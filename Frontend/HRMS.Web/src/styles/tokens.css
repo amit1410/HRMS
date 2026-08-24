@@ -1,0 +1,83 @@
+/*
+ * Design tokens.
+ *
+ * Plain CSS with custom properties rather than a utility framework or a CSS-in-JS runtime. For an
+ * application of this size the trade is straightforward: no build-time dependency to keep current, no
+ * class-name soup in the JSX, and one file to change when the palette does. Every value the UI uses is
+ * declared here — a component that needs a colour takes a token, never a literal.
+ */
+
+:root {
+  /* Neutrals: the surface of the app. */
+  --color-canvas: #f5f6f8;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f9fafb;
+  --color-border: #e3e6ea;
+  --color-border-strong: #cbd2d9;
+
+  /* Text, in descending prominence. */
+  --color-text: #1a1f27;
+  --color-text-muted: #5b6472;
+  --color-text-subtle: #8a929e;
+  --color-text-inverse: #ffffff;
+
+  /* Brand: a single accent, used for primary actions and the active nav item. */
+  --color-accent: #2f5bea;
+  --color-accent-hover: #2449c7;
+  --color-accent-soft: #eaefff;
+
+  /* Status. Success/warning/danger map onto Active/Resigned/Terminated. */
+  --color-success: #17784a;
+  --color-success-soft: #e4f4ea;
+  --color-warning: #8a5a00;
+  --color-warning-soft: #fdf1dc;
+  --color-danger: #b3261e;
+  --color-danger-soft: #fdeceb;
+  --color-info: #1d5f7a;
+  --color-info-soft: #e5f2f7;
+
+  /* The sidebar is the one dark surface. */
+  --color-nav: #171c26;
+  --color-nav-text: #c3c9d4;
+  --color-nav-text-active: #ffffff;
+  --color-nav-hover: #232a37;
+
+  /* Spacing scale, 4px based. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 6%);
+  --shadow-md: 0 4px 12px rgb(16 24 40 / 8%);
+  --shadow-lg: 0 12px 32px rgb(16 24 40 / 12%);
+
+  --font-sans:
+    'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', Consolas, 'Courier New', monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 2rem;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --sidebar-width: 15rem;
+  --content-max: 78rem;
+
+  --focus-ring: 0 0 0 3px rgb(47 91 234 / 35%);
+  --transition: 120ms ease;
+}

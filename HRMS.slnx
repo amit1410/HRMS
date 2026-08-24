@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/Backend/">
+    <Project Path="Backend/HRMS.API/HRMS.API.csproj" />
+    <Project Path="Backend/HRMS.Application/HRMS.Application.csproj" />
+    <Project Path="Backend/HRMS.Domain/HRMS.Domain.csproj" />
+    <Project Path="Backend/HRMS.Infrastructure/HRMS.Infrastructure.csproj" />
+    <Project Path="Backend/HRMS.Tests/HRMS.Tests.csproj" />
+  </Folder>
+</Solution>

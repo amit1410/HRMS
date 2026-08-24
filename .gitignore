@@ -1,0 +1,32 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+
+# Rider / VS
+.idea/
+.vs/
+
+# Logs
+logs/
+*.log
+
+# Local dev SQLite database (schema is Code-First; never committed)
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend
+node_modules/
+dist/
+
+# Local tool state. `~/` is a stray directory created when a tool wrote to a literal "~" instead of
+# expanding it to the home directory; it contains an API key, so it must never be committed.
+.claude/settings.local.json
+~/
+
+# OS
+Thumbs.db
+.DS_Store

@@ -1,0 +1,1317 @@
+/*
+ * Application styles.
+ *
+ * Organised by scope: reset, primitives (buttons, inputs, badges), containers (card, table, states),
+ * then the shell and the two screens. Class names are plain and semantic — the JSX says what a thing is
+ * and this file says how it looks.
+ */
+
+/* ------------------------------------------------------------------------------------------------
+ * Reset and base
+ * --------------------------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/** Available to assistive technology, absent from the layout. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.full-page-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: var(--space-5);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Buttons
+ * --------------------------------------------------------------------------------------------- */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 2.25rem;
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition:
+    background var(--transition),
+    border-color var(--transition);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.button-primary {
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+}
+
+.button-primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+
+.button-secondary {
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.button-secondary:hover:not(:disabled) {
+  background: var(--color-surface-sunken);
+}
+
+/* Destructive confirmation only. The button that *opens* a confirmation is a link-styled row action —
+ * red is spent on the click that actually deletes something, so it keeps its meaning. */
+.button-danger {
+  background: var(--color-danger);
+  color: var(--color-text-inverse);
+}
+
+.button-danger:hover:not(:disabled) {
+  background: #96201a;
+}
+
+.button-block {
+  width: 100%;
+  margin-top: var(--space-2);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Forms
+ * --------------------------------------------------------------------------------------------- */
+
+.field {
+  margin-bottom: var(--space-4);
+}
+
+.field label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-muted);
+}
+
+.input {
+  width: 100%;
+  min-height: 2.375rem;
+  padding: 0 var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  color: var(--color-text);
+}
+
+.input:focus {
+  border-color: var(--color-accent);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
+
+.input.has-error {
+  border-color: var(--color-danger);
+}
+
+.field-error,
+.form-error {
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+}
+
+.field-error {
+  margin-top: var(--space-1);
+}
+
+.form-error {
+  padding: var(--space-3);
+  margin-bottom: var(--space-4);
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-sm);
+}
+
+.field-hint {
+  margin-top: var(--space-1);
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+/* The asterisk is `aria-hidden`; the input's own `required` attribute is what assistive technology
+ * reads, so this is purely the visual half of the same fact. */
+.field-required {
+  margin-left: var(--space-1);
+  color: var(--color-danger);
+}
+
+.textarea {
+  min-height: auto;
+  padding: var(--space-2) var(--space-3);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* Height and padding match `.input` so a select and a text box on the same row line up. `appearance` is
+ * left alone: the native control is the one that works on a phone. */
+.select {
+  padding-right: var(--space-2);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+.field-check {
+  margin-bottom: var(--space-4);
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The label of a checkbox sits beside it and reads as a statement, not a heading — so it does not take
+ * the muted, small treatment `.field label` gives the label above an input. */
+.check-row label {
+  margin-bottom: 0;
+  font-size: var(--text-base);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.checkbox {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Form layout
+ *
+ * Two columns where there is room, one where there is not — `auto-fit` rather than a breakpoint, so the
+ * form reflows with the space it is actually given instead of the width of the window.
+ * --------------------------------------------------------------------------------------------- */
+
+.form-card {
+  max-width: 52rem;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0 var(--space-4);
+}
+
+/* A fieldset with its border removed: the grouping is announced by the legend, and a box around every
+ * section would turn one form into five. */
+.form-section {
+  padding: 0;
+  margin: 0 0 var(--space-5);
+  border: none;
+}
+
+.form-section legend {
+  padding: 0;
+  margin-bottom: var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+/* The search box and the select are one field, so they sit tight together under a single label. */
+.manager-field .input {
+  margin-bottom: var(--space-2);
+}
+
+.manager-field .select {
+  margin-bottom: 0;
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Spinner
+ * --------------------------------------------------------------------------------------------- */
+
+.spinner-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.spinner {
+  display: inline-block;
+  border-style: solid;
+  border-color: currentcolor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+  opacity: 0.7;
+}
+
+.spinner-label {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Honour a reduced-motion preference: a pulse still reads as activity without rotating. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    50% {
+      opacity: 0.25;
+    }
+  }
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Badges
+ * --------------------------------------------------------------------------------------------- */
+
+.badge {
+  display: inline-block;
+  padding: 0.0625rem var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.badge-neutral {
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+
+.badge-success {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.badge-warning {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.badge-danger {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.badge-info {
+  background: var(--color-info-soft);
+  color: var(--color-info);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Card
+ * --------------------------------------------------------------------------------------------- */
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.card-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+
+.card-subtitle {
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+}
+
+.card-body {
+  padding: var(--space-4) var(--space-5);
+  transition: opacity var(--transition);
+}
+
+/* A background reload dims the body instead of replacing it, so nothing on screen jumps. */
+.card-body.is-refreshing {
+  opacity: 0.55;
+}
+
+.card-note {
+  margin-top: var(--space-3);
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Tables
+ * --------------------------------------------------------------------------------------------- */
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+  padding: var(--space-3) var(--space-3);
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.data-table th {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.data-table tbody tr:hover {
+  background: var(--color-surface-sunken);
+}
+
+.data-table th:first-child,
+.data-table td:first-child {
+  padding-left: 0;
+}
+
+.data-table th:last-child,
+.data-table td:last-child {
+  padding-right: 0;
+}
+
+.data-table .align-end {
+  text-align: right;
+}
+
+/* A real button in the header cell, styled to look like the header text it replaces. Inheriting the
+ * `<th>`'s own typography is what keeps a sortable column from looking like a different column. */
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.th-sort:hover {
+  color: var(--color-text);
+}
+
+.th-sort.is-active {
+  color: var(--color-accent);
+}
+
+/* Always present, so a column does not change width when it becomes the sorted one. */
+.th-sort-mark {
+  font-size: 0.875em;
+  opacity: 0.5;
+}
+
+.th-sort.is-active .th-sort-mark {
+  opacity: 1;
+}
+
+/* Right-aligned column: the button has to align the same way the plain header would. */
+.align-end .th-sort {
+  justify-content: flex-end;
+}
+
+.row-actions {
+  display: inline-flex;
+  gap: var(--space-3);
+  white-space: nowrap;
+}
+
+/* Text, not buttons. A table of twenty rows with forty buttons in it reads as a control panel; these are
+ * links to somewhere and one verb that opens a confirmation. */
+.row-action {
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--color-accent);
+  cursor: pointer;
+}
+
+.row-action:hover {
+  text-decoration: underline;
+}
+
+.row-action-danger {
+  color: var(--color-danger);
+}
+
+.cell-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.cell-primary {
+  font-weight: var(--weight-medium);
+}
+
+/* Monospace so codes of the same length line up down the column, which is how a list of them is read. */
+.cell-code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+/* A code used as a row's secondary line keeps the secondary size; only the family carries over. */
+.cell-secondary.cell-code {
+  font-size: var(--text-xs);
+}
+
+.cell-secondary {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+.table-loading {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-6);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Empty / error states
+ * --------------------------------------------------------------------------------------------- */
+
+.state-block {
+  padding: var(--space-6) var(--space-5);
+  text-align: center;
+}
+
+.state-title {
+  font-weight: var(--weight-semibold);
+}
+
+.state-message {
+  max-width: 32rem;
+  margin: var(--space-2) auto 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.state-hint {
+  max-width: 32rem;
+  margin: var(--space-2) auto 0;
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+.state-action {
+  margin-top: var(--space-4);
+}
+
+.state-error .state-title {
+  color: var(--color-danger);
+}
+
+.state-page {
+  max-width: 34rem;
+  margin: var(--space-7) auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.state-code {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Shell
+ * --------------------------------------------------------------------------------------------- */
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  flex: 0 0 var(--sidebar-width);
+  padding: var(--space-5) var(--space-4);
+  background: var(--color-nav);
+  color: var(--color-nav-text);
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-2);
+}
+
+.sidebar-mark {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  background: var(--color-accent);
+  border-radius: var(--radius-md);
+  color: var(--color-text-inverse);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+}
+
+.sidebar-brand-text {
+  color: var(--color-nav-text-active);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+}
+
+.nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--color-nav-text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  transition: background var(--transition);
+}
+
+.nav-link:hover:not(.is-disabled) {
+  background: var(--color-nav-hover);
+  color: var(--color-nav-text-active);
+  text-decoration: none;
+}
+
+.nav-link.is-active {
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+}
+
+.nav-link.is-disabled {
+  color: var(--color-text-subtle);
+  cursor: default;
+}
+
+.nav-soon {
+  padding: 0 var(--space-2);
+  border: 1px solid currentcolor;
+  border-radius: var(--radius-pill);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.app-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tenant {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.tenant-label {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tenant-name {
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tenant-code {
+  padding: 0 var(--space-2);
+  background: var(--color-accent-soft);
+  border-radius: var(--radius-pill);
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.user-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.user-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.user-roles {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+}
+
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-muted);
+}
+
+.app-content {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: var(--content-max);
+  padding: var(--space-5);
+  margin: 0 auto;
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Page furniture
+ * --------------------------------------------------------------------------------------------- */
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.page-title {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+}
+
+.page-subtitle {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.page-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.export-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.export-error {
+  max-width: 22rem;
+  margin: 0;
+  text-align: right;
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * List toolbar
+ *
+ * Search and filters above a table. The search box takes the leftover width and the filters keep their
+ * own, so adding a third filter narrows the box rather than pushing anything onto a second row.
+ * --------------------------------------------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.toolbar-search {
+  flex: 1 1 14rem;
+  min-width: 12rem;
+}
+
+.toolbar-filter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 9rem;
+}
+
+.toolbar-filter-label {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-muted);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Pagination
+ * --------------------------------------------------------------------------------------------- */
+
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+}
+
+.pagination-summary {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.pagination-size {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.pagination-select {
+  width: auto;
+  min-height: 2rem;
+}
+
+.pagination-list {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.pagination-step {
+  min-height: 2rem;
+  padding: 0 var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.pagination-page {
+  min-width: 2rem;
+  min-height: 2rem;
+  padding: 0 var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.pagination-page:hover:not(:disabled) {
+  background: var(--color-surface-sunken);
+}
+
+.pagination-page:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* The current page is `aria-current="page"`; this is the visual half of that. */
+.pagination-page.is-current {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-text-inverse);
+}
+
+.pagination-gap {
+  padding: 0 var(--space-1);
+  color: var(--color-text-subtle);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Notices
+ * --------------------------------------------------------------------------------------------- */
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+.notice-success {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.notice-error {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.notice-info {
+  background: var(--color-info-soft);
+  color: var(--color-info);
+}
+
+.notice-close {
+  padding: 0 var(--space-1);
+  background: none;
+  border: none;
+  font-size: var(--text-lg);
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Modal
+ *
+ * The backdrop is the positioning context and the click target for dismissal; the dialog itself stops
+ * short of the viewport height so a long message scrolls inside the box rather than off the screen.
+ * --------------------------------------------------------------------------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: rgb(16 24 40 / 45%);
+}
+
+.modal {
+  width: 100%;
+  max-width: 28rem;
+  max-height: calc(100vh - 2 * var(--space-4));
+  overflow-y: auto;
+  padding: var(--space-5);
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.modal-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+
+.modal-close {
+  padding: 0 var(--space-1);
+  background: none;
+  border: none;
+  font-size: var(--text-xl);
+  line-height: 1;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+}
+
+.modal-close:hover {
+  color: var(--color-text);
+}
+
+.modal-body {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.modal-hint {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+/* The 409 that kept the dialog open. Its top margin is what separates it from the message above. */
+.modal-body .form-error {
+  margin-top: var(--space-3);
+  margin-bottom: 0;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Dashboard
+ * --------------------------------------------------------------------------------------------- */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-5);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.stat-label {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.stat-value {
+  display: flex;
+  align-items: center;
+  min-height: 2.25rem;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  line-height: 1.1;
+}
+
+.stat-unavailable {
+  color: var(--color-text-subtle);
+}
+
+.stat-hint {
+  color: var(--color-text-subtle);
+  font-size: var(--text-xs);
+  min-height: 1.125rem;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.bar-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 7rem) 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.bar-label {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-track {
+  height: 0.5rem;
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  background: var(--color-accent);
+  border-radius: var(--radius-pill);
+}
+
+.bar-value {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Login
+ * --------------------------------------------------------------------------------------------- */
+
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: var(--space-5);
+  background: linear-gradient(160deg, #eef1f7 0%, #f7f8fa 55%, #eceff5 100%);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 24rem;
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.login-title {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+}
+
+.login-subtitle {
+  color: var(--color-text-subtle);
+  font-size: var(--text-sm);
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Narrow screens
+ *
+ * The sidebar becomes a horizontal strip above the content, and columns that only add context are
+ * dropped from tables rather than squeezed.
+ * --------------------------------------------------------------------------------------------- */
+
+@media (max-width: 60rem) {
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 48rem) {
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    overflow-x: auto;
+  }
+
+  .sidebar-brand-text {
+    display: none;
+  }
+
+  .nav-list {
+    flex-direction: row;
+  }
+
+  .app-header {
+    flex-wrap: wrap;
+  }
+
+  .app-content {
+    padding: var(--space-4);
+  }
+
+  .col-secondary {
+    display: none;
+  }
+
+  .user-roles,
+  .nav-soon {
+    display: none;
+  }
+
+  /* The heading and its buttons stack: side by side, "New employee" next to a long title leaves the
+   * title two words per line. */
+  .page-head {
+    flex-direction: column;
+  }
+
+  .page-actions {
+    width: 100%;
+  }
+
+  /* Filters go full width rather than shrinking to a select too narrow to read its own options. */
+  .toolbar-filter,
+  .toolbar-search {
+    flex: 1 1 100%;
+  }
+
+  .pagination {
+    justify-content: center;
+  }
+
+  /* Page numbers are the first thing to go: Previous and Next still get the user anywhere, and the
+   * summary above says where they are. */
+  .pagination-list li:not(:first-child):not(:last-child) {
+    display: none;
+  }
+
+  .form-actions {
+    flex-direction: column-reverse;
+  }
+
+  .form-actions .button {
+    width: 100%;
+  }
+}
