@@ -136,6 +136,10 @@ try
 
     if (!app.Environment.IsDevelopment())
     {
+        // HSTS tells the browser to only use HTTPS for this host for a year, preventing
+        // network-level downgrade attacks. UseHsts must come before UseHttpsRedirection.
+        app.UseHsts();
+
         // Enforce HTTPS outside development (dev may run plain HTTP for tooling/tests).
         //
         // After UseCors, not before: a cross-origin request that arrives over http gets redirected, and a 307
@@ -154,6 +158,23 @@ try
     // Authentication must run before authorization so the tenant context has verified claims to read.
     app.UseAuthentication();
     app.UseAuthorization();
+
+    // Standard security response headers — applied to every response that reaches this point.
+    // X-Content-Type-Options blocks MIME-type sniffing; X-Frame-Options prevents clickjacking;
+    // Referrer-Policy limits how much of the URL is sent downstream.
+    // X-Powered-By is removed to avoid advertising the stack.
+    app.Use(async (context, next) =>
+    {
+        context.Response.OnStarting(() =>
+        {
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            context.Response.Headers.XFrameOptions = "DENY";
+            context.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+            context.Response.Headers.Remove("X-Powered-By");
+            return Task.CompletedTask;
+        });
+        await next();
+    });
 
     app.MapControllers();
 

@@ -1,4 +1,5 @@
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { type ReactNode } from 'react'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthProvider.tsx'
 import { Permissions } from './auth/permissions.ts'
 import { RequireAuth } from './auth/RequireAuth.tsx'
@@ -6,14 +7,33 @@ import { RequirePermission } from './auth/RequirePermission.tsx'
 import { ErrorBoundary } from './components/ErrorBoundary.tsx'
 import { AppLayout } from './layout/AppLayout.tsx'
 import { DashboardPage } from './pages/DashboardPage.tsx'
+import { EmployeeDetailPage } from './pages/employees/EmployeeDetailPage.tsx'
 import { EmployeeFormPage } from './pages/employees/EmployeeFormPage.tsx'
 import { EmployeesPage } from './pages/employees/EmployeesPage.tsx'
 import { ForbiddenPage } from './pages/ForbiddenPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
+import { WorkspacePickerPage } from './pages/WorkspacePickerPage.tsx'
 import { departmentsModule, designationsModule } from './pages/lookups/lookupModules.ts'
 import { LookupFormPage } from './pages/lookups/LookupFormPage.tsx'
 import { LookupListPage } from './pages/lookups/LookupListPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
+import { EmployeeCodeConfigurationPage } from './pages/EmployeeCodeConfigurationPage.tsx'
+import { isApexHost } from './lib/isApexHost.ts'
+
+/**
+ * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
+ * /employees would leave the "Something went wrong" fallback stuck on screen even after
+ * the user navigates to /dashboard — because ErrorBoundary only clears its state when it
+ * receives new *props*, and a route change inside <Routes> does not re-render <ErrorBoundary>
+ * itself.
+ *
+ * This component exists only to hold `useLocation`, which requires being inside a Router
+ * context. It cannot live inside <Routes>, so we key the ErrorBoundary from here instead.
+ */
+function KeyedErrorBoundary({ children }: { children: ReactNode }) {
+  const location = useLocation()
+  return <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
+}
 
 /**
  * The route table.
@@ -33,16 +53,31 @@ import { NotFoundPage } from './pages/NotFoundPage.tsx'
  * their way out instead of landing on a bare page.
  */
 export function App() {
+  const apex = isApexHost(window.location.hostname)
+
   return (
     <ErrorBoundary>
       <AuthProvider>
+        <KeyedErrorBoundary>
         <Routes>
-          <Route path="/login" element={<LoginPage />} />
+          {apex ? (
+            <Route path="/" element={<WorkspacePickerPage />} />
+          ) : (
+            <>
+              <Route path="/login" element={<LoginPage />} />
 
-          <Route element={<RequireAuth />}>
-            <Route element={<AppLayout />}>
-              <Route index element={<Navigate to="/dashboard" replace />} />
-              <Route path="dashboard" element={<DashboardPage />} />
+              <Route element={<RequireAuth />}>
+                <Route element={<AppLayout />}>
+                  <Route index element={<Navigate to="/dashboard" replace />} />
+                  <Route path="dashboard" element={<DashboardPage />} />
+                  <Route
+                    path="configuration/employee-code"
+                    element={
+                      <RequirePermission permission={Permissions.employeeCodeConfiguration.view}>
+                        <EmployeeCodeConfigurationPage />
+                      </RequirePermission>
+                    }
+                  />
 
               <Route path="employees">
                 <Route
@@ -58,6 +93,14 @@ export function App() {
                   element={
                     <RequirePermission permission={Permissions.employee.create}>
                       <EmployeeFormPage />
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path=":id"
+                  element={
+                    <RequirePermission permission={Permissions.employee.view}>
+                      <EmployeeDetailPage />
                     </RequirePermission>
                   }
                 />
@@ -104,7 +147,10 @@ export function App() {
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Route>
+          </>
+          )}
         </Routes>
+        </KeyedErrorBoundary>
       </AuthProvider>
     </ErrorBoundary>
   )

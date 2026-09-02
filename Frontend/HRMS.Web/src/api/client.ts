@@ -1,4 +1,5 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios'
+import { apiOriginConfigFromEnv, resolveApiBaseUrl } from '../lib/apiOrigin.ts'
 import { ApiError, toApiError } from './errors.ts'
 import { session } from './session.ts'
 import type { ApiResponse, AuthenticatedUser, LoginResponse } from './types.ts'
@@ -31,6 +32,33 @@ export const refreshApi = axios.create({
   headers: { 'Content-Type': 'application/json' },
   timeout: 30_000,
 })
+
+// ---------------------------------------------------------------------------------------------
+// Workspace-aware base URL
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The origin this request should leave for, resolved per request: the host in the address bar
+ * decides which tenant's API answers, so `demo01.localhost` must call `demo01.localhost:5080`
+ * and never another workspace's origin. Without a configured template this is simply the static
+ * `VITE_API_BASE_URL`, unchanged.
+ *
+ * The two instances share the interceptor because a refresh must reach the *same* workspace's API
+ * as the request that triggered it — tokens live in one tenant's database, and `localStorage`,
+ * where the refresh token sits, is already partitioned by page origin.
+ */
+function currentBaseUrl(): string {
+  return resolveApiBaseUrl(apiOriginConfigFromEnv(import.meta.env), window.location.hostname)
+}
+
+for (const instance of [api, refreshApi]) {
+  instance.interceptors.request.use((config) => {
+    // Axios combines `baseURL` with `url` only after every request interceptor has run, so writing
+    // it here is what the eventual request actually uses.
+    config.baseURL = currentBaseUrl()
+    return config
+  })
+}
 
 // ---------------------------------------------------------------------------------------------
 // Session events

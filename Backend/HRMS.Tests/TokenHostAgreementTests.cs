@@ -104,13 +104,12 @@ public class TokenHostAgreementTests : IClassFixture<HrmsApiFactory>
     }
 
     /// <summary>
-    /// A host no organization signs in at leaves the token alone, because there is nothing for it to
-    /// disagree with. Safe in both deployment modes: with a connection-string template configured, a scope
-    /// with no resolved organization cannot open a tenant database at all; without one, every organization
-    /// shares a database and the query filters isolate them by the very claim this check would compare.
+    /// A tenant token is not valid at an address that resolves to no workspace. This matters in shared-
+    /// database mode, where the unresolved scope can otherwise open the shared database and select rows by
+    /// token claim alone, bypassing the host/workspace half of the isolation boundary.
     /// </summary>
     [Fact]
-    public async Task A_host_that_resolves_to_no_organization_leaves_the_token_alone()
+    public async Task A_token_is_refused_at_a_host_that_resolves_to_no_workspace()
     {
         var token = await TokenForAsync(Demo01Host, "admin@demo01.com");
 
@@ -118,7 +117,7 @@ public class TokenHostAgreementTests : IClassFixture<HrmsApiFactory>
         using var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(DefaultPolicyRoute)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(DefaultPolicyRoute)).StatusCode);
     }
 
     /// <summary>

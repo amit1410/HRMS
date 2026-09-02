@@ -23,7 +23,7 @@ import { useFlash } from '../../hooks/useFlash.ts'
 import { useListQuery } from '../../hooks/useListQuery.ts'
 import { formatDate } from '../../lib/format.ts'
 import { ExportEmployeesButton } from '../dashboard/ExportEmployeesButton.tsx'
-import { EMPLOYEES_PATH } from './employeeValues.ts'
+import { EMPLOYEES_PATH } from './personalDetailsValues.ts'
 import {
   loadDepartmentOptions,
   loadDesignationOptions,
@@ -57,7 +57,6 @@ export function EmployeesPage() {
   const location = useLocation()
 
   const canCreate = can(Permissions.employee.create)
-  const canEdit = can(Permissions.employee.edit)
   const canDelete = can(Permissions.employee.delete)
   const canExport = can(Permissions.employee.export)
   const canViewDepartments = can(Permissions.department.view)
@@ -126,7 +125,9 @@ export function EmployeesPage() {
       sortBy: 'firstName',
       render: (row) => (
         <div className="cell-stack">
-          <span className="cell-primary">{row.fullName}</span>
+          <Link className="cell-primary" to={`${EMPLOYEES_PATH}/${row.id}`}>
+            {row.fullName}
+          </Link>
           <span className="cell-secondary">{row.email}</span>
         </div>
       ),
@@ -166,11 +167,6 @@ export function EmployeesPage() {
       align: 'end',
       render: (row) => (
         <div className="row-actions">
-          {canEdit && (
-            <Link className="row-action" to={`${EMPLOYEES_PATH}/${row.id}/edit`} state={returnState}>
-              Edit
-            </Link>
-          )}
           {canDelete && (
             <button
               type="button"

@@ -64,7 +64,15 @@ public static class DatabaseSeeder
         // composite (TenantId, …) foreign keys refuse a reference the database cannot resolve.
         await SeedDepartmentsAsync(db, tenant.Id, ct);
         await SeedDesignationsAsync(db, tenant.Id, ct);
+        await SeedBanksAsync(db, tenant.Id, ct);
         await SeedEmployeesAsync(db, tenant.Id, ct);
+        await SeedPositionChangeReasonsAsync(db, tenant.Id, ct);
+        await SeedOrganisationHierarchyAsync(db, tenant.Id, ct);
+
+        // Global reference data — not tenant-scoped, seeded once per database.
+        await SeedCountriesAsync(db, ct);
+        await SeedStatesAsync(db, ct);
+        await SeedCitiesAsync(db, ct);
     }
 
     private static async Task SeedPermissionsAsync(HrmsDbContext db, CancellationToken ct)
@@ -297,12 +305,40 @@ public static class DatabaseSeeder
         }
     }
 
+    private static async Task SeedBanksAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = await db.Banks.IgnoreQueryFilters()
+            .Select(b => new { b.TenantId, b.Code })
+            .ToListAsync(ct);
+        var existingSet = existing.Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.Banks
+            .Where(b => b.TenantId == tenantId)
+            .Where(b => !existingSet.Contains((b.TenantId, b.Code.ToLowerInvariant())))
+            .Select(b => new Bank
+            {
+                Id = b.Id,
+                TenantId = b.TenantId,
+                Code = b.Code,
+                Name = b.Name,
+                Description = b.Description,
+                IsActive = b.IsActive
+            })
+            .ToList();
+
+        if (toAdd.Count > 0)
+        {
+            db.Banks.AddRange(toAdd);
+            await db.SaveChangesAsync(ct);
+        }
+    }
+
     private static async Task SeedEmployeesAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
     {
         var existing = await db.Employees.IgnoreQueryFilters()
             .Select(e => new { e.TenantId, e.EmployeeCode })
             .ToListAsync(ct);
-        var existingSet = existing.Select(x => (x.TenantId, Code: x.EmployeeCode.ToLowerInvariant())).ToHashSet();
+        var existingSet = existing.Select(x => (x.TenantId, Code: (x.EmployeeCode ?? string.Empty).ToLowerInvariant())).ToHashSet();
 
         var seedEmployees = SeedData.Employees.Where(e => e.TenantId == tenantId).ToList();
 
@@ -355,5 +391,369 @@ public static class DatabaseSeeder
         // the row it references.
         db.Employees.AddRange(entities);
         await db.SaveChangesAsync(ct);
+    }
+
+    private static async Task SeedPositionChangeReasonsAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = await db.PositionChangeReasons.IgnoreQueryFilters()
+            .Select(r => new { r.TenantId, r.Code })
+            .ToListAsync(ct);
+        var existingSet = existing.Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.PositionChangeReasons
+            .Where(r => r.TenantId == tenantId)
+            .Where(r => !existingSet.Contains((r.TenantId, r.Code.ToLowerInvariant())))
+            .Select(r => new PositionChangeReason
+            {
+                Id = r.Id,
+                TenantId = r.TenantId,
+                Code = r.Code,
+                Name = r.Name,
+                Description = r.Description,
+                SortOrder = r.SortOrder,
+                IsActive = true
+            })
+            .ToList();
+
+        if (toAdd.Count > 0)
+        {
+            db.PositionChangeReasons.AddRange(toAdd);
+            await db.SaveChangesAsync(ct);
+        }
+    }
+
+    /// <summary>
+    /// Seeds the tenant-scoped organizational hierarchy masters (holding companies, lines of business,
+    /// organisations, sub-departments, sections, sub-sections, functions, sub-functions, grades,
+    /// work locations, employee types, cost centers) that the employee employment section depends on.
+    /// Each is matched on (TenantId, Code) so a re-run never duplicates, mirroring
+    /// <see cref="SeedBanksAsync"/>.
+    /// </summary>
+    private static async Task SeedOrganisationHierarchyAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        await SeedHoldingCompaniesAsync(db, tenantId, ct);
+        await SeedLinesOfBusinessAsync(db, tenantId, ct);
+        await SeedOrganisationsAsync(db, tenantId, ct);
+        await SeedSubDepartmentsAsync(db, tenantId, ct);
+        await SeedSectionsAsync(db, tenantId, ct);
+        await SeedSubSectionsAsync(db, tenantId, ct);
+        await SeedFunctionsAsync(db, tenantId, ct);
+        await SeedSubFunctionsAsync(db, tenantId, ct);
+        await SeedGradesAsync(db, tenantId, ct);
+        await SeedWorkLocationsAsync(db, tenantId, ct);
+        await SeedEmployeeTypesAsync(db, tenantId, ct);
+        await SeedCostCentersAsync(db, tenantId, ct);
+    }
+
+    private static async Task SeedHoldingCompaniesAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.HoldingCompanies.IgnoreQueryFilters()
+                .Select(h => new { h.TenantId, h.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.HoldingCompanies
+            .Where(h => h.TenantId == tenantId)
+            .Where(h => !existing.Contains((h.TenantId, h.Code.ToLowerInvariant())))
+            .Select(h => new HoldingCompany
+            {
+                Id = h.Id, TenantId = h.TenantId, Code = h.Code, Name = h.Name,
+                Description = h.Description, IsActive = h.IsActive
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.HoldingCompanies.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    private static async Task SeedLinesOfBusinessAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.LinesOfBusiness.IgnoreQueryFilters()
+                .Select(l => new { l.TenantId, l.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.LinesOfBusiness
+            .Where(l => l.TenantId == tenantId)
+            .Where(l => !existing.Contains((l.TenantId, l.Code.ToLowerInvariant())))
+            .Select(l => new Lob
+            {
+                Id = l.Id, TenantId = l.TenantId, Code = l.Code, Name = l.Name,
+                Description = l.Description, IsActive = l.IsActive, HoldingCompanyId = l.HoldingCompanyId
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.LinesOfBusiness.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    private static async Task SeedOrganisationsAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.Organisations.IgnoreQueryFilters()
+                .Select(o => new { o.TenantId, o.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.Organisations
+            .Where(o => o.TenantId == tenantId)
+            .Where(o => !existing.Contains((o.TenantId, o.Code.ToLowerInvariant())))
+            .Select(o => new Organisation
+            {
+                Id = o.Id, TenantId = o.TenantId, Code = o.Code, Name = o.Name,
+                Description = o.Description, IsActive = o.IsActive
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.Organisations.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    private static async Task SeedSubDepartmentsAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.SubDepartments.IgnoreQueryFilters()
+                .Select(s => new { s.TenantId, s.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.SubDepartments
+            .Where(s => s.TenantId == tenantId)
+            .Where(s => !existing.Contains((s.TenantId, s.Code.ToLowerInvariant())))
+            .Select(s => new SubDepartment
+            {
+                Id = s.Id, TenantId = s.TenantId, Code = s.Code, Name = s.Name,
+                Description = s.Description, IsActive = s.IsActive, DepartmentId = s.DepartmentId
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.SubDepartments.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    private static async Task SeedSectionsAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.Sections.IgnoreQueryFilters()
+                .Select(s => new { s.TenantId, s.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.Sections
+            .Where(s => s.TenantId == tenantId)
+            .Where(s => !existing.Contains((s.TenantId, s.Code.ToLowerInvariant())))
+            .Select(s => new Section
+            {
+                Id = s.Id, TenantId = s.TenantId, Code = s.Code, Name = s.Name,
+                Description = s.Description, IsActive = s.IsActive, SubDepartmentId = s.SubDepartmentId
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.Sections.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    private static async Task SeedSubSectionsAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.SubSections.IgnoreQueryFilters()
+                .Select(s => new { s.TenantId, s.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.SubSections
+            .Where(s => s.TenantId == tenantId)
+            .Where(s => !existing.Contains((s.TenantId, s.Code.ToLowerInvariant())))
+            .Select(s => new SubSection
+            {
+                Id = s.Id, TenantId = s.TenantId, Code = s.Code, Name = s.Name,
+                Description = s.Description, IsActive = s.IsActive, SectionId = s.SectionId
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.SubSections.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    private static async Task SeedFunctionsAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.Functions.IgnoreQueryFilters()
+                .Select(f => new { f.TenantId, f.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.Functions
+            .Where(f => f.TenantId == tenantId)
+            .Where(f => !existing.Contains((f.TenantId, f.Code.ToLowerInvariant())))
+            .Select(f => new Function
+            {
+                Id = f.Id, TenantId = f.TenantId, Code = f.Code, Name = f.Name,
+                Description = f.Description, IsActive = f.IsActive
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.Functions.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    private static async Task SeedSubFunctionsAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.SubFunctions.IgnoreQueryFilters()
+                .Select(s => new { s.TenantId, s.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.SubFunctions
+            .Where(s => s.TenantId == tenantId)
+            .Where(s => !existing.Contains((s.TenantId, s.Code.ToLowerInvariant())))
+            .Select(s => new SubFunction
+            {
+                Id = s.Id, TenantId = s.TenantId, Code = s.Code, Name = s.Name,
+                Description = s.Description, IsActive = s.IsActive, FunctionId = s.FunctionId
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.SubFunctions.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    private static async Task SeedGradesAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.Grades.IgnoreQueryFilters()
+                .Select(g => new { g.TenantId, g.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.Grades
+            .Where(g => g.TenantId == tenantId)
+            .Where(g => !existing.Contains((g.TenantId, g.Code.ToLowerInvariant())))
+            .Select(g => new Grade
+            {
+                Id = g.Id, TenantId = g.TenantId, Code = g.Code, Name = g.Name,
+                Description = g.Description, IsActive = g.IsActive, SortOrder = g.SortOrder
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.Grades.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    private static async Task SeedWorkLocationsAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.WorkLocations.IgnoreQueryFilters()
+                .Select(w => new { w.TenantId, w.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.WorkLocations
+            .Where(w => w.TenantId == tenantId)
+            .Where(w => !existing.Contains((w.TenantId, w.Code.ToLowerInvariant())))
+            .Select(w => new WorkLocation
+            {
+                Id = w.Id, TenantId = w.TenantId, Code = w.Code, Name = w.Name,
+                Description = w.Description, IsActive = w.IsActive
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.WorkLocations.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    private static async Task SeedEmployeeTypesAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.EmployeeTypes.IgnoreQueryFilters()
+                .Select(e => new { e.TenantId, e.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.EmployeeTypes
+            .Where(e => e.TenantId == tenantId)
+            .Where(e => !existing.Contains((e.TenantId, e.Code.ToLowerInvariant())))
+            .Select(e => new EmployeeType
+            {
+                Id = e.Id, TenantId = e.TenantId, Code = e.Code, Name = e.Name,
+                Description = e.Description, IsActive = e.IsActive, SortOrder = e.SortOrder
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.EmployeeTypes.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    private static async Task SeedCostCentersAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var existing = (await db.CostCenters.IgnoreQueryFilters()
+                .Select(c => new { c.TenantId, c.Code }).ToListAsync(ct))
+            .Select(x => (x.TenantId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.CostCenters
+            .Where(c => c.TenantId == tenantId)
+            .Where(c => !existing.Contains((c.TenantId, c.Code.ToLowerInvariant())))
+            .Select(c => new CostCenter
+            {
+                Id = c.Id, TenantId = c.TenantId, Code = c.Code, Name = c.Name,
+                Description = c.Description, IsActive = c.IsActive
+            })
+            .ToList();
+
+        if (toAdd.Count > 0) { db.CostCenters.AddRange(toAdd); await db.SaveChangesAsync(ct); }
+    }
+
+    /// <summary>
+    /// Seeds global reference countries. Not tenant-scoped — one copy per database.
+    /// </summary>
+    private static async Task SeedCountriesAsync(HrmsDbContext db, CancellationToken ct)
+    {
+        var existing = await db.Countries.Select(c => c.Code).ToListAsync(ct);
+        var existingSet = new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
+
+        var toAdd = SeedData.Countries
+            .Where(c => !existingSet.Contains(c.Code))
+            .Select(c => new Country
+            {
+                Id = c.Id,
+                Code = c.Code,
+                Name = c.Name,
+                IsActive = true
+            })
+            .ToList();
+
+        if (toAdd.Count > 0)
+        {
+            db.Countries.AddRange(toAdd);
+            await db.SaveChangesAsync(ct);
+        }
+    }
+
+    /// <summary>
+    /// Seeds global reference states. Not tenant-scoped — one copy per database.
+    /// </summary>
+    private static async Task SeedStatesAsync(HrmsDbContext db, CancellationToken ct)
+    {
+        var existing = await db.States
+            .Select(s => new { s.CountryId, s.Code })
+            .ToListAsync(ct);
+        var existingSet = existing.Select(x => (x.CountryId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.States
+            .Where(s => !existingSet.Contains((s.CountryId, s.Code.ToLowerInvariant())))
+            .Select(s => new State
+            {
+                Id = s.Id,
+                CountryId = s.CountryId,
+                Code = s.Code,
+                Name = s.Name,
+                IsActive = true
+            })
+            .ToList();
+
+        if (toAdd.Count > 0)
+        {
+            db.States.AddRange(toAdd);
+            await db.SaveChangesAsync(ct);
+        }
+    }
+
+    /// <summary>
+    /// Seeds global reference cities. Not tenant-scoped — one copy per database.
+    /// </summary>
+    private static async Task SeedCitiesAsync(HrmsDbContext db, CancellationToken ct)
+    {
+        var existing = await db.Cities
+            .Select(c => new { c.StateId, c.Code })
+            .ToListAsync(ct);
+        var existingSet = existing.Select(x => (x.StateId, Code: x.Code.ToLowerInvariant())).ToHashSet();
+
+        var toAdd = SeedData.Cities
+            .Where(c => !existingSet.Contains((c.StateId, c.Code.ToLowerInvariant())))
+            .Select(c => new City
+            {
+                Id = c.Id,
+                StateId = c.StateId,
+                Code = c.Code,
+                Name = c.Name,
+                IsActive = true
+            })
+            .ToList();
+
+        if (toAdd.Count > 0)
+        {
+            db.Cities.AddRange(toAdd);
+            await db.SaveChangesAsync(ct);
+        }
     }
 }

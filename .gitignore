@@ -17,10 +17,40 @@ logs/
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.bak
+*.backup
+*.dump
+*.dmp
+*.mdf
+*.ldf
 
 # Frontend
 node_modules/
 dist/
+coverage/
+
+# Local environment and secrets (keep example templates)
+.env
+.env.*
+!.env.example
+
+# Local runtime artifacts and generated checks
+_buildcheck/
+*.out
+*.err
+*.pid
+*.tmp
+*.cache
+api-*.txt
+login*.json
+resp.json
+token*.txt
+e2e-token.txt
+start-backend.ps1
+start-frontend.ps1
 
 # Local tool state. `~/` is a stray directory created when a tool wrote to a literal "~" instead of
 # expanding it to the home directory; it contains an API key, so it must never be committed.

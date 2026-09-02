@@ -49,8 +49,9 @@ public sealed class TenantShardResolutionMiddleware
             // No organization signs in at this host: the apex marketing/workspace-picker host, the health
             // probe, or simply a host nobody has bought. Not rejected here — rejecting would take down
             // /health and the apex host with it — because nothing that reads tenant data can proceed anyway.
-            // An authenticated request has no shard for its token to agree with, and opening a tenant
-            // database without a resolved organization is refused rather than defaulted.
+            // An authenticated tenant request is refused later by TenantMatchesShardRequirement because
+            // there is no resolved workspace for its token to agree with. Anonymous apex routes remain
+            // available because they explicitly opt out of authorization.
             _logger.LogDebug("No organization is registered for host {Host}; continuing with no shard.", host);
             await _next(context);
             return;

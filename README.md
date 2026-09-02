@@ -93,7 +93,7 @@ The API listens on `http://localhost:5080` (and `https://localhost:5081` via the
 
 | Endpoint | Auth | Purpose |
 |----------|------|---------|
-| `POST /api/auth/login` | anonymous, rate-limited | Sign in with organization code + email + password; returns an access/refresh pair and the user's profile, roles and permissions. |
+| `POST /api/auth/login` | anonymous, rate-limited | Sign in with email + password; the tenant is resolved from the incoming host. Returns an access/refresh pair and the user's profile, roles and permissions. |
 | `POST /api/auth/refresh` | anonymous, rate-limited | Exchange a refresh token for a new pair. Single-use — the presented token is revoked. |
 | `POST /api/auth/logout` | bearer token | Revoke a refresh token. Idempotent. |
 | `GET /api/auth/me` | bearer token | The signed-in user's profile, roles and effective permissions. |
@@ -125,10 +125,10 @@ Every list endpoint takes `page`, `pageSize` (default 20, max 100), `search`, `s
 
 Swagger UI (Development only): `http://localhost:5080/swagger` — use **Authorize** and paste the `accessToken` from `/api/auth/login`.
 
-Sign in:
+Sign in (tenant is resolved from the host, so the request goes to that host's API):
 
 ```bash
-curl -X POST http://localhost:5080/api/auth/login -H "Content-Type: application/json" -d "{\"tenantCode\":\"DEMO01\",\"email\":\"admin@demo01.com\",\"password\":\"Passw0rd!\"}"
+curl -X POST http://localhost:5080/api/auth/login -H "Content-Type: application/json" -d "{\"email\":\"admin@demo01.com\",\"password\":\"Passw0rd!\"}"
 ```
 
 Then call an authenticated endpoint:
@@ -299,9 +299,10 @@ looks like a bug in the client.
 
 ### What is in it
 
-- **Login** — organization code + email + password, matching the API's tenant-scoped sign-in. The last
-  organization code is remembered locally (a convenience, not a credential) so a returning user types
-  one field less. Field errors from the API land on the fields they name.
+- **Login** — email + password, with the tenant resolved from the incoming host. The login page
+  picks up the organization name, logo and primary colour from the tenant's branding (when one is
+  configured), so each workspace looks distinct before the user types a thing. Field errors from the
+  API land on the fields they name.
 - **App shell** — sidebar navigation on wide viewports, becoming a horizontal strip above the content
   below 48rem (768px), and a header showing the signed-in user *and their organization*, because two
   tabs signed into different tenants must not be mistakable for one another.
@@ -467,8 +468,13 @@ module's own list.
 - **Phase 3 — Organization structure & employees: department, designation and employee CRUD, paging/search/sorting, CSV export.** ✅ Complete.
 - **Phase 4 — React + TypeScript frontend foundation: typed API client, session/token handling, route guards, app shell, dashboard.** ✅ Complete.
 - **Phase 5 — Employee, department and designation screens: lists with server-side paging/search/sort and filters, create/edit forms, delete confirmation.** ✅ Complete.
+- **Phase 6 — Branded login: tenant branding entity, service and controller, `useTenantBranding` hook, login page with four visual states (branded with logo, branded colour-only, neutral fallback, loading).** ✅ Complete.
+- **Phase 7 — Sharding + whitelabel: catalog database, host→tenant resolution, trust reconciliation, provisioning, auth without typed tenant code, branding by host, apex host resolution.** ✅ Complete.
+- **Phase 8 — Frontend hardening: runtime API origin from environment, `tenantCode` removed from login, branded workspace picker on the apex host, CSP meta tag, route-aware error boundary.** ✅ Complete.
+- **Phase 9 — Permission seed data: 17 permissions across four resource groups, six roles with stable explicit IDs, idempotent seeding, frontend/backend permission mirror test.** ✅ Complete.
+- **Phase 10 — Hardening & documentation: HSTS, security response headers (nosniff, DENY framing, referrer policy), production connection-string defaults, error-boundary route reset.** ✅ Complete.
 
-Every module in the plan so far is built, tested and reachable from the UI; nothing beyond Phase 5 is scoped yet.
+Every module in the plan is built, tested and reachable from the UI.
 
 Authorization infrastructure is in place and exercised end to end (`[HasPermission]`, one policy per permission, tenant-claim requirement, fallback policy), and the three domain modules sit behind it with tenant isolation enforced on reads *and* writes. The frontend now drives that API for real — sign-in, session restore, refresh rotation, permission-aware navigation, a dashboard, the CSV export, and full create/read/update/delete for all three modules, with every list's paging, search, sort and filters carried in the URL so a view can be linked to and returned to.
 

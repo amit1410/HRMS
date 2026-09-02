@@ -14,6 +14,31 @@ public static class Permissions
         public const string Edit = "Employee.Edit";
         public const string Delete = "Employee.Delete";
         public const string Export = "Employee.Export";
+        public const string Import = "Employee.Import";
+    }
+
+    public static class EmployeeSensitive
+    {
+        public const string View = "EmployeeSensitive.View";
+        public const string Edit = "EmployeeSensitive.Edit";
+    }
+
+    public static class Geography
+    {
+        public const string View = "Geography.View";
+        public const string Manage = "Geography.Manage";
+    }
+
+    public static class EmploymentHistory
+    {
+        public const string View = "EmploymentHistory.View";
+        public const string Change = "EmploymentHistory.Change";
+    }
+
+    public static class EmployeeCodeConfiguration
+    {
+        public const string View = "EmployeeCodeConfiguration.View";
+        public const string Manage = "EmployeeCodeConfiguration.Manage";
     }
 
     public static class Department
@@ -43,7 +68,11 @@ public static class Permissions
     /// <summary>Every permission the system knows about. Used by the seeder and SuperAdmin/TenantAdmin grants.</summary>
     public static readonly IReadOnlyList<string> All = new[]
     {
-        Employee.View, Employee.Create, Employee.Edit, Employee.Delete, Employee.Export,
+        Employee.View, Employee.Create, Employee.Edit, Employee.Delete, Employee.Export, Employee.Import,
+        EmployeeSensitive.View, EmployeeSensitive.Edit,
+        Geography.View, Geography.Manage,
+        EmploymentHistory.View, EmploymentHistory.Change,
+        EmployeeCodeConfiguration.View, EmployeeCodeConfiguration.Manage,
         Department.View, Department.Create, Department.Edit, Department.Delete,
         Designation.View, Designation.Create, Designation.Edit, Designation.Delete,
         User.View, User.Create, User.Edit, User.Delete

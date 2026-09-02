@@ -1,5 +1,24 @@
 import { listDepartments } from '../../api/departments.ts'
 import { listDesignations } from '../../api/designations.ts'
+import { listCountries } from '../../api/countries.ts'
+import { listStates } from '../../api/states.ts'
+import { listCities } from '../../api/cities.ts'
+import {
+  listHoldingCompanies,
+  listLinesOfBusiness,
+  listOrganisations,
+  listBanks,
+  listSubDepartments,
+  listSections,
+  listSubSections,
+  listFunctions,
+  listSubFunctions,
+  listGrades,
+  listEmployeeTypes,
+  listWorkLocations,
+  listCostCenters,
+  listPositionChangeReasons,
+} from '../../api/masterData.ts'
 import { MAX_PAGE_SIZE } from '../../api/types.ts'
 import type { SelectOption } from '../../components/fields.tsx'
 
@@ -90,4 +109,231 @@ export function truncationHint(
 ): string | undefined {
   if (total <= loaded) return undefined
   return `Showing the first ${loaded} of ${total} ${noun}.${more ? ` ${more}` : ''}`
+}
+
+export async function loadCountryOptions(
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const page = await listCountries(
+    { pageSize: MAX_PAGE_SIZE, sortBy: 'name', ...(activeOnly ? { isActive: true } : {}) },
+    signal,
+  )
+  return {
+    options: page.items.map((item) => ({ value: item.id, label: item.name })),
+    total: page.totalCount,
+  }
+}
+
+export async function loadStateOptions(
+  countryId: string,
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const page = await listStates(
+    { countryId, pageSize: MAX_PAGE_SIZE, sortBy: 'name', ...(activeOnly ? { isActive: true } : {}) },
+    signal,
+  )
+  return {
+    options: page.items.map((item) => ({ value: item.id, label: item.name })),
+    total: page.totalCount,
+  }
+}
+
+export async function loadCityOptions(
+  stateId: string,
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const page = await listCities(
+    { stateId, pageSize: MAX_PAGE_SIZE, sortBy: 'name', ...(activeOnly ? { isActive: true } : {}) },
+    signal,
+  )
+  return {
+    options: page.items.map((item) => ({ value: item.id, label: item.name })),
+    total: page.totalCount,
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tenant-scoped master data loaders (employment / position history)
+// ---------------------------------------------------------------------------------------------
+
+function masterLabel(item: { code: string; name: string; isActive: boolean }): string {
+  const label = `${item.code} - ${item.name}`
+  return item.isActive ? label : `${label} (inactive)`
+}
+
+export async function loadHoldingCompanyOptions(
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listHoldingCompanies({ ...(activeOnly ? { isActive: true } : {}) }, signal)
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadBankOptions(
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listBanks({ ...(activeOnly ? { isActive: true } : {}) }, signal)
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadLobOptions(
+  holdingCompanyId?: string,
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listLinesOfBusiness(
+    { parentId: holdingCompanyId, ...(activeOnly ? { isActive: true } : {}) },
+    signal,
+  )
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadOrganisationOptions(
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listOrganisations({ ...(activeOnly ? { isActive: true } : {}) }, signal)
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadSubDepartmentOptions(
+  departmentId?: string,
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listSubDepartments(
+    { parentId: departmentId, ...(activeOnly ? { isActive: true } : {}) },
+    signal,
+  )
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadSectionOptions(
+  subDepartmentId?: string,
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listSections(
+    { parentId: subDepartmentId, ...(activeOnly ? { isActive: true } : {}) },
+    signal,
+  )
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadSubSectionOptions(
+  sectionId?: string,
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listSubSections(
+    { parentId: sectionId, ...(activeOnly ? { isActive: true } : {}) },
+    signal,
+  )
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadFunctionOptions(
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listFunctions({ ...(activeOnly ? { isActive: true } : {}) }, signal)
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadSubFunctionOptions(
+  functionId?: string,
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listSubFunctions(
+    { parentId: functionId, ...(activeOnly ? { isActive: true } : {}) },
+    signal,
+  )
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadGradeOptions(
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listGrades({ ...(activeOnly ? { isActive: true } : {}) }, signal)
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadEmployeeTypeOptions(
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listEmployeeTypes({ ...(activeOnly ? { isActive: true } : {}) }, signal)
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadWorkLocationOptions(
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listWorkLocations({ ...(activeOnly ? { isActive: true } : {}) }, signal)
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadCostCenterOptions(
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listCostCenters({ ...(activeOnly ? { isActive: true } : {}) }, signal)
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
+}
+
+export async function loadPositionChangeReasonOptions(
+  { activeOnly = false }: LoadOptions = {},
+  signal?: AbortSignal,
+): Promise<ReferenceOptions> {
+  const items = await listPositionChangeReasons({ ...(activeOnly ? { isActive: true } : {}) }, signal)
+  return {
+    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
+    total: items.length,
+  }
 }

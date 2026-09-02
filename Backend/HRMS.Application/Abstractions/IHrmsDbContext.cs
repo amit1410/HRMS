@@ -1,5 +1,6 @@
 using HRMS.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace HRMS.Application.Abstractions;
 
@@ -26,7 +27,48 @@ public interface IHrmsDbContext
     DbSet<RefreshToken> RefreshTokens { get; }
     DbSet<Department> Departments { get; }
     DbSet<Designation> Designations { get; }
+    DbSet<Bank> Banks { get; }
+    DbSet<Country> Countries { get; }
+    DbSet<State> States { get; }
+    DbSet<City> Cities { get; }
     DbSet<Employee> Employees { get; }
 
+    // Organizational hierarchy masters
+    DbSet<HoldingCompany> HoldingCompanies { get; }
+    DbSet<Lob> LinesOfBusiness { get; }
+    DbSet<Organisation> Organisations { get; }
+    DbSet<SubDepartment> SubDepartments { get; }
+    DbSet<Section> Sections { get; }
+    DbSet<SubSection> SubSections { get; }
+    DbSet<Function> Functions { get; }
+    DbSet<SubFunction> SubFunctions { get; }
+    DbSet<Grade> Grades { get; }
+    DbSet<EmployeeType> EmployeeTypes { get; }
+    DbSet<WorkLocation> WorkLocations { get; }
+    DbSet<CostCenter> CostCenters { get; }
+    DbSet<PositionChangeReason> PositionChangeReasons { get; }
+    DbSet<EmployeeCodeConfig> EmployeeCodeConfigs { get; }
+    DbSet<EmployeeCodeRule> EmployeeCodeRules { get; }
+    DbSet<EmployeeCodeConfigVersion> EmployeeCodeConfigVersions { get; }
+    DbSet<EmployeeCodeRuleCondition> EmployeeCodeRuleConditions { get; }
+    DbSet<EmployeeCodeSegment> EmployeeCodeSegments { get; }
+    DbSet<EmployeeCodeSequence> EmployeeCodeSequences { get; }
+
+    // Employee sub-entities
+    DbSet<EmployeeContact> EmployeeContacts { get; }
+    DbSet<EmployeeAddress> EmployeeAddresses { get; }
+    DbSet<EmployeeFamily> EmployeeFamilyMembers { get; }
+    DbSet<EmployeeEducation> EmployeeEducationRecords { get; }
+    DbSet<EmployeeEmploymentHistory> EmployeeEmploymentHistory { get; }
+    DbSet<EmployeePreviousEmployment> EmployeePreviousEmployments { get; }
+    DbSet<EmployeeBankDetail> EmployeeBankDetails { get; }
+    DbSet<EmployeeDocument> EmployeeDocuments { get; }
+    DbSet<EmployeeSupervisor> EmployeeSupervisors { get; }
+    DbSet<EmployeeAdditionalInfo> EmployeeAdditionalInfo { get; }
+    DbSet<EmployeeAuditLog> EmployeeAuditLogs { get; }
+    DbSet<EmployeeEmployment> EmployeeEmployments { get; }
+    DbSet<ImportBatch> ImportBatches { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
+    Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);
 }

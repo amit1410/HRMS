@@ -219,7 +219,6 @@ describe('EmployeesPage', () => {
     await screen.findByText('Nadia Farrell')
 
     expect(screen.queryByRole('link', { name: 'New employee' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Edit' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
     // Reading a page of rows and walking out with the whole directory are separate permissions.
     expect(screen.queryByRole('button', { name: 'Export CSV' })).not.toBeInTheDocument()
@@ -233,7 +232,6 @@ describe('EmployeesPage', () => {
       'href',
       '/employees/new',
     )
-    expect(screen.getAllByRole('link', { name: 'Edit' })).toHaveLength(2)
     expect(screen.getByRole('button', { name: 'Export CSV' })).toBeInTheDocument()
     // Absent rather than disabled: a greyed Delete still says the action exists.
     expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()

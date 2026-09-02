@@ -23,8 +23,14 @@ public class EmployeeExportTests
     private static readonly byte[] Utf8Bom = [0xEF, 0xBB, 0xBF];
 
     private const string Header =
-        "Employee Code,First Name,Last Name,Email,Phone,Date of Birth,Gender,Date of Joining," +
-        "Date of Leaving,Status,Department,Designation,Reporting Manager,Address";
+        "Employee Code,Salutation,First Name,Middle Name,Last Name,Email,Phone," +
+        "Date of Birth,Gender,Blood Group,Marital Status," +
+        "Date of Joining,Group Date of Joining,Date of Leaving,Status,Job Status," +
+        "Employee Type,Department,Designation,Reporting Manager," +
+        "Aadhaar,PAN,PF,UAN," +
+        "ESIC Number,Mediclaim Number,Gratuity,Pension," +
+        "Cost Center,Payroll Location,ESIC Applicable," +
+        "Citizenship,Language Known,Address";
 
     [Fact]
     public async Task Export_leads_with_a_byte_order_mark_then_the_header_row()
@@ -38,7 +44,7 @@ public class EmployeeExportTests
 
         var lines = Lines(file);
         Assert.Equal(Header, lines[0]);
-        Assert.Equal(14, lines[0].Split(',').Length);
+        Assert.Equal(34, lines[0].Split(',').Length);
     }
 
     [Fact]
@@ -74,9 +80,35 @@ public class EmployeeExportTests
 
         var priya = lines.Single(l => l.StartsWith("EMP-003,", StringComparison.Ordinal));
         Assert.Equal(
-            "EMP-003,Priya,Raman,priya.raman@demo01.com,555-0103,1991-02-18,Female,2019-07-01," +
-            ",Active,Engineering,Senior Software Engineer,Owen Brand,44 Orchard Street",
+            "EMP-003,,Priya,,Raman,priya.raman@demo01.com,555-0103,1991-02-18,Female,Unspecified,Unspecified,2019-07-01,,,Active,,,Engineering,Senior Software Engineer,Owen Brand,,,,,,,False,False,,,False,,,44 Orchard Street",
             priya);
+    }
+
+    [Fact]
+    public async Task Export_masks_statutory_identifiers_and_never_contains_the_raw_values()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+
+        var request = NewRequest();
+        request.AadhaarNumber = "111122223333";
+        request.PanNumber = "ABCDE1234F";
+        request.PfNumber = "PF-SECRET-5678";
+        request.UanNumber = "UAN-SECRET-9012";
+        request.EsicNumber = "ESIC-SECRET-3456";
+        request.MediclaimNumber = "MED-SECRET-7890";
+        Assert.True((await harness.Employees().CreateAsync(request)).Succeeded);
+
+        var text = TextOf((await harness.Employees()
+            .ExportAsync(new EmployeeQuery { Search = "EMP-777" })).Value!);
+
+        Assert.Contains("XXXX-XXXX-3333,A****F,******5678,******9012,******3456,******7890", text,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(request.AadhaarNumber, text, StringComparison.Ordinal);
+        Assert.DoesNotContain(request.PanNumber, text, StringComparison.Ordinal);
+        Assert.DoesNotContain(request.PfNumber, text, StringComparison.Ordinal);
+        Assert.DoesNotContain(request.UanNumber, text, StringComparison.Ordinal);
+        Assert.DoesNotContain(request.EsicNumber, text, StringComparison.Ordinal);
+        Assert.DoesNotContain(request.MediclaimNumber, text, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -194,9 +226,9 @@ public class EmployeeExportTests
         var line = Lines((await harness.Employees().ExportAsync(new EmployeeQuery { Search = "EMP-777" })).Value!)[1];
         var fields = line.Split(',');
 
-        Assert.Equal("'=SUM(A1:A9)", fields[1]);
-        Assert.Equal("'@Reference", fields[2]);
-        Assert.Equal("'+1-555-0199", fields[4]);
+        Assert.Equal("'=SUM(A1:A9)", fields[2]);
+        Assert.Equal("'@Reference", fields[4]);
+        Assert.Equal("'+1-555-0199", fields[6]);
         Assert.Equal("'-Wing 3", fields[^1]);
     }
 
@@ -213,9 +245,9 @@ public class EmployeeExportTests
 
         var line = Lines((await harness.Employees().ExportAsync(new EmployeeQuery { Search = "EMP-777" })).Value!)[1];
 
-        // Code, names, email, then two empty fields for phone and date of birth; no manager and no address.
+        // Code, Salutation, names, email, then two empty fields for phone and date of birth; defaults for enums; no manager and no address.
         Assert.Equal(
-            "EMP-777,Sam,Okafor,sam.okafor@demo01.com,,,Other,2023-05-01,,Active,Engineering,Software Engineer,,",
+            "EMP-777,,Sam,,Okafor,sam.okafor@demo01.com,,,Other,Unspecified,Unspecified,2023-05-01,,,Active,,,Engineering,Software Engineer,,,,,,,,False,False,,,False,,,",
             line);
     }
 

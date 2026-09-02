@@ -28,6 +28,12 @@ export const NAV_ITEMS: readonly NavItem[] = [
     available: true,
   },
   {
+    label: 'Employee Code Configuration',
+    to: '/configuration/employee-code',
+    permission: Permissions.employeeCodeConfiguration.view,
+    available: true,
+  },
+  {
     label: 'Departments',
     to: '/departments',
     permission: Permissions.department.view,

@@ -7,6 +7,15 @@
     <!-- The palette is light-only; declaring it keeps the browser from restyling form controls dark. -->
     <meta name="color-scheme" content="light" />
     <meta name="robots" content="noindex, nofollow" />
+    <!-- Baseline Content Security Policy. 'unsafe-inline' is required for Vite's module scripts
+         and React's runtime; a stricter policy can be enforced through a server-set header
+         (see Program.cs security headers middleware) once the CSP shape is finalised.
+         frame-ancestors is enforced via X-Frame-Options response header on the API; browsers
+         ignore frame-ancestors delivered via a <meta> element. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' http://demo01.localhost:5080 http://demo02.localhost:5080 http://demo03.localhost:5080; font-src 'self'; base-uri 'self'; form-action 'self'"
+    />
     <title>HRMS</title>
   </head>
   <body>

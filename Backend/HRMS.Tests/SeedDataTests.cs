@@ -155,7 +155,8 @@ public class SeedDataTests
 
         var employeeGrants = await context.RolePermissions
             .CountAsync(rp => rp.RoleId == SeedData.RoleId(RoleNames.Employee));
-        Assert.Equal(0, employeeGrants);
+        Assert.Equal(SeedData.RolePermissionMap[RoleNames.Employee].Length, employeeGrants);
+        Assert.Equal(new[] { DomainPermissions.Geography.View }, SeedData.RolePermissionMap[RoleNames.Employee]);
     }
 
     /// <summary>

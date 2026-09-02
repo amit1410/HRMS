@@ -74,11 +74,11 @@ public class EmployeeService : IEmployeeService
         var page = await employees
             .Select(e => new EmployeeListItemDto(
                 e.Id,
-                e.EmployeeCode,
+                e.EmployeeCode ?? string.Empty,
                 e.FirstName + " " + e.LastName,
-                e.Email,
-                e.Department!.Name,
-                e.Designation!.Name,
+                e.Contact != null && e.Contact.OfficialEmail != null ? e.Contact.OfficialEmail : e.Email,
+                e.Department != null ? e.Department.Name : null,
+                e.Designation != null ? e.Designation.Name : null,
                 e.Status,
                 e.DateOfJoining))
             .ToPagedResultAsync(query, cancellationToken);
@@ -101,6 +101,31 @@ public class EmployeeService : IEmployeeService
             : Result<EmployeeDto>.Success(employee);
     }
 
+    public async Task<Result<EmployeeSensitiveDetailsDto>> GetSensitiveDetailsAsync(
+        Guid id, CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is null)
+        {
+            return Result<EmployeeSensitiveDetailsDto>.Unauthorized(NoTenantMessage);
+        }
+
+        var details = await _db.Employees.AsNoTracking()
+            .Where(e => e.Id == id)
+            .Select(e => new EmployeeSensitiveDetailsDto(
+                e.Id,
+                e.AadhaarNumber,
+                e.PanNumber,
+                e.UanNumber,
+                e.PfNumber,
+                e.EsicNumber,
+                e.MediclaimNumber))
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return details is null
+            ? Result<EmployeeSensitiveDetailsDto>.NotFound(NotFoundMessage)
+            : Result<EmployeeSensitiveDetailsDto>.Success(details);
+    }
+
     public async Task<Result<EmployeeDto>> CreateAsync(
         EmployeeRequest request, CancellationToken cancellationToken = default)
     {
@@ -111,6 +136,9 @@ public class EmployeeService : IEmployeeService
 
         var employeeCode = request.EmployeeCode.Trim();
         var email = request.Email.Trim();
+
+        // Enforce default employee status at the backend level.
+        var employeeStatus = request.Status == default ? EmployeeStatus.Active : request.Status;
 
         var referenceProblem = await ValidateReferencesAsync(request, existing: null, cancellationToken);
         if (referenceProblem is not null)
@@ -129,22 +157,60 @@ public class EmployeeService : IEmployeeService
             Id = Guid.NewGuid(),
             TenantId = tenantId,
             EmployeeCode = employeeCode,
+            Salutation = Normalize(request.Salutation),
             FirstName = request.FirstName.Trim(),
+            MiddleName = Normalize(request.MiddleName),
             LastName = request.LastName.Trim(),
             Email = email,
             Phone = Normalize(request.Phone),
             DateOfBirth = request.DateOfBirth,
             Gender = request.Gender,
+            BloodGroup = request.BloodGroup,
+            MaritalStatus = request.MaritalStatus,
+            BirthCountry = Normalize(request.BirthCountry),
+            BirthState = Normalize(request.BirthState),
+            BirthCity = Normalize(request.BirthCity),
+            BirthCountryId = request.BirthCountryId,
+            BirthStateId = request.BirthStateId,
+            BirthCityId = request.BirthCityId,
+            Religion = Normalize(request.Religion),
+            Caste = Normalize(request.Caste),
+            EmployeeType = Normalize(request.EmployeeType),
             DateOfJoining = request.DateOfJoining,
+            GroupDateOfJoining = request.GroupDateOfJoining,
             DateOfLeaving = request.DateOfLeaving,
-            Status = request.Status,
+            Status = employeeStatus,
+            JobStatus = Normalize(request.JobStatus),
+            GroupId = Normalize(request.GroupId),
             DepartmentId = request.DepartmentId,
             DesignationId = request.DesignationId,
             ReportingManagerId = request.ReportingManagerId,
+            AadhaarNumber = Normalize(request.AadhaarNumber),
+            PanNumber = Normalize(request.PanNumber),
+            PfNumber = Normalize(request.PfNumber),
+            UanNumber = Normalize(request.UanNumber),
+            EsicNumber = Normalize(request.EsicNumber),
+            MediclaimNumber = Normalize(request.MediclaimNumber),
+            Gratuity = request.Gratuity,
+            Pension = request.Pension,
+            CostCenterCode = Normalize(request.CostCenterCode),
+            PayrollLocation = Normalize(request.PayrollLocation),
+            EsicApplicable = request.EsicApplicable,
+            Citizenship = Normalize(request.Citizenship),
+            LanguageKnown = Normalize(request.LanguageKnown),
+            ProfilePictureUrl = Normalize(request.ProfilePictureUrl),
             Address = Normalize(request.Address)
         };
 
         _db.Employees.Add(employee);
+        _db.EmployeeContacts.Add(new EmployeeContact
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantId,
+            EmployeeId = employee.Id,
+            OfficialEmail = email,
+            OfficialPhone = employee.Phone
+        });
 
         try
         {
@@ -176,7 +242,9 @@ public class EmployeeService : IEmployeeService
             return Result<EmployeeDto>.Unauthorized(NoTenantMessage);
         }
 
-        var employee = await _db.Employees.FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
+        var employee = await _db.Employees
+            .Include(e => e.Contact)
+            .FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
         if (employee is null)
         {
             return Result<EmployeeDto>.NotFound(NotFoundMessage);
@@ -215,19 +283,70 @@ public class EmployeeService : IEmployeeService
         }
 
         employee.EmployeeCode = employeeCode;
+        employee.Salutation = Normalize(request.Salutation);
         employee.FirstName = request.FirstName.Trim();
+        employee.MiddleName = Normalize(request.MiddleName);
         employee.LastName = request.LastName.Trim();
         employee.Email = email;
         employee.Phone = Normalize(request.Phone);
         employee.DateOfBirth = request.DateOfBirth;
         employee.Gender = request.Gender;
+        employee.BloodGroup = request.BloodGroup;
+        employee.MaritalStatus = request.MaritalStatus;
+        employee.BirthCountry = Normalize(request.BirthCountry);
+        employee.BirthState = Normalize(request.BirthState);
+        employee.BirthCity = Normalize(request.BirthCity);
+        employee.BirthCountryId = request.BirthCountryId;
+        employee.BirthStateId = request.BirthStateId;
+        employee.BirthCityId = request.BirthCityId;
+        employee.Religion = Normalize(request.Religion);
+        employee.Caste = Normalize(request.Caste);
+        employee.EmployeeType = Normalize(request.EmployeeType);
         employee.DateOfJoining = request.DateOfJoining;
+        employee.GroupDateOfJoining = request.GroupDateOfJoining;
         employee.DateOfLeaving = request.DateOfLeaving;
         employee.Status = request.Status;
+        employee.JobStatus = Normalize(request.JobStatus);
+        employee.GroupId = Normalize(request.GroupId);
         employee.DepartmentId = request.DepartmentId;
         employee.DesignationId = request.DesignationId;
         employee.ReportingManagerId = request.ReportingManagerId;
+        employee.AadhaarNumber = Normalize(request.AadhaarNumber);
+        employee.PanNumber = Normalize(request.PanNumber);
+        employee.PfNumber = Normalize(request.PfNumber);
+        employee.UanNumber = Normalize(request.UanNumber);
+        employee.EsicNumber = Normalize(request.EsicNumber);
+        employee.MediclaimNumber = Normalize(request.MediclaimNumber);
+        employee.Gratuity = request.Gratuity;
+        employee.Pension = request.Pension;
+        employee.CostCenterCode = Normalize(request.CostCenterCode);
+        employee.PayrollLocation = Normalize(request.PayrollLocation);
+        employee.EsicApplicable = request.EsicApplicable;
+        employee.Citizenship = Normalize(request.Citizenship);
+        employee.LanguageKnown = Normalize(request.LanguageKnown);
+        employee.ProfilePictureUrl = Normalize(request.ProfilePictureUrl);
         employee.Address = Normalize(request.Address);
+
+        // Keep the legacy full Employee edit path working while maintaining EmployeeContact as the
+        // employee-facing contact record. Alternate contact values are deliberately left untouched.
+        if (employee.Contact is null)
+        {
+            employee.Contact = new EmployeeContact
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantId,
+                EmployeeId = employee.Id,
+                OfficialEmail = email,
+                OfficialPhone = employee.Phone
+            };
+            _db.EmployeeContacts.Add(employee.Contact);
+        }
+        else
+        {
+            employee.Contact.OfficialEmail = email;
+            employee.Contact.OfficialPhone = employee.Phone;
+            employee.Contact.ModifiedDate = DateTime.UtcNow;
+        }
 
         try
         {
@@ -249,6 +368,53 @@ public class EmployeeService : IEmployeeService
         _logger.LogInformation("Updated employee {EmployeeId} in tenant {TenantId}.", id, tenantId);
 
         return await ReloadAsync(id, "Employee updated.", cancellationToken);
+    }
+
+    public async Task<Result<EmployeeDto>> CreatePersonalDetailsAsync(
+        EmployeePersonalDetailsRequest request, CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId)
+        {
+            return Result<EmployeeDto>.Unauthorized(NoTenantMessage);
+        }
+
+        var birthProblem = await ValidateBirthLocationAsync(request, cancellationToken);
+        if (birthProblem is not null)
+        {
+            return birthProblem;
+        }
+
+        return await CreatePersonalDetailsCoreAsync(
+            request, tenantId, cancellationToken);
+    }
+
+    public async Task<Result<EmployeeDto>> UpdatePersonalDetailsAsync(
+        Guid id, EmployeePersonalDetailsRequest request, CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId)
+        {
+            return Result<EmployeeDto>.Unauthorized(NoTenantMessage);
+        }
+
+        var employee = await _db.Employees.FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
+        if (employee is null)
+        {
+            return Result<EmployeeDto>.NotFound(NotFoundMessage);
+        }
+
+        var birthProblem = await ValidateBirthLocationAsync(request, cancellationToken);
+        if (birthProblem is not null)
+        {
+            return birthProblem;
+        }
+
+        ApplyPersonalDetails(employee, request, preserveSensitive: true);
+
+        await _db.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("Updated Personal Details for employee {EmployeeId} in tenant {TenantId}.", id, tenantId);
+
+        return await ReloadAsync(id, "Personal Details updated.", cancellationToken);
     }
 
     /// <summary>
@@ -317,26 +483,51 @@ public class EmployeeService : IEmployeeService
             .ToListAsync(cancellationToken);
 
         var csv = new CsvBuilder(
-            "Employee Code", "First Name", "Last Name", "Email", "Phone", "Date of Birth", "Gender",
-            "Date of Joining", "Date of Leaving", "Status", "Department", "Designation",
-            "Reporting Manager", "Address");
+            "Employee Code", "Salutation", "First Name", "Middle Name", "Last Name", "Email", "Phone",
+            "Date of Birth", "Gender", "Blood Group", "Marital Status",
+            "Date of Joining", "Group Date of Joining", "Date of Leaving", "Status", "Job Status",
+            "Employee Type", "Department", "Designation", "Reporting Manager",
+            "Aadhaar", "PAN", "PF", "UAN",
+            "ESIC Number", "Mediclaim Number", "Gratuity", "Pension",
+            "Cost Center", "Payroll Location", "ESIC Applicable",
+            "Citizenship", "Language Known", "Address");
 
         foreach (var row in rows)
         {
             csv.AppendRow(
                 row.EmployeeCode,
+                row.Salutation,
                 row.FirstName,
+                row.MiddleName,
                 row.LastName,
                 row.Email,
                 row.Phone,
                 row.DateOfBirth?.ToString(DateFormat),
                 row.Gender.ToString(),
+                row.BloodGroup.ToString(),
+                row.MaritalStatus.ToString(),
                 row.DateOfJoining.ToString(DateFormat),
+                row.GroupDateOfJoining?.ToString(DateFormat),
                 row.DateOfLeaving?.ToString(DateFormat),
                 row.Status.ToString(),
+                row.JobStatus,
+                row.EmployeeType,
                 row.DepartmentName,
                 row.DesignationName,
                 row.ReportingManagerName,
+                row.MaskedAadhaarNumber,
+                row.MaskedPanNumber,
+                row.MaskedPfNumber,
+                row.MaskedUanNumber,
+                row.MaskedEsicNumber,
+                row.MaskedMediclaimNumber,
+                row.Gratuity.ToString(),
+                row.Pension.ToString(),
+                row.CostCenterCode,
+                row.PayrollLocation,
+                row.EsicApplicable.ToString(),
+                row.Citizenship,
+                row.LanguageKnown,
                 row.Address);
         }
 
@@ -376,10 +567,12 @@ public class EmployeeService : IEmployeeService
         {
             var search = query.Search.Trim().ToLowerInvariant();
             employees = employees.Where(e =>
-                e.EmployeeCode.ToLower().Contains(search) ||
+                (e.EmployeeCode ?? string.Empty).ToLower().Contains(search) ||
                 e.FirstName.ToLower().Contains(search) ||
                 e.LastName.ToLower().Contains(search) ||
-                e.Email.ToLower().Contains(search));
+                (e.Contact != null && e.Contact.OfficialEmail != null
+                    ? e.Contact.OfficialEmail
+                    : e.Email).ToLower().Contains(search));
         }
 
         return employees;
@@ -403,8 +596,10 @@ public class EmployeeService : IEmployeeService
                 ? employees.OrderByDescending(e => e.LastName)
                 : employees.OrderBy(e => e.LastName),
             "email" => descending
-                ? employees.OrderByDescending(e => e.Email)
-                : employees.OrderBy(e => e.Email),
+                ? employees.OrderByDescending(e =>
+                    e.Contact != null && e.Contact.OfficialEmail != null ? e.Contact.OfficialEmail : e.Email)
+                : employees.OrderBy(e =>
+                    e.Contact != null && e.Contact.OfficialEmail != null ? e.Contact.OfficialEmail : e.Email),
             "department" => descending
                 ? employees.OrderByDescending(e => e.Department!.Name)
                 : employees.OrderBy(e => e.Department!.Name),
@@ -431,23 +626,56 @@ public class EmployeeService : IEmployeeService
     private static IQueryable<EmployeeDto> ProjectDetail(IQueryable<Employee> employees) =>
         employees.Select(e => new EmployeeDto(
             e.Id,
-            e.EmployeeCode,
+            e.EmployeeCode ?? string.Empty,
+            e.Salutation,
             e.FirstName,
+            e.MiddleName,
             e.LastName,
             e.FirstName + " " + e.LastName,
-            e.Email,
-            e.Phone,
+            e.Contact != null && e.Contact.OfficialEmail != null ? e.Contact.OfficialEmail : e.Email,
+            e.Contact != null && e.Contact.OfficialPhone != null ? e.Contact.OfficialPhone : e.Phone,
             e.DateOfBirth,
             e.Gender,
+            e.BloodGroup,
+            e.MaritalStatus,
+            e.BirthCountry,
+            e.BirthState,
+            e.BirthCity,
+            e.BirthCountryId,
+            e.BirthCountryRef != null ? e.BirthCountryRef.Name : null,
+            e.BirthStateId,
+            e.BirthStateRef != null ? e.BirthStateRef.Name : null,
+            e.BirthCityId,
+            e.BirthCityRef != null ? e.BirthCityRef.Name : null,
+            e.Religion,
+            e.Caste,
             e.DateOfJoining,
+            e.GroupDateOfJoining,
             e.DateOfLeaving,
             e.Status,
+            e.JobStatus,
+            e.GroupId,
             e.DepartmentId,
-            e.Department!.Name,
+            e.Department != null ? e.Department.Name : null,
             e.DesignationId,
-            e.Designation!.Name,
+            e.Designation != null ? e.Designation.Name : null,
             e.ReportingManagerId,
             e.ReportingManager == null ? null : e.ReportingManager.FirstName + " " + e.ReportingManager.LastName,
+            e.EmployeeType,
+            EmployeeDto.MaskAadhaar(e.AadhaarNumber),
+            EmployeeDto.MaskPan(e.PanNumber),
+            EmployeeDto.MaskNumericId(e.PfNumber),
+            EmployeeDto.MaskNumericId(e.UanNumber),
+            EmployeeDto.MaskNumericId(e.EsicNumber),
+            EmployeeDto.MaskNumericId(e.MediclaimNumber),
+            e.Gratuity,
+            e.Pension,
+            e.CostCenterCode,
+            e.PayrollLocation,
+            e.EsicApplicable,
+            e.Citizenship,
+            e.LanguageKnown,
+            e.ProfilePictureUrl,
             e.Address,
             e.CreatedDate,
             e.ModifiedDate));
@@ -468,43 +696,50 @@ public class EmployeeService : IEmployeeService
     }
 
     /// <summary>
-    /// Checks that the department, designation and manager on the request exist <em>within the caller's
+    /// Checks that a department, designation and/or manager on the request exist <em>within the caller's
     /// tenant</em> — the queries run through the global filter, so another tenant's id is reported as
-    /// nonexistent. Returns null when everything resolves.
+    /// nonexistent. Department, designation and manager are all optional (they belong to later Employee
+    /// sections), so each is validated only when a value is supplied. Returns null when everything resolves.
     /// </summary>
     private async Task<Result<EmployeeDto>?> ValidateReferencesAsync(
         EmployeeRequest request, Employee? existing, CancellationToken cancellationToken)
     {
-        var department = await _db.Departments.AsNoTracking()
-            .Where(d => d.Id == request.DepartmentId)
-            .Select(d => new { d.IsActive })
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (department is null)
+        if (request.DepartmentId is Guid departmentId)
         {
-            return Result<EmployeeDto>.Invalid("departmentId", "The selected department does not exist.");
+            var department = await _db.Departments.AsNoTracking()
+                .Where(d => d.Id == departmentId)
+                .Select(d => new { d.IsActive })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (department is null)
+            {
+                return Result<EmployeeDto>.Invalid("departmentId", "The selected department does not exist.");
+            }
+
+            if (!department.IsActive && existing?.DepartmentId != request.DepartmentId)
+            {
+                return Result<EmployeeDto>.Invalid(
+                    "departmentId", "The selected department is no longer active and cannot be assigned.");
+            }
         }
 
-        if (!department.IsActive && existing?.DepartmentId != request.DepartmentId)
+        if (request.DesignationId is Guid designationId)
         {
-            return Result<EmployeeDto>.Invalid(
-                "departmentId", "The selected department is no longer active and cannot be assigned.");
-        }
+            var designation = await _db.Designations.AsNoTracking()
+                .Where(d => d.Id == designationId)
+                .Select(d => new { d.IsActive })
+                .FirstOrDefaultAsync(cancellationToken);
 
-        var designation = await _db.Designations.AsNoTracking()
-            .Where(d => d.Id == request.DesignationId)
-            .Select(d => new { d.IsActive })
-            .FirstOrDefaultAsync(cancellationToken);
+            if (designation is null)
+            {
+                return Result<EmployeeDto>.Invalid("designationId", "The selected designation does not exist.");
+            }
 
-        if (designation is null)
-        {
-            return Result<EmployeeDto>.Invalid("designationId", "The selected designation does not exist.");
-        }
-
-        if (!designation.IsActive && existing?.DesignationId != request.DesignationId)
-        {
-            return Result<EmployeeDto>.Invalid(
-                "designationId", "The selected designation is no longer active and cannot be assigned.");
+            if (!designation.IsActive && existing?.DesignationId != request.DesignationId)
+            {
+                return Result<EmployeeDto>.Invalid(
+                    "designationId", "The selected designation is no longer active and cannot be assigned.");
+            }
         }
 
         if (request.ReportingManagerId is Guid managerId)
@@ -523,6 +758,39 @@ public class EmployeeService : IEmployeeService
             {
                 return Result<EmployeeDto>.Invalid(
                     "reportingManagerId", "The selected manager has left the organization and cannot be assigned.");
+            }
+        }
+
+        // Birth location cascading validation.
+        if (request.BirthStateId.HasValue)
+        {
+            if (!request.BirthCountryId.HasValue)
+            {
+                return Result<EmployeeDto>.Invalid("birthCountryId", "Birth country is required when a birth state is selected.");
+            }
+
+            var stateInCountry = await _db.States.AsNoTracking()
+                .AnyAsync(s => s.Id == request.BirthStateId.Value && s.CountryId == request.BirthCountryId.Value, cancellationToken);
+
+            if (!stateInCountry)
+            {
+                return Result<EmployeeDto>.Invalid("birthStateId", "The selected state does not belong to the selected country.");
+            }
+        }
+
+        if (request.BirthCityId.HasValue)
+        {
+            if (!request.BirthStateId.HasValue)
+            {
+                return Result<EmployeeDto>.Invalid("birthStateId", "Birth state is required when a birth city is selected.");
+            }
+
+            var cityInState = await _db.Cities.AsNoTracking()
+                .AnyAsync(c => c.Id == request.BirthCityId.Value && c.StateId == request.BirthStateId.Value, cancellationToken);
+
+            if (!cityInState)
+            {
+                return Result<EmployeeDto>.Invalid("birthCityId", "The selected city does not belong to the selected state.");
             }
         }
 
@@ -583,7 +851,7 @@ public class EmployeeService : IEmployeeService
         }
 
         var clashes = await candidates
-            .Where(e => e.EmployeeCode.ToLower() == normalizedCode || e.Email.ToLower() == normalizedEmail)
+            .Where(e => (e.EmployeeCode ?? string.Empty).ToLower() == normalizedCode || e.Email.ToLower() == normalizedEmail)
             .Select(e => new { e.EmployeeCode, e.Email })
             .ToListAsync(cancellationToken);
 
@@ -608,5 +876,189 @@ public class EmployeeService : IEmployeeService
     {
         var trimmed = value?.Trim();
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
+    /// <summary>
+    /// Creates an employee from Personal Details, assigning the employee code and a uniqueness-safe
+    /// placeholder email (the real work email is a separate Contact concern). The employee is created with
+    /// no department, designation or reporting manager — those are captured by later sections.
+    /// </summary>
+    private async Task<Result<EmployeeDto>> CreatePersonalDetailsCoreAsync(
+        EmployeePersonalDetailsRequest request,
+        Guid tenantId,
+        CancellationToken cancellationToken)
+    {
+        var employee = new Employee
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantId,
+            // Employee Code is assigned atomically with Initial Employment, once its
+            // organizational context is available for the selected generation method.
+            EmployeeCode = null,
+            // A uniqueness-safe placeholder until the Contact section supplies the real work email.
+            Email = $"emp-{Guid.NewGuid():N}@placeholder.local",
+            DateOfJoining = request.DateOfJoining
+        };
+
+        ApplyPersonalDetails(employee, request);
+
+        _db.Employees.Add(employee);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation("Created employee {EmployeeId} in tenant {TenantId} from Personal Details.", employee.Id, tenantId);
+
+        return await ReloadAsync(employee.Id, "Employee created.", cancellationToken);
+    }
+
+    /// <summary>Applies only the Personal Details fields of a request onto an employee record.</summary>
+    private void ApplyPersonalDetails(Employee employee, EmployeePersonalDetailsRequest request, bool preserveSensitive = false)
+    {
+        employee.Salutation = Normalize(request.Salutation);
+        employee.FirstName = request.FirstName.Trim();
+        employee.MiddleName = Normalize(request.MiddleName);
+        employee.LastName = request.LastName.Trim();
+        employee.DateOfBirth = request.DateOfBirth;
+        employee.Gender = request.Gender;
+        employee.BloodGroup = request.BloodGroup;
+        employee.MaritalStatus = request.MaritalStatus;
+        employee.BirthCountryId = request.BirthCountryId;
+        employee.BirthStateId = request.BirthStateId;
+        employee.BirthCityId = request.BirthCityId;
+        employee.Religion = Normalize(request.Religion);
+        employee.Caste = Normalize(request.Caste);
+        employee.Citizenship = Normalize(request.Citizenship);
+        employee.EsicApplicable = request.EsicApplicable;
+        employee.EsicNumber = Normalize(request.EsicNumber);
+        employee.MediclaimNumber = Normalize(request.MediclaimNumber);
+        employee.Gratuity = request.Gratuity;
+        employee.Pension = request.Pension;
+        // Aadhaar, PAN, PF and UAN are returned only masked on read, so an edit form cannot resend the
+        // originals. Leave-blank-means-unchanged here — a create always carries the full values.
+        employee.PfNumber = OverwriteOrKeep(employee.PfNumber, request.PfNumber, preserveSensitive);
+        employee.UanNumber = OverwriteOrKeep(employee.UanNumber, request.UanNumber, preserveSensitive);
+        employee.AadhaarNumber = OverwriteOrKeep(employee.AadhaarNumber, request.AadhaarNumber, preserveSensitive);
+        employee.PanNumber = OverwriteOrKeep(employee.PanNumber, request.PanNumber, preserveSensitive);
+        employee.DateOfJoining = request.DateOfJoining;
+        employee.JobStatus = Normalize(request.JobStatus);
+    }
+
+    /// <summary>
+    /// Applies a value that may be masked on read. When <paramref name="preserveSensitive"/> is set and the
+    /// incoming value is blank, the stored value is kept; otherwise the incoming value (normalized) wins.
+    /// </summary>
+    private static string? OverwriteOrKeep(string? current, string? incoming, bool preserveSensitive) =>
+        preserveSensitive && string.IsNullOrWhiteSpace(incoming) ? current : Normalize(incoming);
+
+    /// <summary>
+    /// Birth location cascade for the Personal Details DTO: a selected state must belong to the selected
+    /// country, and a selected city must belong to the selected state (the same rule the shared employee
+    /// write enforces).
+    /// </summary>
+    private async Task<Result<EmployeeDto>?> ValidateBirthLocationAsync(
+        EmployeePersonalDetailsRequest request, CancellationToken cancellationToken)
+    {
+        if (request.BirthStateId.HasValue)
+        {
+            if (!request.BirthCountryId.HasValue)
+            {
+                return Result<EmployeeDto>.Invalid("birthCountryId", "Birth country is required when a birth state is selected.");
+            }
+
+            var stateInCountry = await _db.States.AsNoTracking()
+                .AnyAsync(s => s.Id == request.BirthStateId.Value && s.CountryId == request.BirthCountryId.Value, cancellationToken);
+
+            if (!stateInCountry)
+            {
+                return Result<EmployeeDto>.Invalid("birthStateId", "The selected state does not belong to the selected country.");
+            }
+        }
+
+        if (request.BirthCityId.HasValue)
+        {
+            if (!request.BirthStateId.HasValue)
+            {
+                return Result<EmployeeDto>.Invalid("birthStateId", "Birth state is required when a birth city is selected.");
+            }
+
+            var cityInState = await _db.Cities.AsNoTracking()
+                .AnyAsync(c => c.Id == request.BirthCityId.Value && c.StateId == request.BirthStateId.Value, cancellationToken);
+
+            if (!cityInState)
+            {
+                return Result<EmployeeDto>.Invalid("birthCityId", "The selected city does not belong to the selected state.");
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Produces the employee code for a new hire according to the tenant's configuration. When the tenant
+    /// auto-generates codes the code is <c>Prefix + NextNumber</c> (padded to <see cref="EmployeeCodeConfig.Padding"/>
+    /// digits) and <c>advanceCounter</c> tells the caller to advance the counter; when it does not, a
+    /// client-supplied code is required and no counter is touched. Returns the resolved code (or an error).
+    /// </summary>
+    private async Task<(Result<EmployeeDto>? Error, string? Code, bool AdvanceCounter, string Prefix, int Padding)>
+        ResolveEmployeeCodeAsync(string? clientCode, CancellationToken cancellationToken)
+    {
+        var config = await _db.EmployeeCodeConfigs.AsNoTracking()
+            .FirstOrDefaultAsync(cancellationToken);
+
+        // A tenant with no configuration row defaults to auto-generation.
+        var autoGenerate = config?.AutoGenerate ?? true;
+        var prefix = string.IsNullOrWhiteSpace(config?.Prefix) ? "EMP" : config.Prefix.Trim().ToUpperInvariant();
+        var padding = Math.Clamp(config?.Padding ?? 0, 0, 10);
+        var nextNumber = Math.Max(1, config?.NextNumber ?? 1);
+
+        if (autoGenerate)
+        {
+            var code = prefix + nextNumber.ToString(padding == 0 ? string.Empty : $"D{padding}");
+
+            return (null, code, true, prefix, padding);
+        }
+
+        // Manual-code configuration: the client supplies the code.
+        if (string.IsNullOrWhiteSpace(clientCode))
+        {
+            return (
+                Result<EmployeeDto>.Invalid(
+                    "employeeCode", "Employee code is required because this organization assigns codes manually."),
+                null, false, string.Empty, 0);
+        }
+
+        var normalized = clientCode.Trim();
+        var conflict = await FindConflictAsync(normalized, Guid.NewGuid().ToString("N") + "@placeholder.local", excludeId: null, cancellationToken);
+        if (conflict is not null)
+        {
+            return (conflict, null, false, string.Empty, 0);
+        }
+
+        return (null, normalized, false, string.Empty, 0);
+    }
+
+    /// <summary>
+    /// Advances the tenant's employee-code counter once an auto-generated code has been consumed.
+    /// </summary>
+    private async Task PersistEmployeeCodeCounterAsync(
+        string prefix, int padding, CancellationToken cancellationToken)
+    {
+        var config = await _db.EmployeeCodeConfigs.FirstOrDefaultAsync(cancellationToken);
+        if (config is null)
+        {
+            config = new EmployeeCodeConfig
+            {
+                Id = Guid.NewGuid(),
+                TenantId = _tenantContext.TenantId!.Value,
+                AutoGenerate = true,
+                Prefix = prefix,
+                Padding = padding,
+                NextNumber = 2
+            };
+            _db.EmployeeCodeConfigs.Add(config);
+        }
+        else
+        {
+            config.NextNumber = Math.Max(config.NextNumber + 1, 2);
+        }
     }
 }

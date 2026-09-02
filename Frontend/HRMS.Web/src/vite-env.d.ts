@@ -7,6 +7,13 @@
  */
 interface ImportMetaEnv {
   readonly VITE_API_BASE_URL?: string
+
+  /**
+   * Origin template for workspace-aware API routing, e.g. `http://{workspace}.localhost:5080`.
+   * When set, the label in the current address picks the API origin; when absent, requests keep
+   * going to `VITE_API_BASE_URL`.
+   */
+  readonly VITE_API_ORIGIN_TEMPLATE?: string
 }
 
 interface ImportMeta {

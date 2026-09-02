@@ -40,7 +40,47 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<Department> Departments => Set<Department>();
     public DbSet<Designation> Designations => Set<Designation>();
+    public DbSet<Bank> Banks => Set<Bank>();
+    public DbSet<Country> Countries => Set<Country>();
+    public DbSet<State> States => Set<State>();
+    public DbSet<City> Cities => Set<City>();
     public DbSet<Employee> Employees => Set<Employee>();
+
+    // Organizational hierarchy masters
+    public DbSet<HoldingCompany> HoldingCompanies => Set<HoldingCompany>();
+    public DbSet<Lob> LinesOfBusiness => Set<Lob>();
+    public DbSet<Organisation> Organisations => Set<Organisation>();
+    public DbSet<SubDepartment> SubDepartments => Set<SubDepartment>();
+    public DbSet<Section> Sections => Set<Section>();
+    public DbSet<SubSection> SubSections => Set<SubSection>();
+    public DbSet<Function> Functions => Set<Function>();
+    public DbSet<SubFunction> SubFunctions => Set<SubFunction>();
+    public DbSet<Grade> Grades => Set<Grade>();
+    public DbSet<EmployeeType> EmployeeTypes => Set<EmployeeType>();
+    public DbSet<WorkLocation> WorkLocations => Set<WorkLocation>();
+    public DbSet<CostCenter> CostCenters => Set<CostCenter>();
+    public DbSet<PositionChangeReason> PositionChangeReasons => Set<PositionChangeReason>();
+    public DbSet<EmployeeCodeConfig> EmployeeCodeConfigs => Set<EmployeeCodeConfig>();
+    public DbSet<EmployeeCodeRule> EmployeeCodeRules => Set<EmployeeCodeRule>();
+    public DbSet<EmployeeCodeConfigVersion> EmployeeCodeConfigVersions => Set<EmployeeCodeConfigVersion>();
+    public DbSet<EmployeeCodeRuleCondition> EmployeeCodeRuleConditions => Set<EmployeeCodeRuleCondition>();
+    public DbSet<EmployeeCodeSegment> EmployeeCodeSegments => Set<EmployeeCodeSegment>();
+    public DbSet<EmployeeCodeSequence> EmployeeCodeSequences => Set<EmployeeCodeSequence>();
+
+    // Employee sub-entities
+    public DbSet<EmployeeContact> EmployeeContacts => Set<EmployeeContact>();
+    public DbSet<EmployeeAddress> EmployeeAddresses => Set<EmployeeAddress>();
+    public DbSet<EmployeeFamily> EmployeeFamilyMembers => Set<EmployeeFamily>();
+    public DbSet<EmployeeEducation> EmployeeEducationRecords => Set<EmployeeEducation>();
+    public DbSet<EmployeeEmploymentHistory> EmployeeEmploymentHistory => Set<EmployeeEmploymentHistory>();
+    public DbSet<EmployeePreviousEmployment> EmployeePreviousEmployments => Set<EmployeePreviousEmployment>();
+    public DbSet<EmployeeBankDetail> EmployeeBankDetails => Set<EmployeeBankDetail>();
+    public DbSet<EmployeeDocument> EmployeeDocuments => Set<EmployeeDocument>();
+    public DbSet<EmployeeSupervisor> EmployeeSupervisors => Set<EmployeeSupervisor>();
+    public DbSet<EmployeeAdditionalInfo> EmployeeAdditionalInfo => Set<EmployeeAdditionalInfo>();
+    public DbSet<EmployeeAuditLog> EmployeeAuditLogs => Set<EmployeeAuditLog>();
+    public DbSet<EmployeeEmployment> EmployeeEmployments => Set<EmployeeEmployment>();
+    public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
 
     /// <summary>
     /// Applies the UTC treatment to every DateTime property in the model, so a timestamp means the same
@@ -78,21 +118,49 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         // re-evaluates it per query against the current request's tenant. When no tenant is resolved
         // (TenantId == null) the predicate matches no rows: reads must be tenant-scoped, and bootstrap
         // paths (login lookup, seeding) opt out explicitly with IgnoreQueryFilters().
-        //
-        // These stay in place under database-per-tenant, and they are not redundant there. The shard
-        // boundary decides which database a request reaches; these decide which rows within it. Removing
-        // them would turn a context with no resolved tenant — startup, seeding, refresh — from "sees
-        // nothing" into "sees the entire shard", which is the opposite of the guarantee they exist for.
-        //
-        // One of the ten DbSets above is absent from this list: Tenant is the root that everything else is
-        // scoped *to*, and a shard holds exactly one row of it, so filtering it would only make the tenant
-        // invisible to its own login lookup.
         modelBuilder.Entity<User>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<UserRole>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<RefreshToken>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<Department>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<Designation>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Bank>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<Employee>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+
+        // Employee sub-entity query filters
+        modelBuilder.Entity<EmployeeContact>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeAddress>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeFamily>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeEducation>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeEmploymentHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeePreviousEmployment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeBankDetail>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeDocument>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeSupervisor>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeAdditionalInfo>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeAuditLog>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeEmployment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ImportBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+
+        // Organizational hierarchy master query filters
+        modelBuilder.Entity<HoldingCompany>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Lob>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Organisation>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SubDepartment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Section>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SubSection>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Function>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SubFunction>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Grade>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeType>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<WorkLocation>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<CostCenter>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PositionChangeReason>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeCodeConfig>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeCodeConfigVersion>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeCodeRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeCodeRuleCondition>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeCodeSegment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeCodeSequence>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
     }
 
     public override int SaveChanges()
@@ -106,6 +174,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         ApplyAuditAndTenantStamps();
         return base.SaveChangesAsync(cancellationToken);
     }
+
+    public Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
+        => Database.BeginTransactionAsync(cancellationToken);
 
     /// <summary>
     /// Sets audit timestamps and enforces the tenant guard on tenant-scoped rows — stamping the

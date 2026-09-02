@@ -31,6 +31,8 @@ export interface StubResponse {
 
 export interface StubCall {
   method: string
+  /** The origin the request was aimed at — what workspace-aware routing decided for this call. */
+  baseURL: string
   url: string
   /** Request body, parsed back from JSON when it was serialized. */
   body: unknown
@@ -150,6 +152,7 @@ function toCall(config: InternalAxiosRequestConfig): StubCall {
   const authorization = config.headers?.Authorization
   return {
     method: (config.method ?? 'get').toLowerCase(),
+    baseURL: config.baseURL ?? '',
     url: config.url ?? '',
     body: parseBody(config.data),
     params: (config.params ?? {}) as Record<string, unknown>,

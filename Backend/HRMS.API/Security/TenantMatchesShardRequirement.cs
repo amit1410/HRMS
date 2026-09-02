@@ -43,12 +43,18 @@ public sealed class TenantMatchesShardHandler : AuthorizationHandler<TenantMatch
 
         if (shard is null)
         {
-            // No organization was resolved for this host, so there is nothing for the token to disagree
-            // with. Safe in both deployment modes and load-bearing in neither: with a connection-string
-            // template configured, a shard-less scope cannot open a tenant database at all; without one,
-            // every organization shares a database and the six query filters isolate them by the same
-            // claim this requirement would have compared against.
-            context.Succeed(requirement);
+            if (context.User.Identity is not { IsAuthenticated: true })
+            {
+                // RequireAuthenticatedUser supplies the ordinary bearer challenge. Keeping this requirement
+                // neutral for anonymous callers avoids misreporting a missing token as a workspace mismatch.
+                context.Succeed(requirement);
+                return Task.CompletedTask;
+            }
+
+            // An authenticated tenant request must always arrive through a resolved workspace. In shared-
+            // database mode, accepting the token here would let an unregistered/apex host reach the tenant
+            // selected only by its claim, bypassing the host/workspace side of the isolation boundary.
+            Refuse(context, requirement, null, "the request host does not resolve to a workspace");
             return Task.CompletedTask;
         }
 
@@ -97,14 +103,21 @@ public sealed class TenantMatchesShardHandler : AuthorizationHandler<TenantMatch
     private void Refuse(
         AuthorizationHandlerContext context,
         TenantMatchesShardRequirement requirement,
-        ShardDescriptor shard,
+        ShardDescriptor? shard,
         string reason)
     {
-        _logger.LogWarning(
-            "Refusing a request at host {Host} (organization {TenantCode}): {Reason}.",
-            shard.Host,
-            shard.TenantCode,
-            reason);
+        if (shard is null)
+        {
+            _logger.LogWarning("Refusing an authenticated tenant request: {Reason}.", reason);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Refusing a request at host {Host} (organization {TenantCode}): {Reason}.",
+                shard.Host,
+                shard.TenantCode,
+                reason);
+        }
 
         context.Fail(new AuthorizationFailureReason(this, reason));
     }

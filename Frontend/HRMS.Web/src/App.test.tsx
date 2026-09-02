@@ -55,6 +55,17 @@ describe('App', () => {
     window.localStorage.clear()
     stub = installStubAdapter()
     stubDashboard(stub)
+    stub.on('get', '/api/tenants/current/branding', () => ({
+      data: ok({
+        displayName: 'Northwind Demo',
+        logoUrl: null,
+        primaryColor: '#1D4ED8',
+        welcomeMessage: null,
+        supportEmail: null,
+        ssoEnabled: false,
+        ssoProviderName: null,
+      }),
+    }))
   })
 
   afterEach(() => {
@@ -69,10 +80,9 @@ describe('App', () => {
     renderApp('/reports/headcount')
 
     expect(await screen.findByLabelText('Password')).toBeInTheDocument()
-    // Nothing was fetched on behalf of someone not yet signed in.
-    expect(stub.calls).toHaveLength(0)
+    // Only the anonymous branding endpoint was fetched — no authenticated calls on behalf of a visitor.
+    expect(stub.callsTo('get', '/api/tenants/current/branding')).toHaveLength(1)
 
-    await userEvent.type(screen.getByLabelText('Tenant code'), 'DEMO01')
     await userEvent.type(screen.getByLabelText('Email'), 'hr@demo01.test')
     await userEvent.type(screen.getByLabelText('Password'), 'pw')
     await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
@@ -87,8 +97,7 @@ describe('App', () => {
 
     renderApp('/login')
 
-    await userEvent.type(screen.getByLabelText('Tenant code'), 'DEMO01')
-    await userEvent.type(screen.getByLabelText('Email'), 'hr@demo01.test')
+    await userEvent.type(await screen.findByLabelText('Email'), 'hr@demo01.test')
     await userEvent.type(screen.getByLabelText('Password'), 'pw')
     await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 

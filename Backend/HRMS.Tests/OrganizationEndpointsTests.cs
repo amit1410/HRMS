@@ -393,7 +393,7 @@ public class OrganizationEndpointsTests : IClassFixture<HrmsApiFactory>
         Assert.Equal(new byte[] { 0xEF, 0xBB, 0xBF }, bytes.Take(3));
 
         var text = Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
-        Assert.StartsWith("Employee Code,First Name,Last Name,Email,Phone", text);
+        Assert.StartsWith("Employee Code,Salutation,First Name,Middle Name,Last Name,Email,Phone", text);
         Assert.Contains("Nadia", text, StringComparison.Ordinal);
     }
 
@@ -457,7 +457,8 @@ public class OrganizationEndpointsTests : IClassFixture<HrmsApiFactory>
     private HttpClient CreateClient(
         Guid tenantId, Guid userId, string tenantCode, string email, IReadOnlyList<string> permissions)
     {
-        var client = _factory.CreateClient();
+        var host = tenantId == Demo02 ? HrmsApiFactory.Demo02Host : HrmsApiFactory.Demo01Host;
+        var client = _factory.CreateClientFor(host);
         var token = TestTokens.Create(
             userId,
             tenantId,

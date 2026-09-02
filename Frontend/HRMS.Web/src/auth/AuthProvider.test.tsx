@@ -23,7 +23,7 @@ function Probe() {
         onClick={async () => {
           setError('')
           try {
-            await login({ tenantCode: 'DEMO01', email: 'hr@demo01.test', password: 'pw' })
+            await login({ email: 'hr@demo01.test', password: 'pw' })
           } catch (caught) {
             setError(caught instanceof Error ? caught.message : 'failed')
           }
@@ -182,7 +182,7 @@ describe('AuthProvider', () => {
       await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('authenticated'))
 
       window.dispatchEvent(
-        new StorageEvent('storage', { key: 'hrms.lastTenantCode.v1', newValue: null }),
+        new StorageEvent('storage', { key: 'hrms.lastWorkspaceLabel.v1', newValue: null }),
       )
 
       expect(screen.getByTestId('status')).toHaveTextContent('authenticated')

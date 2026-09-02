@@ -12,7 +12,7 @@ public record EmployeeListItemDto(
     string EmployeeCode,
     string FullName,
     string Email,
-    string DepartmentName,
-    string DesignationName,
+    string? DepartmentName,
+    string? DesignationName,
     EmployeeStatus Status,
     DateOnly DateOfJoining);

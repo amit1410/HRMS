@@ -25,7 +25,7 @@ public class HrmsCatalogDbContextFactory : IDesignTimeDbContextFactory<HrmsCatal
     {
         var options = new DbContextOptionsBuilder<HrmsCatalogDbContext>()
             .UseSqlServer(
-                "Server=(localdb)\\MSSQLLocalDB;Database=HRMS_Catalog;Trusted_Connection=True;TrustServerCertificate=True;",
+                "Server=localhost;Database=HRMS_Catalog;Trusted_Connection=True;TrustServerCertificate=True;",
                 sql =>
                 {
                     sql.MigrationsAssembly(typeof(HrmsCatalogDbContext).Assembly.FullName);

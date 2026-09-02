@@ -5,8 +5,10 @@ import type {
   ApiResponse,
   Employee,
   EmployeeListItem,
+  EmployeePersonalDetailsRequest,
   EmployeeQuery,
   EmployeeRequest,
+  EmployeeSensitiveDetails,
   PagedResult,
 } from './types.ts'
 
@@ -37,6 +39,15 @@ export function getEmployee(id: string, signal?: AbortSignal): Promise<Employee>
   )
 }
 
+export function getEmployeeSensitiveDetails(
+  id: string,
+  signal?: AbortSignal,
+): Promise<EmployeeSensitiveDetails> {
+  return request<EmployeeSensitiveDetails>(() =>
+    api.get<ApiResponse<EmployeeSensitiveDetails>>(`/api/employees/${id}/sensitive-details`, { signal }),
+  )
+}
+
 export function createEmployee(body: EmployeeRequest, signal?: AbortSignal): Promise<Employee> {
   return request<Employee>(() =>
     api.post<ApiResponse<Employee>>('/api/employees', body, { signal }),
@@ -50,6 +61,30 @@ export function updateEmployee(
 ): Promise<Employee> {
   return request<Employee>(() =>
     api.put<ApiResponse<Employee>>(`/api/employees/${id}`, body, { signal }),
+  )
+}
+
+/**
+ * Creates an employee from the Personal Details section only. The backend assigns the employee code
+ * according to the tenant's employee-code configuration, so none is sent here.
+ */
+export function createPersonalDetails(
+  body: EmployeePersonalDetailsRequest,
+  signal?: AbortSignal,
+): Promise<Employee> {
+  return request<Employee>(() =>
+    api.post<ApiResponse<Employee>>('/api/employees/personal-details', body, { signal }),
+  )
+}
+
+/** Updates only the Personal Details fields of an existing employee. */
+export function updatePersonalDetails(
+  id: string,
+  body: EmployeePersonalDetailsRequest,
+  signal?: AbortSignal,
+): Promise<Employee> {
+  return request<Employee>(() =>
+    api.put<ApiResponse<Employee>>(`/api/employees/${id}/personal-details`, body, { signal }),
   )
 }
 

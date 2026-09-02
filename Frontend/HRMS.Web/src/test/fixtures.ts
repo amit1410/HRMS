@@ -1,10 +1,19 @@
 import type {
+  AddressType,
   AuthenticatedUser,
+  Bank,
   Department,
   Designation,
   Employee,
+  EmployeeAddress,
+  EmployeeBankDetail,
+  EmployeeBankDetailEdit,
+  EmployeeContact,
+  EmployeeEmploymentHistory,
   EmployeeListItem,
+  EmployeeSensitiveDetails,
   LoginResponse,
+  MasterLookup,
   PagedResult,
 } from '../api/types.ts'
 import { Permissions } from '../auth/permissions.ts'
@@ -22,6 +31,8 @@ export const HR_MANAGER_PERMISSIONS = [
   Permissions.employee.create,
   Permissions.employee.edit,
   Permissions.employee.export,
+  Permissions.employeeSensitive.view,
+  Permissions.employeeSensitive.edit,
   Permissions.department.view,
   Permissions.designation.view,
 ]
@@ -90,13 +101,73 @@ export function makeEmployeeDetail(overrides: Partial<Employee> = {}): Employee 
     phone: '+353 1 555 0134',
     dateOfBirth: '1991-07-02',
     gender: 'Female',
+    bloodGroup: 'Unspecified',
+    maritalStatus: 'Unspecified',
     dateOfJoining: '2023-03-14',
     status: 'Active',
     departmentId: 'd1000000-0000-0000-0000-000000000001',
     departmentName: 'Engineering',
     designationId: 'g1000000-0000-0000-0000-000000000001',
     designationName: 'Senior Software Engineer',
+    gratuity: false,
+    pension: false,
+    esicApplicable: false,
     address: '14 Kildare Street, Dublin',
+    createdDate: '2026-01-05T09:30:00Z',
+    ...overrides,
+  }
+}
+
+export function makeEmployeeSensitiveDetails(
+  overrides: Partial<EmployeeSensitiveDetails> = {},
+): EmployeeSensitiveDetails {
+  return {
+    employeeId: 'e1000000-0000-0000-0000-000000000001',
+    aadhaarNumber: null,
+    panNumber: null,
+    uanNumber: null,
+    pfNumber: null,
+    esicNumber: null,
+    mediclaimNumber: null,
+    ...overrides,
+  }
+}
+
+/** The contact record DTO, keyed to the same employee as the other fixtures. */
+export function makeContact(overrides: Partial<EmployeeContact> = {}): EmployeeContact {
+  return {
+    id: 'c3000000-0000-0000-0000-000000000001',
+    employeeId: 'e1000000-0000-0000-0000-000000000001',
+    officialEmail: 'nadia.farrell@demo01.test',
+    personalEmail: 'personal@example.com',
+    alternateEmail: 'alternate@example.com',
+    officialPhone: '9876543210',
+    personalPhone: '9123456780',
+    emergencyNumber: null,
+    sameAsCurrentAddress: true,
+    createdDate: '2026-01-05T09:30:00Z',
+    ...overrides,
+  }
+}
+
+/** A structured address DTO, keyed to the same employee as the other fixtures. */
+export function makeAddress(
+  addressType: AddressType,
+  overrides: Partial<EmployeeAddress> = {},
+): EmployeeAddress {
+  const isCurrent = addressType === 'Current'
+  return {
+    id: isCurrent ? 'a1000000-0000-0000-0000-000000000001' : 'a1000000-0000-0000-0000-000000000002',
+    employeeId: 'e1000000-0000-0000-0000-000000000001',
+    addressType,
+    country: 'India',
+    state: 'Maharashtra',
+    district: 'Mumbai City',
+    city: 'Mumbai',
+    zipCode: '400001',
+    addressLine1: '14 Kildare Street',
+    addressLine2: 'Flat 3',
+    houseNumber: null,
     createdDate: '2026-01-05T09:30:00Z',
     ...overrides,
   }
@@ -109,6 +180,107 @@ export function makeDepartment(overrides: Partial<Department> = {}): Department 
     name: 'Engineering',
     isActive: true,
     employeeCount: 12,
+    createdDate: '2026-01-05T09:30:00Z',
+    ...overrides,
+  }
+}
+
+/** A bank master row as the dropdown supplies it (the unified master lookup shape). */
+export function makeBankLookup(overrides: Partial<MasterLookup> = {}): MasterLookup {
+  return {
+    id: 'b1000000-0000-0000-0000-000000000001',
+    code: 'SBI',
+    name: 'State Bank of India',
+    isActive: true,
+    ...overrides,
+  }
+}
+
+/** Any master-data row as the dropdown supplies it (holding companies, grades, change reasons, …). */
+export function makeMasterLookup(overrides: Partial<MasterLookup> = {}): MasterLookup {
+  return {
+    id: 'm1000000-0000-0000-0000-000000000001',
+    code: 'M1',
+    name: 'Master item',
+    isActive: true,
+    ...overrides,
+  }
+}
+
+/** A position market change history row (FKs to master data plus denormalized names). */
+export function makeEmploymentHistory(
+  overrides: Partial<EmployeeEmploymentHistory> = {},
+): EmployeeEmploymentHistory {
+  return {
+    id: 'eh1000000-0000-0000-0000-000000000001',
+    employeeId: 'e1000000-0000-0000-0000-000000000001',
+    effectiveFrom: '2026-01-05',
+    effectiveTo: null,
+    departmentId: 'd1000000-0000-0000-0000-000000000001',
+    departmentName: 'Engineering',
+    designationId: 'g1000000-0000-0000-0000-000000000001',
+    designationName: 'Software Engineer',
+    gradeId: 'gr1000000-0000-0000-0000-000000000001',
+    gradeName: 'Grade 1',
+    workLocationId: 'wl1000000-0000-0000-0000-000000000001',
+    workLocationName: 'Mumbai Office',
+    positionChangeReasonId: 'pr1000000-0000-0000-0000-000000000001',
+    positionChangeReasonName: 'New Hire',
+    employmentType: 'FullTime',
+    employmentStatus: 'Active',
+    createdDate: '2026-01-05T09:30:00Z',
+    ...overrides,
+  }
+}
+
+/** A bank master entity (used where the Bank-type shape is required). */
+export function makeBank(overrides: Partial<Bank> = {}): Bank {
+  return {
+    id: 'b1000000-0000-0000-0000-000000000001',
+    code: 'SBI',
+    name: 'State Bank of India',
+    isActive: true,
+    ...overrides,
+  }
+}
+
+/** An employee bank detail DTO, keyed to the same employee as the other fixtures. */
+export function makeBankDetail(overrides: Partial<EmployeeBankDetail> = {}): EmployeeBankDetail {
+  return {
+    id: 'bk1000000-0000-0000-0000-000000000001',
+    employeeId: 'e1000000-0000-0000-0000-000000000001',
+    bankId: 'b1000000-0000-0000-0000-000000000001',
+    bankName: 'State Bank of India',
+    accountHolderName: 'Nadia Farrell',
+    maskedAccountNumber: '********-100',
+    accountType: 'Savings',
+    accountPurpose: 'Salary',
+    status: 'Active',
+    maskedIfscCode: 'SBIN*****01',
+    branchName: 'Main Branch',
+    effectiveFrom: '2026-01-05',
+    isActive: true,
+    hasDocumentOfProof: false,
+    createdDate: '2026-01-05T09:30:00Z',
+    ...overrides,
+  }
+}
+
+export function makeBankDetailEdit(overrides: Partial<EmployeeBankDetailEdit> = {}): EmployeeBankDetailEdit {
+  return {
+    id: 'bk1000000-0000-0000-0000-000000000001',
+    employeeId: 'e1000000-0000-0000-0000-000000000001',
+    bankId: 'b1000000-0000-0000-0000-000000000001',
+    bankName: 'State Bank of India',
+    accountHolderName: 'Nadia Farrell',
+    accountNumber: 'ACC-100',
+    accountType: 'Savings',
+    accountPurpose: 'Salary',
+    status: 'Active',
+    ifscCode: 'SBIN0000001',
+    branchName: 'Main Branch',
+    effectiveFrom: '2026-01-05',
+    isActive: true,
     createdDate: '2026-01-05T09:30:00Z',
     ...overrides,
   }

@@ -53,11 +53,15 @@ public class EmployeeRequestValidator : AbstractValidator<EmployeeRequest>
         RuleFor(x => x.Status)
             .IsInEnum().WithMessage("Status is not a recognized value.");
 
+        // Department and designation are captured by the Employment/Position section, which is built later,
+        // so they are optional here — an employee can be created from Personal Details alone.
         RuleFor(x => x.DepartmentId)
-            .NotEmpty().WithMessage("Department is required.");
+            .NotEqual(Guid.Empty).WithMessage("Department is not a valid selection.")
+            .When(x => x.DepartmentId.HasValue);
 
         RuleFor(x => x.DesignationId)
-            .NotEmpty().WithMessage("Designation is required.");
+            .NotEqual(Guid.Empty).WithMessage("Designation is not a valid selection.")
+            .When(x => x.DesignationId.HasValue);
 
         RuleFor(x => x.ReportingManagerId)
             .NotEqual(Guid.Empty).WithMessage("Reporting manager is not a valid employee.")
@@ -97,6 +101,37 @@ public class EmployeeRequestValidator : AbstractValidator<EmployeeRequest>
             .Must((request, dateOfLeaving) => dateOfLeaving!.Value >= request.DateOfJoining)
             .WithMessage("Date of leaving cannot be before the date of joining.")
             .When(x => x.DateOfLeaving.HasValue && x.DateOfJoining != default);
+
+        RuleFor(x => x.AadhaarNumber)
+            .Matches(@"^\d{12}$").WithMessage("Aadhaar number must be exactly 12 digits.")
+            .When(x => !string.IsNullOrWhiteSpace(x.AadhaarNumber));
+
+        RuleFor(x => x.PanNumber)
+            .Matches(@"^[A-Z]{5}\d{4}[A-Z]$").WithMessage("PAN must be in the format ABCDE1234F (5 letters, 4 digits, 1 letter).")
+            .When(x => !string.IsNullOrWhiteSpace(x.PanNumber));
+
+        RuleFor(x => x.UanNumber)
+            .Matches(@"^\d{12}$").WithMessage("UAN must be exactly 12 digits.")
+            .When(x => !string.IsNullOrWhiteSpace(x.UanNumber));
+
+        // ESIC Number is mandatory when ESIC Applicable is set to true.
+        RuleFor(x => x.EsicNumber)
+            .NotEmpty().WithMessage("ESIC Number is required when ESIC is applicable.")
+            .When(x => x.EsicApplicable);
+
+        // ESIC Number validation format (when provided).
+        RuleFor(x => x.EsicNumber)
+            .MaximumLength(50).WithMessage("ESIC Number must not exceed 50 characters.")
+            .When(x => !string.IsNullOrWhiteSpace(x.EsicNumber));
+
+        // Birth location cascading validation (shape only — referential integrity checked by the service).
+        RuleFor(x => x.BirthStateId)
+            .Null().WithMessage("Birth state requires a birth country to be selected.")
+            .When(x => x.BirthStateId.HasValue && !x.BirthCountryId.HasValue);
+
+        RuleFor(x => x.BirthCityId)
+            .Null().WithMessage("Birth city requires a birth state to be selected.")
+            .When(x => x.BirthCityId.HasValue && !x.BirthStateId.HasValue);
     }
 
     /// <summary>

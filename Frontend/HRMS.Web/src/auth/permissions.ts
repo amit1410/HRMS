@@ -18,6 +18,23 @@ export const Permissions = {
     edit: 'Employee.Edit',
     delete: 'Employee.Delete',
     export: 'Employee.Export',
+    import: 'Employee.Import',
+  },
+  employeeSensitive: {
+    view: 'EmployeeSensitive.View',
+    edit: 'EmployeeSensitive.Edit',
+  },
+  geography: {
+    view: 'Geography.View',
+    manage: 'Geography.Manage',
+  },
+  employmentHistory: {
+    view: 'EmploymentHistory.View',
+    change: 'EmploymentHistory.Change',
+  },
+  employeeCodeConfiguration: {
+    view: 'EmployeeCodeConfiguration.View',
+    manage: 'EmployeeCodeConfiguration.Manage',
   },
   department: {
     view: 'Department.View',

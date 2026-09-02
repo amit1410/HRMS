@@ -281,18 +281,23 @@ public class AuthEndpointsTests : IClassFixture<HrmsApiFactory>
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    /// <summary>A validly signed token without a tenant claim identifies no tenant, so it grants nothing.</summary>
+    /// <summary>
+    /// A validly signed token without a tenant claim identifies no workspace session, so it is challenged
+    /// rather than treated as an authenticated user who merely lacks a permission.
+    /// </summary>
     [Fact]
     public async Task A_token_without_a_tenant_claim_is_refused()
     {
-        using var client = _factory.CreateClient();
+        // Use a resolved workspace so this test isolates the missing claim rather than also triggering the
+        // unresolved-host guard.
+        using var client = _factory.CreateClientFor(HrmsApiFactory.Demo01Host);
 
         var token = TestTokens.Create(Demo01AdminId, SeedData.TenantIds.Demo01, includeTenantClaim: false);
 
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         var response = await client.GetAsync("/api/auth/me");
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]

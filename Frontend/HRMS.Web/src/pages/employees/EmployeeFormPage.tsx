@@ -1,98 +1,154 @@
+import { useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { createEmployee, getEmployee, updateEmployee } from '../../api/employees.ts'
+import { getEmployee } from '../../api/employees.ts'
 import { Card } from '../../components/Card.tsx'
-import { ErrorState } from '../../components/ErrorState.tsx'
+import { Notice } from '../../components/Notice.tsx'
 import { PageHeader } from '../../components/PageHeader.tsx'
-import { Spinner } from '../../components/Spinner.tsx'
-import { useApiQuery } from '../../hooks/useApiQuery.ts'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle.ts'
-import {
-  NO_REFERENCES,
-  emptyEmployeeValues,
-  toCurrentReferences,
-  toEmployeeValues,
-} from './employeeValues.ts'
-import { EmployeeForm } from './EmployeeForm.tsx'
+import { AddressDetailsForm } from './AddressDetailsForm.tsx'
+import { BankDetailsForm } from './BankDetailsForm.tsx'
+import { ContactDetailsForm } from './ContactDetailsForm.tsx'
+import { EmploymentSectionForm } from './EmploymentSectionForm.tsx'
+import { PersonalDetailsForm } from './PersonalDetailsForm.tsx'
+import { EmployeeProfileSidebar, type EmployeeSection } from './EmployeeProfileSidebar.tsx'
+import { useApiQuery } from '../../hooks/useApiQuery.ts'
+import { FamilyDetailsForm } from './FamilyDetailsForm.tsx'
+import { PreviousEmploymentForm } from './PreviousEmploymentForm.tsx'
+
+type FormTab = EmployeeSection
+
+const TABS: { id: FormTab; label: string }[] = [
+  { id: 'personal', label: 'Personal Details' },
+  { id: 'contact', label: 'Contact Details' },
+  { id: 'address', label: 'Address Details' },
+  { id: 'family', label: 'Family Details' },
+  { id: 'bank', label: 'Bank Details' },
+  { id: 'previousEmployment', label: 'Previous Employment' },
+  { id: 'employment', label: 'Employment' },
+]
+const TAB_ICONS: Record<FormTab, string> = { personal:'◉', contact:'✉', address:'⌂', family:'♧', bank:'▣', previousEmployment:'◫', employment:'▤' }
 
 /**
- * Create and edit for an employee.
+ * Create and edit an employee, split into tabbed sections just like the detail page.
  *
- * Split into two components rather than branched inside one, because the edit mode has a fetch that the
- * create mode must not make and a hook cannot be called conditionally. The `key` on {@link EditEmployee}
- * restarts the form when the route moves from one employee to another, so typed-but-unsaved values cannot
- * leak from the record the user left onto the one they opened.
+ * One reusable component handles both paths. `/employees/new` renders it in create mode ("New Hire",
+ * SAVE button) and `/employees/:id/edit` in edit mode (loaded record, UPDATE button). After a create the
+ * Personal Details form flips to edit mode on the page, replacing "New Hire" with the generated code.
+ *
+ * The Contact and Address sub-resources live behind their own endpoints that need an existing employee, so
+ * on the create path those tabs stay inert (with a short explanation) until the employee row is created via
+ * the Personal Details SAVE button; on the edit path they are always available. There is deliberately no
+ * department, designation or reporting manager here — those belong to later screens.
  */
 export function EmployeeFormPage() {
   const { id } = useParams()
 
-  return id === undefined ? <NewEmployee /> : <EditEmployee key={id} id={id} />
+  if (id !== undefined) {
+    return <EditPage key={id} id={id} />
+  }
+  return <NewPage />
 }
 
-function NewEmployee() {
+function TabNav({ tab, setTab }: { tab: FormTab; setTab: (next: FormTab) => void }) {
+  return (
+    <div className="tab-nav" role="tablist" aria-label="Employee sections">
+      {TABS.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          role="tab"
+          id={`tab-${item.id}`}
+          className={`tab-nav-item${tab === item.id ? ' is-active' : ''}`}
+          aria-selected={tab === item.id}
+          aria-controls={`panel-${item.id}`}
+          onClick={() => setTab(item.id)}
+        >
+          <span className="employee-tab-icon" aria-hidden="true">{TAB_ICONS[item.id]}</span>{item.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function NewPage() {
   useDocumentTitle('New employee')
+  const [tab, setTab] = useState<FormTab>('personal')
+  const [createdId, setCreatedId] = useState<string | undefined>(undefined)
+  const employeeId = createdId
+  const employee = useApiQuery((signal) => employeeId ? getEmployee(employeeId, signal) : Promise.resolve(null), [employeeId])
 
   return (
     <>
       <PageHeader title="New employee" subtitle="Add someone to the directory" />
-      <EmployeeForm
-        initial={emptyEmployeeValues()}
-        current={NO_REFERENCES}
-        submitLabel="Create employee"
-        onSubmit={(body) => createEmployee(body)}
-        successMessage={(employee) => `${employee.fullName} was added.`}
-      />
+      <TabNav tab={tab} setTab={setTab} />
+      <div className="employee-details-shell">
+        <EmployeeProfileSidebar employee={employee.data} activeSection={tab as EmployeeSection} onSectionChange={setTab} />
+        <main className="employee-section-content" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0}>
+        {tab === 'personal' && <PersonalDetailsForm onCreated={setCreatedId} />}
+        {tab === 'contact' &&
+          (employeeId ? (
+            <ContactDetailsForm employeeId={employeeId} />
+          ) : (
+            <NeedsEmployeeNotice />
+          ))}
+        {tab === 'address' &&
+          (employeeId ? (
+            <AddressDetailsForm employeeId={employeeId} />
+          ) : (
+            <NeedsEmployeeNotice />
+          ))}
+        {tab === 'family' && (employeeId ? <FamilyDetailsForm employeeId={employeeId} /> : <NeedsEmployeeNotice />)}
+        {tab === 'bank' &&
+          (employeeId ? (
+            <BankDetailsForm employeeId={employeeId} />
+          ) : (
+            <NeedsEmployeeNotice />
+          ))}
+        {tab === 'previousEmployment' && (employeeId ? <PreviousEmploymentForm employeeId={employeeId} /> : <NeedsEmployeeNotice />)}
+        {tab === 'employment' &&
+          (employeeId ? (
+            <EmploymentSectionForm employeeId={employeeId} />
+          ) : (
+            <NeedsEmployeeNotice />
+          ))}
+        </main>
+      </div>
     </>
   )
 }
 
-/**
- * The edit mode fetches the employee even when the row it was opened from is already on screen. The list
- * returns `EmployeeListItem`, which carries department and designation as *names* — the form needs the ids,
- * and there is no way to turn a name back into one that cannot pick the wrong record.
- */
-function EditEmployee({ id }: { id: string }) {
+function EditPage({ id }: { id: string }) {
   useDocumentTitle('Edit employee')
-
-  const { data, error, isLoading, refetch } = useApiQuery((signal) => getEmployee(id, signal), [id])
-
-  if (error) {
-    return (
-      <>
-        <PageHeader title="Edit employee" />
-        <Card>
-          <ErrorState error={error} onRetry={refetch} />
-        </Card>
-      </>
-    )
-  }
-
-  if (isLoading || !data) {
-    return (
-      <>
-        <PageHeader title="Edit employee" />
-        <Card>
-          <div className="table-loading">
-            <Spinner label="Loading employee…" />
-          </div>
-        </Card>
-      </>
-    )
-  }
+  const [tab, setTab] = useState<FormTab>('personal')
+  const employee = useApiQuery((signal) => getEmployee(id, signal), [id])
 
   return (
     <>
-      <PageHeader
-        title={`Edit ${data.fullName}`}
-        subtitle={`${data.employeeCode} · ${data.departmentName} · ${data.designationName}`}
-      />
-      <EmployeeForm
-        initial={toEmployeeValues(data)}
-        current={toCurrentReferences(data)}
-        employeeId={data.id}
-        submitLabel="Save changes"
-        onSubmit={(body) => updateEmployee(id, body)}
-        successMessage={(employee) => `${employee.fullName} was updated.`}
-      />
+      <PageHeader title="Edit employee" subtitle="Update their personal details" />
+      <TabNav tab={tab} setTab={setTab} />
+      <div className="employee-details-shell">
+        <EmployeeProfileSidebar employee={employee.data} activeSection={tab as EmployeeSection} onSectionChange={setTab} />
+        <main className="employee-section-content" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0}>
+        {tab === 'personal' && <PersonalDetailsForm employeeId={id} />}
+        {tab === 'contact' && <ContactDetailsForm employeeId={id} />}
+        {tab === 'address' && <AddressDetailsForm employeeId={id} />}
+        {tab === 'family' && <FamilyDetailsForm employeeId={id} />}
+        {tab === 'bank' && <BankDetailsForm employeeId={id} />}
+        {tab === 'previousEmployment' && <PreviousEmploymentForm employeeId={id} />}
+        {tab === 'employment' && <EmploymentSectionForm employeeId={id} />}
+        </main>
+      </div>
     </>
+  )
+}
+
+function NeedsEmployeeNotice() {
+  return (
+    <Card className="form-card">
+      <Notice tone="info">
+        Save the Personal Details section first to create the employee, then fill in the remaining details
+        here.
+      </Notice>
+    </Card>
   )
 }

@@ -22,7 +22,29 @@ public static class DependencyInjection
         services.AddScoped<ITenantBrandingService, TenantBrandingService>();
         services.AddScoped<IDepartmentService, DepartmentService>();
         services.AddScoped<IDesignationService, DesignationService>();
+        services.AddScoped<ICountryService, CountryService>();
+        services.AddScoped<IStateService, StateService>();
+        services.AddScoped<ICityService, CityService>();
         services.AddScoped<IEmployeeService, EmployeeService>();
+        services.AddScoped<IEmployeeCodeConfigurationService, EmployeeCodeConfigurationService>();
+        services.AddScoped<IEmployeeCodeSequenceService, EmployeeCodeSequenceService>();
+        services.AddSingleton<EmployeeCodes.EmployeeCodeRuleMatcher>();
+        services.AddSingleton<EmployeeCodes.EmployeeCodeRenderer>();
+
+        // Employee sub-entity services
+        services.AddScoped<IEmployeeContactService, EmployeeContactService>();
+        services.AddScoped<IEmployeeAddressService, EmployeeAddressService>();
+        services.AddScoped<IEmployeeFamilyService, EmployeeFamilyService>();
+        services.AddScoped<IEmployeeEducationService, EmployeeEducationService>();
+        services.AddScoped<IEmployeePreviousEmploymentService, EmployeePreviousEmploymentService>();
+        services.AddScoped<IEmployeeBankDetailService, EmployeeBankDetailService>();
+        services.AddScoped<IEmployeeSupervisorService, EmployeeSupervisorService>();
+        services.AddScoped<IEmployeeAdditionalInfoService, EmployeeAdditionalInfoService>();
+        services.AddScoped<IEmployeeEmploymentService, EmployeeEmploymentService>();
+        services.AddScoped<IEmployeeAuditService, EmployeeAuditService>();
+        services.AddScoped<IEmployeeDocumentService, EmployeeDocumentService>();
+        services.AddScoped<IImportBatchService, ImportBatchService>();
+        services.AddScoped<IMasterLookupService, MasterLookupService>();
 
         return services;
     }
