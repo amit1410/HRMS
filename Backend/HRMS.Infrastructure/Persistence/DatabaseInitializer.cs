@@ -25,6 +25,30 @@ namespace HRMS.Infrastructure.Persistence;
 /// </summary>
 public static class DatabaseInitializer
 {
+    /// <summary>
+    /// Runs startup database preparation unless the explicit development-only skip switch is enabled.
+    /// The switch is intentionally passed in by the host so production can never skip initialization by
+    /// accident, and the default remains the existing initialization path.
+    /// </summary>
+    public static async Task InitializeIfEnabledAsync(
+        IServiceProvider services,
+        bool isDevelopment,
+        bool skipInitialization,
+        CancellationToken cancellationToken = default)
+    {
+        var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("HRMS.DatabaseInitializer");
+
+        if (isDevelopment && skipInitialization)
+        {
+            logger.LogWarning(
+                "Database initialization was skipped because Database:SkipInitialization is enabled in Development. "
+                + "Schema preparation and seeding were not performed.");
+            return;
+        }
+
+        await InitializeAsync(services, cancellationToken);
+    }
+
     public static async Task InitializeAsync(IServiceProvider services, CancellationToken cancellationToken = default)
     {
         var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("HRMS.DatabaseInitializer");

@@ -26,6 +26,21 @@ public class DatabaseInitializerTests : IDisposable
         Path.Combine(Path.GetTempPath(), $"hrms-initializer-catalog-{Guid.NewGuid():N}.db");
 
     [Fact]
+    public async Task Skips_initialization_when_the_development_switch_is_enabled()
+    {
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var services = new ServiceCollection();
+        services.AddSingleton<ILoggerFactory>(loggerFactory);
+
+        // No DbContexts or provisioning services are registered intentionally. If the initializer path ran,
+        // resolving its first dependency would fail; the explicit Development switch must return before it.
+        await DatabaseInitializer.InitializeIfEnabledAsync(
+            services.BuildServiceProvider(),
+            isDevelopment: true,
+            skipInitialization: true);
+    }
+
+    [Fact]
     public async Task Rebuilds_a_development_database_that_is_missing_a_table()
     {
         // A database as an earlier phase left it: complete except for a table the model has since gained.

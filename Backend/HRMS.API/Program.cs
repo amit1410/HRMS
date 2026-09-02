@@ -114,7 +114,11 @@ try
     var app = builder.Build();
 
     // Apply migrations (SQL Server) or create schema (SQLite dev fallback), then seed reference data + demo tenants.
-    await DatabaseInitializer.InitializeAsync(app.Services);
+    // Development-only skip is explicit and default-off so a local API can be inspected without startup writes.
+    await DatabaseInitializer.InitializeIfEnabledAsync(
+        app.Services,
+        app.Environment.IsDevelopment(),
+        app.Configuration.GetValue<bool>("Database:SkipInitialization"));
 
     // Centralized exception handling must sit at the top of the pipeline.
     app.UseMiddleware<ExceptionHandlingMiddleware>();
