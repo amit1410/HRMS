@@ -1,5 +1,6 @@
 using FluentValidation;
 using HRMS.Application.DTOs.Employees;
+using HRMS.Application.Validators.Common;
 using HRMS.Domain.Enums;
 
 namespace HRMS.Application.Validators.Employees;
@@ -17,6 +18,12 @@ public class EmploymentChangeRequestValidator : AbstractValidator<EmploymentChan
             .NotEmpty().WithMessage("Effective date is required.")
             .GreaterThanOrEqualTo(Today)
                 .WithMessage("Effective date must be today or in the future.");
+
+        RuleFor(x => x.EmployeeCode)
+            .MaximumLength(100)
+            .Matches(CodeFormats.Pattern)
+            .When(x => !string.IsNullOrWhiteSpace(x.EmployeeCode))
+            .WithMessage(CodeFormats.Message);
 
         RuleFor(x => x.DepartmentId)
             .NotEmpty().WithMessage("Department is required.");

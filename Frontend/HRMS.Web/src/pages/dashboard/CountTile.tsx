@@ -16,10 +16,12 @@ export function CountTile({
   label,
   hint,
   load,
+  icon,
 }: {
   label: string
   hint?: string
   load: (signal: AbortSignal) => Promise<PagedResult<unknown>>
+  icon?: string
 }) {
   const { data, error, isLoading } = useApiQuery(load, [])
 
@@ -30,6 +32,7 @@ export function CountTile({
       value={data?.totalCount ?? null}
       isLoading={isLoading}
       error={error}
+      icon={icon}
     />
   )
 }

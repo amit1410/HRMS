@@ -1,5 +1,7 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Services;
+using HRMS.Application.EmployeeCodes;
+using HRMS.Application.Validators.Employees;
 using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Persistence.Seed;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -67,8 +69,21 @@ public sealed class OrganizationTestHarness : IDisposable
     public IEmployeeBankDetailService BankDetails() =>
         new EmployeeBankDetailService(TrackContext(), TenantContext, NullLogger<EmployeeBankDetailService>.Instance);
 
-    public IEmployeeEmploymentService Employment() =>
-        new EmployeeEmploymentService(TrackContext(), TenantContext, NullLogger<EmployeeEmploymentService>.Instance);
+    public IEmployeeEmploymentService Employment()
+    {
+        var context = TrackContext();
+        return new EmployeeEmploymentService(
+            context,
+            TenantContext,
+            NullLogger<EmployeeEmploymentService>.Instance,
+            new EmployeeCodeRuleMatcher(),
+            new EmployeeCodeRenderer(),
+            new EmployeeCodeSequenceService(context, TenantContext));
+    }
+
+    public IEmployeeCodeConfigurationService CodeConfiguration() =>
+        new EmployeeCodeConfigurationService(
+            TrackContext(), TenantContext, new EmployeeCodeConfigurationRequestValidator());
 
     public IEmployeeCodeSequenceService EmployeeCodeSequences() =>
         new EmployeeCodeSequenceService(TrackContext(), TenantContext);

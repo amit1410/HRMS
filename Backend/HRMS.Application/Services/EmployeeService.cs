@@ -371,7 +371,9 @@ public class EmployeeService : IEmployeeService
     }
 
     public async Task<Result<EmployeeDto>> CreatePersonalDetailsAsync(
-        EmployeePersonalDetailsRequest request, CancellationToken cancellationToken = default)
+        EmployeePersonalDetailsRequest request,
+        CancellationToken cancellationToken = default,
+        bool canEditSensitive = true)
     {
         if (_tenantContext.TenantId is not Guid tenantId)
         {
@@ -385,11 +387,14 @@ public class EmployeeService : IEmployeeService
         }
 
         return await CreatePersonalDetailsCoreAsync(
-            request, tenantId, cancellationToken);
+            request, tenantId, cancellationToken, canEditSensitive);
     }
 
     public async Task<Result<EmployeeDto>> UpdatePersonalDetailsAsync(
-        Guid id, EmployeePersonalDetailsRequest request, CancellationToken cancellationToken = default)
+        Guid id,
+        EmployeePersonalDetailsRequest request,
+        CancellationToken cancellationToken = default,
+        bool canEditSensitive = true)
     {
         if (_tenantContext.TenantId is not Guid tenantId)
         {
@@ -408,7 +413,7 @@ public class EmployeeService : IEmployeeService
             return birthProblem;
         }
 
-        ApplyPersonalDetails(employee, request, preserveSensitive: true);
+        ApplyPersonalDetails(employee, request, preserveSensitive: true, canEditSensitive: canEditSensitive);
 
         await _db.SaveChangesAsync(cancellationToken);
 
@@ -886,7 +891,8 @@ public class EmployeeService : IEmployeeService
     private async Task<Result<EmployeeDto>> CreatePersonalDetailsCoreAsync(
         EmployeePersonalDetailsRequest request,
         Guid tenantId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool canEditSensitive)
     {
         var employee = new Employee
         {
@@ -900,7 +906,7 @@ public class EmployeeService : IEmployeeService
             DateOfJoining = request.DateOfJoining
         };
 
-        ApplyPersonalDetails(employee, request);
+        ApplyPersonalDetails(employee, request, canEditSensitive: canEditSensitive);
 
         _db.Employees.Add(employee);
         await _db.SaveChangesAsync(cancellationToken);
@@ -911,7 +917,11 @@ public class EmployeeService : IEmployeeService
     }
 
     /// <summary>Applies only the Personal Details fields of a request onto an employee record.</summary>
-    private void ApplyPersonalDetails(Employee employee, EmployeePersonalDetailsRequest request, bool preserveSensitive = false)
+    private void ApplyPersonalDetails(
+        Employee employee,
+        EmployeePersonalDetailsRequest request,
+        bool preserveSensitive = false,
+        bool canEditSensitive = true)
     {
         employee.Salutation = Normalize(request.Salutation);
         employee.FirstName = request.FirstName.Trim();
@@ -927,17 +937,23 @@ public class EmployeeService : IEmployeeService
         employee.Religion = Normalize(request.Religion);
         employee.Caste = Normalize(request.Caste);
         employee.Citizenship = Normalize(request.Citizenship);
-        employee.EsicApplicable = request.EsicApplicable;
-        employee.EsicNumber = Normalize(request.EsicNumber);
-        employee.MediclaimNumber = Normalize(request.MediclaimNumber);
+        if (canEditSensitive)
+        {
+            employee.EsicApplicable = request.EsicApplicable;
+            employee.EsicNumber = Normalize(request.EsicNumber);
+            employee.MediclaimNumber = Normalize(request.MediclaimNumber);
+        }
         employee.Gratuity = request.Gratuity;
         employee.Pension = request.Pension;
         // Aadhaar, PAN, PF and UAN are returned only masked on read, so an edit form cannot resend the
         // originals. Leave-blank-means-unchanged here — a create always carries the full values.
-        employee.PfNumber = OverwriteOrKeep(employee.PfNumber, request.PfNumber, preserveSensitive);
-        employee.UanNumber = OverwriteOrKeep(employee.UanNumber, request.UanNumber, preserveSensitive);
-        employee.AadhaarNumber = OverwriteOrKeep(employee.AadhaarNumber, request.AadhaarNumber, preserveSensitive);
-        employee.PanNumber = OverwriteOrKeep(employee.PanNumber, request.PanNumber, preserveSensitive);
+        if (canEditSensitive)
+        {
+            employee.PfNumber = OverwriteOrKeep(employee.PfNumber, request.PfNumber, preserveSensitive);
+            employee.UanNumber = OverwriteOrKeep(employee.UanNumber, request.UanNumber, preserveSensitive);
+            employee.AadhaarNumber = OverwriteOrKeep(employee.AadhaarNumber, request.AadhaarNumber, preserveSensitive);
+            employee.PanNumber = OverwriteOrKeep(employee.PanNumber, request.PanNumber, preserveSensitive);
+        }
         employee.DateOfJoining = request.DateOfJoining;
         employee.JobStatus = Normalize(request.JobStatus);
     }

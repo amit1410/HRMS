@@ -106,6 +106,17 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
             typeof(HrmsDbContext).Assembly,
             type => type.Namespace?.StartsWith(CatalogConfigurationsNamespace, StringComparison.Ordinal) != true);
 
+        // SQL Server supplies rowversion values, while SQLite (used by the isolated test database) does
+        // not have that type. Keep the concurrency column non-null and provider-safe in SQLite so sequence
+        // allocation can exercise the same transaction path without a provider-specific insert failure.
+        if (Database.IsSqlite())
+        {
+            modelBuilder.Entity<EmployeeCodeSequence>()
+                .Property(e => e.RowVersion)
+                .IsRequired()
+                .ValueGeneratedNever();
+        }
+
         // Belt and braces for the same exclusion, and it has to come *after* the sweep: an explicit
         // configuration applied later overrides an earlier Ignore, silently. With no catalog configuration
         // in the model TenantBranding is only reachable by convention through Tenant.Branding, which

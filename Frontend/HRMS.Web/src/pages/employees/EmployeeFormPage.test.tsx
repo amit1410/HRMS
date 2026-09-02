@@ -3,12 +3,14 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { Route, Routes, useLocation } from 'react-router-dom'
 import { session } from '../../api/session.ts'
+import { Permissions } from '../../auth/permissions.ts'
 import type { FlashState } from '../../hooks/useFlash.ts'
 import {
   makeAddress,
   makeEmployee,
   makeEmployeeDetail,
   makeEmployeeSensitiveDetails,
+  makeUser,
   paged,
 } from '../../test/fixtures.ts'
 import { renderAsUser } from '../../test/renderWith.tsx'
@@ -78,6 +80,40 @@ describe('EmployeeFormPage (Personal Details)', () => {
   })
 
   describe('creating', () => {
+    it('allows Personal Details SAVE without the sensitive-edit permission', async () => {
+      stub.on('post', NEW_CREATE_URL, () => ({
+        status: 201,
+        data: ok(makeEmployeeDetail({ employeeCode: '' })),
+      }))
+      renderAsUser(
+        <Routes>
+          <Route path="/employees/new" element={<EmployeeFormPage />} />
+        </Routes>,
+        {
+          route: NEW_ROUTE,
+          user: makeUser({
+            permissions: [
+              Permissions.employee.view,
+              Permissions.employee.create,
+              Permissions.department.view,
+              Permissions.designation.view,
+            ],
+          }),
+        },
+      )
+
+      await userEvent.type(field('First name'), 'Ravi')
+      await userEvent.type(field('Last name'), 'Menon')
+      fireEvent.change(field('Date of joining'), { target: { value: '2024-02-01' } })
+
+      const save = screen.getByRole('button', { name: 'SAVE' })
+      expect(save).toBeEnabled()
+      await userEvent.click(save)
+
+      await waitFor(() => expect(stub.callsTo('post', NEW_CREATE_URL)).toHaveLength(1))
+      expect(await screen.findByText(/Employee created/)).toBeInTheDocument()
+    })
+
     it('shows New Hire for the employee code and only the Personal Details sections', () => {
       renderForm()
 

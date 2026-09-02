@@ -228,6 +228,7 @@ export function makeEmploymentHistory(
     positionChangeReasonName: 'New Hire',
     employmentType: 'FullTime',
     employmentStatus: 'Active',
+    changeReason: 'NewJoining',
     createdDate: '2026-01-05T09:30:00Z',
     ...overrides,
   }

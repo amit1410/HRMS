@@ -12,9 +12,13 @@ export interface EmployeeCodeConfiguration {
   separator: string
   effectiveFrom: string
   effectiveTo?: string | null
+  versionId?: string | null
+  isActive: boolean
 }
 
 export interface EmployeeCodeConfigurationRequest {
+  versionId?: string | null
+  isActive?: boolean
   autoGenerate: boolean
   assignmentMode?: 'Manual' | 'Auto' | number
   generationMethod?: 'Simple' | 'RuleBased' | number | null
@@ -34,9 +38,11 @@ export interface EmployeeCodeRule {
   status: number | string
   conditions: Array<{ id: string; field: number | string; operator: number | string; referenceId?: string | null; value?: string | null }>
   segments: Array<{ id: string; sequenceOrder: number; segmentType: number | string; fixedValue?: string | null; paddingLength?: number | null }>
+  configurationVersionId?: string | null
 }
 
 export interface EmployeeCodeRuleRequest {
+  configurationVersionId?: string | null
   name: string
   priority: number
   isDefault: boolean

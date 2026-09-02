@@ -114,7 +114,7 @@ export function EmployeeDetailPage() {
         {tab === 'family' && <FamilyDetailsForm employeeId={employee.id} />}
         {tab === 'bank' && <BankDetailsForm employeeId={employee.id} />}
         {tab === 'previousEmployment' && <PreviousEmploymentForm employeeId={employee.id} />}
-          {tab === 'employment' && <EmploymentSectionForm employeeId={employee.id} />}
+          {tab === 'employment' && <EmploymentSectionForm employeeId={employee.id} employeeCode={employee.employeeCode} onSaved={refetch} />}
         </main>
       </div>
     </>

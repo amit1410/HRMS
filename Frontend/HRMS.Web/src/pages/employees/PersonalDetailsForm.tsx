@@ -497,7 +497,7 @@ export function PersonalDetailsForm({ employeeId, onCreated }: PersonalDetailsFo
             Cancel
           </Link>
           {hasUnsavedChanges && <span className="unsaved-indicator" role="status"><span aria-hidden="true">●</span> You have unsaved changes</span>}
-          <button type="submit" className="button button-primary" disabled={saving || !canEditSensitive}>
+          <button type="submit" className="button button-primary" disabled={saving}>
             {saving ? <Spinner size={14} label="Saving\u2026" /> : isEdit ? 'UPDATE' : 'SAVE'}
           </button>
         </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type RefObject } from 'react'
 import { useAuth } from '../auth/useAuth.ts'
 import { Spinner } from '../components/Spinner.tsx'
 import { initials } from '../lib/format.ts'
@@ -9,7 +9,7 @@ import { initials } from '../lib/format.ts'
  * The tenant is shown deliberately. Every request is scoped to it server-side from the token, and an
  * operator with accounts in two tenants needs to see, without checking, which one they are looking at.
  */
-export function Header() {
+export function Header({ onMenu, menuButtonRef, menuOpen }: { onMenu: () => void; menuButtonRef: RefObject<HTMLButtonElement | null>; menuOpen: boolean }) {
   const { user, logout } = useAuth()
   const [signingOut, setSigningOut] = useState(false)
 
@@ -28,6 +28,7 @@ export function Header() {
 
   return (
     <header className="app-header">
+      <button ref={menuButtonRef} type="button" className="menu-button" onClick={onMenu} aria-label="Open navigation" aria-expanded={menuOpen}>☰</button>
       <div className="tenant">
         <span className="tenant-label">Tenant</span>
         <span className="tenant-name">{user.tenantName}</span>

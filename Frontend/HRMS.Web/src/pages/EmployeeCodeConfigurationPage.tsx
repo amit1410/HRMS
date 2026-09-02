@@ -36,7 +36,9 @@ export function EmployeeCodeConfigurationPage() {
   const [separator, setSeparator] = useState('-')
   const [effectiveFrom, setEffectiveFrom] = useState(new Date().toISOString().slice(0, 10))
   const [effectiveTo, setEffectiveTo] = useState('')
+  const [versionActive, setVersionActive] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [configurationError, setConfigurationError] = useState<string | null>(null)
   const [ruleName, setRuleName] = useState('Default Employee Rule')
   const [rulePriority, setRulePriority] = useState(100)
   const [ruleDefault, setRuleDefault] = useState(true)
@@ -62,17 +64,20 @@ export function EmployeeCodeConfigurationPage() {
     setSeparator(data.separator || '-')
     setEffectiveFrom(data.effectiveFrom?.slice(0, 10) || effectiveFrom)
     setEffectiveTo(data.effectiveTo?.slice(0, 10) || '')
+    setVersionActive(data.isActive !== false)
   }, [data])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setSaving(true)
+    setConfigurationError(null)
     try {
-      await saveEmployeeCodeConfiguration({ autoGenerate, assignmentMode: autoGenerate ? 'Auto' : 'Manual', generationMethod: autoGenerate ? generationMethod : null, prefix: prefix.trim(), nextNumber, padding, separator, effectiveFrom, effectiveTo: effectiveTo || null })
+      const editingSameVersion = data?.effectiveFrom?.slice(0, 10) === effectiveFrom
+      await saveEmployeeCodeConfiguration({ versionId: editingSameVersion ? data?.versionId ?? null : null, isActive: versionActive, autoGenerate, assignmentMode: autoGenerate ? 'Auto' : 'Manual', generationMethod: autoGenerate ? generationMethod : null, prefix: prefix.trim(), nextNumber, padding, separator, effectiveFrom, effectiveTo: effectiveTo || null })
       flash.show('Employee Code configuration saved.')
-      refetch()
-    } catch {
-      // request errors are surfaced by the shared API layer; keep the form usable.
+      await refetch()
+    } catch (error) {
+      setConfigurationError(error instanceof ApiError ? error.message : 'Unable to save Employee Code configuration.')
     } finally {
       setSaving(false)
     }
@@ -84,23 +89,12 @@ export function EmployeeCodeConfigurationPage() {
     if (!ruleName.trim()) { setRuleError('Rule name is required.'); return }
     if (!Number.isFinite(rulePriority) || rulePriority < 0) { setRuleError('Priority is required and must be a valid number.'); return }
     if (selectedRuleId && !isRuleLoaded) { setRuleError('The complete rule is still loading. Please wait.'); return }
-    const payload: EmployeeCodeRuleRequest = { name: ruleName.trim(), priority: rulePriority, isDefault: ruleDefault, status: ruleStatus, conditions: ruleDefault ? [] : conditions.map(c => ({ id: c.id, field: c.field, operator: c.operator, value: c.valueCode || null, referenceId: c.valueId || null })), segments: segments.map((segment, index) => ({ id: segment.id, sequenceOrder: index + 1, segmentType: segment.segmentType, fixedValue: segment.segmentType === 0 ? segment.fixedValue.trim() : null, paddingLength: segment.segmentType === 1 ? segment.paddingLength : null })) }
+    const payload: EmployeeCodeRuleRequest = { configurationVersionId: data?.versionId ?? null, name: ruleName.trim(), priority: rulePriority, isDefault: ruleDefault, status: ruleStatus, conditions: ruleDefault ? [] : conditions.map(c => ({ id: c.id, field: c.field, operator: c.operator, value: c.valueCode || null, referenceId: c.valueId || null })), segments: segments.map((segment, index) => ({ id: segment.id, sequenceOrder: index + 1, segmentType: segment.segmentType, fixedValue: segment.segmentType === 0 ? segment.fixedValue.trim() : null, paddingLength: segment.segmentType === 1 ? segment.paddingLength : null })) }
     if (import.meta.env.DEV) console.debug('SAVE RULE CLICKED', { id: selectedRuleId, ruleName: payload.name, priority: payload.priority, status: payload.status, isDefaultFallback: payload.isDefault, conditions: payload.conditions.map(condition => ({ field: condition.field, operator: condition.operator, referenceId: condition.referenceId, value: condition.value })), segments: payload.segments.map(segment => ({ order: segment.sequenceOrder, segmentType: segment.segmentType, fixedValue: segment.fixedValue, paddingLength: segment.paddingLength })) })
     setRuleSaving(true)
     try {
       const savedConditions = payload.conditions
-      const dimensionSegment: Record<number, number> = { 0: 2, 1: 3, 2: 4, 3: 5, 4: 6, 5: 7, 6: 8, 7: 9, 8: 10, 9: 11, 10: 12, 11: 13, 12: 14, 13: 15, 14: 16, 15: 17 }
-      const includedTypes = conditions.filter(c => c.include && c.valueId && dimensionSegment[c.field] !== undefined).map(c => dimensionSegment[c.field]!)
-      const effectiveSegments = segments.filter(segment => {
-        const conditionField = Object.entries(dimensionSegment).find(([, segmentType]) => segmentType === segment.segmentType)?.[0]
-        return conditionField === undefined || includedTypes.includes(segment.segmentType)
-      })
-      for (const segmentType of includedTypes) {
-        if (effectiveSegments.some(s => s.segmentType === segmentType)) continue
-        const sequenceIndex = effectiveSegments.findIndex(s => s.segmentType === 1)
-        effectiveSegments.splice(sequenceIndex >= 0 ? sequenceIndex : effectiveSegments.length, 0, { segmentType, fixedValue: '', paddingLength: 0 })
-      }
-      const request: EmployeeCodeRuleRequest = { ...payload, conditions: savedConditions, segments: effectiveSegments.map((segment, index) => ({ sequenceOrder: index + 1, segmentType: segment.segmentType, fixedValue: segment.segmentType === 0 ? segment.fixedValue.trim() : null, paddingLength: segment.segmentType === 1 ? segment.paddingLength : null })) }
+      const request: EmployeeCodeRuleRequest = { ...payload, conditions: savedConditions, segments: segments.map((segment, index) => ({ id: segment.id, sequenceOrder: index + 1, segmentType: segment.segmentType, fixedValue: segment.segmentType === 0 ? segment.fixedValue.trim() : null, paddingLength: segment.segmentType === 1 ? segment.paddingLength : null })) }
       const saved = selectedRuleId ? await updateEmployeeCodeRule(selectedRuleId, request) : await saveEmployeeCodeRule(request)
       const persisted = await getEmployeeCodeRule(saved.id)
       hydrateRuleEditor(persisted)
@@ -120,7 +114,7 @@ export function EmployeeCodeConfigurationPage() {
     const loadedConditions = rule.conditions.map((condition) => { const field = enumNumber(condition.field, fieldValues); return { clientId: crypto.randomUUID(), field, operator: enumNumber(condition.operator, operatorValues), valueId: condition.referenceId ?? '', valueCode: condition.value ?? '', include: rule.segments.some(segment => enumNumber(segment.segmentType, segmentValues) === ({ 0: 2, 1: 3, 2: 4, 3: 5 } as Record<number, number>)[field]) } })
     setRuleStatus(enumNumber(rule.status, { Draft: 0, Active: 1, Inactive: 2 }))
     setConditions(loadedConditions)
-    setSegments(rule.segments.map(segment => ({ id: segment.id, segmentType: enumNumber(segment.segmentType, segmentValues), fixedValue: segment.fixedValue ?? '', paddingLength: segment.paddingLength ?? 0 })))
+    setSegments(rule.segments.sort((a, b) => a.sequenceOrder - b.sequenceOrder).map(segment => ({ id: segment.id, segmentType: enumNumber(segment.segmentType, segmentValues), fixedValue: segment.fixedValue ?? '', paddingLength: segment.paddingLength ?? 0 })))
     setRuleError(null)
     setIsRuleLoaded(true)
   }
@@ -173,6 +167,7 @@ export function EmployeeCodeConfigurationPage() {
     <>
       <PageHeader title="Employee Code Configuration" subtitle="Configure how employee codes are assigned for this workspace." />
       {error ? <Notice tone="error">Unable to load Employee Code configuration.</Notice> : null}
+      {configurationError ? <Notice tone="error">{configurationError}</Notice> : null}
       <Card title="Employee Code Assignment" subtitle="Choose whether HR users enter codes or the system generates them.">
         {isLoading ? <p className="muted">Loading configuration…</p> : (
           <form className="form-stack" onSubmit={submit}>
@@ -188,14 +183,15 @@ export function EmployeeCodeConfigurationPage() {
               {generationMethod === 'RuleBased' ? <p className="field-help">Active rules are evaluated from lowest priority number to highest; the default fallback is used when no specific rule matches.</p> : null}
             </fieldset> : null}
 
-            {autoGenerate && generationMethod === 'Simple' ? <div className="form-grid form-grid-3">
+            <div className="form-grid form-grid-3">
               <label className="field"><span>Prefix</span><input value={prefix} maxLength={10} onChange={(e) => setPrefix(e.target.value)} disabled={!autoGenerate} /></label>
               <label className="field"><span>Starting / next number</span><input type="number" min={1} value={nextNumber} onChange={(e) => setNextNumber(Number(e.target.value))} disabled={!autoGenerate} /></label>
               <label className="field"><span>Padding length</span><input type="number" min={0} max={10} value={padding} onChange={(e) => setPadding(Number(e.target.value))} disabled={!autoGenerate} /></label>
               <label className="field"><span>Separator</span><select value={separator} onChange={(e) => setSeparator(e.target.value)} disabled={!autoGenerate}><option value="">None</option><option value="-">-</option><option value="/">/</option><option value=".">.</option><option value="_">_</option></select></label>
               <label className="field"><span>Effective from</span><input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} /></label>
               <label className="field"><span>Effective to</span><input type="date" value={effectiveTo} onChange={(e) => setEffectiveTo(e.target.value)} /></label>
-            </div> : null}
+              <label className="checkbox-field"><input type="checkbox" checked={versionActive} onChange={(e) => setVersionActive(e.target.checked)} /> Version active</label>
+            </div>
             {autoGenerate && generationMethod === 'Simple' ? <p className="field-help">Example preview: <strong>{[prefix || 'EMP', String(Math.max(1, nextNumber)).padStart(Math.max(0, padding), '0')].join(separator)}</strong></p> : null}
             <div className="form-actions"><button className="button button-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save Configuration'}</button></div>
           </form>
@@ -225,7 +221,7 @@ export function EmployeeCodeConfigurationPage() {
               <button className="button button-link" type="button" onClick={() => setSegments((all) => all.filter((_, i) => i !== index))} disabled={segments.length <= 1}>Remove</button>
             </div>)}
             <button className="button button-secondary" type="button" onClick={() => setSegments((all) => [...all, { segmentType: 1, fixedValue: '', paddingLength: 5 }])}>+ Add segment</button>
-            <div className="preview-card"><strong>Rule Preview</strong><div className="preview-value">{rulePreview()}</div><span className="field-help">Display-only preview; sequence is not consumed.</span></div>
+            <div className="preview-card"><strong>Sample rule preview</strong><div className="preview-value">{rulePreview()}</div><span className="field-help">Display-only sample; it does not reserve or consume the next sequence number. Padding 8 means an eight-digit sequence.</span></div>
           </div>
           <div className="form-actions"><button className="button button-secondary" type="submit" disabled={ruleSaving}>{ruleSaving ? 'Saving…' : 'Save Rule'}</button><button className="button button-link" type="button" onClick={createNewRule}>Create New</button>{selectedRuleId ? <button className="button button-link" type="button" onClick={() => { const selected = rulesQuery.data?.find(rule => rule.id === selectedRuleId); if (selected) void deleteRule(selected) }}>Delete Rule</button> : null}</div>
         </form>

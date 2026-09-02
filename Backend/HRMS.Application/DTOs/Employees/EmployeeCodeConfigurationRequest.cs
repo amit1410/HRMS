@@ -3,6 +3,8 @@ using HRMS.Domain.Enums;
 
 public sealed class EmployeeCodeConfigurationRequest
 {
+    public Guid? VersionId { get; set; }
+    public bool IsActive { get; set; } = true;
     public bool AutoGenerate { get; set; } = true;
     public EmployeeCodeAssignmentMode AssignmentMode { get; set; } = EmployeeCodeAssignmentMode.Auto;
     public EmployeeCodeGenerationMethod? GenerationMethod { get; set; } = EmployeeCodeGenerationMethod.Simple;

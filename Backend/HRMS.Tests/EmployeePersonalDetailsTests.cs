@@ -51,6 +51,20 @@ public class EmployeePersonalDetailsTests
     }
 
     [Fact]
+    public async Task Create_personal_details_does_not_require_sensitive_edit_permission()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+
+        var result = await harness.Employees().CreatePersonalDetailsAsync(
+            NewRequest(),
+            canEditSensitive: false);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(string.Empty, result.Value!.EmployeeCode);
+        Assert.Equal("Sam", result.Value.FirstName);
+    }
+
+    [Fact]
     public async Task Create_does_not_consume_employee_code_sequence()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();

@@ -5,16 +5,18 @@ import {
   getEmploymentHistory,
   upsertEmployment,
 } from '../../api/employeeSubsections.ts'
+import { getEmployeeCodeConfiguration } from '../../api/employeeCodeConfiguration.ts'
 import { toApiError, hasFieldErrors, type ApiError } from '../../api/errors.ts'
 import type {
   EmployeeEmployment,
   EmployeeEmploymentHistory,
   EmployeeEmploymentRequest,
   EmploymentChangeRequest,
+  EmploymentChangeReason,
   EmploymentType,
   EmployeeStatus,
 } from '../../api/types.ts'
-import { EMPLOYEE_STATUSES, EMPLOYMENT_TYPES } from '../../api/types.ts'
+import { EMPLOYEE_STATUSES, EMPLOYMENT_CHANGE_REASONS, EMPLOYMENT_TYPES } from '../../api/types.ts'
 import { Card } from '../../components/Card.tsx'
 import { SelectField, TextField, type SelectOption } from '../../components/fields.tsx'
 import { ErrorState } from '../../components/ErrorState.tsx'
@@ -44,10 +46,15 @@ import {
 interface EmploymentSectionFormProps {
   /** The employee whose employment history is being viewed/appended to. */
   employeeId: string
+  /** Refreshes the employee header after Initial Employment assigns a pending code. */
+  employeeCode?: string
+  onSaved?: () => void | Promise<void>
 }
 
 interface FormValues {
+  employeeCode: string
   effectiveFrom: string
+  changeReason: EmploymentChangeReason
   holdingCompanyId: string
   lobId: string
   organisationId: string
@@ -72,7 +79,9 @@ interface FormValues {
 }
 
 const EMPTY: FormValues = {
+  employeeCode: '',
   effectiveFrom: '',
+  changeReason: 'NewJoining',
   holdingCompanyId: '',
   lobId: '',
   organisationId: '',
@@ -107,7 +116,9 @@ const CHILDREN: Partial<Record<keyof FormValues, (keyof FormValues)[]>> = {
 
 function toRequest(values: FormValues): EmploymentChangeRequest {
   return {
+    employeeCode: values.employeeCode || null,
     effectiveFrom: values.effectiveFrom,
+    changeReason: values.changeReason,
     holdingCompanyId: values.holdingCompanyId || null,
     lobId: values.lobId || null,
     organisationId: values.organisationId || null,
@@ -132,9 +143,11 @@ function toRequest(values: FormValues): EmploymentChangeRequest {
   }
 }
 
-function formValuesFromHistory(record: EmployeeEmploymentHistory): FormValues {
+function formValuesFromHistory(record: EmployeeEmploymentHistory, employeeCode = ''): FormValues {
   return {
+    employeeCode,
     effectiveFrom: record.effectiveFrom,
+    changeReason: record.changeReason,
     holdingCompanyId: record.holdingCompanyId ?? '',
     lobId: record.lobId ?? '',
     organisationId: record.organisationId ?? '',
@@ -168,21 +181,24 @@ function formValuesFromHistory(record: EmployeeEmploymentHistory): FormValues {
  * here — history is immutable. The reason for a change is picked from the tenant's own change-reason
  * master, never typed in.
  */
-export function EmploymentSectionForm({ employeeId }: EmploymentSectionFormProps) {
-  const [values, setValues] = useState<FormValues>(EMPTY)
+export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }: EmploymentSectionFormProps) {
+  const [values, setValues] = useState<FormValues>(() => ({ ...EMPTY, employeeCode }))
   const [error, setError] = useState<ApiError | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const hydratedEmployeeId = useRef<string | null>(null)
 
   const history = useApiQuery((signal) => getEmploymentHistory(employeeId, signal), [employeeId])
+  const codeConfiguration = useApiQuery((signal) => getEmployeeCodeConfiguration(signal), [employeeId])
+
+  const manualCode = codeConfiguration.data?.assignmentMode === 'Manual' || codeConfiguration.data?.assignmentMode === 0
 
   useEffect(() => {
     const current = history.data?.find((record) => !record.effectiveTo) ?? history.data?.[0]
     if (!current || hydratedEmployeeId.current === employeeId) return
-    setValues(formValuesFromHistory(current))
+    setValues((previous) => formValuesFromHistory(current, employeeCode || previous.employeeCode))
     hydratedEmployeeId.current = employeeId
-  }, [employeeId, history.data])
+  }, [employeeId, employeeCode, history.data])
 
   // Dependent org hierarchy — each level loads only once its parent is chosen.
   const holdingCompanies = useApiQuery((signal) => loadHoldingCompanyOptions({ activeOnly: true }, signal), [])
@@ -266,9 +282,10 @@ export function EmploymentSectionForm({ employeeId }: EmploymentSectionFormProps
     try {
       if (import.meta.env.DEV) console.debug('EMPLOYMENT SAVE CLICKED', { employeeId, effectiveDate: values.effectiveFrom, changeReason: values.positionChangeReasonId, holdingCompanyId: values.holdingCompanyId, lobId: values.lobId, organisationId: values.organisationId, departmentId: values.departmentId, designationId: values.designationId })
       const saved = await createEmploymentChange(employeeId, toRequest(values))
-      setValues(formValuesFromHistory(saved))
+      setValues((previous) => formValuesFromHistory(saved, employeeCode || previous.employeeCode))
       setSuccess('Employment change recorded.')
       await history.refetch()
+      await onSaved?.()
     } catch (caught) {
       setError(toApiError(caught))
     } finally {
@@ -335,6 +352,18 @@ export function EmploymentSectionForm({ employeeId }: EmploymentSectionFormProps
             <form className="employment-editor" onSubmit={saveEmploymentChange} noValidate>
               <EmploymentAccordion title="1. Employment Details" defaultOpen>
                 <div className="form-grid">
+                  {manualCode && !employeeCode && (
+                    <TextField
+                      id="employeeCode"
+                      label="Employee code"
+                      value={values.employeeCode}
+                      onChange={(value) => update('employeeCode', value)}
+                      maxLength={50}
+                      required
+                      hint="Required for the first employment record when manual assignment is enabled."
+                      error={fieldError('employeeCode')}
+                    />
+                  )}
                   <TextField
                     id="effectiveFrom"
                     label="Effective date"
@@ -343,6 +372,15 @@ export function EmploymentSectionForm({ employeeId }: EmploymentSectionFormProps
                     onChange={(value) => update('effectiveFrom', value)}
                     required
                     error={fieldError('effectiveFrom')}
+                  />
+                  <SelectField
+                    id="changeReason"
+                    label="Change type"
+                    value={values.changeReason}
+                    onChange={(value) => update('changeReason', value as EmploymentChangeReason)}
+                    options={EMPLOYMENT_CHANGE_REASONS.map((reason) => ({ value: reason, label: reason }))}
+                    error={fieldError('changeReason')}
+                    required
                   />
                   <SelectField
                     id="positionChangeReasonId"
@@ -481,7 +519,7 @@ export function EmploymentSectionForm({ employeeId }: EmploymentSectionFormProps
                 <div className="form-grid">
                   <SelectField
                     id="countryLocationId"
-                    label="Country"
+                    label="Location"
                     value={values.countryLocationId}
                     onChange={(value) => update('countryLocationId', value)}
                     options={asOptions(countries.data?.options ?? [], values.countryLocationId)}

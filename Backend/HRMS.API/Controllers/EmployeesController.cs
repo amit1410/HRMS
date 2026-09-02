@@ -3,6 +3,7 @@ using HRMS.API.Security;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Employees;
+using HRMS.Application.Security;
 using HRMS.Domain.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -130,7 +131,6 @@ public class EmployeesController : ControllerBase
     /// </remarks>
     [HttpPost("personal-details")]
     [HasPermission(Permissions.Employee.Create)]
-    [HasPermission(Permissions.EmployeeSensitive.Edit)]
     [ProducesResponseType(typeof(ApiResponse<EmployeeDto>), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status401Unauthorized)]
@@ -139,14 +139,16 @@ public class EmployeesController : ControllerBase
         [FromBody] EmployeePersonalDetailsRequest request,
         CancellationToken cancellationToken)
     {
-        var result = await _employeeService.CreatePersonalDetailsAsync(request, cancellationToken);
+        var result = await _employeeService.CreatePersonalDetailsAsync(
+            request,
+            cancellationToken,
+            User.HasClaim(HrmsClaimTypes.Permission, Permissions.EmployeeSensitive.Edit));
         return result.ToCreatedResult(nameof(GetById), dto => new { id = dto.Id });
     }
 
     /// <summary>Updates only the Personal Details fields of an existing employee.</summary>
     [HttpPut("{id:guid}/personal-details")]
     [HasPermission(Permissions.Employee.Edit)]
-    [HasPermission(Permissions.EmployeeSensitive.Edit)]
     [ProducesResponseType(typeof(ApiResponse<EmployeeDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status401Unauthorized)]
@@ -157,7 +159,11 @@ public class EmployeesController : ControllerBase
         [FromBody] EmployeePersonalDetailsRequest request,
         CancellationToken cancellationToken)
     {
-        var result = await _employeeService.UpdatePersonalDetailsAsync(id, request, cancellationToken);
+        var result = await _employeeService.UpdatePersonalDetailsAsync(
+            id,
+            request,
+            cancellationToken,
+            User.HasClaim(HrmsClaimTypes.Permission, Permissions.EmployeeSensitive.Edit));
         return result.ToActionResult();
     }
 

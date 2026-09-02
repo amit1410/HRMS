@@ -32,11 +32,16 @@ public interface IEmployeeService
     /// manual codes, nothing until the Employment section provides one).
     /// </summary>
     Task<Result<EmployeeDto>> CreatePersonalDetailsAsync(
-        EmployeePersonalDetailsRequest request, CancellationToken cancellationToken = default);
+        EmployeePersonalDetailsRequest request,
+        CancellationToken cancellationToken = default,
+        bool canEditSensitive = true);
 
     /// <summary>Updates only the Personal Details fields of an existing employee.</summary>
     Task<Result<EmployeeDto>> UpdatePersonalDetailsAsync(
-        Guid id, EmployeePersonalDetailsRequest request, CancellationToken cancellationToken = default);
+        Guid id,
+        EmployeePersonalDetailsRequest request,
+        CancellationToken cancellationToken = default,
+        bool canEditSensitive = true);
 
     Task<Result<bool>> DeleteAsync(Guid id, CancellationToken cancellationToken = default);
 

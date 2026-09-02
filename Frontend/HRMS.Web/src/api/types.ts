@@ -501,6 +501,9 @@ export const EDUCATION_TYPES: readonly EducationType[] = ['FullTime', 'PartTime'
 export type EmploymentType = 'Unspecified' | 'FullTime' | 'PartTime' | 'Contract' | 'Intern' | 'Temporary' | 'Consultant'
 export const EMPLOYMENT_TYPES: readonly EmploymentType[] = ['Unspecified', 'FullTime', 'PartTime', 'Contract', 'Intern', 'Temporary', 'Consultant']
 
+export type EmploymentChangeReason = 'Unspecified' | 'NewJoining' | 'Promotion' | 'Transfer' | 'DepartmentChange' | 'RoleChange' | 'LocationChange' | 'GradeChange' | 'ManagerChange' | 'OrganizationalRestructure' | 'Correction' | 'Other'
+export const EMPLOYMENT_CHANGE_REASONS: readonly EmploymentChangeReason[] = ['Unspecified', 'NewJoining', 'Promotion', 'Transfer', 'DepartmentChange', 'RoleChange', 'LocationChange', 'GradeChange', 'ManagerChange', 'OrganizationalRestructure', 'Correction', 'Other']
+
 export type AccountType = 'Unspecified' | 'Savings' | 'Current' | 'Salary' | 'NRE' | 'NRO'
 export const ACCOUNT_TYPES: readonly AccountType[] = ['Unspecified', 'Savings', 'Current', 'Salary', 'NRE', 'NRO']
 
@@ -939,6 +942,7 @@ export interface EmployeeEmploymentHistory {
   careerGroup?: string | null
   employmentType: EmploymentType
   employmentStatus: EmployeeStatus
+  changeReason: EmploymentChangeReason
   changeReasonDescription?: string | null
   createdBy?: string | null
   createdDate: string
@@ -946,6 +950,7 @@ export interface EmployeeEmploymentHistory {
 }
 
 export interface EmploymentChangeRequest {
+  employeeCode?: string | null
   effectiveFrom: string
   holdingCompanyId?: string | null
   lobId?: string | null
@@ -964,6 +969,7 @@ export interface EmploymentChangeRequest {
   costCenterId?: string | null
   managerId?: string | null
   positionChangeReasonId?: string | null
+  changeReason: EmploymentChangeReason
   businessRole?: string | null
   gradeLevel?: string | null
   careerGroup?: string | null

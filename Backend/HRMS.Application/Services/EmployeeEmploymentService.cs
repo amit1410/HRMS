@@ -2,10 +2,12 @@ using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Employees;
 using HRMS.Application.EmployeeCodes;
+using HRMS.Application.Validators.Common;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using System.Text.RegularExpressions;
 
 namespace HRMS.Application.Services;
 
@@ -569,10 +571,50 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             [EmployeeCodeConditionField.Designation] = references.Designation?.Code,
             [EmployeeCodeConditionField.EmployeeType] = references.EmployeeType?.Code,
             [EmployeeCodeConditionField.Country] = references.Country?.Code,
+            [EmployeeCodeConditionField.Location] = references.WorkLocation?.Code,
             [EmployeeCodeConditionField.WorkLocation] = references.WorkLocation?.Code,
             [EmployeeCodeConditionField.CostCenter] = references.CostCenter?.Code
         };
-        var segmentValues = values.ToDictionary(x => (EmployeeCodeSegmentType)x.Key, x => x.Value);
+        var referenceIds = new Dictionary<EmployeeCodeConditionField, Guid?>
+        {
+            [EmployeeCodeConditionField.HoldingCompany] = references.HoldingCompany?.Id,
+            [EmployeeCodeConditionField.Lob] = references.Lob?.Id,
+            [EmployeeCodeConditionField.Organisation] = references.Organisation?.Id,
+            [EmployeeCodeConditionField.Department] = references.Department?.Id,
+            [EmployeeCodeConditionField.SubDepartment] = references.SubDepartment?.Id,
+            [EmployeeCodeConditionField.Section] = references.Section?.Id,
+            [EmployeeCodeConditionField.SubSection] = references.SubSection?.Id,
+            [EmployeeCodeConditionField.Function] = references.Function?.Id,
+            [EmployeeCodeConditionField.SubFunction] = references.SubFunction?.Id,
+            [EmployeeCodeConditionField.Grade] = references.Grade?.Id,
+            [EmployeeCodeConditionField.Designation] = references.Designation?.Id,
+            [EmployeeCodeConditionField.EmployeeType] = references.EmployeeType?.Id,
+            [EmployeeCodeConditionField.Country] = references.Country?.Id,
+            [EmployeeCodeConditionField.Location] = references.WorkLocation?.Id,
+            [EmployeeCodeConditionField.WorkLocation] = references.WorkLocation?.Id,
+            [EmployeeCodeConditionField.CostCenter] = references.CostCenter?.Id
+        };
+        // These enums intentionally do not share numeric values. Keep the mapping explicit so a
+        // condition for Department cannot accidentally render as a different segment type.
+        var segmentValues = new Dictionary<EmployeeCodeSegmentType, string?>
+        {
+            [EmployeeCodeSegmentType.HoldingCompanyCode] = values[EmployeeCodeConditionField.HoldingCompany],
+            [EmployeeCodeSegmentType.LobCode] = values[EmployeeCodeConditionField.Lob],
+            [EmployeeCodeSegmentType.OrganisationCode] = values[EmployeeCodeConditionField.Organisation],
+            [EmployeeCodeSegmentType.DepartmentCode] = values[EmployeeCodeConditionField.Department],
+            [EmployeeCodeSegmentType.SubDepartmentCode] = values[EmployeeCodeConditionField.SubDepartment],
+            [EmployeeCodeSegmentType.SectionCode] = values[EmployeeCodeConditionField.Section],
+            [EmployeeCodeSegmentType.SubSectionCode] = values[EmployeeCodeConditionField.SubSection],
+            [EmployeeCodeSegmentType.FunctionCode] = values[EmployeeCodeConditionField.Function],
+            [EmployeeCodeSegmentType.SubFunctionCode] = values[EmployeeCodeConditionField.SubFunction],
+            [EmployeeCodeSegmentType.GradeCode] = values[EmployeeCodeConditionField.Grade],
+            [EmployeeCodeSegmentType.DesignationCode] = values[EmployeeCodeConditionField.Designation],
+            [EmployeeCodeSegmentType.EmployeeTypeCode] = values[EmployeeCodeConditionField.EmployeeType],
+            [EmployeeCodeSegmentType.CountryCode] = values[EmployeeCodeConditionField.Country],
+            [EmployeeCodeSegmentType.LocationCode] = values[EmployeeCodeConditionField.WorkLocation],
+            [EmployeeCodeSegmentType.WorkLocationCode] = values[EmployeeCodeConditionField.WorkLocation],
+            [EmployeeCodeSegmentType.CostCenterCode] = values[EmployeeCodeConditionField.CostCenter]
+        };
         var context = new EmployeeCodeGenerationContext(request.EffectiveFrom, values, segmentValues);
 
         if (version.GenerationMethod == EmployeeCodeGenerationMethod.RuleBased)
@@ -582,10 +624,8 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
                 .Include(r => r.Segments)
                 .Where(r => r.EmployeeCodeConfigVersionId == version.Id && !r.IsDeleted && r.Status == EmployeeCodeRuleStatus.Active)
                 .ToListAsync(cancellationToken);
-            var specific = rules.Where(r => !r.IsDefault && r.Conditions.Count > 0)
-                .Where(r => r.Conditions.All(c => c.Operator == EmployeeCodeConditionOperator.Equals &&
-                    values.TryGetValue(c.Field, out var actual) && actual is not null &&
-                    string.Equals(actual, c.Value ?? c.ReferenceId?.ToString(), StringComparison.OrdinalIgnoreCase)))
+                var specific = rules.Where(r => !r.IsDefault && r.Conditions.Count > 0)
+                .Where(r => r.Conditions.All(c => ConditionMatches(c, values, referenceIds)))
                 .OrderBy(r => r.Priority).ThenBy(r => r.Id).FirstOrDefault();
             var rule = specific ?? rules.SingleOrDefault(r => r.IsDefault);
             if (rule is null)
@@ -667,6 +707,19 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
     private static Result<EmployeeEmploymentHistoryDto>? ValidateEmploymentChangeCommand(
         EmploymentChangeRequest request)
     {
+        if (request.EffectiveFrom == default)
+            return Result<EmployeeEmploymentHistoryDto>.Invalid("effectiveFrom", "Effective date is required.");
+
+        if (request.EffectiveFrom < DateOnly.FromDateTime(DateTime.UtcNow))
+            return Result<EmployeeEmploymentHistoryDto>.Invalid("effectiveFrom", "Effective date must be today or in the future.");
+
+        var employeeCode = Normalize(request.EmployeeCode);
+        if (employeeCode?.Length > 100)
+            return Result<EmployeeEmploymentHistoryDto>.Invalid("employeeCode", "Employee code must not exceed 100 characters.");
+
+        if (employeeCode is not null && !Regex.IsMatch(employeeCode, CodeFormats.Pattern))
+            return Result<EmployeeEmploymentHistoryDto>.Invalid("employeeCode", CodeFormats.Message);
+
         if (!request.DepartmentId.HasValue)
             return Result<EmployeeEmploymentHistoryDto>.Invalid("departmentId", "Department is required.");
 
@@ -986,6 +1039,24 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
     private static string EmployeeFullName(Employee employee) =>
         string.Join(" ", new[] { employee.FirstName, employee.MiddleName, employee.LastName }
             .Where(part => !string.IsNullOrWhiteSpace(part)));
+
+    private static bool ConditionMatches(
+        EmployeeCodeRuleCondition condition,
+        IReadOnlyDictionary<EmployeeCodeConditionField, string?> values,
+        IReadOnlyDictionary<EmployeeCodeConditionField, Guid?> referenceIds)
+    {
+        if (condition.Operator != EmployeeCodeConditionOperator.Equals)
+            return false;
+
+        if (condition.ReferenceId is Guid referenceId)
+        {
+            return referenceIds.TryGetValue(condition.Field, out var actualId) && actualId == referenceId;
+        }
+
+        return values.TryGetValue(condition.Field, out var actualCode) &&
+               actualCode is not null &&
+               string.Equals(actualCode, condition.Value, StringComparison.OrdinalIgnoreCase);
+    }
 
     private sealed class EmploymentReferences
     {

@@ -21,7 +21,12 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
     {
         if (_tenant.TenantId is not Guid) return Result<EmployeeCodeConfigurationDto>.Unauthorized("No authenticated tenant.");
         var config = await _db.EmployeeCodeConfigs.AsNoTracking().FirstOrDefaultAsync(cancellationToken);
-        return config is null ? Result<EmployeeCodeConfigurationDto>.NotFound("Employee Code configuration has not been created.") : Result<EmployeeCodeConfigurationDto>.Success(Map(config));
+        if (config is null) return Result<EmployeeCodeConfigurationDto>.NotFound("Employee Code configuration has not been created.");
+        var version = await _db.EmployeeCodeConfigVersions.AsNoTracking()
+            .Where(v => v.EmployeeCodeConfigId == config.Id)
+            .OrderByDescending(v => v.EffectiveFrom)
+            .FirstOrDefaultAsync(cancellationToken);
+        return Result<EmployeeCodeConfigurationDto>.Success(Map(config, version));
     }
 
     public async Task<Result<EmployeeCodeConfigurationDto>> SaveAsync(EmployeeCodeConfigurationRequest request, CancellationToken cancellationToken = default)
@@ -37,24 +42,72 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
         if (!validation.IsValid) return Result<EmployeeCodeConfigurationDto>.Invalid("Employee Code configuration is invalid.", validation.Errors.Select(e => new ValidationError(e.PropertyName, e.ErrorMessage)).ToList());
         var config = await _db.EmployeeCodeConfigs.FirstOrDefaultAsync(cancellationToken);
         if (config is null) { config = new EmployeeCodeConfig { Id = Guid.NewGuid(), TenantId = tenantId }; _db.EmployeeCodeConfigs.Add(config); }
-        if (request.AutoGenerate)
+
+        // Rules are optional while a configuration is being created. Rule-Based generation reports a
+        // useful error at employment time until an active matching/fallback rule exists; Simple mode
+        // must never depend on a rule at all.
+        var version = request.VersionId is Guid versionId
+            ? await _db.EmployeeCodeConfigVersions.FirstOrDefaultAsync(v => v.Id == versionId && v.EmployeeCodeConfigId == config.Id, cancellationToken)
+            : await _db.EmployeeCodeConfigVersions.FirstOrDefaultAsync(v => v.EmployeeCodeConfigId == config.Id && v.EffectiveFrom == request.EffectiveFrom, cancellationToken);
+        if (request.VersionId is not null && version is null)
+            return Result<EmployeeCodeConfigurationDto>.NotFound("The selected Employee Code configuration version was not found.");
+        if (version is null)
         {
-            var hasUsableRule = await _db.EmployeeCodeRules.AnyAsync(r => r.EmployeeCodeConfigId == config.Id && !r.IsDeleted && r.Status == EmployeeCodeRuleStatus.Active && (r.IsDefault || r.Segments.Any()), cancellationToken);
-            if (!hasUsableRule && config.Id != Guid.Empty)
-                return Result<EmployeeCodeConfigurationDto>.Invalid("autoGenerate", "At least one active Employee Code rule is required before Auto mode can be enabled.");
+            var requestedEnd = request.EffectiveTo ?? DateOnly.MaxValue;
+            var overlapping = await _db.EmployeeCodeConfigVersions
+                .Where(v => v.EmployeeCodeConfigId == config.Id && v.IsActive)
+                .ToListAsync(cancellationToken);
+            var conflicting = overlapping.FirstOrDefault(v =>
+                request.EffectiveFrom <= (v.EffectiveTo ?? DateOnly.MaxValue) &&
+                v.EffectiveFrom <= requestedEnd);
+            if (conflicting is not null)
+            {
+                return Result<EmployeeCodeConfigurationDto>.Conflict(
+                    "Another Employee Code configuration is already effective for part of the selected date range.");
+            }
+
+            version = new EmployeeCodeConfigVersion
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantId,
+                EmployeeCodeConfigId = config.Id
+            };
+            _db.EmployeeCodeConfigVersions.Add(version);
         }
+        else
+        {
+            var requestedEnd = request.EffectiveTo ?? DateOnly.MaxValue;
+            var conflicting = await _db.EmployeeCodeConfigVersions
+                .Where(v => v.EmployeeCodeConfigId == config.Id && v.Id != version.Id && v.IsActive)
+                .AnyAsync(v => request.EffectiveFrom <= (v.EffectiveTo ?? DateOnly.MaxValue) &&
+                               v.EffectiveFrom <= requestedEnd, cancellationToken);
+            if (conflicting)
+                return Result<EmployeeCodeConfigurationDto>.Conflict("Another active Employee Code configuration is already effective for part of the selected date range.");
+        }
+
+        version.AutoGenerate = request.AssignmentMode == EmployeeCodeAssignmentMode.Auto;
+        version.AssignmentMode = request.AssignmentMode;
+        version.GenerationMethod = request.AssignmentMode == EmployeeCodeAssignmentMode.Manual ? null : request.GenerationMethod;
+        version.Prefix = request.Prefix.Trim().ToUpperInvariant();
+        version.NextNumber = request.NextNumber;
+        version.Padding = request.Padding;
+        version.Separator = request.Separator;
+        version.EffectiveFrom = request.EffectiveFrom;
+        version.EffectiveTo = request.EffectiveTo;
+        version.IsActive = request.IsActive;
+
         config.AssignmentMode = request.AssignmentMode;
         config.GenerationMethod = request.AssignmentMode == EmployeeCodeAssignmentMode.Manual ? null : request.GenerationMethod;
         config.AutoGenerate = request.AssignmentMode == EmployeeCodeAssignmentMode.Auto;
         config.Prefix = request.Prefix.Trim().ToUpperInvariant(); config.NextNumber = request.NextNumber; config.Padding = request.Padding; config.Separator = request.Separator; config.EffectiveFrom = request.EffectiveFrom; config.EffectiveTo = request.EffectiveTo;
         await _db.SaveChangesAsync(cancellationToken);
-        return Result<EmployeeCodeConfigurationDto>.Success(Map(config), "Employee Code configuration saved.");
+        return Result<EmployeeCodeConfigurationDto>.Success(Map(config, version), "Employee Code configuration saved.");
     }
 
     public async Task<Result<IReadOnlyList<EmployeeCodeRuleDto>>> GetRulesAsync(CancellationToken cancellationToken = default)
     {
         if (_tenant.TenantId is not Guid) return Result<IReadOnlyList<EmployeeCodeRuleDto>>.Unauthorized("No authenticated tenant.");
-        var rules = await _db.EmployeeCodeRules.AsNoTracking().Where(r => !r.IsDeleted).Include(r => r.Conditions).Include(r => r.Segments).OrderBy(r => r.Priority).ToListAsync(cancellationToken);
+        var rules = await _db.EmployeeCodeRules.AsNoTracking().Where(r => r.TenantId == _tenant.TenantId && !r.IsDeleted).Include(r => r.Conditions).Include(r => r.Segments).OrderBy(r => r.Priority).ToListAsync(cancellationToken);
         return Result<IReadOnlyList<EmployeeCodeRuleDto>>.Success(rules.Select(MapRule).ToList());
     }
 
@@ -88,37 +141,66 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
             return Result<EmployeeCodeRuleDto>.Invalid("Sequence padding must be between 0 and 12.");
         var config = await _db.EmployeeCodeConfigs.FirstOrDefaultAsync(cancellationToken);
         if (config is null) return Result<EmployeeCodeRuleDto>.Invalid("Create Employee Code configuration before adding rules.");
-        var version = await _db.EmployeeCodeConfigVersions
-            .Where(v => v.EmployeeCodeConfigId == config.Id && v.IsActive)
-            .OrderByDescending(v => v.EffectiveFrom)
-            .FirstOrDefaultAsync(cancellationToken);
-        if (version is null) return Result<EmployeeCodeRuleDto>.Invalid("No active Employee Code configuration version exists.");
+        var version = request.ConfigurationVersionId is Guid requestedVersionId
+            ? await _db.EmployeeCodeConfigVersions.FirstOrDefaultAsync(v => v.Id == requestedVersionId && v.EmployeeCodeConfigId == config.Id, cancellationToken)
+            : await _db.EmployeeCodeConfigVersions
+                .Where(v => v.EmployeeCodeConfigId == config.Id && v.IsActive)
+                .OrderByDescending(v => v.EffectiveFrom)
+                .FirstOrDefaultAsync(cancellationToken);
+        if (version is null) return Result<EmployeeCodeRuleDto>.NotFound("The selected Employee Code configuration version was not found.");
+        if (request.Status == EmployeeCodeRuleStatus.Active && !version.IsActive)
+            return Result<EmployeeCodeRuleDto>.Conflict("An active rule cannot be attached to an inactive Employee Code configuration version.");
         if (request.IsDefault && request.Status == EmployeeCodeRuleStatus.Active)
         {
             var existingDefault = await _db.EmployeeCodeRules.AnyAsync(r => r.Id != id && r.EmployeeCodeConfigVersionId == version.Id && !r.IsDeleted && r.IsDefault && r.Status == EmployeeCodeRuleStatus.Active, cancellationToken);
             if (existingDefault) return Result<EmployeeCodeRuleDto>.Conflict("Only one active default Employee Code rule is allowed.");
         }
-        var rule = id.HasValue ? await _db.EmployeeCodeRules.Where(r => !r.IsDeleted).Include(r => r.Conditions).Include(r => r.Segments).FirstOrDefaultAsync(r => r.Id == id.Value, cancellationToken) : null;
-        if (rule is null) { rule = new EmployeeCodeRule { Id = Guid.NewGuid(), TenantId = tenantId, EmployeeCodeConfigId = config.Id, EmployeeCodeConfigVersionId = version.Id }; _db.EmployeeCodeRules.Add(rule); }
+        var rule = id.HasValue ? await _db.EmployeeCodeRules.Where(r => r.TenantId == tenantId && !r.IsDeleted).Include(r => r.Conditions).Include(r => r.Segments).FirstOrDefaultAsync(r => r.Id == id.Value, cancellationToken) : null;
+        if (rule is null)
+        {
+            rule = new EmployeeCodeRule { Id = Guid.NewGuid(), TenantId = tenantId, EmployeeCodeConfigId = config.Id, EmployeeCodeConfigVersionId = version.Id };
+            _db.EmployeeCodeRules.Add(rule);
+        }
+        else if (rule.EmployeeCodeConfigVersionId != version.Id)
+        {
+            // A version is historical. Saving an existing rule while another version is selected creates a
+            // version-local copy instead of moving or mutating the historical rule.
+            var sourceConditions = rule.Conditions.ToList();
+            var sourceSegments = rule.Segments.ToList();
+            rule = new EmployeeCodeRule
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantId,
+                EmployeeCodeConfigId = config.Id,
+                EmployeeCodeConfigVersionId = version.Id,
+                Conditions = sourceConditions.Select(c => new EmployeeCodeRuleCondition
+                {
+                    Id = Guid.NewGuid(), TenantId = tenantId, Field = c.Field, Operator = c.Operator,
+                    ReferenceId = c.ReferenceId, Value = c.Value
+                }).ToList(),
+                Segments = sourceSegments.Select(s => new EmployeeCodeSegment
+                {
+                    Id = Guid.NewGuid(), TenantId = tenantId, SequenceOrder = s.SequenceOrder,
+                    SegmentType = s.SegmentType, FixedValue = s.FixedValue, PaddingLength = s.PaddingLength
+                }).ToList()
+            };
+            _db.EmployeeCodeRules.Add(rule);
+            _db.EmployeeCodeRuleConditions.AddRange(rule.Conditions);
+            _db.EmployeeCodeSegments.AddRange(rule.Segments);
+        }
         rule.Name = request.Name.Trim(); rule.Priority = request.Priority; rule.IsDefault = request.IsDefault; rule.Status = request.Status;
         var conditionEntities = new List<EmployeeCodeRuleCondition>();
         var requestedConditionIds = request.Conditions.Where(c => c.Id.HasValue).Select(c => c.Id!.Value).ToHashSet();
-        _db.EmployeeCodeRuleConditions.RemoveRange(rule.Conditions.Where(c => !requestedConditionIds.Contains(c.Id)));
+        _db.EmployeeCodeRuleConditions.RemoveRange(rule.Conditions.Where(c => !requestedConditionIds.Contains(c.Id)).ToList());
         foreach (var c in request.Conditions)
         {
-            var code = c.Value?.Trim();
-            if (c.ReferenceId.HasValue && string.IsNullOrWhiteSpace(code))
+            var code = await ResolveConditionCodeAsync(c, tenantId, cancellationToken);
+            if (c.ReferenceId.HasValue && code is null)
             {
-                code = c.Field switch
-                {
-                    EmployeeCodeConditionField.HoldingCompany => await _db.HoldingCompanies.Where(x => x.Id == c.ReferenceId && x.TenantId == tenantId).Select(x => x.Code).FirstOrDefaultAsync(cancellationToken),
-                    EmployeeCodeConditionField.Lob => await _db.LinesOfBusiness.Where(x => x.Id == c.ReferenceId && x.TenantId == tenantId).Select(x => x.Code).FirstOrDefaultAsync(cancellationToken),
-                    EmployeeCodeConditionField.Organisation => await _db.Organisations.Where(x => x.Id == c.ReferenceId && x.TenantId == tenantId).Select(x => x.Code).FirstOrDefaultAsync(cancellationToken),
-                    EmployeeCodeConditionField.Department => await _db.Departments.Where(x => x.Id == c.ReferenceId && x.TenantId == tenantId).Select(x => x.Code).FirstOrDefaultAsync(cancellationToken),
-                    _ => null
-                };
-                if (code is null) return Result<EmployeeCodeRuleDto>.Invalid("condition", "The selected master value is invalid or belongs to another tenant.");
+                return Result<EmployeeCodeRuleDto>.Invalid("condition", "The selected master value is invalid or belongs to another tenant.");
             }
+            if (request.Status == EmployeeCodeRuleStatus.Active && string.IsNullOrWhiteSpace(code))
+                return Result<EmployeeCodeRuleDto>.Invalid("condition", "Active rule conditions must select a master value or provide a value.");
             var condition = c.Id.HasValue ? rule.Conditions.FirstOrDefault(existing => existing.Id == c.Id.Value) : null;
             if (condition is null) { condition = new EmployeeCodeRuleCondition { Id = c.Id ?? Guid.NewGuid(), TenantId = tenantId, EmployeeCodeRuleId = rule.Id }; _db.EmployeeCodeRuleConditions.Add(condition); }
             condition.Field = c.Field; condition.Operator = c.Operator; condition.ReferenceId = c.ReferenceId; condition.Value = code;
@@ -126,7 +208,7 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
         }
         rule.Conditions = conditionEntities;
         var requestedSegmentIds = request.Segments.Where(s => s.Id.HasValue).Select(s => s.Id!.Value).ToHashSet();
-        _db.EmployeeCodeSegments.RemoveRange(rule.Segments.Where(s => !requestedSegmentIds.Contains(s.Id)));
+        _db.EmployeeCodeSegments.RemoveRange(rule.Segments.Where(s => !requestedSegmentIds.Contains(s.Id)).ToList());
         var segmentEntities = new List<EmployeeCodeSegment>();
         foreach (var s in request.Segments.OrderBy(s => s.SequenceOrder))
         {
@@ -148,7 +230,7 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
         if (rule.IsDefault && rule.Status == EmployeeCodeRuleStatus.Active)
         {
             var anotherFallback = await _db.EmployeeCodeRules.AnyAsync(r => r.Id != id && r.EmployeeCodeConfigVersionId == rule.EmployeeCodeConfigVersionId && !r.IsDeleted && r.IsDefault && r.Status == EmployeeCodeRuleStatus.Active, cancellationToken);
-            if (!anotherFallback) return Result<EmployeeCodeRuleDto>.Conflict("Cannot delete the active default fallback rule while Rule-Based generation is active. Create or activate another fallback rule first.");
+            if (!anotherFallback) return Result<EmployeeCodeRuleDto>.Conflict("Cannot delete the only active default fallback for this configuration version. Use an explicit replacement action first; no rule was changed.");
         }
         rule.IsDeleted = true;
         rule.DeletedAt = DateTime.UtcNow;
@@ -156,6 +238,38 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
         return Result<EmployeeCodeRuleDto>.Success(MapRule(rule), "Employee Code rule deleted.");
     }
 
-    private static EmployeeCodeConfigurationDto Map(EmployeeCodeConfig config) => new(config.Id, config.AutoGenerate, config.AssignmentMode, config.GenerationMethod, config.Prefix, config.NextNumber, config.Padding, config.Separator, config.EffectiveFrom, config.EffectiveTo);
-    private static EmployeeCodeRuleDto MapRule(EmployeeCodeRule rule) => new(rule.Id, rule.Name, rule.Priority, rule.IsDefault, rule.Status, rule.Conditions.OrderBy(c => c.Id).Select(c => new EmployeeCodeConditionDto(c.Id, c.Field, c.Operator, c.ReferenceId, c.Value)).ToList(), rule.Segments.OrderBy(s => s.SequenceOrder).Select(s => new EmployeeCodeSegmentDto(s.Id, s.SequenceOrder, s.SegmentType, s.FixedValue, s.PaddingLength)).ToList());
+    private static EmployeeCodeConfigurationDto Map(EmployeeCodeConfig config, EmployeeCodeConfigVersion? version) =>
+        version is null
+            ? new(config.Id, config.AutoGenerate, config.AssignmentMode, config.GenerationMethod, config.Prefix, config.NextNumber, config.Padding, config.Separator, config.EffectiveFrom, config.EffectiveTo)
+            : new(config.Id, version.AutoGenerate, version.AssignmentMode, version.GenerationMethod, version.Prefix, version.NextNumber, version.Padding, version.Separator, version.EffectiveFrom, version.EffectiveTo, version.Id, version.IsActive);
+    private static EmployeeCodeRuleDto MapRule(EmployeeCodeRule rule) => new(rule.Id, rule.Name, rule.Priority, rule.IsDefault, rule.Status, rule.Conditions.OrderBy(c => c.Id).Select(c => new EmployeeCodeConditionDto(c.Id, c.Field, c.Operator, c.ReferenceId, c.Value)).ToList(), rule.Segments.OrderBy(s => s.SequenceOrder).Select(s => new EmployeeCodeSegmentDto(s.Id, s.SequenceOrder, s.SegmentType, s.FixedValue, s.PaddingLength)).ToList(), rule.EmployeeCodeConfigVersionId);
+
+    private async Task<string?> ResolveConditionCodeAsync(
+        EmployeeCodeConditionRequest condition,
+        Guid tenantId,
+        CancellationToken cancellationToken)
+    {
+        if (condition.ReferenceId is not Guid referenceId)
+            return condition.Value?.Trim();
+
+        return condition.Field switch
+        {
+            EmployeeCodeConditionField.HoldingCompany => await _db.HoldingCompanies.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Lob => await _db.LinesOfBusiness.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Organisation => await _db.Organisations.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Department => await _db.Departments.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.SubDepartment => await _db.SubDepartments.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Section => await _db.Sections.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.SubSection => await _db.SubSections.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Function => await _db.Functions.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.SubFunction => await _db.SubFunctions.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Grade => await _db.Grades.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Designation => await _db.Designations.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.EmployeeType => await _db.EmployeeTypes.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Country => await _db.Countries.Where(x => x.Id == referenceId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Location or EmployeeCodeConditionField.WorkLocation => await _db.WorkLocations.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.CostCenter => await _db.CostCenters.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            _ => null
+        };
+    }
 }

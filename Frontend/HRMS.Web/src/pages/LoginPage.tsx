@@ -1,206 +1,40 @@
-import { useMemo, useState, type CSSProperties, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { hasFieldErrors, toApiError, type ApiError } from '../api/errors.ts'
 import { useAuth } from '../auth/useAuth.ts'
-import { TextField } from '../components/fields.tsx'
 import { FullPageSpinner, Spinner } from '../components/Spinner.tsx'
 import { useDocumentTitle } from '../hooks/useDocumentTitle.ts'
 import { useTenantBranding } from '../hooks/useTenantBranding.ts'
 
-/**
- * Sign-in.
- *
- * Two fields, because which directory of users to check is decided by the address the browser is
- * at — the workspace host — so there is deliberately nothing here that names an organization. An
- * email address that exists in two organizations is unambiguous the moment the host is known.
- *
- * The API answers a bad email and a bad password identically ("Invalid credentials"), so this page
- * has nothing to add: it shows what the server said and does not guess which half was wrong.
- *
- * Tenant branding (display name, logo, primary colour, welcome message) is loaded from the
- * pre-authentication `/api/tenants/current/branding` endpoint, which resolves by the host the
- * request arrives at — never by client input. The branding fetches anonymously before the user
- * signs in, so the sign-in screen can personalize itself for the correct workspace.
- */
 export function LoginPage() {
   useDocumentTitle('Sign in')
-
-  const { status, login } = useAuth()
-  const navigate = useNavigate()
-  const location = useLocation()
+  const { status, login } = useAuth(); const navigate = useNavigate(); const location = useLocation()
   const { branding, isLoading: brandingLoading, error: brandingError } = useTenantBranding()
-
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState<ApiError | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-
-  // Workspace-level styling derived from branding — applied as inline style on the page root
-  // so the custom property is available to all descendant selectors.
-  const workspaceStyle = useMemo<CSSProperties | undefined>(() => {
-    if (!branding?.primaryColor) return undefined
-    return { '--ws-accent': branding.primaryColor } as CSSProperties
-  }, [branding?.primaryColor])
-
-  // A stored refresh token is still being exchanged; showing the form now would flash it at someone who
-  // turns out to be signed in.
-  if (status === 'restoring') {
-    return <FullPageSpinner label="Restoring your session…" />
-  }
-
-  if (status === 'authenticated') {
-    return <Navigate to={redirectTarget(location.state)} replace />
-  }
-
-  // Branding is still loading — show a spinner instead of a flickering unbranded card.
-  if (brandingLoading) {
-    return (
-      <div className="login-page" style={workspaceStyle}>
-        <FullPageSpinner label="Loading workspace…" />
-      </div>
-    )
-  }
-
-  // Branding request failed — the workspace may be unreachable or misconfigured.
-  if (brandingError && !branding) {
-    return (
-      <div className="login-page" style={workspaceStyle}>
-        <div className="login-card">
-          <div className="login-brand">
-            <span className="sidebar-mark login-mark" aria-hidden="true">
-              HR
-            </span>
-            <div>
-              <h1 className="login-title">Workspace unavailable</h1>
-              <p className="login-subtitle">We couldn't load this workspace's sign-in page.</p>
-            </div>
-          </div>
-          <div className="form-error" role="alert">
-            {brandingError.message || 'Unable to connect to the server. Please try again later.'}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // Branding loaded but the address belongs to no organization (or the org has no branding).
-  // The API returns a neutral (all-null) payload for unknown, inactive, and opted-out orgs alike,
-  // so a caller cannot probe which addresses belong to somebody.
+  const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [passwordVisible, setPasswordVisible] = useState(false)
+  const [error, setError] = useState<ApiError | null>(null); const [submitting, setSubmitting] = useState(false); const calendarDate = useLocalCalendarDate()
+  const workspaceStyle = useMemo<CSSProperties | undefined>(() => branding?.primaryColor ? { '--ws-accent': branding.primaryColor } as CSSProperties : undefined, [branding?.primaryColor])
+  if (status === 'restoring') return <FullPageSpinner label="Restoring your session…" />
+  if (status === 'authenticated') return <Navigate to={redirectTarget(location.state)} replace />
+  if (brandingLoading) return <div className="login-page" style={workspaceStyle}><FullPageSpinner label="Loading workspace…" /></div>
+  if (brandingError && !branding) return <Unavailable title="Workspace unavailable" subtitle="We couldn't load this workspace's sign-in page." error={brandingError.message || 'Unable to connect to the server. Please try again later.'} style={workspaceStyle} />
   const isUnavailable = branding !== null && !branding.displayName && !branding.logoUrl
-
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (submitting) return
-
-    setSubmitting(true)
-    setError(null)
-    try {
-      await login({ email: email.trim(), password })
-      // Straight to wherever the guard interrupted, replacing this entry so Back does not return here.
-      navigate(redirectTarget(location.state), { replace: true })
-    } catch (caught) {
-      setError(toApiError(caught))
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const fieldError = (field: string) => error?.fieldErrors[field]
-
-  if (isUnavailable) {
-    return (
-      <div className="login-page" style={workspaceStyle}>
-        <div className="login-card">
-          <div className="login-brand">
-            <span className="sidebar-mark login-mark" aria-hidden="true">
-              HR
-            </span>
-            <div>
-              <h1 className="login-title">Workspace not found</h1>
-              <p className="login-subtitle">There is no organization at this address.</p>
-            </div>
-          </div>
-          <p className="form-error" role="alert">
-            Check the address you used, or ask your administrator for the correct workspace URL.
-          </p>
-        </div>
-      </div>
-    )
-  }
-
-  const displayName = branding?.displayName || 'Sign in'
-  const welcomeMessage = branding?.welcomeMessage
-  const logoUrl = branding?.logoUrl
-
-  return (
-    <div className="login-page" data-testid="login-page" style={workspaceStyle}>
-      <div className="login-card">
-        <div className="login-brand">
-          {logoUrl ? (
-            <img
-              className="login-logo"
-              src={logoUrl}
-              alt={displayName}
-              width={48}
-              height={48}
-            />
-          ) : (
-            <span className="sidebar-mark login-mark" aria-hidden="true">
-              HR
-            </span>
-          )}
-          <div>
-            <h1 className="login-title">{displayName}</h1>
-            {welcomeMessage && <p className="login-subtitle">{welcomeMessage}</p>}
-          </div>
-        </div>
-
-        {error && !hasFieldErrors(error) && (
-          <p className="form-error" role="alert">
-            {error.message}
-          </p>
-        )}
-
-        <form onSubmit={onSubmit} noValidate>
-          <TextField
-            id="email"
-            label="Email"
-            type="email"
-            value={email}
-            onChange={setEmail}
-            autoComplete="username"
-            error={fieldError('email')}
-          />
-          <TextField
-            id="password"
-            label="Password"
-            type="password"
-            value={password}
-            onChange={setPassword}
-            autoComplete="current-password"
-            error={fieldError('password')}
-          />
-
-          <button type="submit" className="button button-primary button-block" disabled={submitting}>
-            {submitting ? <Spinner size={16} label="Signing in…" /> : 'Sign in'}
-          </button>
-        </form>
-      </div>
-    </div>
-  )
+  if (isUnavailable) return <Unavailable title="Workspace not found" subtitle="There is no organization at this address." error="Check the address you used, or ask your administrator for the correct workspace URL." style={workspaceStyle} />
+  const displayName = branding?.displayName || 'HRMS'; const fieldError = (field: string) => error?.fieldErrors[field]
+  async function onSubmit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (submitting) return; setSubmitting(true); setError(null); try { await login({ email: email.trim(), password }); navigate(redirectTarget(location.state), { replace: true }) } catch (caught) { setError(toApiError(caught)) } finally { setSubmitting(false) } }
+  const month = calendarDate.toLocaleString('en-US', { month: 'long' }).toUpperCase(); const day = String(calendarDate.getDate()).padStart(2, '0')
+  return <div className="login-page" data-testid="login-page" style={workspaceStyle}><div className="login-layout">
+    <section className="login-visual" aria-label={`${displayName} workspace`}><div className="login-glow login-glow-one" aria-hidden="true" /><div className="login-glow login-glow-two" aria-hidden="true" /><svg className="login-curves" viewBox="0 0 700 760" aria-hidden="true" focusable="false"><path d="M-40 170C150 80 180 300 390 220s180-100 360-30" /><path d="M-80 610c170-130 240 30 390-40s190-170 420-110" /></svg><div className="login-visual-content"><BrandMark displayName={displayName} logoUrl={branding?.logoUrl} /><div className="login-hero-copy"><p className="login-eyebrow">{displayName} workspace</p><h1>A better workday<br />starts here.</h1><p>Your people. Your workspace. Everything connected.</p>{branding?.welcomeMessage && <span className="login-welcome-note">{branding.welcomeMessage}</span>}</div><div className="login-decorations" aria-hidden="true"><div className="login-team-card"><div className="login-avatar">A</div><div><strong>People first</strong><span>Team workspace</span></div><span className="login-status-dot" /></div><div className="login-calendar-card"><div className="calendar-top"><span>{month}</span><strong>{day}</strong></div><div className="calendar-lines"><i /><i /><i /><i /><i /><i /></div><span className="calendar-check">✓</span></div><span className="login-check check-one">✓</span><span className="login-check check-two">✓</span><span className="login-spark spark-one">✦</span><span className="login-spark spark-two">✦</span></div></div><p className="login-visual-footer">Built around your people</p></section>
+    <section className="login-form-panel"><div className="login-form-wrap"><div className="login-workspace-badge">{displayName.toUpperCase()} WORKSPACE</div><div className="login-form-heading"><h2>Welcome back</h2><p>Sign in to your organization workspace.</p></div>{error && !hasFieldErrors(error) && <p className="form-error login-error" role="alert">{error.message}</p>}<form className="login-form" onSubmit={onSubmit} noValidate><LoginField id="email" label="Email" type="email" value={email} onChange={setEmail} autoComplete="username" placeholder="you@company.com" error={fieldError('email')} icon={<EmailIcon />} /><LoginField id="password" label="Password" type={passwordVisible ? 'text' : 'password'} value={password} onChange={setPassword} autoComplete="current-password" placeholder="Enter your password" error={fieldError('password')} icon={<LockIcon />} trailing={<button type="button" className="password-toggle" onClick={() => setPasswordVisible((visible) => !visible)} aria-label={passwordVisible ? 'Hide password' : 'Show password'}>{passwordVisible ? <EyeOffIcon /> : <EyeIcon />}</button>} /><button type="submit" className="login-submit" disabled={submitting}>{submitting ? <Spinner size={17} label="Signing in…" /> : <><span>Sign in</span><ArrowIcon /></>}</button></form><p className="login-supporting-text">Use the credentials provided by your organization.</p><p className="login-form-footer">Need access? Contact your HR administrator.</p></div></section>
+  </div></div>
 }
 
-/**
- * Where to land after signing in.
- *
- * Only in-app absolute paths are honoured. A protocol-relative value (`//evil.example`) is a valid
- * router path but navigates off-site, so it is refused — the route state comes from `RequireAuth`, but
- * a link can put anything in history state and this is the one place it is trusted.
- */
-function redirectTarget(state: unknown): string {
-  const from = (state as { from?: { pathname?: unknown } } | null)?.from?.pathname
-  if (typeof from !== 'string') return '/dashboard'
-  if (!from.startsWith('/') || from.startsWith('//')) return '/dashboard'
-  if (from === '/login') return '/dashboard'
-  return from
-}
+function Unavailable({ title, subtitle, error, style }: { title: string; subtitle: string; error: string; style?: CSSProperties }) { return <div className="login-page" style={style}><div className="login-card"><BrandMark displayName="HRMS" /><h1 className="login-title">{title}</h1><p className="login-subtitle">{subtitle}</p><p className="form-error" role="alert">{error}</p></div></div> }
+function BrandMark({ displayName, logoUrl }: { displayName: string; logoUrl?: string | null }) { return <div className="login-tenant-brand">{logoUrl ? <img className="login-logo" src={logoUrl} alt={displayName} width={48} height={48} /> : <span className="login-mark" aria-hidden="true">HR</span>}<span>{displayName}</span></div> }
+function LoginField({ id, label, type, value, onChange, autoComplete, placeholder, error, icon, trailing }: { id: string; label: string; type: 'email' | 'password' | 'text'; value: string; onChange: (value: string) => void; autoComplete: string; placeholder: string; error?: string; icon: ReactNode; trailing?: ReactNode }) { return <div className="login-field"><label htmlFor={id}>{label}</label><div className="login-input-wrap">{icon}<input id={id} name={id} type={type} value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} placeholder={placeholder} required aria-invalid={error ? true : undefined} aria-describedby={error ? `${id}-error` : undefined} />{trailing}</div>{error && <p className="field-error" id={`${id}-error`}>{error}</p>}</div> }
+function EmailIcon() { return <svg className="login-input-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16v11H4zM4 7l8 6 8-6" /></svg> }
+function LockIcon() { return <svg className="login-input-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2" /></svg> }
+function EyeIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Z" /><circle cx="12" cy="12" r="2.5" /></svg> }
+function EyeOffIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18M10.6 7.3A10.8 10.8 0 0 1 12 7c6 0 9.5 5 9.5 5a17 17 0 0 1-3.2 3.3M6.5 6.8C3.9 8.4 2.5 12 2.5 12s3.5 5 9.5 5c1.1 0 2.1-.2 3-.5" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></svg> }
+function ArrowIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" /></svg> }
+function useLocalCalendarDate(): Date { const [date, setDate] = useState(() => new Date()); useEffect(() => { let timer: ReturnType<typeof setTimeout>; const schedule = () => { const now = new Date(); const nextMidnight = new Date(now); nextMidnight.setHours(24, 0, 0, 0); timer = setTimeout(() => { setDate(new Date()); schedule() }, Math.max(1000, nextMidnight.getTime() - now.getTime())) }; const refresh = () => { if (document.visibilityState === 'visible') setDate(new Date()) }; schedule(); document.addEventListener('visibilitychange', refresh); return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', refresh) } }, []); return date }
+function redirectTarget(state: unknown): string { const from = (state as { from?: { pathname?: unknown } } | null)?.from?.pathname; if (typeof from !== 'string' || !from.startsWith('/') || from.startsWith('//') || from === '/login') return '/dashboard'; return from }

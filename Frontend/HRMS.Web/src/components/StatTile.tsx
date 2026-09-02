@@ -8,6 +8,7 @@ interface StatTileProps {
   hint?: string
   isLoading: boolean
   error: ApiError | null
+  icon?: string
 }
 
 /**
@@ -16,9 +17,10 @@ interface StatTileProps {
  * A failed tile shows a short marker instead of the number and keeps the label, so one endpoint the
  * user cannot reach does not take the whole dashboard down with it.
  */
-export function StatTile({ label, value, hint, isLoading, error }: StatTileProps) {
+export function StatTile({ label, value, hint, isLoading, error, icon }: StatTileProps) {
   return (
     <div className="stat-tile">
+      <span className="stat-icon" aria-hidden="true">{icon || '•'}</span>
       <span className="stat-label">{label}</span>
       <span className="stat-value">
         {isLoading ? (
