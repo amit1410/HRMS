@@ -14,6 +14,7 @@ import { EmployeeProfileSidebar, type EmployeeSection } from './EmployeeProfileS
 import { useApiQuery } from '../../hooks/useApiQuery.ts'
 import { FamilyDetailsForm } from './FamilyDetailsForm.tsx'
 import { PreviousEmploymentForm } from './PreviousEmploymentForm.tsx'
+import { SupervisorSectionForm } from './SupervisorSectionForm.tsx'
 
 type FormTab = EmployeeSection
 
@@ -25,8 +26,9 @@ const TABS: { id: FormTab; label: string }[] = [
   { id: 'bank', label: 'Bank Details' },
   { id: 'previousEmployment', label: 'Previous Employment' },
   { id: 'employment', label: 'Employment' },
+  { id: 'supervisor', label: 'Supervisors' },
 ]
-const TAB_ICONS: Record<FormTab, string> = { personal:'◉', contact:'✉', address:'⌂', family:'♧', bank:'▣', previousEmployment:'◫', employment:'▤' }
+const TAB_ICONS: Record<FormTab, string> = { personal:'◉', contact:'✉', address:'⌂', family:'♧', bank:'▣', previousEmployment:'◫', employment:'▤', supervisor:'↕' }
 
 /**
  * Create and edit an employee, split into tabbed sections just like the detail page.
@@ -111,6 +113,12 @@ function NewPage() {
           ) : (
             <NeedsEmployeeNotice />
           ))}
+        {tab === 'supervisor' &&
+          (employeeId ? (
+            <SupervisorSectionForm employeeId={employeeId} onEmploymentChange={() => setTab('employment')} />
+          ) : (
+            <NeedsEmployeeNotice />
+          ))}
         </main>
       </div>
     </>
@@ -136,6 +144,7 @@ function EditPage({ id }: { id: string }) {
         {tab === 'bank' && <BankDetailsForm employeeId={id} />}
         {tab === 'previousEmployment' && <PreviousEmploymentForm employeeId={id} />}
         {tab === 'employment' && <EmploymentSectionForm employeeId={id} />}
+        {tab === 'supervisor' && <SupervisorSectionForm employeeId={id} onEmploymentChange={() => setTab('employment')} />}
         </main>
       </div>
     </>

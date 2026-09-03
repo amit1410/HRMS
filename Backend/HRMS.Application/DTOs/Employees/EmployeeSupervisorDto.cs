@@ -28,4 +28,6 @@ public record EmployeeSupervisorDto(
     string? ChroManagerName,
     Guid? ChroManagerId,
     DateTime CreatedDate,
-    DateTime? ModifiedDate);
+    DateTime? ModifiedDate,
+    string? L1ResolutionStatus = null,
+    string? L1ResolutionMessage = null);

@@ -3,7 +3,7 @@ import type { Employee, EmployeeEmploymentHistory } from '../../api/types.ts'
 import { Badge, StatusBadge } from '../../components/Badge.tsx'
 import { useApiQuery } from '../../hooks/useApiQuery.ts'
 
-export type EmployeeSection = 'personal' | 'contact' | 'address' | 'family' | 'bank' | 'previousEmployment' | 'employment'
+export type EmployeeSection = 'personal' | 'contact' | 'address' | 'family' | 'bank' | 'previousEmployment' | 'employment' | 'supervisor'
 
 const SECTIONS: { id: EmployeeSection; label: string; icon: string }[] = [
   { id: 'personal', label: 'Personal Details', icon: '◉' },
@@ -13,6 +13,7 @@ const SECTIONS: { id: EmployeeSection; label: string; icon: string }[] = [
   { id: 'bank', label: 'Bank Details', icon: '▣' },
   { id: 'previousEmployment', label: 'Previous Employment', icon: '◫' },
   { id: 'employment', label: 'Employment Details', icon: '▤' },
+  { id: 'supervisor', label: 'Supervisors', icon: '↕' },
 ]
 
 export function EmployeeProfileSidebar({ employee, activeSection, onSectionChange }: {

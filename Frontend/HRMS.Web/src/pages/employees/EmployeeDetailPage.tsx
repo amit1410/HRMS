@@ -16,6 +16,7 @@ import { EmploymentSectionForm } from './EmploymentSectionForm.tsx'
 import { EmployeeProfileSidebar, type EmployeeSection } from './EmployeeProfileSidebar.tsx'
 import { FamilyDetailsForm } from './FamilyDetailsForm.tsx'
 import { PreviousEmploymentForm } from './PreviousEmploymentForm.tsx'
+import { SupervisorSectionForm } from './SupervisorSectionForm.tsx'
 
 type DetailTab = EmployeeSection
 
@@ -27,9 +28,10 @@ const TABS: { id: DetailTab; label: string }[] = [
   { id: 'bank', label: 'Bank Details' },
   { id: 'previousEmployment', label: 'Previous Employment' },
   { id: 'employment', label: 'Employment' },
+  { id: 'supervisor', label: 'Supervisors' },
 ]
 
-const TAB_ICONS: Record<DetailTab, string> = { personal: '◉', contact: '✉', address: '⌂', family: '♧', bank: '▣', previousEmployment: '◫', employment: '▤' }
+const TAB_ICONS: Record<DetailTab, string> = { personal: '◉', contact: '✉', address: '⌂', family: '♧', bank: '▣', previousEmployment: '◫', employment: '▤', supervisor: '↕' }
 
 /**
  * An employee's record, split into tabbed sections: Personal Details, Contact Details and Address Details.
@@ -115,6 +117,7 @@ export function EmployeeDetailPage() {
         {tab === 'bank' && <BankDetailsForm employeeId={employee.id} />}
         {tab === 'previousEmployment' && <PreviousEmploymentForm employeeId={employee.id} />}
           {tab === 'employment' && <EmploymentSectionForm employeeId={employee.id} employeeCode={employee.employeeCode} onSaved={refetch} />}
+          {tab === 'supervisor' && <SupervisorSectionForm employeeId={employee.id} onEmploymentChange={() => setTab('employment')} />}
         </main>
       </div>
     </>

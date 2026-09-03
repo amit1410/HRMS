@@ -18,7 +18,7 @@ import type {
 } from '../../api/types.ts'
 import { EMPLOYEE_STATUSES, EMPLOYMENT_CHANGE_REASONS, EMPLOYMENT_TYPES } from '../../api/types.ts'
 import { Card } from '../../components/Card.tsx'
-import { SelectField, TextField, type SelectOption } from '../../components/fields.tsx'
+import { SelectField, SupervisorField, TextField, type SelectOption } from '../../components/fields.tsx'
 import { ErrorState } from '../../components/ErrorState.tsx'
 import { Notice } from '../../components/Notice.tsx'
 import { Spinner } from '../../components/Spinner.tsx'
@@ -55,6 +55,7 @@ interface FormValues {
   employeeCode: string
   effectiveFrom: string
   changeReason: EmploymentChangeReason
+  managerId: string
   holdingCompanyId: string
   lobId: string
   organisationId: string
@@ -82,6 +83,7 @@ const EMPTY: FormValues = {
   employeeCode: '',
   effectiveFrom: '',
   changeReason: 'NewJoining',
+  managerId: '',
   holdingCompanyId: '',
   lobId: '',
   organisationId: '',
@@ -119,6 +121,7 @@ function toRequest(values: FormValues): EmploymentChangeRequest {
     employeeCode: values.employeeCode || null,
     effectiveFrom: values.effectiveFrom,
     changeReason: values.changeReason,
+    managerId: values.managerId || null,
     holdingCompanyId: values.holdingCompanyId || null,
     lobId: values.lobId || null,
     organisationId: values.organisationId || null,
@@ -148,6 +151,7 @@ function formValuesFromHistory(record: EmployeeEmploymentHistory, employeeCode =
     employeeCode,
     effectiveFrom: record.effectiveFrom,
     changeReason: record.changeReason,
+    managerId: record.managerId ?? '',
     holdingCompanyId: record.holdingCompanyId ?? '',
     lobId: record.lobId ?? '',
     organisationId: record.organisationId ?? '',
@@ -391,6 +395,16 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
                     placeholder="— Select a reason —"
                     required
                     error={fieldError('positionChangeReasonId')}
+                  />
+                  <SupervisorField
+                    id="managerId"
+                    label="Direct manager"
+                    employeeId={employeeId}
+                    supervisorType="L1"
+                    value={values.managerId}
+                    onChange={(managerId) => update('managerId', managerId)}
+                    hint="Optional. Clear this field to explicitly leave the employee unassigned."
+                    error={fieldError('managerId')}
                   />
                 </div>
               </EmploymentAccordion>

@@ -39,6 +39,7 @@ public static class DependencyInjection
         services.AddScoped<IEmployeePreviousEmploymentService, EmployeePreviousEmploymentService>();
         services.AddScoped<IEmployeeBankDetailService, EmployeeBankDetailService>();
         services.AddScoped<IEmployeeSupervisorService, EmployeeSupervisorService>();
+        services.AddScoped<IEmployeeManagerResolver, EmployeeManagerResolver>();
         services.AddScoped<IEmployeeAdditionalInfoService, EmployeeAdditionalInfoService>();
         services.AddScoped<IEmployeeEmploymentService, EmployeeEmploymentService>();
         services.AddScoped<IEmployeeAuditService, EmployeeAuditService>();

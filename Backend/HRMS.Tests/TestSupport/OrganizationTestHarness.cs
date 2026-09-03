@@ -92,6 +92,9 @@ public sealed class OrganizationTestHarness : IDisposable
     public IEmployeeSupervisorService Supervisors() =>
         new EmployeeSupervisorService(TrackContext(), TenantContext, NullLogger<EmployeeSupervisorService>.Instance, Clock);
 
+    public IEmployeeManagerResolver Managers() =>
+        new EmployeeManagerResolver(TrackContext(), TenantContext, Clock);
+
     /// <summary>A context scoped to the current ambient tenant, for arranging or asserting directly.</summary>
     public HrmsDbContext CreateContext() => TrackContext();
 

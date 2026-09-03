@@ -210,7 +210,8 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             return Result<EmployeeEmploymentHistoryDto>.NotFound(NotFoundMessage);
 
         var currentRecords = await IncludeWithMasters(
-                _db.EmployeeEmploymentHistory.AsNoTracking().Where(e => e.EmployeeId == employeeId && e.EffectiveTo == null))
+                _db.EmployeeEmploymentHistory.AsNoTracking().Where(e => e.EmployeeId == employeeId &&
+                    e.EffectiveFrom <= asOfDate && (e.EffectiveTo == null || e.EffectiveTo >= asOfDate)))
             .OrderByDescending(e => e.EffectiveFrom)
             .Take(2)
             .ToListAsync(cancellationToken);
@@ -420,6 +421,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
                 "Employment history contains multiple current records and must be repaired before another change can be recorded.");
         }
 
+        await using var transaction = await _db.BeginTransactionAsync(cancellationToken);
         var currentRecord = openRecords.SingleOrDefault();
 
         if (currentRecord is not null)
@@ -767,6 +769,8 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         return null;
     }
 
+    private DateOnly BusinessDateToday() => DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+
     private async Task<(Result<EmployeeEmploymentHistoryDto>? Error, EmploymentReferences References)>
         ValidateEmploymentReferencesAsync(
             Guid employeeId,
@@ -924,7 +928,17 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             if (references.Manager is null)
                 return (Result<EmployeeEmploymentHistoryDto>.Invalid("managerId", "Manager employee does not exist, is inactive, or belongs to another tenant."), references);
 
-            if (await WouldCreateManagerCycleAsync(employeeId, managerId, tenantId, cancellationToken))
+            var managerHistory = await _db.EmployeeEmploymentHistory.AsNoTracking()
+                .Where(h => h.TenantId == tenantId && h.EmployeeId == managerId &&
+                            h.EffectiveFrom <= request.EffectiveFrom &&
+                            (h.EffectiveTo == null || h.EffectiveTo >= request.EffectiveFrom))
+                .ToListAsync(cancellationToken);
+            if (managerHistory.Count == 0 || managerHistory.Any(h => h.EmploymentStatus != EmployeeStatus.Active))
+                return (Result<EmployeeEmploymentHistoryDto>.Invalid("managerId", "Manager is not actively employed on the effective date."), references);
+            if (managerHistory.Count > 1)
+                return (Result<EmployeeEmploymentHistoryDto>.Conflict("Manager has overlapping employment records on the effective date."), references);
+
+            if (await WouldCreateManagerCycleAsync(employeeId, managerId, tenantId, request.EffectiveFrom, cancellationToken))
                 return (Result<EmployeeEmploymentHistoryDto>.Invalid("managerId", "The selected manager would create a reporting cycle."), references);
         }
 
@@ -935,6 +949,32 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         Guid employeeId,
         Guid managerId,
         Guid tenantId,
+        DateOnly asOfDate,
+        CancellationToken cancellationToken)
+    {
+        // A future change can make an otherwise valid graph circular later. Check the proposed date and
+        // every known effective-date boundary after it, not just the first date in the command.
+        var dates = await _db.EmployeeEmploymentHistory.AsNoTracking()
+            .Where(h => h.TenantId == tenantId && h.EffectiveFrom >= asOfDate)
+            .Select(h => h.EffectiveFrom)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        dates.Add(asOfDate);
+
+        foreach (var date in dates.Distinct().Order())
+        {
+            if (await WouldCreateManagerCycleAtDateAsync(employeeId, managerId, tenantId, date, cancellationToken))
+                return true;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> WouldCreateManagerCycleAtDateAsync(
+        Guid employeeId,
+        Guid managerId,
+        Guid tenantId,
+        DateOnly asOfDate,
         CancellationToken cancellationToken)
     {
         var visited = new HashSet<Guid> { employeeId };
@@ -945,10 +985,15 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             if (!visited.Add(currentId.Value))
                 return true;
 
-            currentId = await _db.Employees.AsNoTracking()
-                .Where(e => e.Id == currentId.Value && e.TenantId == tenantId)
-                .Select(e => e.ReportingManagerId)
-                .FirstOrDefaultAsync(cancellationToken);
+            var managerIds = await _db.EmployeeEmploymentHistory.AsNoTracking()
+                .Where(h => h.EmployeeId == currentId.Value && h.TenantId == tenantId &&
+                            h.EffectiveFrom <= asOfDate &&
+                            (h.EffectiveTo == null || h.EffectiveTo >= asOfDate))
+                .Select(h => h.ManagerId)
+                .ToListAsync(cancellationToken);
+            if (managerIds.Count > 1)
+                return true;
+            currentId = managerIds.SingleOrDefault();
         }
 
         return false;

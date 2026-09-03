@@ -15,15 +15,21 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
 
     private readonly IHrmsDbContext _db;
     private readonly ITenantContext _tenantContext;
+    private readonly TimeProvider _timeProvider;
+    private readonly IEmployeeManagerResolver _managerResolver;
     private readonly ILogger<EmployeeSupervisorService> _logger;
 
     public EmployeeSupervisorService(
         IHrmsDbContext db,
         ITenantContext tenantContext,
-        ILogger<EmployeeSupervisorService> logger)
+        ILogger<EmployeeSupervisorService> logger,
+        TimeProvider? timeProvider = null,
+        IEmployeeManagerResolver? managerResolver = null)
     {
         _db = db;
         _tenantContext = tenantContext;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _managerResolver = managerResolver ?? new EmployeeManagerResolver(db, tenantContext, _timeProvider);
         _logger = logger;
     }
 
@@ -72,9 +78,23 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
                 s.ModifiedDate))
             .FirstOrDefaultAsync(cancellationToken);
 
-        return supervisor is null
-            ? Result<EmployeeSupervisorDto>.NotFound("Supervisor record not found for this employee.")
-            : Result<EmployeeSupervisorDto>.Success(supervisor);
+        if (supervisor is null)
+            return Result<EmployeeSupervisorDto>.NotFound("Supervisor record not found for this employee.");
+
+        var resolution = await _managerResolver.ResolveAsync(
+            employeeId, BusinessDateToday(), cancellationToken);
+        if (!resolution.Succeeded)
+            return Result<EmployeeSupervisorDto>.Failure(resolution.Status, resolution.Message, resolution.Errors);
+
+        var direct = resolution.Value!;
+        return Result<EmployeeSupervisorDto>.Success(supervisor with
+        {
+            L1ManagerId = direct.Status == EmployeeManagerResolutionStatus.Resolved ? direct.ManagerId : null,
+            L1ManagerCode = direct.Status == EmployeeManagerResolutionStatus.Resolved ? direct.ManagerEmployeeCode : null,
+            L1ManagerName = direct.Status == EmployeeManagerResolutionStatus.Resolved ? direct.ManagerFullName : null,
+            L1ResolutionStatus = direct.Status.ToString(),
+            L1ResolutionMessage = direct.Message
+        });
     }
 
     public async Task<Result<EmployeeSupervisorDto>> UpsertAsync(
@@ -96,6 +116,10 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
         {
             return referenceValidation;
         }
+
+        var directValidation = await ValidateDirectManagerAsync(employeeId, request, cancellationToken);
+        if (directValidation is not null)
+            return directValidation;
 
         var existing = await _db.EmployeeSupervisors
             .FirstOrDefaultAsync(s => s.EmployeeId == employeeId, cancellationToken);
@@ -203,7 +227,7 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
 
         return saved is null
             ? Result<EmployeeSupervisorDto>.NotFound("Supervisor record not found after save.")
-            : Result<EmployeeSupervisorDto>.Success(saved, "Supervisor updated.");
+            : await GetAsync(employeeId, cancellationToken);
     }
 
     private async Task<bool> EmployeeExistsAsync(Guid employeeId, CancellationToken cancellationToken)
@@ -250,40 +274,42 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
             }
         }
 
-        // L1 is the direct reporting relationship. Reuse the authoritative Employee.ReportingManagerId
-        // graph so supervisor writes cannot introduce a direct or indirect reporting cycle either.
-        if (request.L1ManagerId is Guid l1ManagerId &&
-            await WouldCreateReportingCycleAsync(employeeId, l1ManagerId, tenantId, cancellationToken))
-        {
+        return null;
+    }
+
+    private async Task<Result<EmployeeSupervisorDto>?> ValidateDirectManagerAsync(
+        Guid employeeId, EmployeeSupervisorRequest request, CancellationToken cancellationToken)
+    {
+        var resolution = await _managerResolver.ResolveAsync(
+            employeeId, BusinessDateToday(), cancellationToken);
+        if (!resolution.Succeeded)
+            return Result<EmployeeSupervisorDto>.Failure(resolution.Status, resolution.Message, resolution.Errors);
+
+        var direct = resolution.Value!;
+        if (direct.Status == EmployeeManagerResolutionStatus.LegacyConflict)
             return Result<EmployeeSupervisorDto>.Invalid(
-                "l1ManagerId", "The selected supervisor would create a reporting cycle.");
+                "l1ManagerId", "Legacy direct-manager assignments conflict with Employment. Reconcile them before changing additional roles.");
+
+        if (direct.Status == EmployeeManagerResolutionStatus.Resolved)
+        {
+            if (request.L1ManagerId != direct.ManagerId)
+                return Result<EmployeeSupervisorDto>.Invalid(
+                    "l1ManagerId", "Direct manager is controlled by Employment. Use Change through Employment.");
+
+            request.L1ManagerCode = direct.ManagerEmployeeCode;
+            request.L1ManagerName = direct.ManagerFullName;
+            return null;
         }
+
+        if (request.L1ManagerId is not null)
+            return Result<EmployeeSupervisorDto>.Invalid(
+                "l1ManagerId", "Direct manager is controlled by Employment. Create an effective employment change first.");
 
         return null;
     }
 
-    private async Task<bool> WouldCreateReportingCycleAsync(
-        Guid employeeId,
-        Guid managerId,
-        Guid tenantId,
-        CancellationToken cancellationToken)
-    {
-        var visited = new HashSet<Guid> { employeeId };
-        Guid? currentId = managerId;
-
-        while (currentId.HasValue)
-        {
-            if (!visited.Add(currentId.Value))
-                return true;
-
-            currentId = await _db.Employees.AsNoTracking()
-                .Where(e => e.Id == currentId.Value && e.TenantId == tenantId)
-                .Select(e => e.ReportingManagerId)
-                .FirstOrDefaultAsync(cancellationToken);
-        }
-
-        return false;
-    }
+    private DateOnly BusinessDateToday() =>
+        DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
 
     public async Task<Result<IReadOnlyList<SupervisorOptionDto>>> GetSupervisorOptionsAsync(
         Guid employeeId, string supervisorType, CancellationToken cancellationToken = default)
@@ -308,7 +334,8 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
 
         var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
         var currentHistory = _db.EmployeeEmploymentHistory
-            .Where(h => h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
+            .Where(h => h.TenantId == tenantId && h.EffectiveFrom <= businessDate &&
+                        (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
 
         // Query employees eligible for the specified supervisor type. A scheduled retirement or joining
         // must not change today's supervisor choices before its effective date.

@@ -1,4 +1,5 @@
 using HRMS.Application.Common;
+using HRMS.Application.Abstractions;
 using HRMS.Application.DTOs.Employees;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
@@ -152,9 +153,47 @@ public class EmployeeEmploymentHardeningTests
     }
 
     [Fact]
+    public async Task Supervisor_read_uses_effective_employment_manager_and_rejects_l1_divergence()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Manager002);
+        var request = Request();
+        request.ManagerId = Manager002;
+        var employment = await harness.Employment().CreateChangeAsync(Employee004, request, "EMP-001");
+        Assert.True(employment.Succeeded, employment.Message);
+
+        var resolved = await harness.Managers().ResolveAsync(Employee004, Today);
+        Assert.True(resolved.Succeeded, resolved.Message);
+        Assert.True(resolved.Value!.Status == EmployeeManagerResolutionStatus.Resolved, resolved.Value.Message);
+        Assert.Equal(Manager002, resolved.Value.ManagerId);
+
+        var allowed = await harness.Supervisors().UpsertAsync(Employee004, new EmployeeSupervisorRequest
+        {
+            L1ManagerId = Manager002,
+            L2ManagerId = Manager003
+        });
+        Assert.True(allowed.Succeeded, allowed.Message);
+
+        var read = await harness.Supervisors().GetAsync(Employee004);
+        Assert.True(read.Succeeded, read.Message);
+        Assert.Equal(Manager002, read.Value!.L1ManagerId);
+        Assert.Equal("EMP-002", read.Value.L1ManagerCode);
+        Assert.Equal("Resolved", read.Value.L1ResolutionStatus);
+
+        var divergent = await harness.Supervisors().UpsertAsync(Employee004, new EmployeeSupervisorRequest
+        {
+            L1ManagerId = Manager003,
+            L2ManagerId = Manager002
+        });
+        Assert.False(divergent.Succeeded);
+        Assert.Equal("l1ManagerId", divergent.Errors!.Single().Field);
+    }
+
+    [Fact]
     public async Task Employment_populates_snapshots_and_synchronizes_current_employee_fields()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Manager002);
         var request = Request();
         request.ManagerId = Manager002;
         request.EmployeeTypeId = OrganizationTestHarness.EmployeeTypeId(Tenant, "FT");
@@ -181,6 +220,23 @@ public class EmployeeEmploymentHardeningTests
         Assert.Equal("Full Time", employee.EmployeeType);
         Assert.Equal("CC-ENG", employee.CostCenterCode);
         Assert.Equal(EmployeeStatus.Active, employee.Status);
+    }
+
+    private static async Task SeedActiveEmploymentAsync(OrganizationTestHarness harness, Guid employeeId)
+    {
+        await using var context = harness.CreateContext();
+        context.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory
+        {
+            Id = Guid.NewGuid(),
+            TenantId = Tenant,
+            EmployeeId = employeeId,
+            EffectiveFrom = Today.AddDays(-30),
+            EffectiveTo = null,
+            EmploymentStatus = EmployeeStatus.Active,
+            EmploymentType = EmploymentType.FullTime,
+            ChangeReason = EmploymentChangeReason.NewJoining
+        });
+        await context.SaveChangesAsync();
     }
 
     [Fact]

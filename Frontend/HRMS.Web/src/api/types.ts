@@ -297,6 +297,8 @@ export interface EmployeeListItem {
   status: EmployeeStatus
   /** ISO date (`yyyy-MM-dd`) — a C# `DateOnly`, so it carries no time and no zone. */
   dateOfJoining: string
+  /** False for a personal-details employee whose first employment starts in the future. */
+  isCurrentlyEmployed?: boolean
 }
 
 /** `DTOs/Employees/EmployeeDto.cs`. Ids *and* display names, so an edit form needs no extra requests. */
@@ -804,6 +806,8 @@ export interface EmployeeSupervisor {
   chroManagerId?: string | null
   createdDate: string
   modifiedDate?: string | null
+  l1ResolutionStatus?: string | null
+  l1ResolutionMessage?: string | null
 }
 
 export interface EmployeeSupervisorRequest {
