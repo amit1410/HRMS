@@ -2,6 +2,7 @@ using FluentValidation;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Employees;
+using HRMS.Application.EmployeeCodes;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -137,6 +138,8 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
             return Result<EmployeeCodeRuleDto>.Invalid("A rule must contain exactly one sequential-number segment.");
         if (request.Segments.Any(s => s.SegmentType is EmployeeCodeSegmentType.FixedText or EmployeeCodeSegmentType.CustomConstant && string.IsNullOrWhiteSpace(s.FixedValue)))
             return Result<EmployeeCodeRuleDto>.Invalid("Fixed text and custom constant segments require a value.");
+        if (request.Segments.Any(s => s.SegmentType == EmployeeCodeSegmentType.LocationCode))
+            return Result<EmployeeCodeRuleDto>.Invalid("segment", "Location code segments are unavailable because this model has no separate Location master.");
         if (request.Segments.Any(s => s.SegmentType == EmployeeCodeSegmentType.SequentialNumber && (s.PaddingLength is < 0 or > 12)))
             return Result<EmployeeCodeRuleDto>.Invalid("Sequence padding must be between 0 and 12.");
         var config = await _db.EmployeeCodeConfigs.FirstOrDefaultAsync(cancellationToken);
@@ -194,10 +197,19 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
         _db.EmployeeCodeRuleConditions.RemoveRange(rule.Conditions.Where(c => !requestedConditionIds.Contains(c.Id)).ToList());
         foreach (var c in request.Conditions)
         {
+            if (c.Field == EmployeeCodeConditionField.Location)
+            {
+                return Result<EmployeeCodeRuleDto>.Invalid("condition", "Location conditions are unavailable because this model has no separate Location master.");
+            }
+
             var code = await ResolveConditionCodeAsync(c, tenantId, cancellationToken);
             if (c.ReferenceId.HasValue && code is null)
             {
                 return Result<EmployeeCodeRuleDto>.Invalid("condition", "The selected master value is invalid or belongs to another tenant.");
+            }
+            if (c.ReferenceId is Guid referenceId && !await IsValidHierarchyAsync(c.Field, referenceId, request.Conditions, tenantId, cancellationToken))
+            {
+                return Result<EmployeeCodeRuleDto>.Invalid("condition", "The selected master value does not belong to the selected parent hierarchy.");
             }
             if (request.Status == EmployeeCodeRuleStatus.Active && string.IsNullOrWhiteSpace(code))
                 return Result<EmployeeCodeRuleDto>.Invalid("condition", "Active rule conditions must select a master value or provide a value.");
@@ -238,11 +250,126 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
         return Result<EmployeeCodeRuleDto>.Success(MapRule(rule), "Employee Code rule deleted.");
     }
 
+    public async Task<Result<EmployeeCodePreviewDto>> PreviewAsync(EmployeeCodePreviewRequest request, CancellationToken cancellationToken = default)
+    {
+        if (_tenant.TenantId is not Guid tenantId)
+            return Result<EmployeeCodePreviewDto>.Unauthorized("No authenticated tenant.");
+
+        var versions = await _db.EmployeeCodeConfigVersions.AsNoTracking()
+            .Where(v => v.TenantId == tenantId && v.IsActive && v.EffectiveFrom <= request.EffectiveFrom &&
+                        (v.EffectiveTo == null || request.EffectiveFrom <= v.EffectiveTo))
+            .OrderBy(v => v.EffectiveFrom)
+            .ToListAsync(cancellationToken);
+        if (versions.Count == 0)
+            return Result<EmployeeCodePreviewDto>.Invalid("effectiveFrom", "No active Employee Code configuration is effective for the selected date.");
+        if (versions.Count > 1)
+            return Result<EmployeeCodePreviewDto>.Conflict("Multiple active Employee Code configurations are effective for the selected date.");
+
+        var version = versions[0];
+        if (version.AssignmentMode != EmployeeCodeAssignmentMode.Auto || version.GenerationMethod != EmployeeCodeGenerationMethod.RuleBased)
+            return Result<EmployeeCodePreviewDto>.Invalid("generationMethod", "Preview is available only for an active Auto Rule-Based configuration.");
+
+        var ids = new Dictionary<EmployeeCodeConditionField, Guid?>
+        {
+            [EmployeeCodeConditionField.HoldingCompany] = request.HoldingCompanyId,
+            [EmployeeCodeConditionField.Lob] = request.LobId,
+            [EmployeeCodeConditionField.Organisation] = request.OrganisationId,
+            [EmployeeCodeConditionField.Department] = request.DepartmentId,
+            [EmployeeCodeConditionField.SubDepartment] = request.SubDepartmentId,
+            [EmployeeCodeConditionField.Section] = request.SectionId,
+            [EmployeeCodeConditionField.SubSection] = request.SubSectionId,
+            [EmployeeCodeConditionField.Function] = request.FunctionId,
+            [EmployeeCodeConditionField.SubFunction] = request.SubFunctionId,
+            [EmployeeCodeConditionField.Grade] = request.GradeId,
+            [EmployeeCodeConditionField.Designation] = request.DesignationId,
+            [EmployeeCodeConditionField.EmployeeType] = request.EmployeeTypeId,
+            [EmployeeCodeConditionField.Country] = request.CountryLocationId,
+            [EmployeeCodeConditionField.WorkLocation] = request.WorkLocationId,
+            [EmployeeCodeConditionField.CostCenter] = request.CostCenterId
+        };
+        var values = new Dictionary<EmployeeCodeConditionField, string?>();
+        foreach (var (field, id) in ids)
+        {
+            if (id is Guid referenceId)
+            {
+                var code = await ResolvePreviewCodeAsync(field, referenceId, tenantId, cancellationToken);
+                if (code is null)
+                    return Result<EmployeeCodePreviewDto>.Invalid(field.ToString(), "The selected master value is invalid, inactive, or belongs to another tenant.");
+                values[field] = code;
+            }
+        }
+
+        var segmentValues = new Dictionary<EmployeeCodeSegmentType, string?>
+        {
+            [EmployeeCodeSegmentType.HoldingCompanyCode] = Code(values, EmployeeCodeConditionField.HoldingCompany),
+            [EmployeeCodeSegmentType.LobCode] = Code(values, EmployeeCodeConditionField.Lob),
+            [EmployeeCodeSegmentType.OrganisationCode] = Code(values, EmployeeCodeConditionField.Organisation),
+            [EmployeeCodeSegmentType.DepartmentCode] = Code(values, EmployeeCodeConditionField.Department),
+            [EmployeeCodeSegmentType.SubDepartmentCode] = Code(values, EmployeeCodeConditionField.SubDepartment),
+            [EmployeeCodeSegmentType.SectionCode] = Code(values, EmployeeCodeConditionField.Section),
+            [EmployeeCodeSegmentType.SubSectionCode] = Code(values, EmployeeCodeConditionField.SubSection),
+            [EmployeeCodeSegmentType.FunctionCode] = Code(values, EmployeeCodeConditionField.Function),
+            [EmployeeCodeSegmentType.SubFunctionCode] = Code(values, EmployeeCodeConditionField.SubFunction),
+            [EmployeeCodeSegmentType.GradeCode] = Code(values, EmployeeCodeConditionField.Grade),
+            [EmployeeCodeSegmentType.DesignationCode] = Code(values, EmployeeCodeConditionField.Designation),
+            [EmployeeCodeSegmentType.EmployeeTypeCode] = Code(values, EmployeeCodeConditionField.EmployeeType),
+            [EmployeeCodeSegmentType.CountryCode] = Code(values, EmployeeCodeConditionField.Country),
+            [EmployeeCodeSegmentType.WorkLocationCode] = Code(values, EmployeeCodeConditionField.WorkLocation),
+            [EmployeeCodeSegmentType.CostCenterCode] = Code(values, EmployeeCodeConditionField.CostCenter)
+        };
+        var context = new EmployeeCodeGenerationContext(request.EffectiveFrom, values, segmentValues);
+        var rules = await _db.EmployeeCodeRules.AsNoTracking()
+            .Include(r => r.Conditions).Include(r => r.Segments)
+            .Where(r => r.EmployeeCodeConfigVersionId == version.Id && !r.IsDeleted && r.Status == EmployeeCodeRuleStatus.Active)
+            .ToListAsync(cancellationToken);
+        var rule = new EmployeeCodeRuleMatcher().Match(rules, values, ids);
+        if (rule is null)
+            return Result<EmployeeCodePreviewDto>.Invalid("rule", "No active rule matches the supplied sample employment values.");
+
+        var sequence = await _db.EmployeeCodeSequences.AsNoTracking()
+            .Where(s => s.TenantId == tenantId && s.EmployeeCodeRuleId == rule.Id
+                        && s.Scope == EmployeeCodeSequenceScope.Tenant
+                        && s.ScopeKey == $"RULE:{rule.Id}"
+                        && s.PeriodKey == "NONE")
+            .Select(s => (long?)s.NextNumber)
+            .SingleOrDefaultAsync(cancellationToken) ?? 1;
+        var rendered = new EmployeeCodeRenderer().Render(rule, context, sequence, version.Separator);
+        if (rendered.Error is not null)
+            return Result<EmployeeCodePreviewDto>.Invalid("rule", rendered.Error);
+
+        return Result<EmployeeCodePreviewDto>.Success(
+            new EmployeeCodePreviewDto(version.Id, version.EffectiveFrom, version.EffectiveTo, rule.Id, rule.Name, sequence, false, rendered.Code!),
+            "Preview generated. The sequence number is unreserved; a later employee save may receive a different number.");
+    }
+
     private static EmployeeCodeConfigurationDto Map(EmployeeCodeConfig config, EmployeeCodeConfigVersion? version) =>
         version is null
             ? new(config.Id, config.AutoGenerate, config.AssignmentMode, config.GenerationMethod, config.Prefix, config.NextNumber, config.Padding, config.Separator, config.EffectiveFrom, config.EffectiveTo)
             : new(config.Id, version.AutoGenerate, version.AssignmentMode, version.GenerationMethod, version.Prefix, version.NextNumber, version.Padding, version.Separator, version.EffectiveFrom, version.EffectiveTo, version.Id, version.IsActive);
     private static EmployeeCodeRuleDto MapRule(EmployeeCodeRule rule) => new(rule.Id, rule.Name, rule.Priority, rule.IsDefault, rule.Status, rule.Conditions.OrderBy(c => c.Id).Select(c => new EmployeeCodeConditionDto(c.Id, c.Field, c.Operator, c.ReferenceId, c.Value)).ToList(), rule.Segments.OrderBy(s => s.SequenceOrder).Select(s => new EmployeeCodeSegmentDto(s.Id, s.SequenceOrder, s.SegmentType, s.FixedValue, s.PaddingLength)).ToList(), rule.EmployeeCodeConfigVersionId);
+
+    private async Task<string?> ResolvePreviewCodeAsync(EmployeeCodeConditionField field, Guid id, Guid tenantId, CancellationToken cancellationToken) =>
+        field switch
+        {
+            EmployeeCodeConditionField.HoldingCompany => await _db.HoldingCompanies.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Lob => await _db.LinesOfBusiness.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Organisation => await _db.Organisations.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Department => await _db.Departments.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.SubDepartment => await _db.SubDepartments.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Section => await _db.Sections.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.SubSection => await _db.SubSections.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Function => await _db.Functions.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.SubFunction => await _db.SubFunctions.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Grade => await _db.Grades.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Designation => await _db.Designations.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.EmployeeType => await _db.EmployeeTypes.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.Country => await _db.Countries.Where(x => x.Id == id && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.WorkLocation => await _db.WorkLocations.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.CostCenter => await _db.CostCenters.Where(x => x.Id == id && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            _ => null
+        };
+
+    private static string? Code(IReadOnlyDictionary<EmployeeCodeConditionField, string?> values, EmployeeCodeConditionField field) => values.GetValueOrDefault(field);
 
     private async Task<string?> ResolveConditionCodeAsync(
         EmployeeCodeConditionRequest condition,
@@ -267,9 +394,36 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
             EmployeeCodeConditionField.Designation => await _db.Designations.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
             EmployeeCodeConditionField.EmployeeType => await _db.EmployeeTypes.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
             EmployeeCodeConditionField.Country => await _db.Countries.Where(x => x.Id == referenceId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
-            EmployeeCodeConditionField.Location or EmployeeCodeConditionField.WorkLocation => await _db.WorkLocations.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
+            EmployeeCodeConditionField.WorkLocation => await _db.WorkLocations.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
             EmployeeCodeConditionField.CostCenter => await _db.CostCenters.Where(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive).Select(x => x.Code).SingleOrDefaultAsync(cancellationToken),
             _ => null
+        };
+    }
+
+    private async Task<bool> IsValidHierarchyAsync(
+        EmployeeCodeConditionField field,
+        Guid referenceId,
+        IReadOnlyCollection<EmployeeCodeConditionRequest> conditions,
+        Guid tenantId,
+        CancellationToken cancellationToken)
+    {
+        Guid? Parent(EmployeeCodeConditionField parentField) =>
+            conditions.FirstOrDefault(c => c.Field == parentField)?.ReferenceId;
+
+        var holdingCompanyId = Parent(EmployeeCodeConditionField.HoldingCompany);
+        var departmentId = Parent(EmployeeCodeConditionField.Department);
+        var subDepartmentId = Parent(EmployeeCodeConditionField.SubDepartment);
+        var sectionId = Parent(EmployeeCodeConditionField.Section);
+        var functionId = Parent(EmployeeCodeConditionField.Function);
+
+        return field switch
+        {
+            EmployeeCodeConditionField.Lob => await _db.LinesOfBusiness.AnyAsync(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive && (!holdingCompanyId.HasValue || x.HoldingCompanyId == holdingCompanyId), cancellationToken),
+            EmployeeCodeConditionField.SubDepartment => await _db.SubDepartments.AnyAsync(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive && (!departmentId.HasValue || x.DepartmentId == departmentId), cancellationToken),
+            EmployeeCodeConditionField.Section => await _db.Sections.AnyAsync(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive && (!subDepartmentId.HasValue || x.SubDepartmentId == subDepartmentId), cancellationToken),
+            EmployeeCodeConditionField.SubSection => await _db.SubSections.AnyAsync(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive && (!sectionId.HasValue || x.SectionId == sectionId), cancellationToken),
+            EmployeeCodeConditionField.SubFunction => await _db.SubFunctions.AnyAsync(x => x.Id == referenceId && x.TenantId == tenantId && x.IsActive && (!functionId.HasValue || x.FunctionId == functionId), cancellationToken),
+            _ => true
         };
     }
 }

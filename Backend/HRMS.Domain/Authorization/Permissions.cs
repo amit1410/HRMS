@@ -29,6 +29,7 @@ public static class Permissions
         public const string Manage = "Geography.Manage";
     }
 
+
     public static class EmploymentHistory
     {
         public const string View = "EmploymentHistory.View";

@@ -202,22 +202,10 @@ public class DesignationService : IDesignationService
                 $"This designation is held by {employeeCount} employee(s). Reassign them, or mark the designation inactive instead of deleting it.");
         }
 
-        _db.Designations.Remove(designation);
-
-        try
-        {
-            await _db.SaveChangesAsync(cancellationToken);
-        }
-        catch (DbUpdateException)
-        {
-            _logger.LogWarning("Designation {DesignationId} could not be deleted: it is still referenced.", id);
-            return Result<bool>.Conflict(
-                "This designation is still held by at least one employee and cannot be deleted.");
-        }
-
-        _logger.LogInformation("Deleted designation {DesignationId} from tenant {TenantId}.", id, tenantId);
-
-        return Result<bool>.Success(true, "Designation deleted.");
+        designation.IsActive = false;
+        await _db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("Deactivated designation {DesignationId} in tenant {TenantId}.", id, tenantId);
+        return Result<bool>.Success(true, "Designation deactivated. Existing references were preserved.");
     }
 
     private static IQueryable<DesignationDto> Project(IQueryable<Designation> designations) =>

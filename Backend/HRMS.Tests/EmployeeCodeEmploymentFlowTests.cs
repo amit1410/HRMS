@@ -102,7 +102,119 @@ public sealed class EmployeeCodeEmploymentFlowTests
     }
 
     [Fact]
-    public async Task Rule_based_generation_matches_location_by_id_even_when_saved_code_is_stale()
+    public async Task Preview_uses_the_same_rule_and_sequence_state_without_allocating()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var department = await AddDepartmentAsync(harness, "IT");
+        var lob = await AddLobAsync(harness, "LOB01");
+        var configuration = await harness.CodeConfiguration().SaveAsync(new EmployeeCodeConfigurationRequest
+        {
+            AutoGenerate = true, AssignmentMode = EmployeeCodeAssignmentMode.Auto,
+            GenerationMethod = EmployeeCodeGenerationMethod.RuleBased, Separator = "/",
+            EffectiveFrom = Today, NextNumber = 1, Padding = 5
+        });
+        Assert.True(configuration.Succeeded, configuration.Message);
+        var rule = await harness.CodeConfiguration().SaveRuleAsync(null, new EmployeeCodeRuleRequest
+        {
+            Name = "Preview IT", Priority = 1, Status = EmployeeCodeRuleStatus.Active,
+            Conditions = [new() { Field = EmployeeCodeConditionField.Department, ReferenceId = department }],
+            Segments =
+            [
+                new() { SequenceOrder = 1, SegmentType = EmployeeCodeSegmentType.HoldingCompanyCode },
+                new() { SequenceOrder = 2, SegmentType = EmployeeCodeSegmentType.LobCode },
+                new() { SequenceOrder = 3, SegmentType = EmployeeCodeSegmentType.OrganisationCode },
+                new() { SequenceOrder = 4, SegmentType = EmployeeCodeSegmentType.DepartmentCode },
+                new() { SequenceOrder = 5, SegmentType = EmployeeCodeSegmentType.SequentialNumber, PaddingLength = 5 }
+            ]
+        });
+        Assert.True(rule.Succeeded, rule.Message);
+
+        var preview = await harness.CodeConfiguration().PreviewAsync(new EmployeeCodePreviewRequest
+        {
+            EffectiveFrom = Today, HoldingCompanyId = Holding, LobId = lob,
+            OrganisationId = Organisation, DepartmentId = department,
+            DesignationId = Designation, CountryLocationId = Country, WorkLocationId = WorkLocation,
+            CostCenterId = null
+        });
+        Assert.True(preview.Succeeded, preview.Message);
+        Assert.Equal("HC01/LOB01/ORG01/IT/00001", preview.Value!.Code);
+        Assert.False(preview.Value.SequenceReserved);
+        Assert.Equal(0, await harness.CreateUnscopedContext().EmployeeCodeSequences.IgnoreQueryFilters().CountAsync());
+
+        var employee = await CreatePendingEmployeeAsync(harness, "Preview One");
+        var saved = await harness.Employment().CreateChangeAsync(employee, Request(department, lob), "tester");
+        Assert.True(saved.Succeeded, saved.Message);
+        Assert.Equal(preview.Value.Code, await EmployeeCodeAsync(harness, employee));
+    }
+
+    [Fact]
+    public async Task Preview_requires_a_tenant_and_effective_active_version()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        harness.ActAs(null);
+        var unauthorized = await harness.CodeConfiguration().PreviewAsync(new EmployeeCodePreviewRequest { EffectiveFrom = Today });
+        Assert.Equal(ResultStatus.Unauthorized, unauthorized.Status);
+    }
+
+    [Fact]
+    public async Task Preview_rejects_missing_master_values_and_dates_outside_the_active_version()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var department = await AddDepartmentAsync(harness, "IT");
+        var lob = await AddLobAsync(harness, "LOB01");
+        var configuration = await harness.CodeConfiguration().SaveAsync(new EmployeeCodeConfigurationRequest
+        {
+            AutoGenerate = true, AssignmentMode = EmployeeCodeAssignmentMode.Auto,
+            GenerationMethod = EmployeeCodeGenerationMethod.RuleBased, EffectiveFrom = Today,
+            EffectiveTo = Today.AddDays(1), Separator = "/"
+        });
+        Assert.True(configuration.Succeeded, configuration.Message);
+        var rule = await harness.CodeConfiguration().SaveRuleAsync(null, new EmployeeCodeRuleRequest
+        {
+            Name = "Preview validation", Priority = 1, Status = EmployeeCodeRuleStatus.Active,
+            Conditions = [new() { Field = EmployeeCodeConditionField.Department, ReferenceId = department }],
+            Segments =
+            [
+                new() { SequenceOrder = 1, SegmentType = EmployeeCodeSegmentType.DepartmentCode },
+                new() { SequenceOrder = 2, SegmentType = EmployeeCodeSegmentType.SequentialNumber, PaddingLength = 5 }
+            ]
+        });
+        Assert.True(rule.Succeeded, rule.Message);
+
+        var outside = await harness.CodeConfiguration().PreviewAsync(new EmployeeCodePreviewRequest { EffectiveFrom = Today.AddDays(2), DepartmentId = department });
+        Assert.Equal(ResultStatus.ValidationFailed, outside.Status);
+
+        var missing = await harness.CodeConfiguration().PreviewAsync(new EmployeeCodePreviewRequest
+        {
+            EffectiveFrom = Today, DepartmentId = Guid.NewGuid(), LobId = lob
+        });
+        Assert.Equal(ResultStatus.ValidationFailed, missing.Status);
+        Assert.Equal(0, await harness.CreateUnscopedContext().EmployeeCodeSequences.IgnoreQueryFilters().CountAsync());
+    }
+
+    [Fact]
+    public async Task Preview_is_tenant_scoped_even_when_using_another_tenants_master_id()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var configuration = await harness.CodeConfiguration().SaveAsync(new EmployeeCodeConfigurationRequest
+        {
+            AutoGenerate = true, AssignmentMode = EmployeeCodeAssignmentMode.Auto,
+            GenerationMethod = EmployeeCodeGenerationMethod.RuleBased, EffectiveFrom = Today
+        });
+        Assert.True(configuration.Succeeded, configuration.Message);
+        var otherDepartment = OrganizationTestHarness.DepartmentId(SeedData.TenantIds.Demo02, "OPS");
+
+        var result = await harness.ActAs(SeedData.TenantIds.Demo02).CodeConfiguration().PreviewAsync(new EmployeeCodePreviewRequest
+        {
+            EffectiveFrom = Today, DepartmentId = otherDepartment
+        });
+
+        Assert.NotEqual(ResultStatus.Success, result.Status);
+        Assert.DoesNotContain("HC01", result.Message ?? string.Empty);
+    }
+
+    [Fact]
+    public async Task Rule_based_generation_matches_work_location_by_id_even_when_saved_code_is_stale()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();
         var department = OrganizationTestHarness.DepartmentId(Tenant, "ENG");
@@ -121,18 +233,18 @@ public sealed class EmployeeCodeEmploymentFlowTests
 
         var rule = await harness.CodeConfiguration().SaveRuleAsync(null, new EmployeeCodeRuleRequest
         {
-            Name = "Bengaluru location rule",
+            Name = "Bengaluru work location rule",
             Priority = 1,
             Status = EmployeeCodeRuleStatus.Active,
             Conditions = [new EmployeeCodeConditionRequest
             {
-                Field = EmployeeCodeConditionField.Location,
+                Field = EmployeeCodeConditionField.WorkLocation,
                 Operator = EmployeeCodeConditionOperator.Equals,
                 ReferenceId = WorkLocation
             }],
             Segments =
             [
-                new() { SequenceOrder = 1, SegmentType = EmployeeCodeSegmentType.LocationCode },
+                new() { SequenceOrder = 1, SegmentType = EmployeeCodeSegmentType.WorkLocationCode },
                 new() { SequenceOrder = 2, SegmentType = EmployeeCodeSegmentType.SequentialNumber, PaddingLength = 5 }
             ]
         });
@@ -150,6 +262,32 @@ public sealed class EmployeeCodeEmploymentFlowTests
 
         Assert.True(result.Succeeded, result.Message);
         Assert.Equal("WL-MUM/00001", await EmployeeCodeAsync(harness, employee));
+    }
+
+    [Fact]
+    public async Task Location_condition_is_rejected_when_no_separate_location_master_exists()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var configuration = await harness.CodeConfiguration().SaveAsync(new EmployeeCodeConfigurationRequest
+        {
+            AutoGenerate = true,
+            AssignmentMode = EmployeeCodeAssignmentMode.Auto,
+            GenerationMethod = EmployeeCodeGenerationMethod.RuleBased,
+            EffectiveFrom = Today
+        });
+        Assert.True(configuration.Succeeded, configuration.Message);
+
+        var result = await harness.CodeConfiguration().SaveRuleAsync(null, new EmployeeCodeRuleRequest
+        {
+            Name = "Unsupported location rule",
+            Priority = 1,
+            Status = EmployeeCodeRuleStatus.Active,
+            Conditions = [new() { Field = EmployeeCodeConditionField.Location, ReferenceId = WorkLocation }],
+            Segments = [new() { SequenceOrder = 1, SegmentType = EmployeeCodeSegmentType.SequentialNumber, PaddingLength = 5 }]
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("separate Location master", result.Message);
     }
 
     [Fact]

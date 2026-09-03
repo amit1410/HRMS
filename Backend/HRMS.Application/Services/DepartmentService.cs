@@ -213,23 +213,10 @@ public class DepartmentService : IDepartmentService
                 $"This department still has {employeeCount} employee(s) assigned. Reassign them, or mark the department inactive instead of deleting it.");
         }
 
-        _db.Departments.Remove(department);
-
-        try
-        {
-            await _db.SaveChangesAsync(cancellationToken);
-        }
-        catch (DbUpdateException)
-        {
-            // An employee was assigned between the count above and this delete; the FK (Restrict) refused.
-            _logger.LogWarning("Department {DepartmentId} could not be deleted: it is still referenced.", id);
-            return Result<bool>.Conflict(
-                "This department is still referenced by at least one employee and cannot be deleted.");
-        }
-
-        _logger.LogInformation("Deleted department {DepartmentId} from tenant {TenantId}.", id, tenantId);
-
-        return Result<bool>.Success(true, "Department deleted.");
+        department.IsActive = false;
+        await _db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("Deactivated department {DepartmentId} in tenant {TenantId}.", id, tenantId);
+        return Result<bool>.Success(true, "Department deactivated. Existing references were preserved.");
     }
 
     /// <summary>

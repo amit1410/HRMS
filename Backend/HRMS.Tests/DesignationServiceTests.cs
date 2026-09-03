@@ -121,7 +121,7 @@ public class DesignationServiceTests
     }
 
     [Fact]
-    public async Task Delete_removes_a_designation_nobody_holds()
+    public async Task Delete_deactivates_a_designation_nobody_holds()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();
 
@@ -131,7 +131,7 @@ public class DesignationServiceTests
         Assert.True(result.Succeeded);
 
         using var unscoped = harness.CreateUnscopedContext();
-        Assert.False(await unscoped.Designations.IgnoreQueryFilters().AnyAsync(d => d.Id == created.Id));
+        Assert.False((await unscoped.Designations.IgnoreQueryFilters().SingleAsync(d => d.Id == created.Id)).IsActive);
     }
 
     [Fact]

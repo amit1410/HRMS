@@ -571,7 +571,6 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             [EmployeeCodeConditionField.Designation] = references.Designation?.Code,
             [EmployeeCodeConditionField.EmployeeType] = references.EmployeeType?.Code,
             [EmployeeCodeConditionField.Country] = references.Country?.Code,
-            [EmployeeCodeConditionField.Location] = references.WorkLocation?.Code,
             [EmployeeCodeConditionField.WorkLocation] = references.WorkLocation?.Code,
             [EmployeeCodeConditionField.CostCenter] = references.CostCenter?.Code
         };
@@ -590,7 +589,6 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             [EmployeeCodeConditionField.Designation] = references.Designation?.Id,
             [EmployeeCodeConditionField.EmployeeType] = references.EmployeeType?.Id,
             [EmployeeCodeConditionField.Country] = references.Country?.Id,
-            [EmployeeCodeConditionField.Location] = references.WorkLocation?.Id,
             [EmployeeCodeConditionField.WorkLocation] = references.WorkLocation?.Id,
             [EmployeeCodeConditionField.CostCenter] = references.CostCenter?.Id
         };
@@ -611,7 +609,6 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             [EmployeeCodeSegmentType.DesignationCode] = values[EmployeeCodeConditionField.Designation],
             [EmployeeCodeSegmentType.EmployeeTypeCode] = values[EmployeeCodeConditionField.EmployeeType],
             [EmployeeCodeSegmentType.CountryCode] = values[EmployeeCodeConditionField.Country],
-            [EmployeeCodeSegmentType.LocationCode] = values[EmployeeCodeConditionField.WorkLocation],
             [EmployeeCodeSegmentType.WorkLocationCode] = values[EmployeeCodeConditionField.WorkLocation],
             [EmployeeCodeSegmentType.CostCenterCode] = values[EmployeeCodeConditionField.CostCenter]
         };
@@ -624,10 +621,8 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
                 .Include(r => r.Segments)
                 .Where(r => r.EmployeeCodeConfigVersionId == version.Id && !r.IsDeleted && r.Status == EmployeeCodeRuleStatus.Active)
                 .ToListAsync(cancellationToken);
-                var specific = rules.Where(r => !r.IsDefault && r.Conditions.Count > 0)
-                .Where(r => r.Conditions.All(c => ConditionMatches(c, values, referenceIds)))
-                .OrderBy(r => r.Priority).ThenBy(r => r.Id).FirstOrDefault();
-            var rule = specific ?? rules.SingleOrDefault(r => r.IsDefault);
+            var rule = _codeRuleMatcher?.Match(rules, values, referenceIds)
+                ?? new EmployeeCodeRuleMatcher().Match(rules, values, referenceIds);
             if (rule is null)
                 return Result<EmployeeEmploymentHistoryDto>.Invalid("employeeCode", "No valid active Employee Code rule matches the selected Initial Employment values.");
             if (_codeSequence is null || _codeRenderer is null)
@@ -1039,24 +1034,6 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
     private static string EmployeeFullName(Employee employee) =>
         string.Join(" ", new[] { employee.FirstName, employee.MiddleName, employee.LastName }
             .Where(part => !string.IsNullOrWhiteSpace(part)));
-
-    private static bool ConditionMatches(
-        EmployeeCodeRuleCondition condition,
-        IReadOnlyDictionary<EmployeeCodeConditionField, string?> values,
-        IReadOnlyDictionary<EmployeeCodeConditionField, Guid?> referenceIds)
-    {
-        if (condition.Operator != EmployeeCodeConditionOperator.Equals)
-            return false;
-
-        if (condition.ReferenceId is Guid referenceId)
-        {
-            return referenceIds.TryGetValue(condition.Field, out var actualId) && actualId == referenceId;
-        }
-
-        return values.TryGetValue(condition.Field, out var actualCode) &&
-               actualCode is not null &&
-               string.Equals(actualCode, condition.Value, StringComparison.OrdinalIgnoreCase);
-    }
 
     private sealed class EmploymentReferences
     {

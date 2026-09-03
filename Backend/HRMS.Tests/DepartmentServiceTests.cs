@@ -233,7 +233,7 @@ public class DepartmentServiceTests
     }
 
     [Fact]
-    public async Task Delete_removes_a_department_nobody_is_assigned_to()
+    public async Task Delete_deactivates_a_department_nobody_is_assigned_to()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();
 
@@ -243,7 +243,7 @@ public class DepartmentServiceTests
         Assert.True(result.Succeeded);
 
         using var unscoped = harness.CreateUnscopedContext();
-        Assert.False(await unscoped.Departments.IgnoreQueryFilters().AnyAsync(d => d.Id == created.Id));
+        Assert.False((await unscoped.Departments.IgnoreQueryFilters().SingleAsync(d => d.Id == created.Id)).IsActive);
     }
 
     [Fact]

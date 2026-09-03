@@ -34,3 +34,33 @@ public sealed class EmployeeCodeSegmentRequest
     public string? FixedValue { get; set; }
     public int? PaddingLength { get; set; }
 }
+
+public sealed class EmployeeCodePreviewRequest
+{
+    public DateOnly EffectiveFrom { get; set; }
+    public Guid? HoldingCompanyId { get; set; }
+    public Guid? LobId { get; set; }
+    public Guid? OrganisationId { get; set; }
+    public Guid? DepartmentId { get; set; }
+    public Guid? SubDepartmentId { get; set; }
+    public Guid? SectionId { get; set; }
+    public Guid? SubSectionId { get; set; }
+    public Guid? FunctionId { get; set; }
+    public Guid? SubFunctionId { get; set; }
+    public Guid? GradeId { get; set; }
+    public Guid? DesignationId { get; set; }
+    public Guid? EmployeeTypeId { get; set; }
+    public Guid? CountryLocationId { get; set; }
+    public Guid? WorkLocationId { get; set; }
+    public Guid? CostCenterId { get; set; }
+}
+
+public sealed record EmployeeCodePreviewDto(
+    Guid VersionId,
+    DateOnly EffectiveFrom,
+    DateOnly? EffectiveTo,
+    Guid RuleId,
+    string RuleName,
+    long PreviewSequence,
+    bool SequenceReserved,
+    string Code);

@@ -45,6 +45,8 @@ public static class DependencyInjection
         services.AddScoped<IEmployeeDocumentService, EmployeeDocumentService>();
         services.AddScoped<IImportBatchService, ImportBatchService>();
         services.AddScoped<IMasterLookupService, MasterLookupService>();
+        services.AddScoped<IMasterManagementService, MasterManagementService>();
+        services.AddScoped<IMasterImportService, MasterImportService>();
 
         return services;
     }

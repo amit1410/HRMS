@@ -360,6 +360,67 @@ a:hover {
 .employment-alert { display:flex; align-items:center; gap:.5rem; margin-bottom:var(--space-4); padding:.7rem 1rem; border:1px solid #b8e6ca; border-radius:var(--radius-md); color:#146c43; background:#f0fbf4; font-size:var(--text-sm); }
 .employment-alert-dismiss { margin-left:auto; border:0; color:inherit; background:transparent; cursor:pointer; font-size:1.1rem; }
 @media (max-width: 960px) { .employment-layout { grid-template-columns:1fr; } .employment-overview { order:1; } .change-panel { order:2; } .employment-summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+/* Master catalogue workspace */
+.master-management-page { min-width: 0; }
+.master-breadcrumb { margin: -.75rem 0 1.25rem; color: var(--color-text-muted); font-size: var(--text-sm); }
+.master-breadcrumb a { color: var(--color-accent); }
+.master-workspace { display: grid; grid-template-columns: 14.5rem minmax(0, 1fr); gap: 1rem; align-items: start; }
+.master-workspace.has-editor { grid-template-columns: 14.5rem minmax(0, 1fr) 22.5rem; }
+.master-workspace > .card { min-width: 0; }
+.master-catalogue .card-body { padding: .55rem; }
+.master-links { display: flex; flex-direction: column; gap: .85rem; margin-top: .8rem; }
+.master-link-group { display: flex; flex-direction: column; gap: .15rem; }
+.master-link-group h3 { margin: 0 .7rem .2rem; color: var(--color-text-subtle); font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; }
+.master-links a { display: block; padding: .65rem .75rem; border-radius: .65rem; color: var(--color-text-muted); font-size: .82rem; text-decoration: none; }
+.master-links a:hover, .master-links a:focus-visible { background: var(--color-surface-muted); color: var(--color-accent); text-decoration: none; }
+.master-links a.is-active { background: color-mix(in srgb, var(--color-accent) 12%, white); color: var(--color-accent); font-weight: 700; box-shadow: inset 3px 0 0 var(--color-accent); }
+.master-records .card-body { min-width: 0; }
+.master-toolbar { flex-wrap: nowrap; }
+.master-toolbar .input[type="search"] { flex: 1 1 auto; min-width: 12rem; }
+.master-toolbar .select { flex: 0 0 9.5rem; }
+.master-records .table-wrap { overflow-x: auto; }
+.master-records table { min-width: 34rem; }
+.master-records tr.is-editing { background: color-mix(in srgb, var(--color-accent) 7%, white); }
+.master-code { display: inline-block; max-width: 16rem; overflow-wrap: anywhere; padding: .2rem .4rem; border: 1px solid var(--color-border); border-radius: .35rem; color: var(--color-text); background: var(--color-surface-sunken); font-size: .78rem; }
+.master-row-actions { white-space: nowrap; }
+.master-row-actions .row-action { display: inline-flex; align-items: center; min-height: 2rem; padding: 0 .55rem; border: 1px solid var(--color-accent); border-radius: .45rem; text-decoration: none; }
+.master-row-actions .row-action-danger { border-color: var(--color-danger); }
+.master-list-footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; color: var(--color-text-muted); font-size: .78rem; }
+.master-list-footer > div { display: flex; gap: .5rem; }
+.master-unsupported { margin: .25rem .7rem 0; color: var(--color-text-subtle); font-size: .7rem; line-height: 1.45; }
+.import-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 1rem; background: rgba(8,48,52,.42); }
+.import-dialog { display: flex; flex-direction: column; width: min(58rem, 100%); max-height: min(90dvh, 48rem); overflow: hidden; padding: 1.25rem; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: 0 1.5rem 4rem rgba(8,48,52,.24); }
+.import-dialog > header, .import-dialog > footer { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.import-dialog h2 { margin: 0; color: var(--color-text); font-size: 1.2rem; }
+.import-dialog header p { margin: .25rem 0 0; color: var(--color-text-muted); font-size: .82rem; }
+.import-steps { display: flex; flex-wrap: wrap; gap: 1.25rem; margin: 1.15rem 0 .75rem; padding: .75rem 1rem; border-radius: .55rem; color: var(--color-accent); background: var(--color-primary-soft); font-size: .78rem; font-weight: var(--weight-medium); }
+.import-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; margin: .75rem 0 1rem; }
+.import-actions label { cursor: pointer; }
+.import-summary { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .75rem; }
+.import-summary span { padding: .35rem .55rem; border: 1px solid var(--color-border); border-radius: .4rem; color: var(--color-text-muted); font-size: .75rem; }
+.import-dialog .table-wrap { overflow: auto; min-height: 0; }
+.import-dialog .data-table { min-width: 42rem; }
+.import-dialog > footer { align-items: center; padding-top: 1rem; margin-top: 1rem; border-top: 1px solid var(--color-border); }
+@media (max-width: 600px) { .import-backdrop { padding: 0; place-items: stretch; }.import-dialog { max-height: none; border-radius: 0; }.import-actions { align-items: stretch; flex-direction: column; }.import-actions > * { width: 100%; }.import-steps { flex-direction: column; gap: .35rem; } }
+.master-editor { position: sticky; top: 1rem; }
+.master-editor .card-header { padding-right: 3rem; }
+.master-editor .card-subtitle { overflow-wrap: anywhere; }
+.master-editor .form-stack { display: flex; flex-direction: column; gap: .2rem; }
+.master-editor .field { display: flex; flex-direction: column; gap: .4rem; margin: 0 0 1rem; }
+.master-editor .field > span { color: var(--color-text-muted); font-size: .82rem; font-weight: var(--weight-medium); }
+.master-editor .field input, .master-editor .field select, .master-editor .field textarea { width: 100%; box-sizing: border-box; min-height: 2.875rem; padding: 0 .75rem; border: 1px solid var(--color-border-strong); border-radius: .55rem; background: var(--color-surface); color: var(--color-text); font: inherit; }
+.master-editor .field textarea { min-height: 5.625rem; padding-top: .65rem; resize: vertical; }
+.master-editor .field input:focus, .master-editor .field select:focus, .master-editor .field textarea:focus { border-color: var(--color-accent); box-shadow: var(--focus-ring); outline: none; }
+.master-editor .checkbox-field { display: flex; align-items: center; gap: .65rem; margin: .15rem 0 0; color: var(--color-text); font-size: .9rem; font-weight: var(--weight-medium); cursor: pointer; }
+.master-editor .checkbox-field input { width: 2.5rem; height: 1.35rem; accent-color: var(--color-accent); }
+.master-editor .field-help { margin: -.45rem 0 1.1rem 3.15rem; color: var(--color-text-subtle); font-size: .75rem; }
+.master-editor .form-actions { position: sticky; bottom: 0; margin: .5rem -.9rem -.9rem; padding: .85rem .9rem; border-top: 1px solid var(--color-border); background: color-mix(in srgb, var(--color-surface) 94%, transparent); }
+.master-editor-close { position: absolute; top: .75rem; right: .75rem; width: 2rem; height: 2rem; border: 0; border-radius: 50%; color: var(--color-text-muted); background: transparent; font-size: 1.4rem; cursor: pointer; }
+.master-editor-close:hover, .master-editor-close:focus-visible { color: var(--color-accent); background: var(--color-surface-muted); }
+.field em { color: var(--color-text-muted); font-size: .72rem; font-style: normal; font-weight: 400; }
+@media (max-width: 1180px) { .master-workspace.has-editor { grid-template-columns: 13rem minmax(0, 1fr); }.master-editor { position: fixed; z-index: 30; inset: 0 0 0 auto; width: min(24rem, 92vw); overflow-y: auto; border-radius: 0; box-shadow: -12px 0 30px rgba(0,0,0,.16); } }
+@media (max-width: 720px) { .master-workspace, .master-workspace.has-editor { display: flex; flex-direction: column; }.master-catalogue, .master-records, .master-editor { width: 100%; }.master-editor { position: static; box-shadow: none; border-radius: var(--radius-md); }.master-breadcrumb { margin-top: -.5rem; }.master-toolbar { flex-direction: column; align-items: stretch; }.master-toolbar .input[type="search"], .master-toolbar .select { flex: 1 1 auto; width: 100%; }.master-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }.master-links a { min-width: 0; }.master-records table { min-width: 31rem; }.master-list-footer { align-items: flex-start; flex-direction: column; } }
 @media (max-width: 560px) { .employment-summary-grid,.timeline-details { grid-template-columns:1fr 1fr; } .timeline-title-row,.timeline-meta { align-items:flex-start; flex-direction:column; gap:.35rem; } }
 
 /* A fieldset with its border removed: the grouping is announced by the legend, and a box around every

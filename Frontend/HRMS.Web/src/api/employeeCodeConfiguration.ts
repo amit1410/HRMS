@@ -51,6 +51,36 @@ export interface EmployeeCodeRuleRequest {
   segments: Array<{ id?: string; sequenceOrder: number; segmentType: number; fixedValue?: string | null; paddingLength?: number | null }>
 }
 
+export interface EmployeeCodePreviewRequest {
+  effectiveFrom: string
+  holdingCompanyId?: string | null
+  lobId?: string | null
+  organisationId?: string | null
+  departmentId?: string | null
+  subDepartmentId?: string | null
+  sectionId?: string | null
+  subSectionId?: string | null
+  functionId?: string | null
+  subFunctionId?: string | null
+  gradeId?: string | null
+  designationId?: string | null
+  employeeTypeId?: string | null
+  countryLocationId?: string | null
+  workLocationId?: string | null
+  costCenterId?: string | null
+}
+
+export interface EmployeeCodePreview {
+  versionId: string
+  effectiveFrom: string
+  effectiveTo?: string | null
+  ruleId: string
+  ruleName: string
+  previewSequence: number
+  sequenceReserved: false
+  code: string
+}
+
 export function getEmployeeCodeConfiguration(signal?: AbortSignal) {
   return request<EmployeeCodeConfiguration>(() =>
     api.get<ApiResponse<EmployeeCodeConfiguration>>('/api/employee-code-configuration', { signal }),
@@ -81,4 +111,8 @@ export function getEmployeeCodeRule(id: string, signal?: AbortSignal) {
 
 export function deleteEmployeeCodeRule(id: string) {
   return request<EmployeeCodeRule>(() => api.delete<ApiResponse<EmployeeCodeRule>>(`/api/employee-code-configuration/rules/${id}`))
+}
+
+export function previewEmployeeCode(body: EmployeeCodePreviewRequest) {
+  return request<EmployeeCodePreview>(() => api.post<ApiResponse<EmployeeCodePreview>>('/api/employee-code-configuration/preview', body))
 }

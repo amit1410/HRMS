@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthProvider.tsx'
 import { Permissions } from './auth/permissions.ts'
 import { RequireAuth } from './auth/RequireAuth.tsx'
@@ -13,12 +13,10 @@ import { EmployeesPage } from './pages/employees/EmployeesPage.tsx'
 import { ForbiddenPage } from './pages/ForbiddenPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { WorkspacePickerPage } from './pages/WorkspacePickerPage.tsx'
-import { departmentsModule, designationsModule } from './pages/lookups/lookupModules.ts'
-import { LookupFormPage } from './pages/lookups/LookupFormPage.tsx'
-import { LookupListPage } from './pages/lookups/LookupListPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
 import { EmployeeCodeConfigurationPage } from './pages/EmployeeCodeConfigurationPage.tsx'
 import { isApexHost } from './lib/isApexHost.ts'
+import { MasterManagementPage } from './pages/masters/MasterManagementPage.tsx'
 
 /**
  * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
@@ -70,6 +68,7 @@ export function App() {
                 <Route element={<AppLayout />}>
                   <Route index element={<Navigate to="/dashboard" replace />} />
                   <Route path="dashboard" element={<DashboardPage />} />
+                  <Route path="masters/:kind" element={<MasterManagementPage />} />
                   <Route
                     path="configuration/employee-code"
                     element={
@@ -114,34 +113,8 @@ export function App() {
                 />
               </Route>
 
-              {[departmentsModule, designationsModule].map((module) => (
-                <Route key={module.key} path={module.key}>
-                  <Route
-                    index
-                    element={
-                      <RequirePermission permission={module.permissions.view}>
-                        <LookupListPage key={module.key} module={module} />
-                      </RequirePermission>
-                    }
-                  />
-                  <Route
-                    path="new"
-                    element={
-                      <RequirePermission permission={module.permissions.create}>
-                        <LookupFormPage key={module.key} module={module} />
-                      </RequirePermission>
-                    }
-                  />
-                  <Route
-                    path=":id/edit"
-                    element={
-                      <RequirePermission permission={module.permissions.edit}>
-                        <LookupFormPage key={module.key} module={module} />
-                      </RequirePermission>
-                    }
-                  />
-                </Route>
-              ))}
+              <Route path="departments/*" element={<LegacyMasterRedirect kind="departments" />} />
+              <Route path="designations/*" element={<LegacyMasterRedirect kind="designations" />} />
 
               <Route path="forbidden" element={<ForbiddenPage />} />
               <Route path="*" element={<NotFoundPage />} />
@@ -154,4 +127,13 @@ export function App() {
       </AuthProvider>
     </ErrorBoundary>
   )
+}
+
+function LegacyMasterRedirect({ kind }: { kind: 'departments' | 'designations' }) {
+  const { '*': suffix = '' } = useParams()
+  const location = useLocation()
+  const parts = suffix.split('/').filter(Boolean)
+  const legacyId = parts[0] ?? ''
+  const query = legacyId === 'new' ? '?add=1' : parts.length >= 2 && parts[1] === 'edit' ? `?edit=${encodeURIComponent(legacyId)}` : location.search
+  return <Navigate replace to={`/masters/${kind}${query}`} />
 }

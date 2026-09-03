@@ -34,15 +34,9 @@ export const NAV_ITEMS: readonly NavItem[] = [
     available: true,
   },
   {
-    label: 'Departments',
-    to: '/departments',
-    permission: Permissions.department.view,
-    available: true,
-  },
-  {
-    label: 'Designations',
-    to: '/designations',
-    permission: Permissions.designation.view,
+    label: 'Masters',
+    to: '/masters/holding-companies',
+    permission: Permissions.geography.view,
     available: true,
   },
 ]

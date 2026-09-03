@@ -50,4 +50,9 @@ public sealed class EmployeeCodeConfigurationController : ControllerBase
     [HasPermission(Permissions.EmployeeCodeConfiguration.Manage)]
     public async Task<ActionResult<ApiResponse<EmployeeCodeRuleDto>>> DeleteRule(Guid id, CancellationToken cancellationToken) =>
         (await _service.SoftDeleteRuleAsync(id, cancellationToken)).ToActionResult();
+
+    [HttpPost("preview")]
+    [HasPermission(Permissions.EmployeeCodeConfiguration.View)]
+    public async Task<ActionResult<ApiResponse<EmployeeCodePreviewDto>>> Preview([FromBody] EmployeeCodePreviewRequest request, CancellationToken cancellationToken) =>
+        (await _service.PreviewAsync(request, cancellationToken)).ToActionResult();
 }
