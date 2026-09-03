@@ -102,7 +102,9 @@ public sealed class EmployeeManagerResolver : IEmployeeManagerResolver
             .Select(e => new { e.EmployeeCode, e.FirstName, e.MiddleName, e.LastName })
             .SingleAsync(cancellationToken);
 
-        if (await WouldCreateCycleAsync(employeeId, managerId, asOfDate, cancellationToken))
+        // Resolution is date-specific. Future-cycle validation belongs to a scheduled assignment command;
+        // it must not make an otherwise valid manager disappear from today's effective state.
+        if (await WouldCreateCycleAtDateAsync(employeeId, managerId, tenantId, asOfDate, cancellationToken))
             return Result<EmployeeManagerResolution>.Success(new(
                 EmployeeManagerResolutionStatus.ReportingCycle, employeeId, managerId,
                 manager.EmployeeCode, FullName(manager.FirstName, manager.MiddleName, manager.LastName),
@@ -121,6 +123,30 @@ public sealed class EmployeeManagerResolver : IEmployeeManagerResolver
     {
         if (_tenantContext.TenantId is not Guid tenantId)
             return true;
+
+        var dates = await _db.EmployeeEmploymentHistory.AsNoTracking()
+            .Where(h => h.TenantId == tenantId && h.EffectiveFrom >= asOfDate)
+            .Select(h => h.EffectiveFrom)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        dates.Add(asOfDate);
+
+        foreach (var date in dates.Distinct().Order())
+        {
+            if (await WouldCreateCycleAtDateAsync(employeeId, proposedManagerId, tenantId, date, cancellationToken))
+                return true;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> WouldCreateCycleAtDateAsync(
+        Guid employeeId,
+        Guid proposedManagerId,
+        Guid tenantId,
+        DateOnly asOfDate,
+        CancellationToken cancellationToken)
+    {
 
         var visited = new HashSet<Guid> { employeeId };
         var cursor = (Guid?)proposedManagerId;

@@ -190,6 +190,157 @@ public class EmployeeEmploymentHardeningTests
     }
 
     [Fact]
+    public async Task Resolver_uses_the_manager_effective_before_on_and_after_a_scheduled_change()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Manager002, Today.AddDays(-30), Today.AddDays(9));
+        await SeedActiveEmploymentAsync(harness, Manager003, Today.AddDays(-30));
+        await AddEmploymentRecordAsync(harness, Employee004, Today.AddDays(-30), Today.AddDays(9), Manager002);
+        await AddEmploymentRecordAsync(harness, Employee004, Today.AddDays(10), null, Manager003);
+
+        var before = await harness.Managers().ResolveAsync(Employee004, Today.AddDays(9));
+        var on = await harness.Managers().ResolveAsync(Employee004, Today.AddDays(10));
+        var after = await harness.Managers().ResolveAsync(Employee004, Today.AddDays(11));
+
+        Assert.Equal(Manager002, before.Value!.ManagerId);
+        Assert.Equal(Manager003, on.Value!.ManagerId);
+        Assert.Equal(Manager003, after.Value!.ManagerId);
+    }
+
+    [Fact]
+    public async Task Resolver_treats_explicit_manager_clearing_as_unassigned_without_legacy_fallback()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SetLegacyManagerAsync(harness, Employee004, null);
+        await AddEmploymentRecordAsync(harness, Employee004, Today, null, null);
+
+        var result = await harness.Managers().ResolveAsync(Employee004, Today);
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.Equal(EmployeeManagerResolutionStatus.NoAssignedManager, result.Value!.Status);
+        Assert.Null(result.Value.ManagerId);
+    }
+
+    [Fact]
+    public async Task Resolver_rejects_missing_future_joining_and_retired_managers_by_date()
+    {
+        using var missingHarness = await OrganizationTestHarness.CreateAsync();
+        await SetLegacyManagerAsync(missingHarness, Employee004, null);
+        await AddEmploymentRecordAsync(missingHarness, Employee004, Today, null, Manager002);
+        var missing = await missingHarness.Managers().ResolveAsync(Employee004, Today.AddDays(1));
+        Assert.Equal(EmployeeManagerResolutionStatus.ManagerNotEligible, missing.Value!.Status);
+
+        using var futureHarness = await OrganizationTestHarness.CreateAsync();
+        await SetLegacyManagerAsync(futureHarness, Employee004, null);
+        await AddEmploymentRecordAsync(futureHarness, Employee004, Today, null, Manager002);
+        await SeedActiveEmploymentAsync(futureHarness, Manager002, Today.AddDays(5));
+        var beforeJoining = await futureHarness.Managers().ResolveAsync(Employee004, Today.AddDays(4));
+        Assert.Equal(EmployeeManagerResolutionStatus.ManagerNotEligible, beforeJoining.Value!.Status);
+
+        using var retirementHarness = await OrganizationTestHarness.CreateAsync();
+        await SetLegacyManagerAsync(retirementHarness, Employee004, null);
+        await AddEmploymentRecordAsync(retirementHarness, Employee004, Today, null, Manager002);
+        await SeedActiveEmploymentAsync(retirementHarness, Manager002, Today.AddDays(-30), Today.AddDays(4));
+        var beforeRetirement = await retirementHarness.Managers().ResolveAsync(Employee004, Today.AddDays(4));
+        var onRetirement = await retirementHarness.Managers().ResolveAsync(Employee004, Today.AddDays(5));
+        Assert.Equal(EmployeeManagerResolutionStatus.Resolved, beforeRetirement.Value!.Status);
+        Assert.Equal(EmployeeManagerResolutionStatus.ManagerNotEligible, onRetirement.Value!.Status);
+    }
+
+    [Fact]
+    public async Task Resolver_detects_a_reporting_cycle_introduced_at_a_future_boundary()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SetLegacyManagerAsync(harness, Employee004, null);
+        await SetLegacyManagerAsync(harness, Manager002, null);
+        await AddEmploymentRecordAsync(harness, Employee004, Today, null, null);
+        await AddEmploymentRecordAsync(harness, Manager002, Today, Today.AddDays(9), null);
+        await AddEmploymentRecordAsync(harness, Manager002, Today.AddDays(10), null, Employee004);
+
+        Assert.True(await harness.Managers().WouldCreateCycleAsync(Employee004, Manager002, Today));
+    }
+
+    [Fact]
+    public async Task Resolver_keeps_today_valid_when_a_cycle_is_only_scheduled_for_a_future_date()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await AddEmploymentRecordAsync(harness, Employee004, Today, null, Manager002);
+        await SeedActiveEmploymentAsync(harness, Manager002, Today.AddDays(-30), Today.AddDays(9));
+        await AddEmploymentRecordAsync(harness, Manager002, Today.AddDays(10), null, Employee004);
+
+        var today = await harness.Managers().ResolveAsync(Employee004, Today);
+
+        Assert.True(today.Succeeded, today.Message);
+        Assert.Equal(EmployeeManagerResolutionStatus.Resolved, today.Value!.Status);
+        Assert.Equal(Manager002, today.Value.ManagerId);
+        Assert.True(await harness.Managers().WouldCreateCycleAsync(Employee004, Manager002, Today));
+    }
+
+    [Fact]
+    public async Task Supervisor_additional_roles_update_without_changing_authoritative_l1()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Manager002);
+        await SeedActiveEmploymentAsync(harness, Manager003);
+        await AddEmploymentRecordAsync(harness, Employee004, Today, null, Manager002);
+
+        var first = await harness.Supervisors().UpsertAsync(Employee004, new EmployeeSupervisorRequest
+        {
+            L1ManagerId = Manager002,
+            L2ManagerId = Manager003
+        });
+        Assert.True(first.Succeeded, first.Message);
+
+        var second = await harness.Supervisors().UpsertAsync(Employee004, new EmployeeSupervisorRequest
+        {
+            L1ManagerId = Manager002,
+            L2ManagerId = Manager002,
+            TimeManagerId = Manager003
+        });
+        Assert.True(second.Succeeded, second.Message);
+        Assert.Equal(Manager002, second.Value!.L1ManagerId);
+        Assert.Equal(Manager002, second.Value.L2ManagerId);
+        Assert.Equal(Manager003, second.Value.TimeManagerId);
+    }
+
+    [Fact]
+    public async Task Manager_only_employment_change_preserves_position_fields_and_employee_code()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Manager002);
+
+        var initial = Request();
+        var created = await harness.Employment().CreateChangeAsync(Employee004, initial, "EMP-001");
+        Assert.True(created.Succeeded, created.Message);
+        string? employeeCode;
+        await using (var context = harness.CreateContext())
+        {
+            employeeCode = await context.Employees
+                .Where(e => e.Id == Employee004)
+                .Select(e => e.EmployeeCode)
+                .SingleAsync();
+        }
+
+        var managerOnly = Request();
+        managerOnly.EffectiveFrom = Today.AddDays(1);
+        managerOnly.ChangeReason = EmploymentChangeReason.Transfer;
+        managerOnly.ManagerId = Manager002;
+        var changed = await harness.Employment().CreateChangeAsync(Employee004, managerOnly, "EMP-001");
+
+        Assert.True(changed.Succeeded, changed.Message);
+        await using (var context = harness.CreateContext())
+        {
+            var employee = await context.Employees.SingleAsync(e => e.Id == Employee004);
+            Assert.Equal(employeeCode, employee.EmployeeCode);
+        }
+        Assert.Equal(initial.DepartmentId, changed.Value!.DepartmentId);
+        Assert.Equal(initial.DesignationId, changed.Value.DesignationId);
+        Assert.Equal(initial.WorkLocationId, changed.Value.WorkLocationId);
+        Assert.Equal(initial.GradeId, changed.Value.GradeId);
+        Assert.Equal(Manager002, changed.Value.ManagerId);
+    }
+
+    [Fact]
     public async Task Employment_populates_snapshots_and_synchronizes_current_employee_fields()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();
@@ -222,7 +373,11 @@ public class EmployeeEmploymentHardeningTests
         Assert.Equal(EmployeeStatus.Active, employee.Status);
     }
 
-    private static async Task SeedActiveEmploymentAsync(OrganizationTestHarness harness, Guid employeeId)
+    private static async Task SeedActiveEmploymentAsync(
+        OrganizationTestHarness harness,
+        Guid employeeId,
+        DateOnly? effectiveFrom = null,
+        DateOnly? effectiveTo = null)
     {
         await using var context = harness.CreateContext();
         context.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory
@@ -230,12 +385,46 @@ public class EmployeeEmploymentHardeningTests
             Id = Guid.NewGuid(),
             TenantId = Tenant,
             EmployeeId = employeeId,
-            EffectiveFrom = Today.AddDays(-30),
-            EffectiveTo = null,
+            EffectiveFrom = effectiveFrom ?? Today.AddDays(-30),
+            EffectiveTo = effectiveTo,
             EmploymentStatus = EmployeeStatus.Active,
             EmploymentType = EmploymentType.FullTime,
             ChangeReason = EmploymentChangeReason.NewJoining
         });
+        await context.SaveChangesAsync();
+    }
+
+    private static async Task AddEmploymentRecordAsync(
+        OrganizationTestHarness harness,
+        Guid employeeId,
+        DateOnly effectiveFrom,
+        DateOnly? effectiveTo,
+        Guid? managerId)
+    {
+        await using var context = harness.CreateContext();
+        context.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory
+        {
+            Id = Guid.NewGuid(),
+            TenantId = Tenant,
+            EmployeeId = employeeId,
+            EffectiveFrom = effectiveFrom,
+            EffectiveTo = effectiveTo,
+            ManagerId = managerId,
+            EmploymentStatus = EmployeeStatus.Active,
+            EmploymentType = EmploymentType.FullTime,
+            ChangeReason = EmploymentChangeReason.NewJoining
+        });
+        await context.SaveChangesAsync();
+    }
+
+    private static async Task SetLegacyManagerAsync(
+        OrganizationTestHarness harness,
+        Guid employeeId,
+        Guid? managerId)
+    {
+        await using var context = harness.CreateContext();
+        var employee = await context.Employees.SingleAsync(e => e.Id == employeeId);
+        employee.ReportingManagerId = managerId;
         await context.SaveChangesAsync();
     }
 
