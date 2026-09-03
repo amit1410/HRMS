@@ -583,9 +583,11 @@ public class EmployeeSubResourcesController : ControllerBase
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ApiResponse<EmployeeEmploymentHistoryDto>>> GetCurrentEmployment(
-        Guid id, CancellationToken cancellationToken)
+        Guid id, [FromQuery] DateOnly? asOfDate, CancellationToken cancellationToken)
     {
-        var result = await _employmentService.GetCurrentAsync(id, cancellationToken);
+        var result = asOfDate.HasValue
+            ? await _employmentService.GetAsOfAsync(id, asOfDate.Value, cancellationToken)
+            : await _employmentService.GetCurrentAsync(id, cancellationToken);
         return result.ToActionResult();
     }
 

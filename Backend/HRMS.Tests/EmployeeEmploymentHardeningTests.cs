@@ -29,7 +29,7 @@ public class EmployeeEmploymentHardeningTests
     private static readonly Guid WorkLocation = OrganizationTestHarness.WorkLocationId(Tenant, "WL-MUM");
     private static readonly Guid Country = OrganizationTestHarness.CountryId("IN");
     private static readonly Guid Reason = OrganizationTestHarness.PositionChangeReasonId(Tenant, "NEW_HIRE");
-    private static readonly DateOnly Today = DateOnly.FromDateTime(DateTime.UtcNow);
+    private static readonly DateOnly Today = new(2026, 3, 4);
 
     [Fact]
     public async Task Invalid_hierarchy_combination_is_rejected()

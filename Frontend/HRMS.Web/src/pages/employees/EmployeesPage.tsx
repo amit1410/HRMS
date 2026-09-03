@@ -16,7 +16,7 @@ import { DataTable, type Column } from '../../components/DataTable.tsx'
 import { Notice } from '../../components/Notice.tsx'
 import { PageHeader } from '../../components/PageHeader.tsx'
 import { Pagination } from '../../components/Pagination.tsx'
-import { StatusBadge } from '../../components/Badge.tsx'
+import { Badge, StatusBadge } from '../../components/Badge.tsx'
 import { useApiQuery } from '../../hooks/useApiQuery.ts'
 import { useDocumentTitle } from '../../hooks/useDocumentTitle.ts'
 import { useFlash } from '../../hooks/useFlash.ts'
@@ -159,7 +159,9 @@ export function EmployeesPage() {
       header: 'Status',
       sortBy: 'status',
       align: 'end',
-      render: (row) => <StatusBadge status={row.status} />,
+      render: (row) => row.isCurrentlyEmployed === false
+        ? <Badge tone="info">Scheduled</Badge>
+        : <StatusBadge status={row.status} />,
     },
     {
       key: 'actions',

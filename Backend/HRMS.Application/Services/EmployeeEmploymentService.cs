@@ -14,7 +14,8 @@ namespace HRMS.Application.Services;
 /// <summary>
 /// Employment details (joining information) and effective-dated position history.
 /// Every position change creates a new record rather than overwriting the previous one.
-/// The current position is derived from the record where <see cref="EmployeeEmploymentHistory.EffectiveTo"/> is null.
+/// The current position is derived from the record whose inclusive effective date range covers the business date.
+/// Tenant timezone configuration is not currently available, so the established UTC business-date fallback is used.
 /// </summary>
 public class EmployeeEmploymentService : IEmployeeEmploymentService
 {
@@ -27,6 +28,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
     private readonly EmployeeCodeRuleMatcher? _codeRuleMatcher;
     private readonly EmployeeCodeRenderer? _codeRenderer;
     private readonly IEmployeeCodeSequenceService? _codeSequence;
+    private readonly TimeProvider _timeProvider;
 
     public EmployeeEmploymentService(
         IHrmsDbContext db,
@@ -34,7 +36,8 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         ILogger<EmployeeEmploymentService> logger,
         EmployeeCodeRuleMatcher? codeRuleMatcher = null,
         EmployeeCodeRenderer? codeRenderer = null,
-        IEmployeeCodeSequenceService? codeSequence = null)
+        IEmployeeCodeSequenceService? codeSequence = null,
+        TimeProvider? timeProvider = null)
     {
         _db = db;
         _tenantContext = tenantContext;
@@ -42,6 +45,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         _codeRuleMatcher = codeRuleMatcher;
         _codeRenderer = codeRenderer;
         _codeSequence = codeSequence;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     // ── Joining Information (EmployeeEmployment — 1:1 with Employee) ──────────
@@ -194,6 +198,10 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
 
     public async Task<Result<EmployeeEmploymentHistoryDto>> GetCurrentAsync(
         Guid employeeId, CancellationToken cancellationToken = default)
+        => await GetAsOfAsync(employeeId, BusinessDateToday(), cancellationToken);
+
+    public async Task<Result<EmployeeEmploymentHistoryDto>> GetAsOfAsync(
+        Guid employeeId, DateOnly asOfDate, CancellationToken cancellationToken = default)
     {
         if (_tenantContext.TenantId is null)
             return Result<EmployeeEmploymentHistoryDto>.Unauthorized(NoTenantMessage);
@@ -431,7 +439,6 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
 
         // Assign a pending Employee Code only after every employment validation has passed. This
         // prevents rejected commands from consuming a sequence number or mutating the employee row.
-        await using var transaction = await _db.BeginTransactionAsync(cancellationToken);
         if (employee.EmployeeCode is null)
         {
             var codeError = await AssignPendingEmployeeCodeAsync(employee, request, references, cancellationToken);
@@ -495,18 +502,21 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
 
         // ── Sync denormalized fields on Employee ───────────────────────────────
 
-        employee.DepartmentId = request.DepartmentId;
-        employee.DesignationId = request.DesignationId;
-        employee.ReportingManagerId = request.ManagerId;
-        employee.EmployeeTypeId = request.EmployeeTypeId;
-        employee.EmployeeType = references.EmployeeType?.Name ?? request.EmploymentType.ToString();
-        employee.CostCenterId = request.CostCenterId;
-        employee.CostCenterCode = references.CostCenter?.Code;
-        employee.Status = request.EmploymentStatus;
-        employee.DateOfLeaving = request.EmploymentStatus == EmployeeStatus.Active
-            ? null
-            : request.EffectiveFrom;
-        employee.ModifiedDate = DateTime.UtcNow;
+        // Scheduled changes remain history-only until their effective date. Updating these summary fields
+        // early would make employee lists and dashboards report tomorrow's state as today's state.
+        if (request.EffectiveFrom <= BusinessDateToday())
+        {
+            employee.DepartmentId = request.DepartmentId;
+            employee.DesignationId = request.DesignationId;
+            employee.ReportingManagerId = request.ManagerId;
+            employee.EmployeeTypeId = request.EmployeeTypeId;
+            employee.EmployeeType = references.EmployeeType?.Name ?? request.EmploymentType.ToString();
+            employee.CostCenterId = request.CostCenterId;
+            employee.CostCenterCode = references.CostCenter?.Code;
+            employee.Status = request.EmploymentStatus;
+            employee.DateOfLeaving = request.EmploymentStatus == EmployeeStatus.Active ? null : request.EffectiveFrom;
+            employee.ModifiedDate = DateTime.UtcNow;
+        }
 
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
@@ -699,13 +709,13 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         return null;
     }
 
-    private static Result<EmployeeEmploymentHistoryDto>? ValidateEmploymentChangeCommand(
+    private Result<EmployeeEmploymentHistoryDto>? ValidateEmploymentChangeCommand(
         EmploymentChangeRequest request)
     {
         if (request.EffectiveFrom == default)
             return Result<EmployeeEmploymentHistoryDto>.Invalid("effectiveFrom", "Effective date is required.");
 
-        if (request.EffectiveFrom < DateOnly.FromDateTime(DateTime.UtcNow))
+        if (request.EffectiveFrom < BusinessDateToday())
             return Result<EmployeeEmploymentHistoryDto>.Invalid("effectiveFrom", "Effective date must be today or in the future.");
 
         var employeeCode = Normalize(request.EmployeeCode);

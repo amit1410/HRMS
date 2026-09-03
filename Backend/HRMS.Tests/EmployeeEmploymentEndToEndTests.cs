@@ -47,8 +47,8 @@ public class EmployeeEmploymentEndToEndTests
     private static readonly Guid ReasonLoc = OrganizationTestHarness.PositionChangeReasonId(Demo01, "LOC_CHG");
     private static readonly Guid ReasonRetire = OrganizationTestHarness.PositionChangeReasonId(Demo01, "RETIRE");
 
-    // The backdated-guard reads real wall-clock UTC (not the harness clock), so base dates on real "today".
-    private static readonly DateOnly Today = DateOnly.FromDateTime(DateTime.UtcNow);
+    // OrganizationTestHarness uses this fixed business date for deterministic effective-date assertions.
+    private static readonly DateOnly Today = new(2026, 3, 4);
 
     [Fact]
     public async Task New_hire_creates_the_first_open_record_and_syncs_the_employee_row()
@@ -134,15 +134,60 @@ public class EmployeeEmploymentEndToEndTests
         Assert.Equal(promo.Value.Id, history.Value[0].Id);
         Assert.Equal(hire.Value.Id, history.Value[1].Id);
 
-        // Current is the new role.
+        // The promotion is scheduled, so today still resolves the hire. The promotion resolves on its
+        // effective date and remains current afterward.
         var current = await harness.Employment().GetCurrentAsync(EmployeeId);
         Assert.True(current.Succeeded);
-        Assert.Equal(promo.Value.Id, current.Value!.Id);
+        Assert.Equal(hire.Value.Id, current.Value!.Id);
+        var onPromotion = await harness.Employment().GetAsOfAsync(EmployeeId, promoDate);
+        Assert.True(onPromotion.Succeeded, onPromotion.Message);
+        Assert.Equal(promo.Value.Id, onPromotion.Value!.Id);
+        var afterPromotion = await harness.Employment().GetAsOfAsync(EmployeeId, promoDate.AddDays(1));
+        Assert.True(afterPromotion.Succeeded, afterPromotion.Message);
+        Assert.Equal(promo.Value.Id, afterPromotion.Value!.Id);
 
-        // Employee row now points at the promoted designation.
+        // The denormalized row remains today's persisted summary; effective readers use history after the
+        // scheduled date, so no background writer is needed and history remains append-only.
         var employee = await harness.CreateUnscopedContext().Employees.IgnoreQueryFilters()
             .SingleAsync(e => e.Id == EmployeeId);
-        Assert.Equal(DesigSse, employee.DesignationId);
+        Assert.Equal(DesigSe, employee.DesignationId);
+    }
+
+    [Fact]
+    public async Task A_future_transfer_is_not_current_or_copied_to_employee_until_its_date()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var hire = await harness.Employment().CreateChangeAsync(EmployeeId, NewHireRequest(), "EMP-001");
+        Assert.True(hire.Succeeded, hire.Message);
+
+        var transferDate = Today.AddDays(10);
+        var transfer = await harness.Employment().CreateChangeAsync(EmployeeId, PromotionRequest(transferDate), "EMP-001");
+        Assert.True(transfer.Succeeded, transfer.Message);
+
+        var before = await harness.Employment().GetCurrentAsync(EmployeeId);
+        Assert.True(before.Succeeded, before.Message);
+        Assert.Equal(hire.Value!.Id, before.Value!.Id);
+        var dayBefore = await harness.Employment().GetAsOfAsync(EmployeeId, transferDate.AddDays(-1));
+        Assert.True(dayBefore.Succeeded, dayBefore.Message);
+        Assert.Equal(hire.Value.Id, dayBefore.Value!.Id);
+        var employeeBefore = await harness.CreateUnscopedContext().Employees.IgnoreQueryFilters().SingleAsync(e => e.Id == EmployeeId);
+        Assert.Equal(DeptEng, employeeBefore.DepartmentId);
+        Assert.Equal(DesigSe, employeeBefore.DesignationId);
+        var beforeList = await harness.Employees().GetAsync(new EmployeeQuery { Search = "EMP-001" });
+        var beforeListItem = Assert.Single(beforeList.Value!.Items);
+        Assert.Equal(hire.Value.DepartmentName, beforeListItem.DepartmentName);
+        Assert.Equal(hire.Value.DesignationName, beforeListItem.DesignationName);
+
+        harness.Clock.Now = new DateTimeOffset(2026, 3, 14, 9, 0, 0, TimeSpan.Zero);
+        var onDate = await harness.Employment().GetCurrentAsync(EmployeeId);
+        Assert.True(onDate.Succeeded, onDate.Message);
+        Assert.Equal(transfer.Value!.Id, onDate.Value!.Id);
+        var after = await harness.Employment().GetAsOfAsync(EmployeeId, transferDate.AddDays(1));
+        Assert.True(after.Succeeded, after.Message);
+        Assert.Equal(transfer.Value.Id, after.Value!.Id);
+        var onDateList = await harness.Employees().GetAsync(new EmployeeQuery { Search = "EMP-001" });
+        var onDateListItem = Assert.Single(onDateList.Value!.Items);
+        Assert.Equal(transfer.Value.DesignationName, onDateListItem.DesignationName);
     }
 
     [Fact]
@@ -183,11 +228,19 @@ public class EmployeeEmploymentEndToEndTests
         Assert.Equal(deptChange.Value.Id, history.Value[1].Id);
         Assert.Equal(hire.Value.Id, history.Value[2].Id);
 
-        // Denormalized employee fields track the current (most recent) record.
+        // Future records do not overwrite today's denormalized summary. Effective readers resolve each
+        // scheduled date from history instead.
         var employee = await harness.CreateUnscopedContext().Employees.IgnoreQueryFilters()
             .SingleAsync(e => e.Id == EmployeeId);
-        Assert.Equal(DeptHr, employee.DepartmentId);
+        Assert.Equal(DeptEng, employee.DepartmentId);
         Assert.Equal(DesigSe, employee.DesignationId);
+
+        var beforeDepartmentChange = await harness.Employment().GetAsOfAsync(EmployeeId, deptDate.AddDays(-1));
+        Assert.Equal(hire.Value.Id, beforeDepartmentChange.Value!.Id);
+        var duringDepartmentChange = await harness.Employment().GetAsOfAsync(EmployeeId, deptDate);
+        Assert.Equal(deptChange.Value.Id, duringDepartmentChange.Value!.Id);
+        var duringLocationChange = await harness.Employment().GetAsOfAsync(EmployeeId, locDate);
+        Assert.Equal(locChange.Value.Id, duringLocationChange.Value!.Id);
     }
 
     [Fact]
@@ -209,6 +262,45 @@ public class EmployeeEmploymentEndToEndTests
         Assert.Equal(ReasonRetire, retireRaw.PositionChangeReasonId);
 
         Assert.Equal(retireDate.AddDays(-1), (await LoadRawAsync(harness, hire.Value!.Id)).EffectiveTo);
+
+        var beforeRetirement = await harness.Employment().GetAsOfAsync(EmployeeId, retireDate.AddDays(-1));
+        Assert.True(beforeRetirement.Succeeded, beforeRetirement.Message);
+        Assert.Equal(hire.Value.Id, beforeRetirement.Value!.Id);
+        var onRetirement = await harness.Employment().GetAsOfAsync(EmployeeId, retireDate);
+        Assert.True(onRetirement.Succeeded, onRetirement.Message);
+        Assert.Equal(retire.Value.Id, onRetirement.Value!.Id);
+
+        var employeeBeforeEffectiveDate = await harness.CreateUnscopedContext().Employees.IgnoreQueryFilters()
+            .SingleAsync(e => e.Id == EmployeeId);
+        Assert.Equal(EmployeeStatus.Active, employeeBeforeEffectiveDate.Status);
+    }
+
+    [Fact]
+    public async Task A_future_initial_joining_has_no_current_employment_before_its_date()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+
+        var employeeBefore = await harness.CreateUnscopedContext().Employees.IgnoreQueryFilters()
+            .SingleAsync(e => e.Id == EmployeeId);
+        var originalCode = employeeBefore.EmployeeCode;
+        var request = NewHireRequest();
+        request.EffectiveFrom = Today.AddDays(7);
+
+        var result = await harness.Employment().CreateChangeAsync(EmployeeId, request, "EMP-001");
+        Assert.True(result.Succeeded, result.Message);
+
+        var currentBefore = await harness.Employment().GetCurrentAsync(EmployeeId);
+        Assert.False(currentBefore.Succeeded);
+        Assert.Equal(ResultStatus.NotFound, currentBefore.Status);
+
+        var savedEmployee = await harness.CreateUnscopedContext().Employees.IgnoreQueryFilters()
+            .SingleAsync(e => e.Id == EmployeeId);
+        Assert.Equal(originalCode, savedEmployee.EmployeeCode);
+        Assert.Equal(EmployeeStatus.Active, savedEmployee.Status);
+
+        var onJoining = await harness.Employment().GetAsOfAsync(EmployeeId, request.EffectiveFrom);
+        Assert.True(onJoining.Succeeded, onJoining.Message);
+        Assert.Equal(result.Value!.Id, onJoining.Value!.Id);
     }
 
     [Fact]

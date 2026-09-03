@@ -5,6 +5,8 @@ export interface NavItem {
   to: string
   /** Hidden entirely when the signed-in user lacks this. Undefined means everyone signed in sees it. */
   permission?: string
+  /** Used for catalogue entries whose child screens have independent permissions. */
+  anyPermission?: readonly string[]
   /**
    * Whether the screen exists yet. The nav is written once, in delivery order: an item that is not
    * built is shown greyed with a "soon" marker rather than linking to a 404.
@@ -36,11 +38,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
   {
     label: 'Masters',
     to: '/masters/holding-companies',
-    permission: Permissions.geography.view,
+    anyPermission: [Permissions.geography.view, Permissions.department.view, Permissions.designation.view],
     available: true,
   },
 ]
 
 export function visibleNavItems(can: (permission: string) => boolean): NavItem[] {
-  return NAV_ITEMS.filter((item) => item.permission === undefined || can(item.permission))
+  return NAV_ITEMS.filter((item) =>
+    (item.permission === undefined || can(item.permission)) &&
+    (item.anyPermission === undefined || item.anyPermission.some(can)),
+  )
 }

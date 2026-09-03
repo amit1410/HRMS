@@ -55,7 +55,7 @@ public sealed class OrganizationTestHarness : IDisposable
     }
 
     public IDepartmentService Departments() =>
-        new DepartmentService(TrackContext(), TenantContext, NullLogger<DepartmentService>.Instance);
+        new DepartmentService(TrackContext(), TenantContext, NullLogger<DepartmentService>.Instance, Clock);
 
     public IDesignationService Designations() =>
         new DesignationService(TrackContext(), TenantContext, NullLogger<DesignationService>.Instance);
@@ -78,7 +78,8 @@ public sealed class OrganizationTestHarness : IDisposable
             NullLogger<EmployeeEmploymentService>.Instance,
             new EmployeeCodeRuleMatcher(),
             new EmployeeCodeRenderer(),
-            new EmployeeCodeSequenceService(context, TenantContext));
+            new EmployeeCodeSequenceService(context, TenantContext),
+            Clock);
     }
 
     public IEmployeeCodeConfigurationService CodeConfiguration() =>
@@ -89,7 +90,7 @@ public sealed class OrganizationTestHarness : IDisposable
         new EmployeeCodeSequenceService(TrackContext(), TenantContext);
 
     public IEmployeeSupervisorService Supervisors() =>
-        new EmployeeSupervisorService(TrackContext(), TenantContext, NullLogger<EmployeeSupervisorService>.Instance);
+        new EmployeeSupervisorService(TrackContext(), TenantContext, NullLogger<EmployeeSupervisorService>.Instance, Clock);
 
     /// <summary>A context scoped to the current ambient tenant, for arranging or asserting directly.</summary>
     public HrmsDbContext CreateContext() => TrackContext();

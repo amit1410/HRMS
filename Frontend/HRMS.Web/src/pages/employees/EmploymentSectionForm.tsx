@@ -194,7 +194,7 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
   const manualCode = codeConfiguration.data?.assignmentMode === 'Manual' || codeConfiguration.data?.assignmentMode === 0
 
   useEffect(() => {
-    const current = history.data?.find((record) => !record.effectiveTo) ?? history.data?.[0]
+    const current = history.data?.find((record) => isEffectiveToday(record))
     if (!current || hydratedEmployeeId.current === employeeId) return
     setValues((previous) => formValuesFromHistory(current, employeeCode || previous.employeeCode))
     hydratedEmployeeId.current = employeeId
@@ -302,7 +302,7 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
   }
 
   const records = history.data ?? []
-  const current = records.find((record) => !record.effectiveTo) ?? records[0]
+  const current = records.find((record) => isEffectiveToday(record))
   const display = (value: string | null | undefined) => value || '—'
   const period = (record: (typeof records)[number]) =>
     `${formatDate(record.effectiveFrom)} – ${record.effectiveTo ? formatDate(record.effectiveTo) : 'Present'}`
@@ -337,7 +337,7 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
             {history.isLoading && !history.data ? <div className="table-loading"><Spinner label="Loading employment history…" /></div> : records.length ? <div className="employment-timeline">
               {records.map((record) => <article key={record.id} className={`employment-timeline-item${record.id === current?.id ? ' is-current' : ''}`}>
                 <div className="timeline-marker" aria-hidden="true">{record.id === current?.id ? '●' : '○'}</div>
-                <div className="timeline-content"><div className="timeline-meta"><span>{record.id === current?.id ? 'CURRENT' : 'PREVIOUS'}</span><time>{period(record)}<span className="sr-only"> {record.effectiveFrom}</span></time></div>
+                <div className="timeline-content"><div className="timeline-meta"><span>{employmentState(record, current?.id)}</span><time>{period(record)}<span className="sr-only"> {record.effectiveFrom}</span></time></div>
                   <div className="timeline-title-row"><h3>{display(record.designationName)}</h3><span className="change-reason-badge">{display(record.positionChangeReasonName)}</span></div>
                   <p className="timeline-subtitle">{display(record.departmentName)} · {display(record.organisationName)}</p>
                   <dl className="timeline-details"><div><dt>Grade</dt><dd>{display(record.gradeName)}</dd></div><div><dt>Location</dt><dd>{display(record.workLocationName)}</dd></div><div><dt>Effective</dt><dd>{period(record)}</dd></div></dl>
@@ -610,6 +610,19 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
       <Notice tone="info">Employment history is maintained as an audit trail and cannot be deleted.</Notice>
     </>
   )
+}
+
+function isEffectiveToday(record: EmployeeEmploymentHistory): boolean {
+  const today = new Date()
+  const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  return record.effectiveFrom <= date && (record.effectiveTo == null || record.effectiveTo >= date)
+}
+
+function employmentState(record: EmployeeEmploymentHistory, currentId?: string): 'CURRENT' | 'SCHEDULED' | 'HISTORICAL' {
+  if (record.id === currentId) return 'CURRENT'
+  const today = new Date()
+  const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  return record.effectiveFrom > date ? 'SCHEDULED' : 'HISTORICAL'
 }
 
 function Summary({ label, value }: { label: string; value?: string | null }) { return <div className="employment-summary-item"><span>{label}</span><strong>{value || '—'}</strong></div> }

@@ -50,8 +50,7 @@ describe('visibleNavItems', () => {
     const labels = items.map((i) => i.label)
     expect(labels).toContain('Dashboard')
     expect(labels).not.toContain('Employees')
-    expect(labels).toContain('Departments')
-    expect(labels).toContain('Designations')
+    expect(labels).toContain('Masters')
   })
 
   it('returns the same items as NAV_ITEMS (no extra or missing entries)', () => {

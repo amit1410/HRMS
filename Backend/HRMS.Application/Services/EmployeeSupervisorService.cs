@@ -306,12 +306,18 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
             return Result<IReadOnlyList<SupervisorOptionDto>>.NotFound(NotFoundMessage);
         }
 
-        // Query employees eligible for the specified supervisor type
+        var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+        var currentHistory = _db.EmployeeEmploymentHistory
+            .Where(h => h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
+
+        // Query employees eligible for the specified supervisor type. A scheduled retirement or joining
+        // must not change today's supervisor choices before its effective date.
         var options = await _db.Employees.AsNoTracking()
             .Where(e =>
                 e.TenantId == tenantId &&
                 e.Id != employeeId &&
-                e.Status == EmployeeStatus.Active &&
+                (currentHistory.Any(h => h.EmployeeId == e.Id && h.EmploymentStatus == EmployeeStatus.Active) ||
+                 !currentHistory.Any(h => h.EmployeeId == e.Id) && e.DateOfJoining <= businessDate && e.Status == EmployeeStatus.Active) &&
                 (e.ManagerCategories & supervisorTypeValue) != 0)
             .OrderBy(e => e.EmployeeCode)
             .Select(e => new SupervisorOptionDto(

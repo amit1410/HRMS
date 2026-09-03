@@ -65,15 +65,14 @@ public sealed class HrmsApiFactory : WebApplicationFactory<Program>
     /// </summary>
     public static string WorkspaceOrigin(string workspace) => $"http://{workspace}.localhost:5173";
 
-    private readonly string _databasePath =
-        Path.Combine(Path.GetTempPath(), $"hrms-integration-{Guid.NewGuid():N}.db");
+    private readonly SqliteConnection _tenantConnection;
 
     /// <summary>
-    /// The catalog gets its own file, not a second table in the one above. Sharing a file would let a query
-    /// join across the catalog/tenant boundary and pass here while failing against two real databases.
+    /// The catalog gets its own named in-memory database, not a second table in the one above. Sharing a
+    /// database would let a query join across the catalog/tenant boundary and pass here while failing
+    /// against two real databases.
     /// </summary>
-    private readonly string _catalogDatabasePath =
-        Path.Combine(Path.GetTempPath(), $"hrms-integration-catalog-{Guid.NewGuid():N}.db");
+    private readonly SqliteConnection _catalogConnection;
 
     private readonly int _authPermitLimit;
 
@@ -95,6 +94,16 @@ public sealed class HrmsApiFactory : WebApplicationFactory<Program>
     {
         _authPermitLimit = authPermitLimit;
         _remoteAddress = remoteAddress;
+
+        // Keep the named in-memory databases alive for the entire fixture. Each EF context opened by the
+        // application connects to these databases, while the anchor connections prevent SQLite from
+        // discarding the schema between scopes. They are test-owned and cannot point at local HRMS files.
+        _tenantConnection = new SqliteConnection(
+            $"Data Source=hrms-integration-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
+        _catalogConnection = new SqliteConnection(
+            $"Data Source=hrms-integration-catalog-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
+        _tenantConnection.Open();
+        _catalogConnection.Open();
     }
 
     /// <summary>A host whose credential endpoints permit only <paramref name="permitLimit"/> requests per window.</summary>
@@ -137,8 +146,12 @@ public sealed class HrmsApiFactory : WebApplicationFactory<Program>
             new Dictionary<string, string?>
             {
                 ["Database:Provider"] = "Sqlite",
-                ["ConnectionStrings:Sqlite"] = $"Data Source={_databasePath}",
-                ["ConnectionStrings:SqliteCatalog"] = $"Data Source={_catalogDatabasePath}",
+                ["ConnectionStrings:Sqlite"] = _tenantConnection.ConnectionString,
+                ["ConnectionStrings:SqliteCatalog"] = _catalogConnection.ConnectionString,
+                // The test databases are deliberately initialized by the normal startup path. This explicit
+                // false value prevents an inherited Database__SkipInitialization environment variable from
+                // leaving the isolated catalog without its Tenants table.
+                ["Database:SkipInitialization"] = "false",
                 ["Jwt:Issuer"] = Issuer,
                 ["Jwt:Audience"] = Audience,
                 ["Jwt:SecretKey"] = SigningKey,
@@ -221,6 +234,14 @@ public sealed class HrmsApiFactory : WebApplicationFactory<Program>
                 "'Jwt' section before the test configuration source is layered in.");
         }
 
+        var configuration = host.Services.GetRequiredService<IConfiguration>();
+        if (configuration.GetValue<bool>("Database:SkipInitialization"))
+        {
+            throw new InvalidOperationException(
+                "The integration host unexpectedly inherited Database:SkipInitialization; its isolated " +
+                "catalog and tenant databases were not prepared.");
+        }
+
         return host;
     }
 
@@ -233,26 +254,9 @@ public sealed class HrmsApiFactory : WebApplicationFactory<Program>
             return;
         }
 
-        // Release pooled handles before removing the files; a leftover temp file is not worth failing over.
+        // Release pooled handles before closing the anchors so SQLite discards the test databases.
         SqliteConnection.ClearAllPools();
-        DeleteIfPossible(_databasePath);
-        DeleteIfPossible(_catalogDatabasePath);
-    }
-
-    private static void DeleteIfPossible(string path)
-    {
-        try
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
+        _tenantConnection.Dispose();
+        _catalogConnection.Dispose();
     }
 }

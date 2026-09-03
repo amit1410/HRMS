@@ -29,15 +29,18 @@ public class DepartmentService : IDepartmentService
 
     private readonly IHrmsDbContext _db;
     private readonly ITenantContext _tenantContext;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<DepartmentService> _logger;
 
     public DepartmentService(
         IHrmsDbContext db,
         ITenantContext tenantContext,
-        ILogger<DepartmentService> logger)
+        ILogger<DepartmentService> logger,
+        TimeProvider? timeProvider = null)
     {
         _db = db;
         _tenantContext = tenantContext;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _logger = logger;
     }
 
@@ -65,7 +68,8 @@ public class DepartmentService : IDepartmentService
                 d.Code.ToLower().Contains(search) || d.Name.ToLower().Contains(search));
         }
 
-        var page = await Project(ApplySort(departments, query))
+        var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+        var page = await Project(ApplySort(departments, query), businessDate)
             .ToPagedResultAsync(query, cancellationToken);
 
         return Result<PagedResult<DepartmentDto>>.Success(page);
@@ -78,7 +82,8 @@ public class DepartmentService : IDepartmentService
             return Result<DepartmentDto>.Unauthorized(NoTenantMessage);
         }
 
-        var department = await Project(_db.Departments.AsNoTracking().Where(d => d.Id == id))
+        var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+        var department = await Project(_db.Departments.AsNoTracking().Where(d => d.Id == id), businessDate)
             .FirstOrDefaultAsync(cancellationToken);
 
         return department is null
@@ -224,16 +229,25 @@ public class DepartmentService : IDepartmentService
     /// count is one aggregate rather than a loaded collection. The count reads through the Employee query
     /// filter, so it too is confined to the caller's tenant.
     /// </summary>
-    private static IQueryable<DepartmentDto> Project(IQueryable<Department> departments) =>
-        departments.Select(d => new DepartmentDto(
+    private IQueryable<DepartmentDto> Project(IQueryable<Department> departments, DateOnly businessDate)
+    {
+        var currentHistory = _db.EmployeeEmploymentHistory
+            .Where(h => h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
+
+        return departments.Select(d => new DepartmentDto(
             d.Id,
             d.Code,
             d.Name,
             d.Description,
             d.IsActive,
-            d.Employees.Count,
+            d.Employees.Count(e => !currentHistory.Any(h => h.EmployeeId == e.Id) && e.DateOfJoining <= businessDate && e.DepartmentId == d.Id) +
+            currentHistory.Count(h => h.DepartmentId == d.Id &&
+                !currentHistory.Any(other => other.EmployeeId == h.EmployeeId &&
+                    (other.EffectiveFrom > h.EffectiveFrom ||
+                     other.EffectiveFrom == h.EffectiveFrom && other.CreatedDate > h.CreatedDate))),
             d.CreatedDate,
             d.ModifiedDate));
+    }
 
     /// <summary>
     /// Orders by one of <see cref="DepartmentQuery.SortFields"/>. The switch is exhaustive over that list —

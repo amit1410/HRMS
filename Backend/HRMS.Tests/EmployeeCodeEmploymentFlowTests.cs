@@ -11,7 +11,7 @@ namespace HRMS.Tests;
 public sealed class EmployeeCodeEmploymentFlowTests
 {
     private static readonly Guid Tenant = SeedData.TenantIds.Demo01;
-    private static readonly DateOnly Today = DateOnly.FromDateTime(DateTime.UtcNow);
+    private static readonly DateOnly Today = new(2026, 3, 4);
     private static readonly Guid Holding = OrganizationTestHarness.HoldingCompanyId(Tenant, "HC01");
     private static readonly Guid Organisation = OrganizationTestHarness.OrganisationId(Tenant, "ORG01");
     private static readonly Guid Designation = OrganizationTestHarness.DesignationId(Tenant, "SE");

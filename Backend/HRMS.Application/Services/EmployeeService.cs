@@ -69,18 +69,32 @@ public class EmployeeService : IEmployeeService
             return Result<PagedResult<EmployeeListItemDto>>.Unauthorized(NoTenantMessage);
         }
 
-        var employees = ApplySort(ApplyFilters(_db.Employees.AsNoTracking(), query), query);
+        var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+        var employees = ApplyEffectiveSort(ApplyEffectiveFilters(_db.Employees.AsNoTracking(), query, businessDate), query, businessDate);
+
+        var currentHistory = _db.EmployeeEmploymentHistory
+            .Where(h => h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
 
         var page = await employees
-            .Select(e => new EmployeeListItemDto(
-                e.Id,
-                e.EmployeeCode ?? string.Empty,
-                e.FirstName + " " + e.LastName,
-                e.Contact != null && e.Contact.OfficialEmail != null ? e.Contact.OfficialEmail : e.Email,
-                e.Department != null ? e.Department.Name : null,
-                e.Designation != null ? e.Designation.Name : null,
-                e.Status,
-                e.DateOfJoining))
+            .Select(e => new
+            {
+                Employee = e,
+                Current = currentHistory
+                    .Where(h => h.EmployeeId == e.Id)
+                    .OrderByDescending(h => h.EffectiveFrom)
+                    .ThenByDescending(h => h.CreatedDate)
+                    .FirstOrDefault()
+            })
+            .Select(x => new EmployeeListItemDto(
+                x.Employee.Id,
+                x.Employee.EmployeeCode ?? string.Empty,
+                x.Employee.FirstName + " " + x.Employee.LastName,
+                x.Employee.Contact != null && x.Employee.Contact.OfficialEmail != null ? x.Employee.Contact.OfficialEmail : x.Employee.Email,
+                x.Current != null && x.Current.Department != null ? x.Current.Department.Name : x.Employee.Department != null ? x.Employee.Department.Name : null,
+                x.Current != null && x.Current.Designation != null ? x.Current.Designation.Name : x.Employee.Designation != null ? x.Employee.Designation.Name : null,
+                x.Current != null ? x.Current.EmploymentStatus : x.Employee.Status,
+                x.Employee.DateOfJoining,
+                x.Current != null))
             .ToPagedResultAsync(query, cancellationToken);
 
         return Result<PagedResult<EmployeeListItemDto>>.Success(page);
@@ -95,6 +109,14 @@ public class EmployeeService : IEmployeeService
 
         var employee = await ProjectDetail(_db.Employees.AsNoTracking().Where(e => e.Id == id))
             .FirstOrDefaultAsync(cancellationToken);
+
+        if (employee is not null)
+        {
+            var effective = await ApplyCurrentEmploymentAsync(employee, cancellationToken);
+            if (!effective.Succeeded)
+                return effective;
+            employee = effective.Value!;
+        }
 
         return employee is null
             ? Result<EmployeeDto>.NotFound(NotFoundMessage)
@@ -583,6 +605,90 @@ public class EmployeeService : IEmployeeService
         return employees;
     }
 
+    private IQueryable<Employee> ApplyEffectiveFilters(
+        IQueryable<Employee> employees, EmployeeQuery query, DateOnly businessDate)
+    {
+        var currentHistory = _db.EmployeeEmploymentHistory
+            .Where(h => h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
+
+        if (query.DepartmentId is Guid departmentId)
+        {
+            employees = employees.Where(e =>
+                currentHistory.Any(h => h.EmployeeId == e.Id && h.DepartmentId == departmentId) ||
+                !currentHistory.Any(h => h.EmployeeId == e.Id) && e.DateOfJoining <= businessDate && e.DepartmentId == departmentId);
+        }
+
+        if (query.DesignationId is Guid designationId)
+        {
+            employees = employees.Where(e =>
+                currentHistory.Any(h => h.EmployeeId == e.Id && h.DesignationId == designationId) ||
+                !currentHistory.Any(h => h.EmployeeId == e.Id) && e.DateOfJoining <= businessDate && e.DesignationId == designationId);
+        }
+
+        if (query.Status is EmployeeStatus status)
+        {
+            employees = employees.Where(e =>
+                currentHistory.Any(h => h.EmployeeId == e.Id && h.EmploymentStatus == status) ||
+                !currentHistory.Any(h => h.EmployeeId == e.Id) && e.DateOfJoining <= businessDate && e.Status == status);
+        }
+
+        if (query.ReportingManagerId is Guid managerId)
+        {
+            employees = employees.Where(e =>
+                currentHistory.Any(h => h.EmployeeId == e.Id && h.ManagerId == managerId) ||
+                !currentHistory.Any(h => h.EmployeeId == e.Id) && e.DateOfJoining <= businessDate && e.ReportingManagerId == managerId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var search = query.Search.Trim().ToLowerInvariant();
+            employees = employees.Where(e =>
+                (e.EmployeeCode ?? string.Empty).ToLower().Contains(search) ||
+                e.FirstName.ToLower().Contains(search) ||
+                e.LastName.ToLower().Contains(search) ||
+                (e.Contact != null && e.Contact.OfficialEmail != null
+                    ? e.Contact.OfficialEmail
+                    : e.Email).ToLower().Contains(search));
+        }
+
+        return employees;
+    }
+
+    private IQueryable<Employee> ApplyEffectiveSort(
+        IQueryable<Employee> employees, EmployeeQuery query, DateOnly businessDate)
+    {
+        var descending = query.SortDescending;
+        var sortBy = query.SortBy?.Trim().ToLowerInvariant();
+        var currentHistory = _db.EmployeeEmploymentHistory
+            .Where(h => h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
+
+        if (sortBy == "department")
+        {
+            var ordered = descending
+                ? employees.OrderByDescending(e => currentHistory.Where(h => h.EmployeeId == e.Id).Select(h => h.Department!.Name).FirstOrDefault() ?? e.Department!.Name)
+                : employees.OrderBy(e => currentHistory.Where(h => h.EmployeeId == e.Id).Select(h => h.Department!.Name).FirstOrDefault() ?? e.Department!.Name);
+            return ordered.ThenBy(e => e.Id);
+        }
+
+        if (sortBy == "designation")
+        {
+            var ordered = descending
+                ? employees.OrderByDescending(e => currentHistory.Where(h => h.EmployeeId == e.Id).Select(h => h.Designation!.Name).FirstOrDefault() ?? e.Designation!.Name)
+                : employees.OrderBy(e => currentHistory.Where(h => h.EmployeeId == e.Id).Select(h => h.Designation!.Name).FirstOrDefault() ?? e.Designation!.Name);
+            return ordered.ThenBy(e => e.Id);
+        }
+
+        if (sortBy == "status")
+        {
+            var ordered = descending
+                ? employees.OrderByDescending(e => currentHistory.Where(h => h.EmployeeId == e.Id).Select(h => (EmployeeStatus?)h.EmploymentStatus).FirstOrDefault() ?? e.Status)
+                : employees.OrderBy(e => currentHistory.Where(h => h.EmployeeId == e.Id).Select(h => (EmployeeStatus?)h.EmploymentStatus).FirstOrDefault() ?? e.Status);
+            return ordered.ThenBy(e => e.Id);
+        }
+
+        return ApplySort(employees, query);
+    }
+
     /// <summary>
     /// Orders by one of <see cref="EmployeeQuery.SortFields"/>. Sorting happens on the entity rather than
     /// the DTO because two of the fields (first/last name, created date) are not on the list DTO at all.
@@ -695,9 +801,68 @@ public class EmployeeService : IEmployeeService
         var saved = await ProjectDetail(_db.Employees.AsNoTracking().Where(e => e.Id == id))
             .FirstOrDefaultAsync(cancellationToken);
 
+        if (saved is not null)
+        {
+            var effective = await ApplyCurrentEmploymentAsync(saved, cancellationToken);
+            if (!effective.Succeeded)
+                return effective;
+            saved = effective.Value!;
+        }
+
         return saved is null
             ? Result<EmployeeDto>.NotFound(NotFoundMessage)
             : Result<EmployeeDto>.Success(saved, message);
+    }
+
+    private async Task<Result<EmployeeDto>> ApplyCurrentEmploymentAsync(
+        EmployeeDto employee, CancellationToken cancellationToken)
+    {
+        var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+        var current = await _db.EmployeeEmploymentHistory.AsNoTracking()
+            .Where(h => h.EmployeeId == employee.Id && h.EffectiveFrom <= businessDate &&
+                        (h.EffectiveTo == null || h.EffectiveTo >= businessDate))
+            .OrderByDescending(h => h.EffectiveFrom)
+            .ThenByDescending(h => h.CreatedDate)
+            .Select(h => new
+            {
+                h.EffectiveFrom,
+                h.EmploymentStatus,
+                h.DepartmentId,
+                DepartmentName = h.Department == null ? null : h.Department.Name,
+                h.DesignationId,
+                DesignationName = h.Designation == null ? null : h.Designation.Name,
+                h.ManagerId,
+                ManagerName = h.Manager == null ? null : h.Manager.FirstName + " " + h.Manager.LastName,
+                EmployeeType = h.EmployeeType == null ? null : h.EmployeeType.Name,
+                CostCenterCode = h.CostCenter == null ? null : h.CostCenter.Code
+            })
+            .Take(2)
+            .ToListAsync(cancellationToken);
+
+        if (current.Count > 1)
+        {
+            return Result<EmployeeDto>.Conflict("Employment history contains multiple current records.");
+        }
+
+        var record = current.SingleOrDefault();
+        if (record is null)
+        {
+            return Result<EmployeeDto>.Success(employee);
+        }
+
+        return Result<EmployeeDto>.Success(employee with
+        {
+            DateOfLeaving = record.EmploymentStatus == EmployeeStatus.Active ? null : record.EffectiveFrom,
+            Status = record.EmploymentStatus,
+            DepartmentId = record.DepartmentId,
+            DepartmentName = record.DepartmentName,
+            DesignationId = record.DesignationId,
+            DesignationName = record.DesignationName,
+            ReportingManagerId = record.ManagerId,
+            ReportingManagerName = record.ManagerName,
+            EmployeeType = record.EmployeeType,
+            CostCenterCode = record.CostCenterCode
+        });
     }
 
     /// <summary>

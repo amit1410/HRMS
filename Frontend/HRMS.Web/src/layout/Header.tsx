@@ -27,7 +27,7 @@ export function Header({ onMenu, menuButtonRef, menuOpen }: { onMenu: () => void
   if (!user) return null
 
   return (
-    <header className="app-header">
+    <header className="app-header" aria-label="Workspace header">
       <button ref={menuButtonRef} type="button" className="menu-button" onClick={onMenu} aria-label="Open navigation" aria-expanded={menuOpen}>☰</button>
       <div className="tenant">
         <span className="tenant-label">Tenant</span>

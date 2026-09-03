@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { session } from '../api/session.ts'
 import { Permissions } from '../auth/permissions.ts'
 import { DashboardPage } from './DashboardPage.tsx'
+import { Header } from '../layout/Header.tsx'
+import { createRef } from 'react'
 import {
   makeDepartment,
   makeEmployee,
@@ -87,7 +89,10 @@ describe('DashboardPage', () => {
   })
 
   it('names the tenant, so a user with accounts in two cannot mistake one for the other', async () => {
-    renderAsUser(<DashboardPage />, { user: makeUser({ tenantName: 'Contoso Retail' }) })
+    renderAsUser(
+      <Header onMenu={() => undefined} menuButtonRef={createRef<HTMLButtonElement>()} menuOpen={false} />,
+      { user: makeUser({ tenantName: 'Contoso Retail' }) },
+    )
 
     expect(await screen.findByText(/Contoso Retail/)).toBeInTheDocument()
   })

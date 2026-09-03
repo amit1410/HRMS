@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { StrictMode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
@@ -134,9 +134,10 @@ describe('App', () => {
 
     renderApp('/dashboard')
 
-    expect(await screen.findByText('Northwind Demo')).toBeInTheDocument()
-    expect(screen.getByText('DEMO01')).toBeInTheDocument()
-    expect(screen.getByText('Priya Raman')).toBeInTheDocument()
+    const header = await screen.findByRole('banner', { name: 'Workspace header' })
+    expect(within(header).getByText('Northwind Demo')).toBeInTheDocument()
+    expect(within(header).getByText('DEMO01')).toBeInTheDocument()
+    expect(within(header).getByText('Priya Raman')).toBeInTheDocument()
   })
 
   it('puts the user back outside on sign-out', async () => {
@@ -162,11 +163,7 @@ describe('App', () => {
 
     // The href and the route table have to agree; a typo in either is a link that lands on the 404.
     expect(screen.getByRole('link', { name: 'Employees' })).toHaveAttribute('href', '/employees')
-    expect(screen.getByRole('link', { name: 'Departments' })).toHaveAttribute('href', '/departments')
-    expect(screen.getByRole('link', { name: 'Designations' })).toHaveAttribute(
-      'href',
-      '/designations',
-    )
+    expect(screen.getByRole('link', { name: 'Masters' })).toHaveAttribute('href', '/masters/holding-companies')
 
     await userEvent.click(screen.getByRole('link', { name: 'Employees' }))
     expect(await screen.findByRole('heading', { name: 'Employees', level: 1 })).toBeInTheDocument()
@@ -187,7 +184,6 @@ describe('App', () => {
 
     // Absent, not disabled: a greyed link still says the screen is somewhere they might get to.
     expect(screen.getByRole('link', { name: 'Employees' })).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Departments' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Designations' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Masters' })).not.toBeInTheDocument()
   })
 })

@@ -47,11 +47,13 @@ describe('AddressDetailsForm', () => {
 
     await waitFor(() => expect(stub.callsTo('get', ADDRESSES_URL)).toHaveLength(1))
 
-    const current = group('Current Address')
-    expect(await within(current).findByLabelText(/^Address Line 1$/)).toHaveValue('14 Kildare Street')
-    expect(await within(current).findByLabelText(/^City \/ Town$/)).toHaveValue('Mumbai')
-    expect(within(current).getByLabelText(/^District$/)).toHaveValue('Mumbai City')
-    expect(within(current).getByLabelText(/^Postal Code \/ Pincode$/)).toHaveValue('400001')
+    await waitFor(() => {
+      const current = group('Current Address')
+      expect(within(current).getByLabelText(/^Address Line 1$/)).toHaveValue('14 Kildare Street')
+      expect(within(current).getByLabelText(/^City \/ Town$/)).toHaveValue('Mumbai')
+      expect(within(current).getByLabelText(/^District$/)).toHaveValue('Mumbai City')
+      expect(within(current).getByLabelText(/^Postal Code \/ Pincode$/)).toHaveValue('400001')
+    })
 
     // The contact flag is read on load: permanent mirrors current and is locked.
     await waitFor(() =>

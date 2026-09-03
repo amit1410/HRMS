@@ -15,4 +15,5 @@ public record EmployeeListItemDto(
     string? DepartmentName,
     string? DesignationName,
     EmployeeStatus Status,
-    DateOnly DateOfJoining);
+    DateOnly DateOfJoining,
+    bool IsCurrentlyEmployed);

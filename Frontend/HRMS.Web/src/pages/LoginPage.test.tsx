@@ -113,10 +113,10 @@ describe('LoginPage', () => {
     renderLogin(login)
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument())
-    const submit = screen.getByRole('button', { name: 'Sign in' })
+    const submit = screen.getByRole('button', { name: /^Sign in$/ })
     await userEvent.click(submit)
 
-    await waitFor(() => expect(screen.getByRole('button')).toBeDisabled())
+    await waitFor(() => expect(submit).toBeDisabled())
     expect(login).toHaveBeenCalledTimes(1)
   })
 
