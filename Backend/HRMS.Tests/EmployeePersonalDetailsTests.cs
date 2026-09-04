@@ -65,6 +65,37 @@ public class EmployeePersonalDetailsTests
     }
 
     [Fact]
+    public async Task Create_without_sensitive_edit_permission_does_not_persist_supplied_sensitive_values()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+
+        var request = NewRequest();
+        request.AadhaarNumber = "111122223333";
+        request.PanNumber = "ABCDE1234F";
+        request.PfNumber = "PF-TEST-0001";
+        request.UanNumber = "999988887777";
+        request.EsicApplicable = true;
+        request.EsicNumber = "ESIC-000123";
+        request.MediclaimNumber = "MED-000456";
+
+        var result = await harness.Employees().CreatePersonalDetailsAsync(
+            request,
+            canEditSensitive: false);
+
+        Assert.True(result.Succeeded);
+
+        using var unscoped = harness.CreateUnscopedContext();
+        var saved = await unscoped.Employees.IgnoreQueryFilters().SingleAsync(e => e.Id == result.Value!.Id);
+        Assert.Null(saved.AadhaarNumber);
+        Assert.Null(saved.PanNumber);
+        Assert.Null(saved.PfNumber);
+        Assert.Null(saved.UanNumber);
+        Assert.False(saved.EsicApplicable);
+        Assert.Null(saved.EsicNumber);
+        Assert.Null(saved.MediclaimNumber);
+    }
+
+    [Fact]
     public async Task Create_does_not_consume_employee_code_sequence()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();
