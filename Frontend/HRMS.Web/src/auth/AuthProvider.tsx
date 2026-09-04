@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { login as apiLogin, logout as apiLogout, restoreSession } from '../api/auth.ts'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { fetchCurrentUser, login as apiLogin, logout as apiLogout, restoreSession } from '../api/auth.ts'
 import { subscribeToSessionEvents } from '../api/client.ts'
 import { session } from '../api/session.ts'
 import type { AuthenticatedUser, LoginRequest } from '../api/types.ts'
@@ -19,6 +19,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session.hasStoredSession() ? 'restoring' : 'anonymous',
   )
   const [user, setUser] = useState<AuthenticatedUser | null>(null)
+  const sessionGeneration = useRef(0)
+
+  const loadFreshUser = useCallback(async () => fetchCurrentUser(), [])
 
   // Exchange the stored refresh token once on load. `restoreSession` shares one in-flight request, so
   // StrictMode's double-invoked effect cannot spend two single-use refresh tokens.
@@ -30,10 +33,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     let active = true
     restoreSession()
-      .then((restored) => {
+      .then(async (restored) => {
         if (!active) return
         if (restored) {
-          setUser(restored.user)
+          const freshUser = await loadFreshUser()
+          if (!active) return
+          setUser(freshUser)
           setStatus('authenticated')
         } else {
           setUser(null)
@@ -49,7 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false
     }
-  }, [])
+  }, [loadFreshUser])
 
   // The interceptor is the only code that learns a refresh has failed, and a background refresh is
   // the only place fresh permissions arrive. Both are surfaced as session events.
@@ -57,14 +62,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () =>
       subscribeToSessionEvents((event) => {
         if (event.type === 'expired') {
+          sessionGeneration.current += 1
           setUser(null)
           setStatus('anonymous')
         } else {
-          setUser(event.user)
-          setStatus('authenticated')
+          const generation = ++sessionGeneration.current
+          void loadFreshUser()
+            .then((freshUser) => {
+              if (generation === sessionGeneration.current) {
+                setUser(freshUser)
+                setStatus('authenticated')
+              }
+            })
+            .catch(() => {
+              if (generation === sessionGeneration.current) {
+                setUser(null)
+                setStatus('anonymous')
+              }
+            })
         }
       }),
-    [],
+    [loadFreshUser],
   )
 
   // Signing out in one tab should not leave another tab looking signed in. The `storage` event fires
@@ -72,6 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     function onStorage(event: StorageEvent) {
       if (event.key === session.refreshTokenKey && event.newValue === null) {
+        sessionGeneration.current += 1
         session.setAccessToken(null)
         setUser(null)
         setStatus('anonymous')
@@ -82,12 +101,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const login = useCallback(async (credentials: LoginRequest) => {
-    const result = await apiLogin(credentials)
-    setUser(result.user)
+    const generation = ++sessionGeneration.current
+    await apiLogin(credentials)
+    const freshUser = await loadFreshUser()
+    if (generation !== sessionGeneration.current) return
+    setUser(freshUser)
     setStatus('authenticated')
-  }, [])
+  }, [loadFreshUser])
 
   const logout = useCallback(async () => {
+    sessionGeneration.current += 1
     await apiLogout()
     setUser(null)
     setStatus('anonymous')

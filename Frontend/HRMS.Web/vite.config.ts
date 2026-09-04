@@ -1,6 +1,17 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { applyAcceptanceConnectSrc } from './src/lib/acceptanceCsp.js'
+
+function acceptanceCspPlugin() {
+  return {
+    name: 'hrms-acceptance-csp',
+    transformIndexHtml(html: string) {
+      const origins = (process.env.VITE_API_CSP_CONNECT_SRC ?? '').split(/\s+/).filter(Boolean)
+      return applyAcceptanceConnectSrc(html, origins)
+    },
+  }
+}
 
 /**
  * Dev server runs on 5173, which is the origin the API's CORS policy allows
@@ -9,7 +20,7 @@ import react from '@vitejs/plugin-react'
  * by CORS and look like a broken API.
  */
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), acceptanceCspPlugin()],
   server: {
     port: 5173,
     strictPort: true,

@@ -54,6 +54,11 @@ export const Permissions = {
     edit: 'User.Edit',
     delete: 'User.Delete',
   },
+  accountEmployeeLink: {
+    view: 'AccountEmployeeLink.View',
+    viewHistory: 'AccountEmployeeLink.ViewHistory',
+    manage: 'AccountEmployeeLink.Manage',
+  },
 } as const
 
 /** Every permission the system knows about — the counterpart of `Permissions.All` in C#. */

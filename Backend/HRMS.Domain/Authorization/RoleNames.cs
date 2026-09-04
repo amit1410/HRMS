@@ -12,9 +12,12 @@ public static class RoleNames
     public const string HRManager = "HRManager";
     public const string Manager = "Manager";
     public const string Employee = "Employee";
+    public const string AccountLinkAdministrator = "AccountLinkAdministrator";
+    public const string AccountLinkAuditor = "AccountLinkAuditor";
 
     public static readonly IReadOnlyList<string> All = new[]
     {
-        SuperAdmin, TenantAdmin, HRAdmin, HRManager, Manager, Employee
+        SuperAdmin, TenantAdmin, HRAdmin, HRManager, Manager, Employee,
+        AccountLinkAdministrator, AccountLinkAuditor
     };
 }

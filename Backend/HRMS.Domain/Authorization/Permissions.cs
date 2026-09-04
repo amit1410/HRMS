@@ -66,6 +66,13 @@ public static class Permissions
         public const string Delete = "User.Delete";
     }
 
+    public static class AccountEmployeeLink
+    {
+        public const string View = "AccountEmployeeLink.View";
+        public const string ViewHistory = "AccountEmployeeLink.ViewHistory";
+        public const string Manage = "AccountEmployeeLink.Manage";
+    }
+
     /// <summary>Every permission the system knows about. Used by the seeder and SuperAdmin/TenantAdmin grants.</summary>
     public static readonly IReadOnlyList<string> All = new[]
     {
@@ -76,6 +83,7 @@ public static class Permissions
         EmployeeCodeConfiguration.View, EmployeeCodeConfiguration.Manage,
         Department.View, Department.Create, Department.Edit, Department.Delete,
         Designation.View, Designation.Create, Designation.Edit, Designation.Delete,
-        User.View, User.Create, User.Edit, User.Delete
+        User.View, User.Create, User.Edit, User.Delete,
+        AccountEmployeeLink.View, AccountEmployeeLink.ViewHistory, AccountEmployeeLink.Manage
     };
 }

@@ -61,7 +61,7 @@ public class AuthEndpointsTests : IClassFixture<HrmsApiFactory>
         // Nothing in the request said DEMO01. The address did.
         Assert.Equal("DEMO01", body.Data.User.TenantCode);
         Assert.Contains(RoleNames.TenantAdmin, body.Data.User.Roles);
-        Assert.Equal(Permissions.All.Count, body.Data.User.Permissions.Count);
+        Assert.Equal(SeedData.RolePermissionMap[RoleNames.TenantAdmin].Length, body.Data.User.Permissions.Count);
     }
 
     /// <summary>Nothing derived from the stored credential may appear in a response.</summary>

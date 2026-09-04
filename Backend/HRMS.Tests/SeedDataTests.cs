@@ -151,7 +151,7 @@ public class SeedDataTests
 
         var tenantAdminGrants = await context.RolePermissions
             .CountAsync(rp => rp.RoleId == SeedData.RoleId(RoleNames.TenantAdmin));
-        Assert.Equal(DomainPermissions.All.Count, tenantAdminGrants);
+        Assert.Equal(SeedData.RolePermissionMap[RoleNames.TenantAdmin].Length, tenantAdminGrants);
 
         var employeeGrants = await context.RolePermissions
             .CountAsync(rp => rp.RoleId == SeedData.RoleId(RoleNames.Employee));

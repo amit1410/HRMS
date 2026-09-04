@@ -1,5 +1,6 @@
 using HRMS.Application.Abstractions;
 using HRMS.Domain.Entities;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence.Catalog;
 using Microsoft.EntityFrameworkCore;
@@ -111,6 +112,8 @@ public static class DatabaseSeeder
         var toAdd = new List<RolePermission>();
         foreach (var (roleName, permissionNames) in SeedData.RolePermissionMap)
         {
+            if (roleName is RoleNames.AccountLinkAdministrator or RoleNames.AccountLinkAuditor)
+                continue; // Special link roles are provisioned by a separately authorized operator.
             var roleId = SeedData.RoleId(roleName);
             foreach (var permissionName in permissionNames)
             {

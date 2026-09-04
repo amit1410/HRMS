@@ -41,6 +41,12 @@ export const NAV_ITEMS: readonly NavItem[] = [
     anyPermission: [Permissions.geography.view, Permissions.department.view, Permissions.designation.view],
     available: true,
   },
+  {
+    label: 'Account–Employee Links',
+    to: '/administration/account-employee-links',
+    permission: Permissions.accountEmployeeLink.view,
+    available: true,
+  },
 ]
 
 export function visibleNavItems(can: (permission: string) => boolean): NavItem[] {

@@ -354,7 +354,9 @@ public class AuthService : IAuthService
         }
 
         var (roles, permissions) = await LoadAuthorizationAsync(user.Id, user.TenantId, cancellationToken);
-        return Result<AuthenticatedUserDto>.Success(ToDto(user, tenant, roles, permissions));
+        var dto = ToDto(user, tenant, roles, permissions);
+        var identity = await ResolveEmployeeIdentityAsync(user.Id, user.TenantId, cancellationToken);
+        return Result<AuthenticatedUserDto>.Success(dto with { EmployeeIdentity = identity });
     }
 
     /// <summary>
@@ -482,6 +484,21 @@ public class AuthService : IAuthService
             LastLoginDateUtc: user.LastLoginDate,
             Roles: roles,
             Permissions: permissions);
+
+    private async Task<EmployeeIdentityDto> ResolveEmployeeIdentityAsync(Guid userId, Guid tenantId, CancellationToken ct)
+    {
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+        var latest = await _db.AccountEmployeeLinkEvents.AsNoTracking().Where(x => x.SubjectUserId == userId).OrderByDescending(x => x.Sequence).FirstOrDefaultAsync(ct);
+        var link = await _db.AccountEmployeeCurrentLinks.AsNoTracking().SingleOrDefaultAsync(x => x.UserId == userId, ct);
+        if (link is null) return new("Unlinked", latest?.Id, null, null, "NotLinked", today);
+        var employee = await _db.Employees.AsNoTracking().SingleOrDefaultAsync(x => x.Id == link.EmployeeId && x.TenantId == tenantId, ct);
+        if (employee is null) return new("Invalid", null, null, null, "RequiresReview", today);
+        var history = await _db.EmployeeEmploymentHistory.AsNoTracking().Where(x => x.EmployeeId == employee.Id && x.EffectiveFrom <= today && (x.EffectiveTo == null || x.EffectiveTo >= today)).ToListAsync(ct);
+        var eligibility = employee.DateOfJoining > today ? "FutureJoining" : history.Count != 1 ? "NoApplicableEmployment" : history[0].EmploymentStatus == EmployeeStatus.Active && employee.Status == EmployeeStatus.Active ? "ActiveEmployment" : "Separated";
+        var creation = await _db.AccountEmployeeLinkEvents.AsNoTracking().SingleOrDefaultAsync(x => x.Id == link.LinkId, ct);
+        if (creation is null) return new("Invalid", null, null, null, "RequiresReview", today);
+        return new("Linked", latest?.Id, link.LinkId, new(employee.Id, string.Join(" ", new[] { employee.FirstName, employee.MiddleName, employee.LastName }.Where(x => !string.IsNullOrWhiteSpace(x))), employee.EmployeeCode), eligibility, today);
+    }
 
     /// <summary>
     /// Runs a password verification against a throwaway hash so that "no such tenant/user" costs roughly

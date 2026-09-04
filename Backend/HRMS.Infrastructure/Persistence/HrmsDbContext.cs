@@ -33,6 +33,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
 
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<User> Users => Set<User>();
+    public DbSet<AccountEmployeeCurrentLink> AccountEmployeeCurrentLinks => Set<AccountEmployeeCurrentLink>();
+    public DbSet<AccountEmployeeLinkEvent> AccountEmployeeLinkEvents => Set<AccountEmployeeLinkEvent>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<Permission> Permissions => Set<Permission>();
     public DbSet<UserRole> UserRoles => Set<UserRole>();
@@ -130,6 +132,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         // (TenantId == null) the predicate matches no rows: reads must be tenant-scoped, and bootstrap
         // paths (login lookup, seeding) opt out explicitly with IgnoreQueryFilters().
         modelBuilder.Entity<User>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<AccountEmployeeCurrentLink>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<AccountEmployeeLinkEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<UserRole>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<RefreshToken>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<Department>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -196,6 +200,11 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     /// </summary>
     private void ApplyAuditAndTenantStamps()
     {
+        foreach (var entry in ChangeTracker.Entries<AccountEmployeeLinkEvent>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new InvalidOperationException("Account employee link events are immutable.");
+        }
         var utcNow = DateTime.UtcNow;
 
         foreach (var entry in ChangeTracker.Entries())

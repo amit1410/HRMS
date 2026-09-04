@@ -19,6 +19,7 @@ public static class DependencyInjection
         services.TryAddSingletonTimeProvider();
 
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<IAccountEmployeeLinkService, AccountEmployeeLinkService>();
         services.AddScoped<ITenantBrandingService, TenantBrandingService>();
         services.AddScoped<IDepartmentService, DepartmentService>();
         services.AddScoped<IDesignationService, DesignationService>();

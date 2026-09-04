@@ -20,6 +20,8 @@ public interface IHrmsDbContext
 {
     DbSet<Tenant> Tenants { get; }
     DbSet<User> Users { get; }
+    DbSet<AccountEmployeeCurrentLink> AccountEmployeeCurrentLinks { get; }
+    DbSet<AccountEmployeeLinkEvent> AccountEmployeeLinkEvents { get; }
     DbSet<Role> Roles { get; }
     DbSet<Permission> Permissions { get; }
     DbSet<UserRole> UserRoles { get; }

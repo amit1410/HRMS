@@ -45,6 +45,9 @@ describe('AuthProvider', () => {
     session.clear()
     window.localStorage.clear()
     stub = installStubAdapter()
+    stub.on('get', '/api/auth/me', () => ({
+      data: ok(makeUser()),
+    }))
   })
 
   afterEach(() => {

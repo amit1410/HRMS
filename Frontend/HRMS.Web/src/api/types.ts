@@ -113,6 +113,16 @@ export interface AuthenticatedUser {
   lastLoginDateUtc?: string | null
   roles: string[]
   permissions: string[]
+  employeeIdentity?: EmployeeIdentity | null
+}
+
+export interface EmployeeIdentity {
+  status: 'Linked' | 'Unlinked' | 'Invalid'
+  revision: string | null
+  linkId: string | null
+  employee: { id: string; displayName: string; employeeCode?: string | null } | null
+  employmentEligibility: 'NotLinked' | 'FutureJoining' | 'NoApplicableEmployment' | 'ActiveEmployment' | 'Separated' | 'RequiresReview'
+  businessDate: string | null
 }
 
 // ---------------------------------------------------------------------------------------------

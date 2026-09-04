@@ -10,6 +10,7 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
     {
         builder.ToTable("Users");
         builder.HasKey(u => u.Id);
+        builder.HasAlternateKey(u => new { u.TenantId, u.Id }).HasName("AK_Users_TenantId_Id");
 
         builder.Property(u => u.TenantId).IsRequired();
         builder.Property(u => u.Email).IsRequired().HasMaxLength(256);

@@ -99,7 +99,9 @@ public static class SeedData
             [RoleNames.HRAdmin] = 3,
             [RoleNames.HRManager] = 4,
             [RoleNames.Manager] = 5,
-            [RoleNames.Employee] = 6
+            [RoleNames.Employee] = 6,
+            [RoleNames.AccountLinkAdministrator] = 7,
+            [RoleNames.AccountLinkAuditor] = 8
         };
 
     /// <summary>Permission ids. Fixed for the same reasons as <see cref="RoleIds"/>.</summary>
@@ -131,7 +133,10 @@ public static class SeedData
             [DomainPermissions.Geography.View] = 23,
             [DomainPermissions.Geography.Manage] = 24,
             [DomainPermissions.EmployeeCodeConfiguration.View] = 25,
-            [DomainPermissions.EmployeeCodeConfiguration.Manage] = 26
+            [DomainPermissions.EmployeeCodeConfiguration.Manage] = 26,
+            [DomainPermissions.AccountEmployeeLink.View] = 27,
+            [DomainPermissions.AccountEmployeeLink.ViewHistory] = 28,
+            [DomainPermissions.AccountEmployeeLink.Manage] = 29
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>
@@ -159,7 +164,9 @@ public static class SeedData
         [RoleNames.HRAdmin] = "HR administrator managing employees, departments and designations.",
         [RoleNames.HRManager] = "HR manager with employee management capabilities.",
         [RoleNames.Manager] = "Manager with read access to organizational data.",
-        [RoleNames.Employee] = "Standard employee with self-service access."
+        [RoleNames.Employee] = "Standard employee with self-service access.",
+        [RoleNames.AccountLinkAdministrator] = "Named operator who can manage account-to-employee links.",
+        [RoleNames.AccountLinkAuditor] = "Named operator who can review account-to-employee link history."
     };
 
     public static IReadOnlyList<Role> Roles =>
@@ -181,8 +188,8 @@ public static class SeedData
     /// <summary>Maps each role to the permission names it is granted.</summary>
     public static IReadOnlyDictionary<string, string[]> RolePermissionMap => new Dictionary<string, string[]>
     {
-        [RoleNames.SuperAdmin] = DomainPermissions.All.ToArray(),
-        [RoleNames.TenantAdmin] = DomainPermissions.All.ToArray(),
+        [RoleNames.SuperAdmin] = DomainPermissions.All.Where(x => !x.StartsWith("AccountEmployeeLink.", StringComparison.Ordinal)).ToArray(),
+        [RoleNames.TenantAdmin] = DomainPermissions.All.Where(x => !x.StartsWith("AccountEmployeeLink.", StringComparison.Ordinal)).ToArray(),
         [RoleNames.HRAdmin] = new[]
         {
             DomainPermissions.Employee.View, DomainPermissions.Employee.Create, DomainPermissions.Employee.Edit,
@@ -210,7 +217,9 @@ public static class SeedData
             DomainPermissions.Employee.View, DomainPermissions.Department.View, DomainPermissions.Designation.View,
             DomainPermissions.Geography.View
         },
-        [RoleNames.Employee] = new[] { DomainPermissions.Geography.View }
+        [RoleNames.Employee] = new[] { DomainPermissions.Geography.View },
+        [RoleNames.AccountLinkAdministrator] = new[] { DomainPermissions.AccountEmployeeLink.View, DomainPermissions.AccountEmployeeLink.Manage },
+        [RoleNames.AccountLinkAuditor] = new[] { DomainPermissions.AccountEmployeeLink.View, DomainPermissions.AccountEmployeeLink.ViewHistory }
     };
 
     /// <summary>

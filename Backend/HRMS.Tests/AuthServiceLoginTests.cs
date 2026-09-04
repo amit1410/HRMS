@@ -291,8 +291,8 @@ public class AuthServiceLoginTests
             Email = "hr@demo01.com", Password = Password
         });
 
-        // TenantAdmin is granted every permission; HRManager only the subset in the seed map.
-        Assert.Equal(Permissions.All.Count, admin.Value!.User.Permissions.Count);
+        // TenantAdmin receives the existing catalog only; link permissions require special-role provisioning.
+        Assert.Equal(SeedData.RolePermissionMap[RoleNames.TenantAdmin].Length, admin.Value!.User.Permissions.Count);
         Assert.Equal(
             SeedData.RolePermissionMap[RoleNames.HRManager].OrderBy(p => p).ToList(),
             hr.Value!.User.Permissions);
@@ -349,5 +349,49 @@ public class AuthServiceLoginTests
         });
 
         Assert.Equal(ResultStatus.Unauthorized, result.Status);
+    }
+
+    [Fact]
+    public async Task Get_current_user_resolves_a_new_link_with_an_old_valid_token()
+    {
+        using var harness = await AuthTestHarness.CreateAsync();
+        var employeeId = OrganizationTestHarness.EmployeeId(SeedData.TenantIds.Demo01, "EMP-001");
+        var linkId = Guid.NewGuid();
+
+        using (var arrange = harness.CreateUnscopedContext())
+        {
+            arrange.AccountEmployeeLinkEvents.Add(new HRMS.Domain.Entities.AccountEmployeeLinkEvent
+            {
+                Id = linkId,
+                TenantId = SeedData.TenantIds.Demo01,
+                SubjectUserId = SeedData.Users[1].Id,
+                ActorUserId = SeedData.Users[0].Id,
+                Sequence = 1,
+                Operation = "Link",
+                NewLinkId = linkId,
+                AfterEmployeeId = employeeId,
+                OccurredAtUtc = DateTime.UtcNow,
+                Reason = "fresh identity",
+                CorrelationId = Guid.NewGuid().ToString("N")
+            });
+            arrange.AccountEmployeeCurrentLinks.Add(new HRMS.Domain.Entities.AccountEmployeeCurrentLink
+            {
+                LinkId = linkId,
+                TenantId = SeedData.TenantIds.Demo01,
+                UserId = SeedData.Users[1].Id,
+                EmployeeId = employeeId
+            });
+            await arrange.SaveChangesAsync();
+        }
+
+        harness.TenantContext.TenantId = SeedData.TenantIds.Demo01;
+        harness.TenantContext.UserId = SeedData.Users[1].Id;
+        harness.At(AuthTestHarness.Demo01Host);
+        var me = await harness.CreateService().GetCurrentUserAsync();
+
+        Assert.True(me.Succeeded, me.Message);
+        Assert.Equal("Linked", me.Value!.EmployeeIdentity!.Status);
+        Assert.Equal(employeeId, me.Value.EmployeeIdentity.Employee!.Id);
+        Assert.Equal(linkId, me.Value.EmployeeIdentity.LinkId);
     }
 }

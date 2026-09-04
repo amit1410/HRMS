@@ -17,6 +17,7 @@ import { NotFoundPage } from './pages/NotFoundPage.tsx'
 import { EmployeeCodeConfigurationPage } from './pages/EmployeeCodeConfigurationPage.tsx'
 import { isApexHost } from './lib/isApexHost.ts'
 import { MasterManagementPage } from './pages/masters/MasterManagementPage.tsx'
+import { AccountEmployeeLinksPage } from './pages/administration/AccountEmployeeLinksPage.tsx'
 
 /**
  * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
@@ -68,6 +69,7 @@ export function App() {
                 <Route element={<AppLayout />}>
                   <Route index element={<Navigate to="/dashboard" replace />} />
                   <Route path="dashboard" element={<DashboardPage />} />
+                  <Route path="administration/account-employee-links" element={<RequirePermission permission={Permissions.accountEmployeeLink.view}><AccountEmployeeLinksPage /></RequirePermission>} />
                   <Route path="masters/:kind" element={<MasterManagementPage />} />
                   <Route
                     path="configuration/employee-code"

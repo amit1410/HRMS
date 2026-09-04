@@ -54,6 +54,9 @@ describe('App', () => {
     session.clear()
     window.localStorage.clear()
     stub = installStubAdapter()
+    stub.on('get', '/api/auth/me', () => ({
+      data: ok(makeUser()),
+    }))
     stubDashboard(stub)
     stub.on('get', '/api/tenants/current/branding', () => ({
       data: ok({
@@ -177,6 +180,9 @@ describe('App', () => {
           user: makeUser({ roles: ['Employee'], permissions: [Permissions.employee.view] }),
         }),
       ),
+    }))
+    stub.on('get', '/api/auth/me', () => ({
+      data: ok(makeUser({ roles: ['Employee'], permissions: [Permissions.employee.view] })),
     }))
 
     renderApp('/dashboard')
