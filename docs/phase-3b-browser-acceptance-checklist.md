@@ -1,6 +1,6 @@
 # Phase 3B browser acceptance checklist
 
-Run `tools/Start-Phase3BBrowserAcceptance.ps1` in a private PowerShell window with `HRMS_SQLSERVER_TEST_SERVER` set and Windows Integrated Security. It creates fresh run-owned databases, applies the real migration chains, seeds synthetic data, selects unused ports, and leaves the environment running. Do not use normal appsettings or existing HRMS databases.
+Setup prerequisites: **Pending**. This checkpoint intentionally does not include the setup/stop scripts, run-state files, credential files, or SQL acceptance fixture source needed to create and manage a disposable browser run. Do not invent a setup procedure, use normal appsettings, or access existing HRMS databases. Obtain separate approval for reviewed setup tooling and a fresh run-owned database environment before proceeding.
 
 Open both printed tenant URLs in Chrome or Edge. Obtain synthetic credentials only from the local run state; never put them in a report.
 
@@ -15,4 +15,4 @@ Open both printed tenant URLs in Chrome or Edge. Obtain synthetic credentials on
 - [ ] Tenant A cannot read or mutate Tenant B identities, links, or history.
 - [ ] Logout and account/session changes discard late identity responses and stale drafts.
 
-Record each item as Passed, Failed, or Pending with sanitized status codes and visible UI behavior. Browser acceptance is not complete until the operator supplies results. Stop with `tools/Stop-Phase3BBrowserAcceptance.ps1 -StatePath <state>`, which stops only recorded process IDs and removes only manifest-owned databases.
+Record each item as Passed, Failed, or Pending with sanitized status codes and visible UI behavior. Browser acceptance is not complete until the operator supplies results. Cleanup prerequisite: **Pending**; use only a separately approved cleanup procedure that stops verified run-owned processes and removes only manifest-owned databases.

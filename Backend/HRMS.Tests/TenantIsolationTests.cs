@@ -96,8 +96,8 @@ public class TenantIsolationTests
         using (var demo01 = db.CreateContext(new TestTenantContext(SeedData.TenantIds.Demo01)))
         {
             var user = await demo01.Users.SingleAsync(u => u.Email == "admin@demo01.com");
-            user.TenantId = SeedData.TenantIds.Demo02; // attempt to relocate — must be ignored
-            await demo01.SaveChangesAsync();
+            user.TenantId = SeedData.TenantIds.Demo02; // attempt to relocate — must be rejected
+            await Assert.ThrowsAsync<InvalidOperationException>(() => demo01.SaveChangesAsync());
         }
 
         using var verify = db.CreateContext(new TestTenantContext());
