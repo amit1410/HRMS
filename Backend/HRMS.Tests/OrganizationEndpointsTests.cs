@@ -349,8 +349,11 @@ public class OrganizationEndpointsTests : IClassFixture<HrmsApiFactory>
         Assert.False(dto.IsActive);
         Assert.NotNull(dto.ModifiedDate);
 
-        Assert.Equal(HttpStatusCode.OK, (await client.DeleteAsync($"/api/departments/{id}")).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/departments/{id}")).StatusCode);
+        var deleted = await client.DeleteAsync($"/api/departments/{id}");
+        Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+        var afterDelete = await client.GetAsync($"/api/departments/{id}");
+        Assert.Equal(HttpStatusCode.OK, afterDelete.StatusCode);
+        Assert.False((await ReadAsync<DepartmentDto>(afterDelete)).Data!.IsActive);
     }
 
     [Fact]

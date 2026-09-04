@@ -34,9 +34,15 @@ public class EmployeeSensitiveDataEndpointsTests : IClassFixture<HrmsApiFactory>
         var request = Request();
 
         using var createWithoutSensitivePermission = Client(Permissions.Employee.Create);
-        Assert.Equal(
-            HttpStatusCode.Forbidden,
-            (await createWithoutSensitivePermission.PostAsJsonAsync("/api/employees/personal-details", request)).StatusCode);
+        var createWithoutSensitive = await createWithoutSensitivePermission.PostAsJsonAsync(
+            "/api/employees/personal-details", request);
+        Assert.Equal(HttpStatusCode.Created, createWithoutSensitive.StatusCode);
+        var withoutSensitiveBody = await ReadAsync<EmployeeDto>(createWithoutSensitive);
+        Assert.Null(withoutSensitiveBody.Data!.MaskedAadhaarNumber);
+        Assert.Null(withoutSensitiveBody.Data.MaskedPanNumber);
+        var withoutSensitiveJson = await createWithoutSensitive.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(request.AadhaarNumber!, withoutSensitiveJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(request.PanNumber!, withoutSensitiveJson, StringComparison.Ordinal);
 
         using var writer = Client(Permissions.Employee.Create, Permissions.EmployeeSensitive.Edit);
         var create = await writer.PostAsJsonAsync("/api/employees/personal-details", request);
