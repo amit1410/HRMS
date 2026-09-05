@@ -76,6 +76,8 @@ public static class DependencyInjection
         // context, so a request's changes are tracked and saved together.
         services.AddScoped<IHrmsDbContext>(sp => sp.GetRequiredService<HrmsDbContext>());
         services.AddScoped<IHrmsCatalogDbContext>(sp => sp.GetRequiredService<HrmsCatalogDbContext>());
+        services.AddScoped<ILeaveRequestSubmissionLock, SqlServerLeaveRequestSubmissionLock>();
+        services.AddSingleton<ILeaveRequestSubmissionDeadlockClassifier, SqlServerLeaveRequestSubmissionDeadlockClassifier>();
 
         services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();

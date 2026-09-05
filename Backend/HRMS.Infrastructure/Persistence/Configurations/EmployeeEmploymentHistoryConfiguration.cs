@@ -11,6 +11,11 @@ public class EmployeeEmploymentHistoryConfiguration : IEntityTypeConfiguration<E
         builder.ToTable("EmployeeEmploymentHistory");
         builder.HasKey(e => e.Id);
 
+        // Requests retain the effective history row that authorized their policy decision.
+        // The tenant and employee are part of the principal key so that this historical
+        // reference cannot cross either ownership boundary.
+        builder.HasAlternateKey(e => new { e.TenantId, e.EmployeeId, e.Id });
+
         builder.Property(e => e.TenantId).IsRequired();
         builder.Property(e => e.EmployeeId).IsRequired();
         builder.Property(e => e.EffectiveFrom).IsRequired();

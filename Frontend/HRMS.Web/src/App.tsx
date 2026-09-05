@@ -18,6 +18,13 @@ import { EmployeeCodeConfigurationPage } from './pages/EmployeeCodeConfiguration
 import { isApexHost } from './lib/isApexHost.ts'
 import { MasterManagementPage } from './pages/masters/MasterManagementPage.tsx'
 import { AccountEmployeeLinksPage } from './pages/administration/AccountEmployeeLinksPage.tsx'
+import { LeaveTypesPage } from './pages/leave/LeaveTypesPage.tsx'
+import { LeavePeriodsPage } from './pages/leave/LeavePeriodsPage.tsx'
+import { LeavePoliciesPage } from './pages/leave/LeavePoliciesPage.tsx'
+import { LeavePolicyEditorPage } from './pages/leave/LeavePolicyEditorPage.tsx'
+import { LeaveRequestPreviewPage } from './pages/leave/LeaveRequestPreviewPage.tsx'
+import { MyLeaveRequestDetailPage, MyLeaveRequestsPage } from './pages/leave/MyLeaveRequestsPage.tsx'
+import { LeaveApprovalDetailPage, LeaveApprovalsPage } from './pages/leave/LeaveApprovalsPage.tsx'
 
 /**
  * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
@@ -79,6 +86,15 @@ export function App() {
                       </RequirePermission>
                     }
                   />
+                  <Route path="leave-management/types" element={<RequirePermission permission={Permissions.leave.typeManage}><LeaveTypesPage /></RequirePermission>} />
+                  <Route path="leave-management/periods" element={<RequirePermission permission={Permissions.leave.periodManage}><LeavePeriodsPage /></RequirePermission>} />
+                  <Route path="leave-management/policies" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePoliciesPage /></RequirePermission>} />
+                  <Route path="leave-management/policies/:policyId" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePolicyEditorPage /></RequirePermission>} />
+                  <Route path="leave-management/apply" element={<LeaveRequestPreviewPage />} />
+                  <Route path="leave-management/my-requests" element={<MyLeaveRequestsPage />} />
+                  <Route path="leave-management/my-requests/:requestId" element={<MyLeaveRequestDetailPage />} />
+                  <Route path="leave-management/approvals" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalsPage /></RequirePermission>} />
+                  <Route path="leave-management/approvals/:requestId" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalDetailPage /></RequirePermission>} />
 
               <Route path="employees">
                 <Route

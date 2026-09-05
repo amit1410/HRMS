@@ -83,6 +83,24 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<EmployeeAuditLog> EmployeeAuditLogs => Set<EmployeeAuditLog>();
     public DbSet<EmployeeEmployment> EmployeeEmployments => Set<EmployeeEmployment>();
     public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
+    public DbSet<LeaveType> LeaveTypes => Set<LeaveType>();
+    public DbSet<LeavePeriod> LeavePeriods => Set<LeavePeriod>();
+    public DbSet<LeavePolicy> LeavePolicies => Set<LeavePolicy>();
+    public DbSet<LeavePolicyVersion> LeavePolicyVersions => Set<LeavePolicyVersion>();
+    public DbSet<LeavePolicyRule> LeavePolicyRules => Set<LeavePolicyRule>();
+    public DbSet<LeavePolicyEligibilityRule> LeavePolicyEligibilityRules => Set<LeavePolicyEligibilityRule>();
+    public DbSet<LeavePolicyEntitlementRule> LeavePolicyEntitlementRules => Set<LeavePolicyEntitlementRule>();
+    public DbSet<LeavePolicyRequestRule> LeavePolicyRequestRules => Set<LeavePolicyRequestRule>();
+    public DbSet<LeavePolicyCalendarRule> LeavePolicyCalendarRules => Set<LeavePolicyCalendarRule>();
+    public DbSet<LeavePolicyAttachmentRule> LeavePolicyAttachmentRules => Set<LeavePolicyAttachmentRule>();
+    public DbSet<LeavePolicyClubbingRule> LeavePolicyClubbingRules => Set<LeavePolicyClubbingRule>();
+    public DbSet<LeavePolicyCancellationRule> LeavePolicyCancellationRules => Set<LeavePolicyCancellationRule>();
+    public DbSet<LeavePolicyApplicabilitySet> LeavePolicyApplicabilitySets => Set<LeavePolicyApplicabilitySet>();
+    public DbSet<EmployeeLeaveBalance> EmployeeLeaveBalances => Set<EmployeeLeaveBalance>();
+    public DbSet<LeaveBalanceTransaction> LeaveBalanceTransactions => Set<LeaveBalanceTransaction>();
+    public DbSet<LeaveRequest> LeaveRequests => Set<LeaveRequest>();
+    public DbSet<LeaveRequestDay> LeaveRequestDays => Set<LeaveRequestDay>();
+    public DbSet<LeaveRequestEvent> LeaveRequestEvents => Set<LeaveRequestEvent>();
 
     /// <summary>
     /// Applies the UTC treatment to every DateTime property in the model, so a timestamp means the same
@@ -117,6 +135,24 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
                 .Property(e => e.RowVersion)
                 .IsRequired()
                 .ValueGeneratedNever();
+            modelBuilder.Entity<EmployeeLeaveBalance>()
+                .Property(e => e.RowVersion)
+                .IsRequired()
+                .ValueGeneratedNever();
+            modelBuilder.Entity<LeaveRequest>()
+                .Property(e => e.RowVersion)
+                .IsRequired()
+                .ValueGeneratedNever();
+
+            // The production computed expression uses SQL Server CONVERT(varchar(36), ...). SQLite stores
+            // GUIDs as text and has no CONVERT/varchar function, so keep the same canonical unordered-pair
+            // value with SQLite's text comparison/concatenation for the isolated test/development provider.
+            modelBuilder.Entity<LeavePolicyClubbingRule>()
+                .Property<string>("NormalizedPairKey")
+                .HasComputedColumnSql(
+                    "CASE WHEN [LowerLeavePolicyRuleId] < [HigherLeavePolicyRuleId] THEN [LowerLeavePolicyRuleId] || ':' || [HigherLeavePolicyRuleId] ELSE [HigherLeavePolicyRuleId] || ':' || [LowerLeavePolicyRuleId] END",
+                    stored: true)
+                .HasMaxLength(73);
         }
 
         // Belt and braces for the same exclusion, and it has to come *after* the sweep: an explicit
@@ -155,6 +191,24 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<EmployeeAuditLog>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeEmployment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<ImportBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeaveType>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePeriod>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicy>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicyVersion>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicyRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicyEligibilityRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicyEntitlementRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicyRequestRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicyCalendarRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicyAttachmentRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicyClubbingRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicyCancellationRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicyApplicabilitySet>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeLeaveBalance>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeaveBalanceTransaction>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeaveRequest>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeaveRequestDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeaveRequestEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
 
         // Organizational hierarchy master query filters
         modelBuilder.Entity<HoldingCompany>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -193,6 +247,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
         => Database.BeginTransactionAsync(cancellationToken);
 
+    public void ClearChangeTracker() => ChangeTracker.Clear();
+
     /// <summary>
     /// Sets audit timestamps and enforces the tenant guard on tenant-scoped rows — stamping the
     /// resolved tenant on insert and freezing TenantId on update. Called on every save so business/
@@ -204,6 +260,16 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         {
             if (entry.State is EntityState.Modified or EntityState.Deleted)
                 throw new InvalidOperationException("Account employee link events are immutable.");
+        }
+        foreach (var entry in ChangeTracker.Entries<LeaveBalanceTransaction>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new InvalidOperationException("Leave balance transactions are immutable.");
+        }
+        foreach (var entry in ChangeTracker.Entries<LeaveRequestEvent>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new InvalidOperationException("Leave request events are immutable.");
         }
         var utcNow = DateTime.UtcNow;
 

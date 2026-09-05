@@ -377,6 +377,54 @@ a:hover {
 .master-links a.is-active { background: color-mix(in srgb, var(--color-accent) 12%, white); color: var(--color-accent); font-weight: 700; box-shadow: inset 3px 0 0 var(--color-accent); }
 .master-records .card-body { min-width: 0; }
 .master-toolbar { flex-wrap: nowrap; }
+.leave-admin-page { display: flex; flex-direction: column; gap: 1rem; }
+.leave-preview-page .detail-list { margin: 0 0 1rem; }
+.leave-preview-page .detail-list dd { font-weight: 600; }
+.leave-toolbar { flex-wrap: wrap; }
+.leave-toolbar .toolbar-search { flex: 1 1 18rem; }
+.leave-toolbar .toolbar-filter { flex: 0 0 12rem; }
+.leave-editor { max-width: 48rem; }
+.leave-editor .form-stack { display: flex; flex-direction: column; gap: .75rem; }
+.leave-editor .field-group { display: flex; gap: 1.25rem; border: 0; padding: 0; margin: 0; }
+.leave-editor .field-group legend { font-weight: 600; margin-bottom: .35rem; }
+.leave-editor .field-group label { display: flex; gap: .4rem; align-items: center; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.row-actions { white-space: nowrap; }
+.policy-editor-header { display: flex; align-items: end; gap: 1rem; justify-content: space-between; flex-wrap: wrap; }
+.policy-editor-code { margin-left: .75rem; }
+.policy-version-selector { min-width: 20rem; }
+.policy-editor-sections { display: grid; gap: 1rem; }
+.detail-list { display: grid; gap: .75rem; margin: 0 0 1rem; }
+.detail-list div { display: grid; grid-template-columns: minmax(8rem, 0.35fr) 1fr; gap: 1rem; align-items: baseline; }
+.detail-list dt { color: var(--ink-muted); font-weight: 600; }
+.detail-list dd { margin: 0; }
+.lifecycle-notice { display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem; }
+.policy-configuration-section { padding: 1.25rem 0; border-top: 1px solid var(--color-border); }
+.policy-configuration-section:first-child { border-top: 0; }
+.section-heading { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; margin-bottom: 1rem; }
+.section-heading h3, .section-heading h4 { margin: 0; }
+.section-heading p { margin: .35rem 0 0; color: var(--ink-muted); }
+.leave-type-selection { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: .65rem; }
+.leave-type-option { display: flex; gap: .65rem; align-items: flex-start; padding: .75rem; border: 1px solid var(--color-border); border-radius: .5rem; }
+.leave-type-option span { display: grid; gap: .2rem; }
+.leave-type-option small { color: var(--ink-muted); }
+.applicability-groups { display: grid; gap: 1rem; }
+.applicability-group { padding: 1rem; border: 1px solid var(--color-border); border-radius: .6rem; }
+.applicability-grid { display: grid; grid-template-columns: repeat(3, minmax(200px, 1fr)); gap: .85rem; }
+.applicability-or { text-align: center; font-weight: 700; color: var(--ink-muted); padding: .4rem; }
+.tenant-wide-notice { display: grid; gap: .3rem; padding: 1rem; background: var(--color-surface-sunken); border: 1px solid var(--color-border); border-radius: .5rem; }
+.policy-lifecycle-actions { flex-wrap: wrap; }
+.policy-validation { border-left: 4px solid var(--color-accent); }
+.validation-summary { display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem; }
+.validation-list { padding: .75rem 1rem; margin: .75rem 0; border-radius: .4rem; }
+.validation-list h4 { margin: 0 0 .35rem; }
+.validation-list ul { margin: 0; padding-left: 1.25rem; }
+.validation-errors { background: color-mix(in srgb, #dc2626 8%, white); }
+.validation-warnings { background: color-mix(in srgb, #d97706 10%, white); }
+.is-selected { background: color-mix(in srgb, var(--color-accent) 7%, white); }
+@media (max-width: 900px) { .applicability-grid { grid-template-columns: repeat(2, minmax(180px, 1fr)); } }
+@media (max-width: 600px) { .section-heading { flex-direction: column; } .applicability-grid { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .form-grid { grid-template-columns: 1fr; } .leave-toolbar { flex-direction: column; align-items: stretch; } .leave-toolbar .toolbar-search, .leave-toolbar .toolbar-filter { width: 100%; flex: 1 1 auto; } .leave-editor { width: 100%; } }
 .master-toolbar .input[type="search"] { flex: 1 1 auto; min-width: 12rem; }
 .master-toolbar .select { flex: 0 0 9.5rem; }
 .master-records .table-wrap { overflow-x: auto; }
@@ -1876,3 +1924,7 @@ a:hover {
 .preview-card { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; color: #1e3a8a; margin-top: 18px; padding: 16px; }
 .preview-value { font-size: 1.2rem; font-weight: 700; letter-spacing: .04em; margin: 6px 0; }
 @media (max-width: 900px) { .condition-header { display: none; } .condition-row, .segment-row { grid-template-columns: 1fr; } }
+/* Leave Policy Eligibility keeps per-LeaveType configuration compact and responsive. */
+.eligibility-type-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.eligibility-type-heading { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0 .75rem; }
+.eligibility-fields { border: 0; padding: 0; margin: 0; }

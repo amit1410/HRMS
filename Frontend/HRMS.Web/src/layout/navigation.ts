@@ -47,6 +47,12 @@ export const NAV_ITEMS: readonly NavItem[] = [
     permission: Permissions.accountEmployeeLink.view,
     available: true,
   },
+  { label: 'Leave Types', to: '/leave-management/types', permission: Permissions.leave.typeManage, available: true },
+  { label: 'Leave Periods', to: '/leave-management/periods', permission: Permissions.leave.periodManage, available: true },
+  { label: 'Leave Policies', to: '/leave-management/policies', permission: Permissions.leave.policyView, available: true },
+  { label: 'Apply Leave (Preview)', to: '/leave-management/apply', available: true },
+  { label: 'My Leave Requests', to: '/leave-management/my-requests', available: true },
+  { label: 'Leave Approvals', to: '/leave-management/approvals', permission: Permissions.leave.approve, available: true },
 ]
 
 export function visibleNavItems(can: (permission: string) => boolean): NavItem[] {

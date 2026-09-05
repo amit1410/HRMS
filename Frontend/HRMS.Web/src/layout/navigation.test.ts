@@ -21,10 +21,10 @@ describe('visibleNavItems', () => {
     expect(items).toHaveLength(NAV_ITEMS.length)
   })
 
-  it('returns only Dashboard when the user has no module permissions', () => {
+  it('returns public signed-in entries when the user has no module permissions', () => {
     const items = visibleNavItems(canNever)
-    expect(items).toHaveLength(1)
-    expect(items.at(0)?.label).toBe('Dashboard')
+    expect(items).toHaveLength(3)
+    expect(items.map(item => item.label)).toEqual(['Dashboard', 'Apply Leave (Preview)', 'My Leave Requests'])
   })
 
   it('hides items whose required permission the user lacks', () => {

@@ -51,4 +51,4 @@ export function Sidebar({ branding, open, onClose }: { branding: TenantBranding 
   )
 }
 
-function NavItemIcon({ label }: { label: string }) { return <span className="nav-icon" aria-hidden="true">{label === 'Dashboard' ? '⌂' : label === 'Employees' ? '♙' : label === 'Departments' ? '▦' : label === 'Designations' ? '✦' : '⚙'}</span> }
+function NavItemIcon({ label }: { label: string }) { return <span className="nav-icon" aria-hidden="true">{label === 'Dashboard' ? '⌂' : label === 'Employees' ? '♙' : label === 'Departments' ? '▦' : label === 'Designations' ? '✦' : label.startsWith('Leave') ? '◈' : '⚙'}</span> }

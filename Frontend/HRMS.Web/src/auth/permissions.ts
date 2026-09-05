@@ -59,6 +59,14 @@ export const Permissions = {
     viewHistory: 'AccountEmployeeLink.ViewHistory',
     manage: 'AccountEmployeeLink.Manage',
   },
+  leave: {
+    typeManage: 'Leave.TypeManage',
+    periodManage: 'Leave.PeriodManage',
+    policyView: 'Leave.PolicyView',
+    policyManage: 'Leave.PolicyManage',
+    policyPublish: 'Leave.PolicyPublish',
+    approve: 'Leave.Approve',
+  },
 } as const
 
 /** Every permission the system knows about — the counterpart of `Permissions.All` in C#. */

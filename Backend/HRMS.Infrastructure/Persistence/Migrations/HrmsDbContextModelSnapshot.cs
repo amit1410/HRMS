@@ -246,8 +246,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasAlternateKey("TenantId", "Id");
-
                     b.HasIndex("TenantId", "Code")
                         .IsUnique();
 
@@ -1623,6 +1621,63 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("EmployeeFamilyMembers", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeLeaveBalance", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("ConsumedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("GrantedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<Guid>("LeavePeriodId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeaveTypeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("ReservedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "LeavePeriodId");
+
+                    b.HasIndex("TenantId", "LeaveTypeId");
+
+                    b.HasIndex("TenantId", "EmployeeId", "LeaveTypeId", "LeavePeriodId")
+                        .IsUnique();
+
+                    b.ToTable("EmployeeLeaveBalances", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_EmployeeLeaveBalances_NonNegativeAndAvailable", "[GrantedQuantity] >= 0 AND [ReservedQuantity] >= 0 AND [ConsumedQuantity] >= 0 AND [ReservedQuantity] + [ConsumedQuantity] <= [GrantedQuantity]");
+                        });
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeePreviousEmployment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1829,8 +1884,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasAlternateKey("TenantId", "Id");
-
                     b.HasIndex("TenantId", "Code")
                         .IsUnique();
 
@@ -1875,8 +1928,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
-
-                    b.HasAlternateKey("TenantId", "Id");
 
                     b.HasIndex("TenantId", "Code")
                         .IsUnique();
@@ -1928,8 +1979,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasAlternateKey("TenantId", "Id");
-
                     b.HasIndex("TenantId", "Code")
                         .IsUnique();
 
@@ -1974,8 +2023,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
-
-                    b.HasAlternateKey("TenantId", "Id");
 
                     b.HasIndex("TenantId", "Code")
                         .IsUnique();
@@ -2044,6 +2091,981 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("ImportBatches", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveBalanceTransaction", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ActorEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ActorType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CorrelationId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateOnly>("EffectiveDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("EmployeeLeaveBalanceId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("LeavePeriodId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("LeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("LeavePolicyVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("LeaveRequestId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeaveTypeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("PayloadFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<decimal>("Quantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<string>("SourceReference")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int>("SourceType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("TransactionType")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ActorEmployeeId");
+
+                    b.HasIndex("TenantId", "ActorUserId");
+
+                    b.HasIndex("TenantId", "EmployeeLeaveBalanceId");
+
+                    b.HasIndex("TenantId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "LeavePeriodId");
+
+                    b.HasIndex("TenantId", "LeavePolicyRuleId");
+
+                    b.HasIndex("TenantId", "LeavePolicyVersionId");
+
+                    b.HasIndex("TenantId", "LeaveTypeId");
+
+                    b.HasIndex("TenantId", "LeaveRequestId", "TransactionType")
+                        .IsUnique()
+                        .HasFilter("[LeaveRequestId] IS NOT NULL");
+
+                    b.HasIndex("TenantId", "EmployeeId", "LeaveTypeId", "LeavePeriodId", "EffectiveDate");
+
+                    b.ToTable("LeaveBalanceTransactions", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeaveBalanceTransactions_PositiveQuantity", "[Quantity] > 0");
+                        });
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePeriod", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
+                    b.Property<string>("ModifiedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("LeavePeriods", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicy", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
+                    b.Property<string>("ModifiedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("LeavePolicies", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyApplicabilitySet", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("CostCenterId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("CountryLocationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("DepartmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("DesignationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("EmployeeTypeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("FunctionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("Gender")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("GradeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("HoldingCompanyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeavePolicyVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("LobId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("OrganisationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SectionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SubDepartmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SubFunctionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SubSectionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("WorkLocationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("CountryLocationId");
+
+                    b.HasIndex("TenantId", "CostCenterId");
+
+                    b.HasIndex("TenantId", "DepartmentId");
+
+                    b.HasIndex("TenantId", "DesignationId");
+
+                    b.HasIndex("TenantId", "EmployeeTypeId");
+
+                    b.HasIndex("TenantId", "FunctionId");
+
+                    b.HasIndex("TenantId", "GradeId");
+
+                    b.HasIndex("TenantId", "HoldingCompanyId");
+
+                    b.HasIndex("TenantId", "LeavePolicyVersionId");
+
+                    b.HasIndex("TenantId", "LobId");
+
+                    b.HasIndex("TenantId", "OrganisationId");
+
+                    b.HasIndex("TenantId", "SectionId");
+
+                    b.HasIndex("TenantId", "SubDepartmentId");
+
+                    b.HasIndex("TenantId", "SubFunctionId");
+
+                    b.HasIndex("TenantId", "SubSectionId");
+
+                    b.HasIndex("TenantId", "WorkLocationId");
+
+                    b.ToTable("LeavePolicyApplicabilitySets", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyAttachmentRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("AttachmentRequirement")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("DocumentLabel")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("LeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("ThresholdQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "LeavePolicyRuleId")
+                        .IsUnique();
+
+                    b.ToTable("LeavePolicyAttachmentRules", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyCalendarRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("ApplyToBetween")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("ApplyToPrefix")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("ApplyToSuffix")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("HolidayTreatment")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("LeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("SandwichMode")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("WeekOffTreatment")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "LeavePolicyRuleId")
+                        .IsUnique();
+
+                    b.ToTable("LeavePolicyCalendarRules", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyCancellationRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("CancelAllowed")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("LeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("ModifyAllowed")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("WithdrawAllowed")
+                        .HasColumnType("bit");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "LeavePolicyRuleId")
+                        .IsUnique();
+
+                    b.ToTable("LeavePolicyCancellationRules", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyClubbingRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("HigherLeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeavePolicyVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LowerLeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("NormalizedPairKey")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(73)
+                        .HasColumnType("nvarchar(73)")
+                        .HasComputedColumnSql("CASE WHEN CONVERT(varchar(36), [LowerLeavePolicyRuleId]) < CONVERT(varchar(36), [HigherLeavePolicyRuleId]) THEN CONVERT(varchar(36), [LowerLeavePolicyRuleId]) + ':' + CONVERT(varchar(36), [HigherLeavePolicyRuleId]) ELSE CONVERT(varchar(36), [HigherLeavePolicyRuleId]) + ':' + CONVERT(varchar(36), [LowerLeavePolicyRuleId]) END", true);
+
+                    b.Property<int>("Relation")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "LeavePolicyVersionId", "HigherLeavePolicyRuleId");
+
+                    b.HasIndex("TenantId", "LeavePolicyVersionId", "LowerLeavePolicyRuleId");
+
+                    b.HasIndex("TenantId", "LeavePolicyVersionId", "NormalizedPairKey")
+                        .IsUnique();
+
+                    b.ToTable("LeavePolicyClubbingRules", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeavePolicyClubbingRules_DifferentParticipants", "[LowerLeavePolicyRuleId] <> [HigherLeavePolicyRuleId]");
+                        });
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyEligibilityRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("EligibilityMode")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("LeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("MinimumServiceUnit")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("MinimumServiceValue")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("NoticePeriodMode")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ProbationMode")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "LeavePolicyRuleId")
+                        .IsUnique();
+
+                    b.ToTable("LeavePolicyEligibilityRules", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyEntitlementRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("AccrualFrequency")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("AccrualTiming")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("EntitlementMode")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("EntitlementQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<int>("EntitlementSource")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("LeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "LeavePolicyRuleId")
+                        .IsUnique();
+
+                    b.ToTable("LeavePolicyEntitlementRules", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyRequestRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("BackdatedRequestMode")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("LeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("MaximumBackdatedDays")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("MaximumConsecutiveQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<decimal?>("MaximumQuantityPerPeriod")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<decimal?>("MaximumRequestQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<int?>("MaximumRequestsPerPeriod")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MinimumAdvanceNoticeDays")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("MinimumRequestQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("PartialDayMode")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("RequestLimitPeriod")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "LeavePolicyRuleId")
+                        .IsUnique();
+
+                    b.ToTable("LeavePolicyRequestRules", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
+                    b.Property<Guid>("LeavePolicyVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeaveTypeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "LeaveTypeId");
+
+                    b.HasIndex("TenantId", "LeavePolicyVersionId", "LeaveTypeId")
+                        .IsUnique();
+
+                    b.ToTable("LeavePolicyRules", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("LeavePolicyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "LeavePolicyId", "VersionNumber")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "Status", "EffectiveFrom", "EffectiveTo");
+
+                    b.ToTable("LeavePolicyVersions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("ChargeableQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EmployeeEmploymentHistoryId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("LeavePeriodId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeavePolicyVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeaveTypeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("PayloadFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<int>("PolicyGenderSnapshot")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("RequestedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("SubmittedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "LeavePeriodId");
+
+                    b.HasIndex("TenantId", "LeaveTypeId");
+
+                    b.HasIndex("TenantId", "EmployeeId", "EmployeeEmploymentHistoryId");
+
+                    b.HasIndex("TenantId", "EmployeeId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "LeavePolicyVersionId", "LeavePolicyRuleId");
+
+                    b.HasIndex("TenantId", "EmployeeId", "StartDate", "EndDate", "Status");
+
+                    b.ToTable("LeaveRequests", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeaveRequests_DateAndQuantity", "[StartDate] <= [EndDate] AND [RequestedQuantity] >= 0 AND [ChargeableQuantity] >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveRequestDay", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CalculationReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal>("ChargeableQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<string>("DayClassification")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<bool>("IsEmployeeRequested")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid>("LeaveRequestId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("RequestedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "LeaveRequestId", "Date")
+                        .IsUnique();
+
+                    b.ToTable("LeaveRequestDays", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_LeaveRequestDays_NonNegativeQuantity", "[RequestedQuantity] >= 0 AND [ChargeableQuantity] >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveRequestEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ActorEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ActorType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CorrelationId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("EventType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("LeaveRequestId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ActorEmployeeId");
+
+                    b.HasIndex("TenantId", "ActorUserId");
+
+                    b.HasIndex("TenantId", "LeaveRequestId", "OccurredAtUtc", "Id");
+
+                    b.ToTable("LeaveRequestEvents", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveType", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("DefaultUnit")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("IsPaid")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("ModifiedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("LeaveTypes", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Lob", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2082,8 +3104,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
-
-                    b.HasAlternateKey("TenantId", "Id");
 
                     b.HasIndex("HoldingCompanyId");
 
@@ -2131,8 +3151,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
-
-                    b.HasAlternateKey("TenantId", "Id");
 
                     b.HasIndex("TenantId", "Code")
                         .IsUnique();
@@ -2338,8 +3356,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasAlternateKey("TenantId", "Id");
-
                     b.HasIndex("SubDepartmentId");
 
                     b.HasIndex("TenantId", "Code")
@@ -2431,8 +3447,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasAlternateKey("TenantId", "Id");
-
                     b.HasIndex("TenantId", "Code")
                         .IsUnique();
 
@@ -2483,8 +3497,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasAlternateKey("TenantId", "Id");
-
                     b.HasIndex("FunctionId");
 
                     b.HasIndex("TenantId", "Code")
@@ -2534,8 +3546,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
-
-                    b.HasAlternateKey("TenantId", "Id");
 
                     b.HasIndex("SectionId");
 
@@ -2718,8 +3728,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
-
-                    b.HasAlternateKey("TenantId", "Id");
 
                     b.HasIndex("TenantId", "Code")
                         .IsUnique();
@@ -3417,6 +4425,44 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeLeaveBalance", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePeriod", "LeavePeriod")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeavePeriodId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveType", "LeaveType")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeaveTypeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("LeavePeriod");
+
+                    b.Navigation("LeaveType");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeePreviousEmployment", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -3502,6 +4548,509 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.ImportBatch", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveBalanceTransaction", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ActorEmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ActorUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeLeaveBalance", "EmployeeLeaveBalance")
+                        .WithMany("Transactions")
+                        .HasForeignKey("TenantId", "EmployeeLeaveBalanceId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePeriod", "LeavePeriod")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeavePeriodId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyRule", "LeavePolicyRule")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeavePolicyRuleId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyVersion", "LeavePolicyVersion")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeavePolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveRequest", "LeaveRequest")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeaveRequestId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveType", "LeaveType")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeaveTypeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("EmployeeLeaveBalance");
+
+                    b.Navigation("LeavePeriod");
+
+                    b.Navigation("LeavePolicyRule");
+
+                    b.Navigation("LeavePolicyVersion");
+
+                    b.Navigation("LeaveRequest");
+
+                    b.Navigation("LeaveType");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePeriod", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicy", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyApplicabilitySet", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Country", "CountryLocation")
+                        .WithMany()
+                        .HasForeignKey("CountryLocationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.CostCenter", "CostCenter")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CostCenterId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Department", "Department")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "DepartmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Designation", "Designation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "DesignationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeType", "EmployeeType")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeTypeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Function", "Function")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "FunctionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Grade", "Grade")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "GradeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.HoldingCompany", "HoldingCompany")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "HoldingCompanyId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyVersion", "LeavePolicyVersion")
+                        .WithMany("ApplicabilitySets")
+                        .HasForeignKey("TenantId", "LeavePolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Lob", "Lob")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LobId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Organisation", "Organisation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "OrganisationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Section", "Section")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SectionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.SubDepartment", "SubDepartment")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubDepartmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.SubFunction", "SubFunction")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubFunctionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.SubSection", "SubSection")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubSectionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.WorkLocation", "WorkLocation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "WorkLocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("CostCenter");
+
+                    b.Navigation("CountryLocation");
+
+                    b.Navigation("Department");
+
+                    b.Navigation("Designation");
+
+                    b.Navigation("EmployeeType");
+
+                    b.Navigation("Function");
+
+                    b.Navigation("Grade");
+
+                    b.Navigation("HoldingCompany");
+
+                    b.Navigation("LeavePolicyVersion");
+
+                    b.Navigation("Lob");
+
+                    b.Navigation("Organisation");
+
+                    b.Navigation("Section");
+
+                    b.Navigation("SubDepartment");
+
+                    b.Navigation("SubFunction");
+
+                    b.Navigation("SubSection");
+
+                    b.Navigation("WorkLocation");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyAttachmentRule", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyRule", "LeavePolicyRule")
+                        .WithOne("AttachmentRule")
+                        .HasForeignKey("HRMS.Domain.Entities.LeavePolicyAttachmentRule", "TenantId", "LeavePolicyRuleId")
+                        .HasPrincipalKey("HRMS.Domain.Entities.LeavePolicyRule", "TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LeavePolicyRule");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyCalendarRule", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyRule", "LeavePolicyRule")
+                        .WithOne("CalendarRule")
+                        .HasForeignKey("HRMS.Domain.Entities.LeavePolicyCalendarRule", "TenantId", "LeavePolicyRuleId")
+                        .HasPrincipalKey("HRMS.Domain.Entities.LeavePolicyRule", "TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LeavePolicyRule");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyCancellationRule", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyRule", "LeavePolicyRule")
+                        .WithOne("CancellationRule")
+                        .HasForeignKey("HRMS.Domain.Entities.LeavePolicyCancellationRule", "TenantId", "LeavePolicyRuleId")
+                        .HasPrincipalKey("HRMS.Domain.Entities.LeavePolicyRule", "TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LeavePolicyRule");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyClubbingRule", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyVersion", "LeavePolicyVersion")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeavePolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyRule", "HigherLeavePolicyRule")
+                        .WithMany("ClubbingRulesAsHigher")
+                        .HasForeignKey("TenantId", "LeavePolicyVersionId", "HigherLeavePolicyRuleId")
+                        .HasPrincipalKey("TenantId", "LeavePolicyVersionId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyRule", "LowerLeavePolicyRule")
+                        .WithMany("ClubbingRulesAsLower")
+                        .HasForeignKey("TenantId", "LeavePolicyVersionId", "LowerLeavePolicyRuleId")
+                        .HasPrincipalKey("TenantId", "LeavePolicyVersionId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("HigherLeavePolicyRule");
+
+                    b.Navigation("LeavePolicyVersion");
+
+                    b.Navigation("LowerLeavePolicyRule");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyEligibilityRule", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyRule", "LeavePolicyRule")
+                        .WithOne("EligibilityRule")
+                        .HasForeignKey("HRMS.Domain.Entities.LeavePolicyEligibilityRule", "TenantId", "LeavePolicyRuleId")
+                        .HasPrincipalKey("HRMS.Domain.Entities.LeavePolicyRule", "TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LeavePolicyRule");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyEntitlementRule", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyRule", "LeavePolicyRule")
+                        .WithOne("EntitlementRule")
+                        .HasForeignKey("HRMS.Domain.Entities.LeavePolicyEntitlementRule", "TenantId", "LeavePolicyRuleId")
+                        .HasPrincipalKey("HRMS.Domain.Entities.LeavePolicyRule", "TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LeavePolicyRule");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyRequestRule", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyRule", "LeavePolicyRule")
+                        .WithOne("RequestRule")
+                        .HasForeignKey("HRMS.Domain.Entities.LeavePolicyRequestRule", "TenantId", "LeavePolicyRuleId")
+                        .HasPrincipalKey("HRMS.Domain.Entities.LeavePolicyRule", "TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LeavePolicyRule");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyRule", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyVersion", "LeavePolicyVersion")
+                        .WithMany("Rules")
+                        .HasForeignKey("TenantId", "LeavePolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveType", "LeaveType")
+                        .WithMany("PolicyRules")
+                        .HasForeignKey("TenantId", "LeaveTypeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LeavePolicyVersion");
+
+                    b.Navigation("LeaveType");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyVersion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicy", "LeavePolicy")
+                        .WithMany("Versions")
+                        .HasForeignKey("TenantId", "LeavePolicyId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LeavePolicy");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveRequest", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePeriod", "LeavePeriod")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeavePeriodId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyVersion", "LeavePolicyVersion")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeavePolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveType", "LeaveType")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeaveTypeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeEmploymentHistory", "EmployeeEmploymentHistory")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId", "EmployeeEmploymentHistoryId")
+                        .HasPrincipalKey("TenantId", "EmployeeId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyRule", "LeavePolicyRule")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeavePolicyVersionId", "LeavePolicyRuleId")
+                        .HasPrincipalKey("TenantId", "LeavePolicyVersionId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("EmployeeEmploymentHistory");
+
+                    b.Navigation("LeavePeriod");
+
+                    b.Navigation("LeavePolicyRule");
+
+                    b.Navigation("LeavePolicyVersion");
+
+                    b.Navigation("LeaveType");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveRequestDay", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveRequest", "LeaveRequest")
+                        .WithMany("Days")
+                        .HasForeignKey("TenantId", "LeaveRequestId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LeaveRequest");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveRequestEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "ActorEmployee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ActorEmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.User", "ActorUser")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ActorUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveRequest", "LeaveRequest")
+                        .WithMany("Events")
+                        .HasForeignKey("TenantId", "LeaveRequestId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ActorEmployee");
+
+                    b.Navigation("ActorUser");
+
+                    b.Navigation("LeaveRequest");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveType", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
                         .WithMany()
@@ -3774,9 +5323,57 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Segments");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeLeaveBalance", b =>
+                {
+                    b.Navigation("Transactions");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeePreviousEmployment", b =>
                 {
                     b.Navigation("SupportingDocuments");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicy", b =>
+                {
+                    b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyRule", b =>
+                {
+                    b.Navigation("AttachmentRule");
+
+                    b.Navigation("CalendarRule");
+
+                    b.Navigation("CancellationRule");
+
+                    b.Navigation("ClubbingRulesAsHigher");
+
+                    b.Navigation("ClubbingRulesAsLower");
+
+                    b.Navigation("EligibilityRule");
+
+                    b.Navigation("EntitlementRule");
+
+                    b.Navigation("RequestRule");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyVersion", b =>
+                {
+                    b.Navigation("ApplicabilitySets");
+
+                    b.Navigation("Rules");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveRequest", b =>
+                {
+                    b.Navigation("Days");
+
+                    b.Navigation("Events");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveType", b =>
+                {
+                    b.Navigation("PolicyRules");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Permission", b =>

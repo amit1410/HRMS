@@ -70,7 +70,26 @@ public interface IHrmsDbContext
     DbSet<EmployeeAuditLog> EmployeeAuditLogs { get; }
     DbSet<EmployeeEmployment> EmployeeEmployments { get; }
     DbSet<ImportBatch> ImportBatches { get; }
+    DbSet<LeaveType> LeaveTypes { get; }
+    DbSet<LeavePeriod> LeavePeriods { get; }
+    DbSet<LeavePolicy> LeavePolicies { get; }
+    DbSet<LeavePolicyVersion> LeavePolicyVersions { get; }
+    DbSet<LeavePolicyRule> LeavePolicyRules { get; }
+    DbSet<LeavePolicyEligibilityRule> LeavePolicyEligibilityRules { get; }
+    DbSet<LeavePolicyEntitlementRule> LeavePolicyEntitlementRules { get; }
+    DbSet<LeavePolicyRequestRule> LeavePolicyRequestRules { get; }
+    DbSet<LeavePolicyCalendarRule> LeavePolicyCalendarRules { get; }
+    DbSet<LeavePolicyAttachmentRule> LeavePolicyAttachmentRules { get; }
+    DbSet<LeavePolicyClubbingRule> LeavePolicyClubbingRules { get; }
+    DbSet<LeavePolicyCancellationRule> LeavePolicyCancellationRules { get; }
+    DbSet<LeavePolicyApplicabilitySet> LeavePolicyApplicabilitySets { get; }
+    DbSet<EmployeeLeaveBalance> EmployeeLeaveBalances { get; }
+    DbSet<LeaveBalanceTransaction> LeaveBalanceTransactions { get; }
+    DbSet<LeaveRequest> LeaveRequests { get; }
+    DbSet<LeaveRequestDay> LeaveRequestDays { get; }
+    DbSet<LeaveRequestEvent> LeaveRequestEvents { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);
+    void ClearChangeTracker();
 }

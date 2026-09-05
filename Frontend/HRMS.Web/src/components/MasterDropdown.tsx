@@ -26,6 +26,9 @@ export interface MasterDropdownProps {
   error?: string
   required?: boolean
   disabled?: boolean
+  /** Include inactive saved values in the lookup while preventing new inactive selection. */
+  includeInactive?: boolean
+  allowInactiveSelection?: boolean
 }
 
 function defaultFormat(item: MasterLookup): string {
@@ -47,6 +50,8 @@ export function MasterDropdown({
   error,
   required,
   disabled,
+  includeInactive = false,
+  allowInactiveSelection = false,
 }: MasterDropdownProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -55,8 +60,8 @@ export function MasterDropdown({
   const listRef = useRef<HTMLDivElement>(null)
 
   const { data: items, isLoading } = useApiQuery(
-    (signal) => fetcher({ parentId, isActive: true }, signal),
-    [fetcher, parentId],
+    (signal) => fetcher({ parentId, isActive: includeInactive ? false : true }, signal),
+    [fetcher, parentId, includeInactive],
   )
 
   const options: SelectOption[] = (items ?? []).map((item) => ({
@@ -109,8 +114,9 @@ export function MasterDropdown({
   }
 
   function selectOption(option: SelectOption): void {
-    onChange(option.value)
     const item = items?.find((candidate) => candidate.id === option.value)
+    if (item && !item.isActive && !allowInactiveSelection && option.value !== value) return
+    onChange(option.value)
     if (item) onOptionSelected?.(item)
     setQuery('')
     setOpen(false)
@@ -191,6 +197,7 @@ export function MasterDropdown({
                 onClick={() => selectOption(option)}
               >
                 <span className="supervisor-field-option-name">{option.label}</span>
+                {items?.find((item) => item.id === option.value)?.isActive === false ? <span className="supervisor-field-option-meta">Inactive</span> : null}
               </div>
             ))}
             {filtered.length > 100 && (

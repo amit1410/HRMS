@@ -136,7 +136,13 @@ public static class SeedData
             [DomainPermissions.EmployeeCodeConfiguration.Manage] = 26,
             [DomainPermissions.AccountEmployeeLink.View] = 27,
             [DomainPermissions.AccountEmployeeLink.ViewHistory] = 28,
-            [DomainPermissions.AccountEmployeeLink.Manage] = 29
+            [DomainPermissions.AccountEmployeeLink.Manage] = 29,
+            [DomainPermissions.Leave.TypeManage] = 30,
+            [DomainPermissions.Leave.PeriodManage] = 31,
+            [DomainPermissions.Leave.PolicyView] = 32,
+            [DomainPermissions.Leave.PolicyManage] = 33,
+            [DomainPermissions.Leave.PolicyPublish] = 34,
+            [DomainPermissions.Leave.Approve] = 35
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>

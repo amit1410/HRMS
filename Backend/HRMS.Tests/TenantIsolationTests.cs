@@ -48,7 +48,7 @@ public class TenantIsolationTests
             demo01.Users.Add(new User
             {
                 Id = newUserId,
-                TenantId = SeedData.TenantIds.Demo02, // spoofed — must be overwritten server-side
+                TenantId = SeedData.TenantIds.Demo02, // spoofed - must be overwritten server-side
                 Email = "intruder@demo01.com",
                 PasswordHash = "x",
                 FirstName = "In",
@@ -96,7 +96,7 @@ public class TenantIsolationTests
         using (var demo01 = db.CreateContext(new TestTenantContext(SeedData.TenantIds.Demo01)))
         {
             var user = await demo01.Users.SingleAsync(u => u.Email == "admin@demo01.com");
-            user.TenantId = SeedData.TenantIds.Demo02; // attempt to relocate — must be rejected
+            user.TenantId = SeedData.TenantIds.Demo02; // attempt to relocate - must be rejected
             await Assert.ThrowsAsync<InvalidOperationException>(() => demo01.SaveChangesAsync());
         }
 

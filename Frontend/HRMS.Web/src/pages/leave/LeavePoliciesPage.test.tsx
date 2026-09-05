@@ -1,0 +1,27 @@
+import { screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { LeavePoliciesPage } from './LeavePoliciesPage.tsx'
+import { Permissions } from '../../auth/permissions.ts'
+import { makeUser, paged } from '../../test/fixtures.ts'
+import { fail, installStubAdapter, ok, type StubAdapter } from '../../test/stubAdapter.ts'
+import { renderAsUser } from '../../test/renderWith.tsx'
+
+const policy = { id: 'policy-1', code: 'IND-CORP', name: 'India Corporate', description: 'Corporate leave policy', isActive: true, versionCount: 2, currentVersionNumber: 2, createdDate: '2027-01-01T00:00:00Z', modifiedDate: null, concurrencyToken: 'policy-token' }
+
+describe('LeavePoliciesPage', () => {
+  let stub: StubAdapter
+  beforeEach(() => { stub = installStubAdapter() })
+  afterEach(() => stub.restore())
+  function renderPage(permissions: string[] = [Permissions.leave.policyView]) { return renderAsUser(<LeavePoliciesPage />, { user: makeUser({ permissions }) }) }
+  function list(rows = [policy]) { stub.on('get', '/api/leave-policies', () => ({ data: ok(paged(rows)) })) }
+
+  it('renders loading and empty states', async () => { stub.on('get', '/api/leave-policies', () => ({ data: ok(paged([])), delay: true })); renderPage(); expect(screen.getByRole('status')).toHaveTextContent('Loading Leave Policies'); expect(await screen.findByText('No Leave Policies have been configured yet.')).toBeInTheDocument() })
+  it('renders policy rows with accurate version summary', async () => { list(); renderPage(); const row = await screen.findByRole('row', { name: /IND-CORP India Corporate/ }); expect(row).toHaveTextContent('v2 — Published'); expect(row).toHaveTextContent('Active'); expect(screen.getByRole('link', { name: 'India Corporate' })).toHaveAttribute('href', '/leave-management/policies/policy-1') })
+  it('sends search and status filters', async () => { list([]); renderPage(); await userEvent.type(await screen.findByLabelText('Search Leave Policies'), 'india'); await userEvent.selectOptions(screen.getByLabelText('Leave Policy status'), 'inactive'); await waitFor(() => expect(stub.calls.filter(call => call.method === 'get').at(-1)?.params).toMatchObject({ search: 'india', isActive: false })) })
+  it('hides mutation actions for PolicyView only', async () => { list(); renderPage(); await screen.findByText('India Corporate'); expect(screen.queryByRole('button', { name: '+ Add Leave Policy' })).not.toBeInTheDocument(); expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument() })
+  it('shows Add Policy and creates identity for PolicyManage', async () => { list([]); stub.on('post', '/api/leave-policies', () => ({ data: ok(policy) })); renderPage([Permissions.leave.policyView, Permissions.leave.policyManage]); await userEvent.click(await screen.findByRole('button', { name: '+ Add Leave Policy' })); await userEvent.type(screen.getByLabelText(/Code/), 'IND-CORP'); await userEvent.type(screen.getByLabelText(/Name/), 'India Corporate'); await userEvent.click(screen.getByRole('button', { name: 'Save Leave Policy' })); await waitFor(() => expect(stub.callsTo('post', '/api/leave-policies')).toHaveLength(1)); expect(stub.callsTo('post', '/api/leave-policies')[0]?.body).toMatchObject({ code: 'IND-CORP', name: 'India Corporate' }) })
+  it('shows duplicate-code validation', async () => { list([]); stub.on('post', '/api/leave-policies', () => ({ status: 409, data: fail('LeavePolicy code already exists.', [{ field: 'code', message: 'A policy with this code already exists.' }]) })); renderPage([Permissions.leave.policyManage]); await userEvent.click(await screen.findByRole('button', { name: '+ Add Leave Policy' })); await userEvent.type(screen.getByLabelText(/Code/), 'IND-CORP'); await userEvent.type(screen.getByLabelText(/Name/), 'India Corporate'); await userEvent.click(screen.getByRole('button', { name: 'Save Leave Policy' })); expect(await screen.findByText('A policy with this code already exists.')).toBeInTheDocument() })
+  it('loads the latest policy before edit and sends its token', async () => { list(); stub.on('get', '/api/leave-policies/policy-1', () => ({ data: ok(policy) })); stub.on('put', '/api/leave-policies/policy-1', () => ({ data: ok(policy) })); renderPage([Permissions.leave.policyManage]); await userEvent.click(await screen.findByRole('button', { name: 'Edit' })); await screen.findByDisplayValue('India Corporate'); await userEvent.click(screen.getByRole('button', { name: 'Save Leave Policy' })); await waitFor(() => expect(stub.callsTo('put', '/api/leave-policies/policy-1')[0]?.body).toMatchObject({ concurrencyToken: 'policy-token' })) })
+  it('keeps identity form open on a concurrency conflict', async () => { list(); stub.on('get', '/api/leave-policies/policy-1', () => ({ data: ok(policy) })); stub.on('put', '/api/leave-policies/policy-1', () => ({ status: 409, data: fail('Configuration changed by another user. Reload before saving.') })); renderPage([Permissions.leave.policyManage]); await userEvent.click(await screen.findByRole('button', { name: 'Edit' })); await screen.findByDisplayValue('India Corporate'); await userEvent.click(screen.getByRole('button', { name: 'Save Leave Policy' })); expect(await screen.findByText(/changed by another user/)).toBeInTheDocument(); expect(screen.getByDisplayValue('India Corporate')).toBeInTheDocument() })
+})

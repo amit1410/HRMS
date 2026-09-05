@@ -65,10 +65,9 @@ public class EmployeePersonalDetailsTests
     }
 
     [Fact]
-    public async Task Create_without_sensitive_edit_permission_does_not_persist_supplied_sensitive_values()
+    public async Task Create_without_sensitive_permission_does_not_persist_sensitive_values_but_authorized_create_does()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();
-
         var request = NewRequest();
         request.AadhaarNumber = "111122223333";
         request.PanNumber = "ABCDE1234F";
@@ -78,21 +77,33 @@ public class EmployeePersonalDetailsTests
         request.EsicNumber = "ESIC-000123";
         request.MediclaimNumber = "MED-000456";
 
-        var result = await harness.Employees().CreatePersonalDetailsAsync(
-            request,
-            canEditSensitive: false);
+        var unauthorized = await harness.Employees().CreatePersonalDetailsAsync(request, canEditSensitive: false);
+        Assert.True(unauthorized.Succeeded, unauthorized.Message);
+        using (var read = harness.CreateUnscopedContext())
+        {
+            var saved = await read.Employees.IgnoreQueryFilters().SingleAsync(e => e.Id == unauthorized.Value!.Id);
+            Assert.Null(saved.AadhaarNumber);
+            Assert.Null(saved.PanNumber);
+            Assert.Null(saved.PfNumber);
+            Assert.Null(saved.UanNumber);
+            Assert.Null(saved.EsicNumber);
+            Assert.Null(saved.MediclaimNumber);
+            Assert.False(saved.EsicApplicable);
+        }
 
-        Assert.True(result.Succeeded);
-
-        using var unscoped = harness.CreateUnscopedContext();
-        var saved = await unscoped.Employees.IgnoreQueryFilters().SingleAsync(e => e.Id == result.Value!.Id);
-        Assert.Null(saved.AadhaarNumber);
-        Assert.Null(saved.PanNumber);
-        Assert.Null(saved.PfNumber);
-        Assert.Null(saved.UanNumber);
-        Assert.False(saved.EsicApplicable);
-        Assert.Null(saved.EsicNumber);
-        Assert.Null(saved.MediclaimNumber);
+        request.FirstName = "Authorized";
+        var authorized = await harness.Employees().CreatePersonalDetailsAsync(request, canEditSensitive: true);
+        Assert.True(authorized.Succeeded, authorized.Message);
+        using var authorizedRead = harness.CreateUnscopedContext();
+        var authorizedSaved = await authorizedRead.Employees.IgnoreQueryFilters()
+            .SingleAsync(e => e.Id == authorized.Value!.Id);
+        Assert.Equal(request.AadhaarNumber, authorizedSaved.AadhaarNumber);
+        Assert.Equal(request.PanNumber, authorizedSaved.PanNumber);
+        Assert.Equal(request.PfNumber, authorizedSaved.PfNumber);
+        Assert.Equal(request.UanNumber, authorizedSaved.UanNumber);
+        Assert.Equal(request.EsicNumber, authorizedSaved.EsicNumber);
+        Assert.Equal(request.MediclaimNumber, authorizedSaved.MediclaimNumber);
+        Assert.True(authorizedSaved.EsicApplicable);
     }
 
     [Fact]

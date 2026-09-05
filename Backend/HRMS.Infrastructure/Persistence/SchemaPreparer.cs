@@ -111,7 +111,7 @@ internal static class SchemaPreparer
                 $"""
                 SELECT m.name || '.' || p.name AS "Value"
                 FROM sqlite_master AS m
-                JOIN pragma_table_info(m.name) AS p
+                JOIN pragma_table_xinfo(m.name) AS p
                 WHERE m.type = 'table'
                 """)
             .ToListAsync(cancellationToken);
