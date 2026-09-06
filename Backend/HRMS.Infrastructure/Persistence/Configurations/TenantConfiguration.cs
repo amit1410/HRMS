@@ -20,6 +20,11 @@ public class TenantConfiguration : IEntityTypeConfiguration<Tenant>
     {
         TenantMapping.ApplyColumns(builder);
 
+        // Provider selection belongs to the catalog routing record. A tenant database must not need a
+        // DatabaseProvider column to determine which provider should open it, so keep this control-plane
+        // property out of the shard model and its migration snapshot.
+        builder.Ignore(t => t.DatabaseProvider);
+
         // Branding is catalog-only: it is read to draw the sign-in screen, before there is a token and
         // therefore before there is a shard to read it from. Ignoring the navigation is required, not
         // tidiness — EF discovers entity types through navigations, so leaving it would map TenantBranding

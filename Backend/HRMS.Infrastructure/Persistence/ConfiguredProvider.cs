@@ -11,7 +11,33 @@ internal static class ConfiguredProvider
 {
     private const string SqliteProviderName = "Sqlite";
 
+    internal enum CatalogProviderKind
+    {
+        SqlServer,
+        MySql,
+        Sqlite
+    }
+
     /// <summary>True when configuration selects the SQLite development fallback. SQL Server is the default.</summary>
     internal static bool IsSqlite(IConfiguration configuration) =>
         string.Equals(configuration["Database:Provider"] ?? "SqlServer", SqliteProviderName, StringComparison.OrdinalIgnoreCase);
+
+    internal static CatalogProviderKind ResolveCatalogProvider(IConfiguration configuration)
+    {
+        var explicitProvider = configuration["Database:CatalogProvider"];
+        if (explicitProvider is not null)
+        {
+            if (string.Equals(explicitProvider, "SqlServer", StringComparison.OrdinalIgnoreCase))
+                return CatalogProviderKind.SqlServer;
+            if (string.Equals(explicitProvider, "MySql", StringComparison.OrdinalIgnoreCase))
+                return CatalogProviderKind.MySql;
+            if (string.Equals(explicitProvider, SqliteProviderName, StringComparison.OrdinalIgnoreCase))
+                return CatalogProviderKind.Sqlite;
+
+            throw new InvalidOperationException(
+                $"DatabaseProviderNotSupported: catalog provider '{explicitProvider}' is not supported.");
+        }
+
+        return IsSqlite(configuration) ? CatalogProviderKind.Sqlite : CatalogProviderKind.SqlServer;
+    }
 }

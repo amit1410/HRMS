@@ -1,4 +1,5 @@
 using HRMS.Application.Abstractions;
+using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Persistence.Catalog;
 using HRMS.Infrastructure.Security;
@@ -7,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using MySql.EntityFrameworkCore.Extensions;
 
 namespace HRMS.Infrastructure;
 
@@ -41,7 +43,12 @@ public static class DependencyInjection
         // before any tenant is known, so it must never depend on anything request-scoped — which is why it
         // keeps the single-argument overload while the tenant context below does not.
         services.AddDbContext<HrmsCatalogDbContext>(options =>
-            UseProvider(options, configuration, CatalogConnectionString(configuration), CatalogHistoryTable));
+        {
+            // Resolve inside the options factory. WebApplicationFactory and other hosts can layer their
+            // test/runtime configuration after service registration but before the context is requested.
+            var catalogProvider = ConfiguredProvider.ResolveCatalogProvider(configuration);
+            UseCatalogProvider(options, CatalogConnectionString(configuration, catalogProvider), catalogProvider);
+        });
 
         // The tenant database, chosen per scope.
         //
@@ -69,15 +76,43 @@ public static class DependencyInjection
             var shard = serviceProvider.GetRequiredService<IShardContext>().Current;
             var connectionString = serviceProvider.GetRequiredService<IShardConnectionStringFactory>().For(shard);
 
-            UseProvider(options, configuration, connectionString);
+            UseProvider(options, configuration, connectionString, tenantProvider: shard?.DatabaseProvider);
+            if (shard?.DatabaseProvider == DatabaseProviderType.MySql)
+                options.AddInterceptors(serviceProvider.GetRequiredService<MySqlConcurrencyTokenInterceptor>());
         });
 
         // Application services depend on the abstractions; each resolves to the same scoped instance as its
         // context, so a request's changes are tracked and saved together.
         services.AddScoped<IHrmsDbContext>(sp => sp.GetRequiredService<HrmsDbContext>());
         services.AddScoped<IHrmsCatalogDbContext>(sp => sp.GetRequiredService<HrmsCatalogDbContext>());
-        services.AddScoped<ILeaveRequestSubmissionLock, SqlServerLeaveRequestSubmissionLock>();
-        services.AddSingleton<ILeaveRequestSubmissionDeadlockClassifier, SqlServerLeaveRequestSubmissionDeadlockClassifier>();
+        services.AddScoped<IEmployeeSerializationLock>(sp =>
+        {
+            var shard = sp.GetRequiredService<IShardContext>().Current;
+            return shard?.DatabaseProvider == DatabaseProviderType.MySql
+                ? sp.GetRequiredService<MySqlLeaveRequestSubmissionLock>()
+                : sp.GetRequiredService<SqlServerLeaveRequestSubmissionLock>();
+        });
+        services.AddScoped<SqlServerLeaveRequestSubmissionLock>();
+        services.AddScoped<MySqlLeaveRequestSubmissionLock>();
+        services.AddScoped<MySqlConcurrencyTokenGenerator>();
+        services.AddScoped<MySqlConcurrencyTokenInterceptor>();
+        services.AddScoped<SqlServerEmployeeCodeSequenceUpdater>();
+        services.AddScoped<MySqlEmployeeCodeSequenceUpdater>();
+        services.AddScoped<IEmployeeCodeSequenceUpdater>(sp =>
+            sp.GetRequiredService<IShardContext>().Current?.DatabaseProvider == DatabaseProviderType.MySql
+                ? sp.GetRequiredService<MySqlEmployeeCodeSequenceUpdater>()
+                : sp.GetRequiredService<SqlServerEmployeeCodeSequenceUpdater>());
+        services.AddScoped<ILeaveRequestSubmissionLock>(sp =>
+            (ILeaveRequestSubmissionLock)sp.GetRequiredService<IEmployeeSerializationLock>());
+        services.AddScoped<IDatabaseTransientErrorClassifier>(sp =>
+            sp.GetRequiredService<IShardContext>().Current?.DatabaseProvider == DatabaseProviderType.MySql
+                ? sp.GetRequiredService<MySqlTransientErrorClassifier>()
+                : sp.GetRequiredService<SqlServerLeaveRequestSubmissionDeadlockClassifier>());
+
+        services.AddScoped<SqlServerLeaveRequestSubmissionDeadlockClassifier>();
+        services.AddScoped<MySqlTransientErrorClassifier>();
+        services.AddScoped<ILeaveRequestSubmissionDeadlockClassifier>(sp =>
+            (ILeaveRequestSubmissionDeadlockClassifier)sp.GetRequiredService<IDatabaseTransientErrorClassifier>());
 
         services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
@@ -113,13 +148,30 @@ public static class DependencyInjection
         DbContextOptionsBuilder options,
         IConfiguration configuration,
         string connectionString,
-        string? historyTable = null)
+        string? historyTable = null,
+        DatabaseProviderType? tenantProvider = null)
     {
         if (ConfiguredProvider.IsSqlite(configuration))
         {
             // No history table to name: the SQLite development path builds the schema from the model with
             // EnsureCreated and never touches migrations.
             options.UseSqlite(connectionString);
+            return;
+        }
+
+        if (tenantProvider is not null
+            && tenantProvider is not DatabaseProviderType.SqlServer
+            && tenantProvider is not DatabaseProviderType.MySql)
+        {
+            throw new InvalidOperationException(
+                $"DatabaseProviderNotSupported: tenant provider '{tenantProvider}' is not supported.");
+        }
+
+        if (tenantProvider is DatabaseProviderType.MySql)
+        {
+            options.UseMySQL(
+                connectionString,
+                mysql => mysql.MigrationsAssembly(DatabaseProviderNames.MySqlMigrationsAssembly));
             return;
         }
 
@@ -134,8 +186,41 @@ public static class DependencyInjection
         });
     }
 
-    private static string CatalogConnectionString(IConfiguration configuration) =>
-        ConfiguredProvider.IsSqlite(configuration)
+    private static void UseCatalogProvider(
+        DbContextOptionsBuilder options,
+        string connectionString,
+        ConfiguredProvider.CatalogProviderKind provider)
+    {
+        switch (provider)
+        {
+            case ConfiguredProvider.CatalogProviderKind.Sqlite:
+                options.UseSqlite(connectionString);
+                return;
+
+            case ConfiguredProvider.CatalogProviderKind.MySql:
+                options.UseMySQL(
+                    connectionString,
+                    mysql => mysql.MigrationsAssembly(DatabaseProviderNames.MySqlCatalogMigrationsAssembly));
+                return;
+
+            case ConfiguredProvider.CatalogProviderKind.SqlServer:
+                options.UseSqlServer(connectionString, sql =>
+                {
+                    sql.MigrationsAssembly(typeof(HrmsCatalogDbContext).Assembly.FullName);
+                    sql.MigrationsHistoryTable(CatalogHistoryTable);
+                });
+                return;
+
+            default:
+                throw new InvalidOperationException(
+                    $"DatabaseProviderNotSupported: catalog provider '{provider}' is not supported.");
+        }
+    }
+
+    private static string CatalogConnectionString(
+        IConfiguration configuration,
+        ConfiguredProvider.CatalogProviderKind provider) =>
+        provider is ConfiguredProvider.CatalogProviderKind.Sqlite
             ? configuration.GetConnectionString("SqliteCatalog") ?? "Data Source=hrms_catalog_dev.db"
             : configuration.GetConnectionString("Catalog")
                 ?? throw new InvalidOperationException("Connection string 'Catalog' is not configured.");

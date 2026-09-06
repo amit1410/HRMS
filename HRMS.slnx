@@ -4,6 +4,8 @@
     <Project Path="Backend/HRMS.Application/HRMS.Application.csproj" />
     <Project Path="Backend/HRMS.Domain/HRMS.Domain.csproj" />
     <Project Path="Backend/HRMS.Infrastructure/HRMS.Infrastructure.csproj" />
+    <Project Path="Backend/HRMS.Infrastructure.MySqlCatalogMigrations/HRMS.Infrastructure.MySqlCatalogMigrations.csproj" />
+    <Project Path="Backend/HRMS.Infrastructure.MySqlMigrations/HRMS.Infrastructure.MySqlMigrations.csproj" />
     <Project Path="Backend/HRMS.Tests/HRMS.Tests.csproj" />
   </Folder>
 </Solution>

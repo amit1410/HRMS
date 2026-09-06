@@ -56,6 +56,12 @@ public class Tenant : BaseEntity
     /// </summary>
     public string ShardKey { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Trusted catalog routing metadata for the tenant database. It is never selected by a request,
+    /// header, token, or frontend payload. Existing rows default to SQL Server.
+    /// </summary>
+    public DatabaseProviderType DatabaseProvider { get; set; } = DatabaseProviderType.SqlServer;
+
     public string TenantName { get; set; } = string.Empty;
 
     public string? Email { get; set; }

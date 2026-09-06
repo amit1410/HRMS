@@ -1,4 +1,5 @@
 using HRMS.Application.Abstractions;
+using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Persistence.Configurations;
 using Microsoft.Extensions.Configuration;
@@ -7,26 +8,18 @@ using Microsoft.Extensions.Options;
 
 namespace HRMS.Infrastructure.Sharding;
 
-/// <summary>Turns a resolved shard into the connection string for that organization's database.</summary>
 internal interface IShardConnectionStringFactory
 {
-    /// <summary>
-    /// The connection string for <paramref name="shard"/>.
-    /// <para>
-    /// With a template configured, a null <paramref name="shard"/> throws: there is no default database to
-    /// fall back to, and inventing one is the failure where one organization's rows are written into
-    /// another's database. Without a template, every caller gets the single shared database — the behaviour
-    /// this system had before sharding.
-    /// </para>
-    /// </summary>
     string For(ShardDescriptor? shard);
 }
 
-/// <inheritdoc cref="IShardConnectionStringFactory"/>
 internal sealed class ShardConnectionStringFactory : IShardConnectionStringFactory
 {
     private readonly IConfiguration _configuration;
-    private readonly string? _template;
+    private readonly string? _legacySqlServerTemplate;
+    private readonly string? _sqlServerTemplate;
+    private readonly string? _mySqlTemplate;
+    private readonly string? _sqliteTemplate;
     private readonly bool _sqlite;
 
     public ShardConnectionStringFactory(
@@ -38,48 +31,44 @@ internal sealed class ShardConnectionStringFactory : IShardConnectionStringFacto
         _sqlite = ConfiguredProvider.IsSqlite(configuration);
 
         var sharding = options.Value;
-        _template = _sqlite ? sharding.SqliteConnectionStringTemplate : sharding.ConnectionStringTemplate;
+        _legacySqlServerTemplate = NullIfWhiteSpace(sharding.ConnectionStringTemplate);
+        _sqlServerTemplate = NullIfWhiteSpace(sharding.SqlServerConnectionStringTemplate);
+        _mySqlTemplate = NullIfWhiteSpace(sharding.MySqlConnectionStringTemplate);
+        _sqliteTemplate = NullIfWhiteSpace(sharding.SqliteConnectionStringTemplate);
 
-        if (string.IsNullOrWhiteSpace(_template))
+        if (_sqlite)
         {
-            _template = null;
-
-            // Worth saying out loud at startup. It is a supported mode, not a misconfiguration, but which of
-            // the two modes a deployment is in changes what "tenant isolation" is resting on — separate
-            // databases, or the query filters alone.
-            var setting = _sqlite
-                ? nameof(ShardingOptions.SqliteConnectionStringTemplate)
-                : nameof(ShardingOptions.ConnectionStringTemplate);
-
-            logger.LogWarning(
-                "No '{Setting}' connection-string template is configured, so every organization shares one "
-                + "database and tenant isolation rests on the global query filters. Set it to give each "
-                + "organization its own database.",
-                $"{ShardingOptions.SectionName}:{setting}");
+            LogSharedFallbackIfNeeded(_sqliteTemplate, nameof(ShardingOptions.SqliteConnectionStringTemplate), logger);
+        }
+        else if (_sqlServerTemplate is null && _legacySqlServerTemplate is null)
+        {
+            LogSharedFallbackIfNeeded(null, nameof(ShardingOptions.SqlServerConnectionStringTemplate), logger);
         }
     }
 
     public string For(ShardDescriptor? shard)
     {
-        if (_template is null)
-        {
-            return SharedConnectionString();
-        }
-
         if (shard is null)
         {
-            throw new InvalidOperationException(
-                "No organization has been resolved for this scope, so there is no database to open. During a "
-                + "request the host-resolution middleware selects one; outside a request (startup, "
-                + "provisioning, seeding, design-time tooling) the caller must select one itself with "
-                + $"{nameof(IShardContext)}.{nameof(IShardContext.Use)} before resolving a tenant DbContext.");
+            if (_sqliteTemplate is null && _sqlServerTemplate is null && _legacySqlServerTemplate is null)
+                return SharedConnectionString(DatabaseProviderType.SqlServer);
+
+            throw NoShardSelected();
         }
 
-        // The shard key comes out of the catalog and goes into a connection string, which makes this a
-        // template-injection sink: a key containing ';' could append 'Password=…' on SQL Server or repoint
-        // 'Data Source=' on SQLite, turning one admin-entered field into a way to choose a database and
-        // credentials. Provisioning validates on the way in; this validates on the way out, because a
-        // connection string assembled from database content should never trust the content.
+        var template = _sqlite
+            ? _sqliteTemplate
+            : shard.DatabaseProvider switch
+            {
+                DatabaseProviderType.SqlServer => _sqlServerTemplate ?? _legacySqlServerTemplate,
+                DatabaseProviderType.MySql => _mySqlTemplate ?? throw MissingTemplate(DatabaseProviderType.MySql),
+                _ => throw new InvalidOperationException(
+                    $"DatabaseProviderNotSupported: tenant provider '{shard.DatabaseProvider}' is not supported.")
+            };
+
+        if (template is null)
+            return SharedConnectionString(shard.DatabaseProvider);
+
         if (!IsSafeShardKey(shard.ShardKey))
         {
             throw new InvalidOperationException(
@@ -88,35 +77,48 @@ internal sealed class ShardConnectionStringFactory : IShardConnectionStringFacto
                 + "'_', and start with a letter or digit.");
         }
 
-        return _template.Replace(ShardingOptions.ShardKeyPlaceholder, shard.ShardKey, StringComparison.Ordinal);
+        return template.Replace(ShardingOptions.ShardKeyPlaceholder, shard.ShardKey, StringComparison.Ordinal);
     }
 
-    /// <summary>
-    /// The single-database connection string. Resolved on use rather than in the constructor so a sharded
-    /// deployment is not required to configure a shared database it will never open.
-    /// </summary>
-    private string SharedConnectionString()
+    private string SharedConnectionString(DatabaseProviderType provider)
     {
         if (_sqlite)
-        {
             return _configuration.GetConnectionString("Sqlite") ?? "Data Source=hrms_dev.db";
-        }
+
+        if (provider is DatabaseProviderType.MySql)
+            throw MissingTemplate(provider);
 
         return _configuration.GetConnectionString("SqlServer")
             ?? throw new InvalidOperationException("Connection string 'SqlServer' is not configured.");
     }
 
+    private static InvalidOperationException NoShardSelected() => new(
+        "No organization has been resolved for this scope, so there is no tenant database to open. "
+        + $"During a request the host-resolution middleware selects one; outside a request use {nameof(IShardContext)}.{nameof(IShardContext.Use)}.");
+
+    private static InvalidOperationException MissingTemplate(DatabaseProviderType provider) => new(
+        $"Sharding:{(provider is DatabaseProviderType.MySql ? nameof(ShardingOptions.MySqlConnectionStringTemplate) : nameof(ShardingOptions.SqlServerConnectionStringTemplate))} "
+        + $"is required for tenant provider '{provider}'.");
+
+    private static string? NullIfWhiteSpace(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
+    private static void LogSharedFallbackIfNeeded(string? template, string setting, ILogger logger)
+    {
+        if (template is null)
+        {
+            logger.LogWarning(
+                "No '{Setting}' connection-string template is configured, so organizations use the configured shared database fallback.",
+                $"{ShardingOptions.SectionName}:{setting}");
+        }
+    }
+
     private static bool IsSafeShardKey(string shardKey)
     {
         if (shardKey.Length is 0 or > TenantMapping.ShardKeyMaxLength)
-        {
             return false;
-        }
 
         if (!char.IsAsciiLetterLower(shardKey[0]) && !char.IsAsciiDigit(shardKey[0]))
-        {
             return false;
-        }
 
         foreach (var character in shardKey)
         {
@@ -125,9 +127,7 @@ internal sealed class ShardConnectionStringFactory : IShardConnectionStringFacto
                 || character is '-' or '_';
 
             if (!allowed)
-            {
                 return false;
-            }
         }
 
         return true;

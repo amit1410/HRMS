@@ -17,22 +17,22 @@ public sealed class LeaveRequestSubmissionService : ILeaveRequestSubmissionServi
     private readonly IHrmsDbContext _db;
     private readonly IEmployeeIdentityResolver _identityResolver;
     private readonly ILeaveRequestValidationService _validationService;
-    private readonly ILeaveRequestSubmissionLock _submissionLock;
+    private readonly IEmployeeSerializationLock _submissionLock;
     private readonly TimeProvider _timeProvider;
     private readonly Action<Exception>? _diagnosticObserver;
     private readonly ILeaveRequestSubmissionRetryPolicy? _retryPolicy;
-    private readonly ILeaveRequestSubmissionDeadlockClassifier? _deadlockClassifier;
+    private readonly IDatabaseTransientErrorClassifier? _deadlockClassifier;
     private readonly ILeaveBalanceAccountingService? _balanceAccountingService;
 
     public LeaveRequestSubmissionService(
         IHrmsDbContext db,
         IEmployeeIdentityResolver identityResolver,
         ILeaveRequestValidationService validationService,
-        ILeaveRequestSubmissionLock submissionLock,
+        IEmployeeSerializationLock submissionLock,
         TimeProvider timeProvider,
         Action<Exception>? diagnosticObserver = null,
         ILeaveRequestSubmissionRetryPolicy? retryPolicy = null,
-        ILeaveRequestSubmissionDeadlockClassifier? deadlockClassifier = null,
+        IDatabaseTransientErrorClassifier? deadlockClassifier = null,
         ILeaveBalanceAccountingService? balanceAccountingService = null)
     {
         _db = db;

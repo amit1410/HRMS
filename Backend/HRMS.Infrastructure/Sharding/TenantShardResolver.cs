@@ -58,7 +58,8 @@ public sealed class TenantShardResolver : ITenantShardResolver
                 tenant.TenantCode,
                 tenant.Host,
                 tenant.ShardKey,
-                tenant.Status))
+                tenant.Status,
+                tenant.DatabaseProvider))
             .FirstOrDefaultAsync(cancellationToken);
 
         _cache.Set(

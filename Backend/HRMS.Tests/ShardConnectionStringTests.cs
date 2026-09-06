@@ -2,10 +2,13 @@ using HRMS.Application.Abstractions;
 using HRMS.Domain.Enums;
 using HRMS.Infrastructure;
 using HRMS.Infrastructure.Persistence;
+using HRMS.Infrastructure.Sharding;
 using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace HRMS.Tests;
 
@@ -121,8 +124,97 @@ public class ShardConnectionStringTests
         Assert.Contains("{shardKey}", exception.Message);
     }
 
-    private static ShardDescriptor Shard(string shardKey) =>
-        new(Guid.NewGuid(), shardKey.ToUpperInvariant(), $"{shardKey}.localhost", shardKey, TenantStatus.Active);
+    [Fact]
+    public void SqlServer_uses_its_provider_specific_template()
+    {
+        var factory = CreateFactory(
+            new Dictionary<string, string?>
+            {
+                ["Sharding:SqlServerConnectionStringTemplate"] = "Server=sql;Database=sql-{shardKey};",
+                ["Sharding:MySqlConnectionStringTemplate"] = "Server=mysql;Database=mysql-{shardKey};"
+            });
+
+        Assert.Contains("sql-demo01", factory.For(Shard("demo01", DatabaseProviderType.SqlServer)));
+    }
+
+    [Fact]
+    public void SqlServer_uses_the_legacy_template_when_specific_template_is_absent()
+    {
+        var factory = CreateFactory(new Dictionary<string, string?>
+        {
+            ["Sharding:ConnectionStringTemplate"] = "Server=legacy;Database=legacy-{shardKey};"
+        });
+
+        Assert.Contains("legacy-demo01", factory.For(Shard("demo01", DatabaseProviderType.SqlServer)));
+    }
+
+    [Fact]
+    public void MySql_uses_only_its_provider_specific_template()
+    {
+        var factory = CreateFactory(new Dictionary<string, string?>
+        {
+            ["Sharding:ConnectionStringTemplate"] = "Server=legacy;Database=legacy-{shardKey};",
+            ["Sharding:MySqlConnectionStringTemplate"] = "Server=mysql;Database=mysql-{shardKey};"
+        });
+
+        var connection = factory.For(Shard("demo01", DatabaseProviderType.MySql));
+
+        Assert.Contains("mysql-demo01", connection);
+        Assert.DoesNotContain("legacy-demo01", connection);
+    }
+
+    [Fact]
+    public void MySql_fails_closed_when_its_template_is_missing_without_leaking_configuration()
+    {
+        const string secret = "not-a-real-secret";
+        var factory = CreateFactory(new Dictionary<string, string?>
+        {
+            ["Sharding:ConnectionStringTemplate"] = $"Server=legacy;Password={secret};Database={{shardKey}};"
+        });
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => factory.For(Shard("demo01", DatabaseProviderType.MySql)));
+
+        Assert.Contains(nameof(ShardingOptions.MySqlConnectionStringTemplate), exception.Message);
+        Assert.DoesNotContain(secret, exception.Message);
+    }
+
+    [Fact]
+    public void Unsupported_provider_fails_closed()
+    {
+        var factory = CreateFactory(new Dictionary<string, string?>
+        {
+            ["Sharding:SqlServerConnectionStringTemplate"] = "Server=sql;Database=sql-{shardKey};"
+        });
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => factory.For(Shard("demo01", (DatabaseProviderType)999)));
+
+        Assert.Contains("DatabaseProviderNotSupported", exception.Message);
+    }
+
+    [Fact]
+    public void Provider_is_taken_from_trusted_shard_metadata_not_request_values()
+    {
+        var factory = CreateFactory(new Dictionary<string, string?>
+        {
+            ["Sharding:SqlServerConnectionStringTemplate"] = "Server=sql;Database=sql-{shardKey};",
+            ["Sharding:MySqlConnectionStringTemplate"] = "Server=mysql;Database=mysql-{shardKey};"
+        });
+
+        Assert.Contains("mysql-demo01", factory.For(Shard("demo01", DatabaseProviderType.MySql)));
+    }
+
+    private static ShardDescriptor Shard(string shardKey, DatabaseProviderType provider = DatabaseProviderType.SqlServer) =>
+        new(Guid.NewGuid(), shardKey.ToUpperInvariant(), $"{shardKey}.localhost", shardKey, TenantStatus.Active, provider);
+
+    private static IShardConnectionStringFactory CreateFactory(Dictionary<string, string?> values)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+        var options = new ShardingOptions();
+        configuration.GetSection(ShardingOptions.SectionName).Bind(options);
+        return new ShardConnectionStringFactory(configuration, Options.Create(options), NullLogger<ShardConnectionStringFactory>.Instance);
+    }
 
     private static string? ConnectionStringFor(IServiceProvider provider, ShardDescriptor? shard)
     {

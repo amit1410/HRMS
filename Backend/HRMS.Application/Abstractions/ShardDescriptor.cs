@@ -17,6 +17,7 @@ namespace HRMS.Application.Abstractions;
 /// <param name="TenantCode">The operator-facing label, for logs and support conversations.</param>
 /// <param name="Host">The host that resolved to this organization, lowercase.</param>
 /// <param name="ShardKey">Names the database holding this organization's data.</param>
+/// <param name="DatabaseProvider">The trusted provider selected for this organization's database.</param>
 /// <param name="Status">
 /// Whether the organization may be served. Carried rather than filtered out at the source so the caller
 /// can tell "no such workspace" from "this workspace is switched off" and log the two differently.
@@ -26,4 +27,5 @@ public sealed record ShardDescriptor(
     string TenantCode,
     string Host,
     string ShardKey,
-    TenantStatus Status);
+    TenantStatus Status,
+    DatabaseProviderType DatabaseProvider = DatabaseProviderType.SqlServer);

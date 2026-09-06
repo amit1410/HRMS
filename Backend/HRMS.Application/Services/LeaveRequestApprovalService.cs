@@ -16,20 +16,20 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
     private readonly IHrmsDbContext _db;
     private readonly IEmployeeIdentityResolver _identityResolver;
     private readonly IEmployeeManagerResolver _managerResolver;
-    private readonly ILeaveRequestSubmissionLock _employeeLock;
+    private readonly IEmployeeSerializationLock _employeeLock;
     private readonly TimeProvider _timeProvider;
     private readonly ILeaveRequestSubmissionRetryPolicy? _retryPolicy;
-    private readonly ILeaveRequestSubmissionDeadlockClassifier? _deadlockClassifier;
+    private readonly IDatabaseTransientErrorClassifier? _deadlockClassifier;
     private readonly ILeaveBalanceAccountingService? _balanceAccountingService;
 
     public LeaveRequestApprovalService(
         IHrmsDbContext db,
         IEmployeeIdentityResolver identityResolver,
         IEmployeeManagerResolver managerResolver,
-        ILeaveRequestSubmissionLock employeeLock,
+        IEmployeeSerializationLock employeeLock,
         TimeProvider timeProvider,
         ILeaveRequestSubmissionRetryPolicy? retryPolicy = null,
-        ILeaveRequestSubmissionDeadlockClassifier? deadlockClassifier = null,
+        IDatabaseTransientErrorClassifier? deadlockClassifier = null,
         ILeaveBalanceAccountingService? balanceAccountingService = null)
     {
         _db = db;

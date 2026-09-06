@@ -21,6 +21,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\HRMS.Infrastructure\HRMS.Infrastructure.csproj" />
+    <ProjectReference Include="..\HRMS.Infrastructure.MySqlCatalogMigrations\HRMS.Infrastructure.MySqlCatalogMigrations.csproj" />
+    <ProjectReference Include="..\HRMS.Infrastructure.MySqlMigrations\HRMS.Infrastructure.MySqlMigrations.csproj" />
     <ProjectReference Include="..\HRMS.Application\HRMS.Application.csproj" />
   </ItemGroup>
 

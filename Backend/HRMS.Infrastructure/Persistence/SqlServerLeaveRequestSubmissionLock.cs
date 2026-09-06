@@ -9,7 +9,7 @@ namespace HRMS.Infrastructure.Persistence;
 /// SQL Server implementation of the submission employee scope. SQLite is accepted only for the isolated
 /// test harness, where SQL Server locking hints do not exist; production SQL Server never takes this path.
 /// </summary>
-public sealed class SqlServerLeaveRequestSubmissionLock(HrmsDbContext db) : ILeaveRequestSubmissionLock
+public sealed class SqlServerLeaveRequestSubmissionLock(HrmsDbContext db) : ILeaveRequestSubmissionLock, IEmployeeSerializationLock
 {
     public async Task AcquireAsync(Guid tenantId, Guid employeeId, CancellationToken cancellationToken = default)
     {

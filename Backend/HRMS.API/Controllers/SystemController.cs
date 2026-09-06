@@ -92,7 +92,7 @@ public class SystemController : ControllerBase
             .AsNoTracking()
             .OrderBy(tenant => tenant.TenantCode)
             .Select(tenant => new CatalogOrganization(
-                new ShardDescriptor(tenant.Id, tenant.TenantCode, tenant.Host, tenant.ShardKey, tenant.Status),
+                new ShardDescriptor(tenant.Id, tenant.TenantCode, tenant.Host, tenant.ShardKey, tenant.Status, tenant.DatabaseProvider),
                 tenant.TenantName))
             .ToListAsync(cancellationToken);
 

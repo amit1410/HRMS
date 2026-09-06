@@ -3,6 +3,7 @@ using HRMS.Domain.Common;
 using HRMS.Domain.Entities;
 using HRMS.Infrastructure.Persistence.Conversions;
 using Microsoft.EntityFrameworkCore;
+using MySql.EntityFrameworkCore.Extensions;
 
 namespace HRMS.Infrastructure.Persistence;
 
@@ -125,6 +126,107 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.ApplyConfigurationsFromAssembly(
             typeof(HrmsDbContext).Assembly,
             type => type.Namespace?.StartsWith(CatalogConfigurationsNamespace, StringComparison.Ordinal) != true);
+
+        if (Database.IsMySql())
+        {
+            // MySql.Data returns DateTime for SQL date columns. Apply one provider-wide conversion so every
+            // DateOnly property materializes correctly without changing the domain model or SQL date schema.
+            foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+            {
+                foreach (var property in entityType.GetProperties())
+                {
+                    if (property.ClrType == typeof(DateOnly))
+                    {
+                        modelBuilder.Entity(entityType.ClrType).Property(property.Name)
+                            .HasConversion(new MySqlDateOnlyConverter())
+                            .HasColumnType("date");
+                    }
+                    else if (property.ClrType == typeof(DateOnly?))
+                    {
+                        modelBuilder.Entity(entityType.ClrType).Property(property.Name)
+                            .HasConversion(new MySqlNullableDateOnlyConverter())
+                            .HasColumnType("date");
+                    }
+                }
+            }
+
+            // Oracle's provider does not consume SQL Server's computed-column expression. Keep the same
+            // unordered GUID-pair invariant using MySQL's stored generated-column syntax.
+            modelBuilder.Entity<LeavePolicyClubbingRule>()
+                .Property<string>("NormalizedPairKey")
+                .HasComputedColumnSql(
+                    "CASE WHEN CAST(`LowerLeavePolicyRuleId` AS CHAR(36)) < CAST(`HigherLeavePolicyRuleId` AS CHAR(36)) "
+                    + "THEN CONCAT(CAST(`LowerLeavePolicyRuleId` AS CHAR(36)), ':', CAST(`HigherLeavePolicyRuleId` AS CHAR(36))) "
+                    + "ELSE CONCAT(CAST(`HigherLeavePolicyRuleId` AS CHAR(36)), ':', CAST(`LowerLeavePolicyRuleId` AS CHAR(36))) END",
+                    stored: true)
+                .HasMaxLength(73);
+
+            // InnoDB's ordinary unique-index NULL semantics provide the same multiple-null behavior as the
+            // SQL Server filtered lifecycle index, so no SQL Server filter expression is sent to MySQL.
+            modelBuilder.Entity<LeaveBalanceTransaction>()
+                .HasIndex(x => new { x.TenantId, x.LeaveRequestId, x.TransactionType })
+                .IsUnique()
+                .HasFilter(null);
+
+            // Oracle's MySQL provider does not translate SQL Server's square-bracket identifiers in
+            // check constraints. Keep the shared SQL Server expressions unchanged and provide the
+            // equivalent MySQL-quoted expressions only for the MySQL model.
+            modelBuilder.Entity<AccountEmployeeLinkEvent>().ToTable("AccountEmployeeLinkEvents", t => t.HasCheckConstraint(
+                "CK_AccountEmployeeLinkEvents_Shape",
+                "`Sequence` > 0 AND `Operation` IN ('Link','Unlink','Replace') AND `Reason` <> '' AND `CorrelationId` <> '' AND ((`Operation` = 'Link' AND `PreviousLinkId` IS NULL AND `BeforeEmployeeId` IS NULL AND `NewLinkId` = `Id` AND `AfterEmployeeId` IS NOT NULL) OR (`Operation` = 'Unlink' AND `PreviousLinkId` IS NOT NULL AND `BeforeEmployeeId` IS NOT NULL AND `NewLinkId` IS NULL AND `AfterEmployeeId` IS NULL) OR (`Operation` = 'Replace' AND `PreviousLinkId` IS NOT NULL AND `BeforeEmployeeId` IS NOT NULL AND `NewLinkId` = `Id` AND `AfterEmployeeId` IS NOT NULL AND `BeforeEmployeeId` <> `AfterEmployeeId`))"));
+            modelBuilder.Entity<EmployeeLeaveBalance>().ToTable("EmployeeLeaveBalances", t => t.HasCheckConstraint(
+                "CK_EmployeeLeaveBalances_NonNegativeAndAvailable",
+                "`GrantedQuantity` >= 0 AND `ReservedQuantity` >= 0 AND `ConsumedQuantity` >= 0 AND `ReservedQuantity` + `ConsumedQuantity` <= `GrantedQuantity`"));
+            modelBuilder.Entity<LeaveBalanceTransaction>().ToTable("LeaveBalanceTransactions", t => t.HasCheckConstraint(
+                "CK_LeaveBalanceTransactions_PositiveQuantity",
+                "`Quantity` > 0"));
+            modelBuilder.Entity<LeavePolicyClubbingRule>().ToTable("LeavePolicyClubbingRules", t => t.HasCheckConstraint(
+                "CK_LeavePolicyClubbingRules_DifferentParticipants",
+                "`LowerLeavePolicyRuleId` <> `HigherLeavePolicyRuleId`"));
+            modelBuilder.Entity<LeaveRequest>().ToTable("LeaveRequests", t => t.HasCheckConstraint(
+                "CK_LeaveRequests_DateAndQuantity",
+                "`StartDate` <= `EndDate` AND `RequestedQuantity` >= 0 AND `ChargeableQuantity` >= 0"));
+            modelBuilder.Entity<LeaveRequestDay>().ToTable("LeaveRequestDays", t => t.HasCheckConstraint(
+                "CK_LeaveRequestDays_NonNegativeQuantity",
+                "`RequestedQuantity` >= 0 AND `ChargeableQuantity` >= 0"));
+
+            // Keep the two self-referencing AccountEmployeeLinkEvent foreign-key names distinct within
+            // MySQL's identifier-length limit. The shared mappings and SQL Server names remain unchanged.
+            modelBuilder.Entity<AccountEmployeeLinkEvent>()
+                .HasOne(x => x.PreviousEvent)
+                .WithMany()
+                .HasForeignKey(x => new { x.TenantId, x.SubjectUserId, x.PreviousEventId })
+                .HasPrincipalKey(x => new { x.TenantId, x.SubjectUserId, x.Id })
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_AELE_PreviousEvent");
+
+            modelBuilder.Entity<AccountEmployeeLinkEvent>()
+                .HasOne(x => x.PreviousLink)
+                .WithMany()
+                .HasForeignKey(x => new { x.TenantId, x.SubjectUserId, x.PreviousLinkId })
+                .HasPrincipalKey(x => new { x.TenantId, x.SubjectUserId, x.Id })
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("FK_AELE_PreviousLink");
+
+            modelBuilder.Entity<LeaveRequest>()
+                .Property(x => x.RowVersion)
+                .HasColumnType("binary(16)")
+                .IsRequired()
+                .IsConcurrencyToken()
+                .ValueGeneratedNever();
+            modelBuilder.Entity<EmployeeLeaveBalance>()
+                .Property(x => x.RowVersion)
+                .HasColumnType("binary(16)")
+                .IsRequired()
+                .IsConcurrencyToken()
+                .ValueGeneratedNever();
+            modelBuilder.Entity<EmployeeCodeSequence>()
+                .Property(x => x.RowVersion)
+                .HasColumnType("binary(16)")
+                .IsRequired()
+                .IsConcurrencyToken()
+                .ValueGeneratedNever();
+        }
 
         // SQL Server supplies rowversion values, while SQLite (used by the isolated test database) does
         // not have that type. Keep the concurrency column non-null and provider-safe in SQLite so sequence

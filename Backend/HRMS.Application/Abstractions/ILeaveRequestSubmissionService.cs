@@ -47,10 +47,13 @@ public sealed record LeaveRequestSubmissionDay(
 /// Acquires the per-employee persistence concurrency scope. The implementation is provider-specific;
 /// future status-changing operations must use this same scope before changing overlap/counting status.
 /// </summary>
-public interface ILeaveRequestSubmissionLock
+public interface IEmployeeSerializationLock
 {
     Task AcquireAsync(Guid tenantId, Guid employeeId, CancellationToken cancellationToken = default);
 }
+
+/// <summary>Compatibility name retained for existing callers; provider-specific locking lives in Infrastructure.</summary>
+public interface ILeaveRequestSubmissionLock : IEmployeeSerializationLock;
 
 public static class LeaveRequestSubmissionErrorCodes
 {

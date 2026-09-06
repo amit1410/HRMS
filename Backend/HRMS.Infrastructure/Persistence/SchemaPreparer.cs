@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using MySql.EntityFrameworkCore.Extensions;
 
 namespace HRMS.Infrastructure.Persistence;
 
@@ -24,9 +25,12 @@ internal static class SchemaPreparer
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        if (db.Database.IsSqlServer())
+        if (db.Database.IsSqlServer() || db.Database.IsMySql())
         {
-            logger.LogInformation("Applying EF Core migrations to the {Label} database (SQL Server).", label);
+            logger.LogInformation(
+                "Applying EF Core migrations to the {Label} database ({Provider}).",
+                label,
+                db.Database.ProviderName);
             await db.Database.MigrateAsync(cancellationToken);
             return;
         }

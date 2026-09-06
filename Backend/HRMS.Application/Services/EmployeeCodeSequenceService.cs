@@ -11,8 +11,9 @@ public sealed class EmployeeCodeSequenceService : IEmployeeCodeSequenceService
     private const int MaxAttempts = 8;
     private readonly IHrmsDbContext _db;
     private readonly ITenantContext _tenant;
+    private readonly IEmployeeCodeSequenceUpdater? _updater;
 
-    public EmployeeCodeSequenceService(IHrmsDbContext db, ITenantContext tenant) { _db = db; _tenant = tenant; }
+    public EmployeeCodeSequenceService(IHrmsDbContext db, ITenantContext tenant, IEmployeeCodeSequenceUpdater? updater = null) { _db = db; _tenant = tenant; _updater = updater; }
 
     public async Task<Result<long>> AllocateAsync(Guid ruleId, EmployeeCodeSequenceScope scope, string scopeKey, EmployeeCodeResetPeriod resetPeriod, string periodKey, long startNumber = 1, int incrementBy = 1, CancellationToken cancellationToken = default)
     {
@@ -36,7 +37,9 @@ public sealed class EmployeeCodeSequenceService : IEmployeeCodeSequenceService
             else
             {
                 var allocated = current.NextNumber;
-                var rows = await _db.EmployeeCodeSequences.Where(s => s.Id == current.Id && s.TenantId == tenantId && s.NextNumber == allocated).ExecuteUpdateAsync(setters => setters.SetProperty(s => s.NextNumber, allocated + current.IncrementBy), cancellationToken);
+                var rows = _updater is null
+                    ? await _db.EmployeeCodeSequences.Where(s => s.Id == current.Id && s.TenantId == tenantId && s.NextNumber == allocated).ExecuteUpdateAsync(setters => setters.SetProperty(s => s.NextNumber, allocated + current.IncrementBy), cancellationToken)
+                    : await _updater.AdvanceAsync(tenantId, current.Id, allocated, allocated + current.IncrementBy, cancellationToken);
                 if (rows == 1) return Result<long>.Success(allocated);
             }
         }

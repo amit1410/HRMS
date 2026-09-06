@@ -35,6 +35,7 @@ internal static class TenantMapping
         builder.Property(t => t.TenantCode).IsRequired().HasMaxLength(TenantCodeMaxLength);
         builder.Property(t => t.Host).IsRequired().HasMaxLength(HostMaxLength);
         builder.Property(t => t.ShardKey).IsRequired().HasMaxLength(ShardKeyMaxLength);
+        builder.Property(t => t.DatabaseProvider).HasConversion<string>().HasMaxLength(32).IsRequired();
         builder.Property(t => t.TenantName).IsRequired().HasMaxLength(200);
         builder.Property(t => t.Email).HasMaxLength(256);
         builder.Property(t => t.Phone).HasMaxLength(30);

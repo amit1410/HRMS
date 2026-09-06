@@ -107,7 +107,7 @@ public static class DatabaseInitializer
             .AsNoTracking()
             .OrderBy(tenant => tenant.TenantCode)
             .Select(tenant => new ShardDescriptor(
-                tenant.Id, tenant.TenantCode, tenant.Host, tenant.ShardKey, tenant.Status))
+                tenant.Id, tenant.TenantCode, tenant.Host, tenant.ShardKey, tenant.Status, tenant.DatabaseProvider))
             .ToListAsync(cancellationToken);
 
         logger.LogInformation("The catalog holds {Count} organization(s).", organizations.Count);

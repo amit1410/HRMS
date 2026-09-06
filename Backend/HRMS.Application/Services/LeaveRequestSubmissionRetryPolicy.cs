@@ -7,11 +7,11 @@ public sealed class LeaveRequestSubmissionRetryPolicy : ILeaveRequestSubmissionR
 {
     public const int MaximumAttempts = 3;
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(25);
-    private readonly ILeaveRequestSubmissionDeadlockClassifier _classifier;
+    private readonly IDatabaseTransientErrorClassifier _classifier;
     private readonly ILogger<LeaveRequestSubmissionRetryPolicy> _logger;
 
     public LeaveRequestSubmissionRetryPolicy(
-        ILeaveRequestSubmissionDeadlockClassifier classifier,
+        IDatabaseTransientErrorClassifier classifier,
         ILogger<LeaveRequestSubmissionRetryPolicy> logger)
     {
         _classifier = classifier;

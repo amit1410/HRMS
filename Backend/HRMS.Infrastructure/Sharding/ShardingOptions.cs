@@ -33,6 +33,12 @@ public sealed class ShardingOptions
     /// </summary>
     public string? ConnectionStringTemplate { get; set; }
 
+    /// <summary>SQL Server tenant connection-string template; the legacy template remains its fallback.</summary>
+    public string? SqlServerConnectionStringTemplate { get; set; }
+
+    /// <summary>MySQL tenant connection-string template; required for MySQL tenants.</summary>
+    public string? MySqlConnectionStringTemplate { get; set; }
+
     /// <summary>The same for the SQLite development fallback, e.g. <c>Data Source=hrms-{shardKey}.db</c>.</summary>
     public string? SqliteConnectionStringTemplate { get; set; }
 
@@ -62,6 +68,8 @@ public sealed class ShardingOptions
         foreach (var (name, template) in new[]
                  {
                      (nameof(ConnectionStringTemplate), ConnectionStringTemplate),
+                     (nameof(SqlServerConnectionStringTemplate), SqlServerConnectionStringTemplate),
+                     (nameof(MySqlConnectionStringTemplate), MySqlConnectionStringTemplate),
                      (nameof(SqliteConnectionStringTemplate), SqliteConnectionStringTemplate)
                  })
         {

@@ -3,7 +3,7 @@ using Microsoft.Data.SqlClient;
 
 namespace HRMS.Infrastructure.Persistence;
 
-public sealed class SqlServerLeaveRequestSubmissionDeadlockClassifier : ILeaveRequestSubmissionDeadlockClassifier
+public sealed class SqlServerLeaveRequestSubmissionDeadlockClassifier : ILeaveRequestSubmissionDeadlockClassifier, IDatabaseTransientErrorClassifier
 {
     public bool IsDeadlock(Exception exception)
     {
