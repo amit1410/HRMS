@@ -1,10 +1,13 @@
 using HRMS.Application.Abstractions;
 using HRMS.Domain.Entities;
+using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence.Catalog;
 using HRMS.Infrastructure.Persistence.Seed;
+using HRMS.Infrastructure.Sharding;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using MySql.Data.MySqlClient;
 
 namespace HRMS.Infrastructure.Persistence;
 
@@ -36,10 +39,19 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
 
         provider.GetRequiredService<IShardContext>().Use(shard);
 
+        await PrepareMySqlDatabaseAsync(provider, shard, cancellationToken);
+
         var tenant = await LoadCatalogRowAsync(provider, shard, cancellationToken);
 
         var db = provider.GetRequiredService<HrmsDbContext>();
-        await SchemaPreparer.PrepareAsync(db, $"'{shard.TenantCode}' tenant", _logger, cancellationToken);
+        try
+        {
+            await SchemaPreparer.PrepareAsync(db, $"'{shard.TenantCode}' tenant", _logger, cancellationToken);
+        }
+        catch (MySqlException ex)
+        {
+            throw new TenantProvisioningException("MySqlMigrationFailed", "The MySQL tenant migration failed.", ex);
+        }
 
         _logger.LogInformation(
             "Seeding organization {TenantCode} on shard {ShardKey}.", shard.TenantCode, shard.ShardKey);
@@ -49,6 +61,170 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
             provider.GetRequiredService<IPasswordHasher>(),
             tenant,
             cancellationToken);
+    }
+
+    public async Task SynchronizeTenantIdentityAsync(
+        ShardDescriptor shard,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(shard);
+        using var scope = _scopeFactory.CreateScope();
+        var provider = scope.ServiceProvider;
+        provider.GetRequiredService<IShardContext>().Use(shard);
+        var db = provider.GetRequiredService<HrmsDbContext>();
+        var tenant = await db.Tenants.SingleOrDefaultAsync(x => x.Id == shard.TenantId, cancellationToken);
+        if (tenant is null)
+            return;
+
+        tenant.TenantCode = shard.TenantCode;
+        tenant.Host = shard.Host;
+        tenant.ShardKey = shard.ShardKey;
+        tenant.Status = shard.Status;
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static async Task PrepareMySqlDatabaseAsync(
+        IServiceProvider provider,
+        ShardDescriptor shard,
+        CancellationToken cancellationToken)
+    {
+        if (shard.DatabaseProvider != DatabaseProviderType.MySql)
+            return;
+
+        HrmsDbContext db;
+        string databaseConnectionString;
+        string databaseName;
+        try
+        {
+            db = provider.GetRequiredService<HrmsDbContext>();
+            databaseConnectionString = db.Database.GetDbConnection().ConnectionString;
+            databaseName = GetMySqlDatabaseName(databaseConnectionString);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains(nameof(ShardingOptions.MySqlConnectionStringTemplate), StringComparison.Ordinal))
+        {
+            throw new TenantProvisioningException(
+                "MySqlServerConfigurationMissing",
+                "The trusted MySQL tenant connection template is not configured.",
+                ex);
+        }
+
+        if (string.IsNullOrWhiteSpace(databaseName) || databaseName.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_'))
+            throw new TenantProvisioningException(
+                "MySqlDatabaseNameInvalid",
+                "The configured MySQL tenant database name is not a safe identifier.");
+
+        await using (var serverConnection = new MySqlConnection(CreateMySqlServerConnectionString(databaseConnectionString)))
+        {
+            try
+            {
+                await serverConnection.OpenAsync(cancellationToken);
+            }
+            catch (MySqlException ex)
+            {
+                throw new TenantProvisioningException("MySqlServerConnectionFailed", "The trusted MySQL server connection failed.", ex);
+            }
+            await using var existsCommand = serverConnection.CreateCommand();
+            existsCommand.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = @name";
+            existsCommand.Parameters.AddWithValue("@name", databaseName);
+            bool exists;
+            try
+            {
+                exists = Convert.ToInt32(await existsCommand.ExecuteScalarAsync(cancellationToken)) > 0;
+            }
+            catch (MySqlException ex)
+            {
+                throw new TenantProvisioningException(
+                    "MySqlDatabaseStateUnexpected",
+                    "The MySQL server did not return a usable state for the tenant database.",
+                    ex);
+            }
+            if (!exists)
+            {
+                await using var createCommand = serverConnection.CreateCommand();
+                createCommand.CommandText = $"CREATE DATABASE `{databaseName}`";
+                try
+                {
+                    await createCommand.ExecuteNonQueryAsync(cancellationToken);
+                }
+                catch (MySqlException ex)
+                {
+                    throw new TenantProvisioningException("MySqlDatabaseCreateFailed", "The MySQL tenant database could not be created.", ex);
+                }
+                return;
+            }
+        }
+
+        await using var existingConnection = new MySqlConnection(databaseConnectionString);
+        try
+        {
+            await existingConnection.OpenAsync(cancellationToken);
+        }
+        catch (MySqlException ex)
+        {
+            throw new TenantProvisioningException("MySqlTenantConnectionFailed", "The MySQL tenant database connection failed.", ex);
+        }
+        await using var historyCommand = existingConnection.CreateCommand();
+        historyCommand.CommandText = "SELECT MigrationId FROM `__EFMigrationsHistory` ORDER BY MigrationId";
+        var applied = new List<string>();
+        try
+        {
+            await using var reader = await historyCommand.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+                applied.Add(reader.GetString(0));
+        }
+        catch (MySqlException ex) when (ex.Number == 1146)
+        {
+            throw new TenantProvisioningException(
+                "MySqlDatabaseStateUnexpected",
+                $"MySQL tenant database '{databaseName}' exists without migration history; retry is stopped for operator diagnosis.", ex);
+        }
+
+        const string expectedMigration = "20260905172008_InitialMySqlTenantSchema";
+        if (applied.Count != 1 || !string.Equals(applied[0], expectedMigration, StringComparison.Ordinal))
+            throw new TenantProvisioningException(
+                "MySqlDatabaseStateUnexpected",
+                $"MySQL tenant database '{databaseName}' has incomplete or unexpected migration history; retry is stopped.");
+
+        await using var tableCommand = existingConnection.CreateCommand();
+        tableCommand.CommandText = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE()";
+        var actualTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            await using var tableReader = await tableCommand.ExecuteReaderAsync(cancellationToken);
+            while (await tableReader.ReadAsync(cancellationToken))
+                actualTables.Add(tableReader.GetString(0));
+        }
+        catch (MySqlException ex)
+        {
+            throw new TenantProvisioningException(
+                "MySqlDatabaseStateUnexpected",
+                $"MySQL tenant database '{databaseName}' could not be inspected safely.",
+                ex);
+        }
+
+        var expectedTables = db.Model.GetEntityTypes()
+            .Select(entity => entity.GetTableName())
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        expectedTables.Add("__EFMigrationsHistory");
+        var missingTables = expectedTables.Where(table => !actualTables.Contains(table)).ToArray();
+        if (missingTables.Length > 0)
+            throw new TenantProvisioningException(
+                "MySqlDatabaseStateUnexpected",
+                $"MySQL tenant database '{databaseName}' has incomplete schema; retry is stopped. Missing {string.Join(", ", missingTables)}.");
+    }
+
+    internal static string GetMySqlDatabaseName(string connectionString) =>
+        new MySqlConnectionStringBuilder(connectionString).Database;
+
+    internal static string CreateMySqlServerConnectionString(string tenantConnectionString)
+    {
+        var builder = new MySqlConnectionStringBuilder(tenantConnectionString)
+        {
+            Database = string.Empty
+        };
+        return builder.ConnectionString;
     }
 
     /// <summary>

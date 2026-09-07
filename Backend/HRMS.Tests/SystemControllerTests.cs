@@ -196,6 +196,18 @@ public class SystemControllerTests : IClassFixture<HrmsApiFactory>
 
         public DbSet<TenantBranding> TenantBranding => throw new InvalidOperationException(Reason);
 
+        public DbSet<PlatformUser> PlatformUsers => throw new InvalidOperationException(Reason);
+
+        public DbSet<PlatformRole> PlatformRoles => throw new InvalidOperationException(Reason);
+
+        public DbSet<PlatformPermission> PlatformPermissions => throw new InvalidOperationException(Reason);
+
+        public DbSet<PlatformUserRole> PlatformUserRoles => throw new InvalidOperationException(Reason);
+
+        public DbSet<PlatformRolePermission> PlatformRolePermissions => throw new InvalidOperationException(Reason);
+
+        public DbSet<PlatformRefreshToken> PlatformRefreshTokens => throw new InvalidOperationException(Reason);
+
         public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException(Reason);
     }

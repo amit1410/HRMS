@@ -1,14 +1,14 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { applyAcceptanceConnectSrc } from './src/lib/acceptanceCsp.js'
+import { cspConnectSources } from './src/lib/cspConnectSources.js'
 
-function acceptanceCspPlugin() {
+function cspPlugin(mode: string, configured: readonly string[]) {
   return {
-    name: 'hrms-acceptance-csp',
+    name: 'hrms-csp',
     transformIndexHtml(html: string) {
-      const origins = (process.env.VITE_API_CSP_CONNECT_SRC ?? '').split(/\s+/).filter(Boolean)
-      return applyAcceptanceConnectSrc(html, origins)
+      return applyAcceptanceConnectSrc(html, cspConnectSources(mode, configured))
     },
   }
 }
@@ -19,8 +19,12 @@ function acceptanceCspPlugin() {
  * clash fail loudly instead of silently moving to 5174, where every request would be blocked
  * by CORS and look like a broken API.
  */
-export default defineConfig({
-  plugins: [react(), acceptanceCspPlugin()],
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const configured = (env.VITE_API_CSP_CONNECT_SRC ?? process.env.VITE_API_CSP_CONNECT_SRC ?? '').split(/\s+/).filter(Boolean)
+
+  return {
+  plugins: [react(), cspPlugin(mode, configured)],
   server: {
     port: 5173,
     strictPort: true,
@@ -41,4 +45,5 @@ export default defineConfig({
       exclude: ['src/**/*.test.{ts,tsx}', 'src/test/**', 'src/main.tsx', 'src/vite-env.d.ts'],
     },
   },
+  }
 })

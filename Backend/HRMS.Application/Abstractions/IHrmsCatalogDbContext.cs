@@ -18,6 +18,12 @@ public interface IHrmsCatalogDbContext
 {
     DbSet<Tenant> Tenants { get; }
     DbSet<TenantBranding> TenantBranding { get; }
+    DbSet<PlatformUser> PlatformUsers { get; }
+    DbSet<PlatformRole> PlatformRoles { get; }
+    DbSet<PlatformPermission> PlatformPermissions { get; }
+    DbSet<PlatformUserRole> PlatformUserRoles { get; }
+    DbSet<PlatformRolePermission> PlatformRolePermissions { get; }
+    DbSet<PlatformRefreshToken> PlatformRefreshTokens { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

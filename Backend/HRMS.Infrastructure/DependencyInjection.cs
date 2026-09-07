@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using MySql.EntityFrameworkCore.Extensions;
 
 namespace HRMS.Infrastructure;
@@ -116,9 +117,11 @@ public static class DependencyInjection
 
         services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
+        services.TryAddScoped<IPlatformContext, NullPlatformContext>();
 
         // Singleton: it creates the scope each organization is provisioned in rather than living in one.
         services.AddSingleton<ITenantProvisioningService, TenantProvisioningService>();
+        services.AddScoped<IPlatformTenantService, PlatformTenantService>();
 
         return services;
     }

@@ -2,6 +2,7 @@ using System.Text;
 using HRMS.API.Common;
 using HRMS.Application.Security;
 using HRMS.Domain.Authorization;
+using HRMS.Application.Abstractions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
@@ -28,8 +29,12 @@ public static class AuthenticationServiceCollectionExtensions
 
         services.AddSingleton<IValidateOptions<JwtSettings>, JwtSettingsValidator>();
 
+        services.AddOptions<PlatformJwtSettings>()
+            .Bind(configuration.GetSection(PlatformJwtSettings.SectionName));
+
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-            .AddJwtBearer();
+            .AddJwtBearer()
+            .AddJwtBearer("PlatformBearer");
 
         // JwtSettings is resolved when the handler's options are first built, which is after the host has
         // finished assembling configuration — the same values JwtTokenService signs with.
@@ -79,6 +84,39 @@ public static class AuthenticationServiceCollectionExtensions
                 };
             });
 
+        services.AddOptions<JwtBearerOptions>("PlatformBearer")
+            .Configure<IOptions<PlatformJwtSettings>>((options, jwtSettings) =>
+            {
+                var settings = jwtSettings.Value;
+                if (settings.Validate() is { } error)
+                    throw new InvalidOperationException($"Platform JWT configuration is invalid. {error}");
+                options.MapInboundClaims = false;
+                options.SaveToken = false;
+                options.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true, ValidIssuer = settings.Issuer,
+                    ValidateAudience = true, ValidAudience = settings.Audience,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.SecretKey)),
+                    ValidateLifetime = true, ClockSkew = TimeSpan.FromSeconds(settings.ClockSkewSeconds),
+                    ValidAlgorithms = [SecurityAlgorithms.HmacSha256], NameClaimType = "email", RoleClaimType = "role"
+                };
+                options.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        if (context.HttpContext.User.Identity?.IsAuthenticated == true) return Task.CompletedTask;
+                        return Task.CompletedTask;
+                    },
+                    OnChallenge = async context =>
+                    {
+                        context.HandleResponse();
+                        await FailureResponse.WriteAsync(context.HttpContext, StatusCodes.Status401Unauthorized, "Platform authentication is required.");
+                    },
+                    OnForbidden = context => FailureResponse.WriteAsync(context.HttpContext, StatusCodes.Status403Forbidden, "You do not have platform permission for this action.")
+                };
+            });
+
         services.AddAuthorization(options =>
         {
             // Every [Authorize] endpoint requires an authenticated user, a tenant claim *and* agreement
@@ -109,10 +147,24 @@ public static class AuthenticationServiceCollectionExtensions
                     permission,
                     TenantScoped().RequireClaim(HrmsClaimTypes.Permission, permission).Build());
             }
+
+            options.AddPolicy("PlatformAuthenticated", policy => policy
+                .AddAuthenticationSchemes("PlatformBearer")
+                .RequireAuthenticatedUser()
+                .RequireClaim(PlatformClaimTypes.Scope, "platform"));
+            foreach (var permission in PlatformPermissions.All)
+            {
+                options.AddPolicy(permission, policy => policy
+                    .AddAuthenticationSchemes("PlatformBearer")
+                    .RequireAuthenticatedUser()
+                    .RequireClaim(PlatformClaimTypes.Scope, "platform")
+                    .AddRequirements(new PlatformPermissionRequirement(permission)));
+            }
         });
 
         // Scoped: the handler reads the shard resolved for this request.
         services.AddScoped<IAuthorizationHandler, TenantMatchesShardHandler>();
+        services.AddScoped<IAuthorizationHandler, PlatformPermissionHandler>();
 
         // Turns a host/token disagreement into a 401 rather than the default 403.
         services.AddSingleton<IAuthorizationMiddlewareResultHandler, ShardMismatchAuthorizationResultHandler>();

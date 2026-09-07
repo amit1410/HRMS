@@ -19,6 +19,160 @@ namespace HRMS.Infrastructure.MySqlCatalogMigrations.Migrations
                 .HasAnnotation("ProductVersion", "10.0.11")
                 .HasAnnotation("Relational:MaxIdentifierLength", 64);
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformPermission", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("PlatformPermissions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformRefreshToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("PlatformUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ReplacedByTokenId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("RevokedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("PlatformUserId", "RevokedAtUtc");
+
+                    b.ToTable("PlatformRefreshTokens", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformRole", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("PlatformRoles", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformRolePermission", b =>
+                {
+                    b.Property<int>("PlatformRoleId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("PlatformPermissionId")
+                        .HasColumnType("int");
+
+                    b.HasKey("PlatformRoleId", "PlatformPermissionId");
+
+                    b.HasIndex("PlatformPermissionId");
+
+                    b.ToTable("PlatformRolePermissions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformUser", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<string>("FirstName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("LastLoginAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("LastName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<string>("NormalizedEmail")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)");
+
+                    b.Property<int>("SecurityRevision")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedEmail")
+                        .IsUnique();
+
+                    b.ToTable("PlatformUsers", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformUserRole", b =>
+                {
+                    b.Property<Guid>("PlatformUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("PlatformRoleId")
+                        .HasColumnType("int");
+
+                    b.HasKey("PlatformUserId", "PlatformRoleId");
+
+                    b.HasIndex("PlatformRoleId");
+
+                    b.ToTable("PlatformUserRoles", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Tenant", b =>
                 {
                     b.Property<Guid>("Id")
@@ -125,6 +279,55 @@ namespace HRMS.Infrastructure.MySqlCatalogMigrations.Migrations
                     b.ToTable("TenantBranding", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformRefreshToken", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.PlatformUser", "PlatformUser")
+                        .WithMany("RefreshTokens")
+                        .HasForeignKey("PlatformUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("PlatformUser");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformRolePermission", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.PlatformPermission", "PlatformPermission")
+                        .WithMany("RolePermissions")
+                        .HasForeignKey("PlatformPermissionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PlatformRole", "PlatformRole")
+                        .WithMany("RolePermissions")
+                        .HasForeignKey("PlatformRoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("PlatformPermission");
+
+                    b.Navigation("PlatformRole");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformUserRole", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.PlatformRole", "PlatformRole")
+                        .WithMany("UserRoles")
+                        .HasForeignKey("PlatformRoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PlatformUser", "PlatformUser")
+                        .WithMany("UserRoles")
+                        .HasForeignKey("PlatformUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("PlatformRole");
+
+                    b.Navigation("PlatformUser");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.TenantBranding", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -134,6 +337,25 @@ namespace HRMS.Infrastructure.MySqlCatalogMigrations.Migrations
                         .IsRequired();
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformPermission", b =>
+                {
+                    b.Navigation("RolePermissions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformRole", b =>
+                {
+                    b.Navigation("RolePermissions");
+
+                    b.Navigation("UserRoles");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformUser", b =>
+                {
+                    b.Navigation("RefreshTokens");
+
+                    b.Navigation("UserRoles");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Tenant", b =>

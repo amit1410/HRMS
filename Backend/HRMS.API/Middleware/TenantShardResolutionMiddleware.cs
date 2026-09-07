@@ -37,6 +37,11 @@ public sealed class TenantShardResolutionMiddleware
         ITenantShardResolver resolver,
         IShardContext shardContext)
     {
+        if (context.Items.ContainsKey(PlatformRequestRoutingMiddleware.PlatformHostItem))
+        {
+            await _next(context);
+            return;
+        }
         // Host excludes the port, which Port carries separately — so "demo01.localhost:5173" and
         // "demo01.localhost" resolve to the same organization without any string handling here. Behind a
         // reverse proxy this is whatever the proxy forwarded, which is why forwarded headers have to be

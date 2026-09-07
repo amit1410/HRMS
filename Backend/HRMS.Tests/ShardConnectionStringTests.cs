@@ -7,6 +7,8 @@ using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -252,6 +254,7 @@ public class ShardConnectionStringTests
         // host, and TimeProvider from AddApplication().
         services.AddSingleton<IConfiguration>(configuration);
         services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<IHostEnvironment>(new TestHostEnvironment());
 
         services.AddScoped<ITenantContext>(_ => new TestTenantContext());
         services.AddInfrastructure(configuration);
@@ -264,5 +267,13 @@ public class ShardConnectionStringTests
             ValidateScopes = true,
             ValidateOnBuild = true
         });
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+        public string ApplicationName { get; set; } = "HRMS.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 }

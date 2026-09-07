@@ -182,6 +182,18 @@ public class CorsOriginPolicyTests
     }
 
     [Fact]
+    public void The_local_platform_frontend_is_an_exact_origin_not_a_workspace_template()
+    {
+        var policy = Policy(
+            exactOrigins: ["http://platform.localhost:5173"],
+            workspaceTemplates: ["http://{workspace}.localhost:5173"]);
+
+        Assert.True(policy.IsAllowed("http://platform.localhost:5173"));
+        Assert.True(policy.IsAllowed("http://demo01.localhost:5173"));
+        Assert.False(policy.IsAllowed("http://platform.localhost.evil.test:5173"));
+    }
+
+    [Fact]
     public void Blank_entries_are_ignored_rather_than_treated_as_mistakes()
     {
         var policy = Policy(exactOrigins: [ExactOrigin, "", "   "], workspaceTemplates: ["", WorkspaceTemplate]);

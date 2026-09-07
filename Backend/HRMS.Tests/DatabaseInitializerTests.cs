@@ -124,7 +124,7 @@ public class DatabaseInitializerTests : IDisposable
     /// navigation discovery rather than throwing — so it is asserted rather than assumed.
     /// </summary>
     [Fact]
-    public async Task The_catalog_model_maps_only_the_routing_tables()
+    public async Task The_catalog_model_maps_routing_and_platform_identity_tables_but_no_tenant_tables()
     {
         await using var provider = BuildProvider();
         var catalog = provider.GetRequiredService<HrmsCatalogDbContext>();
@@ -134,7 +134,20 @@ public class DatabaseInitializerTests : IDisposable
             .OrderBy(table => table, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(["TenantBranding", "Tenants"], tables);
+        Assert.Equal(
+            [
+                "PlatformPermissions",
+                "PlatformRefreshTokens",
+                "PlatformRolePermissions",
+                "PlatformRoles",
+                "PlatformUserRoles",
+                "PlatformUsers",
+                "TenantBranding",
+                "Tenants"
+            ],
+            tables);
+        Assert.DoesNotContain("Employees", tables);
+        Assert.DoesNotContain("LeaveRequests", tables);
     }
 
     /// <summary>

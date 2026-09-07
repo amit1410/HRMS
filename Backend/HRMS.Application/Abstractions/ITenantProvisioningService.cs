@@ -23,4 +23,7 @@ public interface ITenantProvisioningService
     /// confirmed is not a recoverable situation.
     /// </exception>
     Task ProvisionAsync(ShardDescriptor shard, CancellationToken cancellationToken = default);
+
+    /// <summary>Synchronizes routing identity into an existing shard during an explicit operator retry.</summary>
+    Task SynchronizeTenantIdentityAsync(ShardDescriptor shard, CancellationToken cancellationToken = default);
 }

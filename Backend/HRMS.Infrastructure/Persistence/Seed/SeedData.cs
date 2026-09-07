@@ -142,7 +142,7 @@ public static class SeedData
             [DomainPermissions.Leave.PolicyView] = 32,
             [DomainPermissions.Leave.PolicyManage] = 33,
             [DomainPermissions.Leave.PolicyPublish] = 34,
-            [DomainPermissions.Leave.Approve] = 35
+            [DomainPermissions.Leave.Approve] = 35,
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>
@@ -165,7 +165,7 @@ public static class SeedData
 
     private static readonly IReadOnlyDictionary<string, string> RoleDescriptions = new Dictionary<string, string>
     {
-        [RoleNames.SuperAdmin] = "Platform super administrator with full access across all tenants.",
+        [RoleNames.SuperAdmin] = "Tenant super administrator with full access within its own tenant.",
         [RoleNames.TenantAdmin] = "Administrator with full access within their own tenant.",
         [RoleNames.HRAdmin] = "HR administrator managing employees, departments and designations.",
         [RoleNames.HRManager] = "HR manager with employee management capabilities.",
@@ -195,7 +195,9 @@ public static class SeedData
     public static IReadOnlyDictionary<string, string[]> RolePermissionMap => new Dictionary<string, string[]>
     {
         [RoleNames.SuperAdmin] = DomainPermissions.All.Where(x => !x.StartsWith("AccountEmployeeLink.", StringComparison.Ordinal)).ToArray(),
-        [RoleNames.TenantAdmin] = DomainPermissions.All.Where(x => !x.StartsWith("AccountEmployeeLink.", StringComparison.Ordinal)).ToArray(),
+        [RoleNames.TenantAdmin] = DomainPermissions.All
+            .Where(x => !x.StartsWith("AccountEmployeeLink.", StringComparison.Ordinal))
+            .ToArray(),
         [RoleNames.HRAdmin] = new[]
         {
             DomainPermissions.Employee.View, DomainPermissions.Employee.Create, DomainPermissions.Employee.Edit,

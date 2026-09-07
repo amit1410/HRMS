@@ -16,6 +16,7 @@ import { WorkspacePickerPage } from './pages/WorkspacePickerPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
 import { EmployeeCodeConfigurationPage } from './pages/EmployeeCodeConfigurationPage.tsx'
 import { isApexHost } from './lib/isApexHost.ts'
+import { isPlatformHost } from './lib/isPlatformHost.ts'
 import { MasterManagementPage } from './pages/masters/MasterManagementPage.tsx'
 import { AccountEmployeeLinksPage } from './pages/administration/AccountEmployeeLinksPage.tsx'
 import { LeaveTypesPage } from './pages/leave/LeaveTypesPage.tsx'
@@ -25,6 +26,10 @@ import { LeavePolicyEditorPage } from './pages/leave/LeavePolicyEditorPage.tsx'
 import { LeaveRequestPreviewPage } from './pages/leave/LeaveRequestPreviewPage.tsx'
 import { MyLeaveRequestDetailPage, MyLeaveRequestsPage } from './pages/leave/MyLeaveRequestsPage.tsx'
 import { LeaveApprovalDetailPage, LeaveApprovalsPage } from './pages/leave/LeaveApprovalsPage.tsx'
+import { PlatformTenantsPage } from './pages/platform/PlatformTenantsPage.tsx'
+import { PlatformLoginPage } from './pages/platform/PlatformLoginPage.tsx'
+import { PlatformAuthProvider, usePlatformAuth } from './auth/PlatformAuthProvider.tsx'
+import { RequirePlatformAuth } from './auth/RequirePlatformAuth.tsx'
 
 /**
  * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
@@ -59,6 +64,20 @@ function KeyedErrorBoundary({ children }: { children: ReactNode }) {
  * their way out instead of landing on a bare page.
  */
 export function App() {
+  if (isPlatformHost(window.location.hostname)) return <PlatformApplication />
+  return <TenantApplication />
+}
+
+function PlatformApplication() {
+  return <ErrorBoundary><PlatformAuthProvider><PlatformRoutes /></PlatformAuthProvider></ErrorBoundary>
+}
+
+function PlatformRoutes() {
+  const { status } = usePlatformAuth()
+  return <KeyedErrorBoundary><Routes><Route path="/platform/login" element={<PlatformLoginPage />} /><Route element={<RequirePlatformAuth />}><Route path="/platform/tenants" element={<PlatformTenantsPage />} /><Route path="*" element={<Navigate to={status === 'authenticated' ? '/platform/tenants' : '/platform/login'} replace />} /></Route></Routes></KeyedErrorBoundary>
+}
+
+function TenantApplication() {
   const apex = isApexHost(window.location.hostname)
 
   return (
@@ -95,7 +114,6 @@ export function App() {
                   <Route path="leave-management/my-requests/:requestId" element={<MyLeaveRequestDetailPage />} />
                   <Route path="leave-management/approvals" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalsPage /></RequirePermission>} />
                   <Route path="leave-management/approvals/:requestId" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalDetailPage /></RequirePermission>} />
-
               <Route path="employees">
                 <Route
                   index

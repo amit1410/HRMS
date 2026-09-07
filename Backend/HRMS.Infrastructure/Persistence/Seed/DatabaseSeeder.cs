@@ -153,8 +153,7 @@ public static class DatabaseSeeder
 
     /// <summary>
     /// Copies one organization's catalog row into its own database. Matched on id rather than code, because
-    /// the id is what every tenant-scoped foreign key in this database points at — a row with the right code
-    /// and a different id would satisfy this check and then fail every insert that followed.
+    /// the id is what every tenant-scoped foreign key in this database points at.
     /// </summary>
     private static async Task SeedTenantAsync(HrmsDbContext db, Tenant tenant, CancellationToken ct)
     {

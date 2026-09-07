@@ -7,6 +7,7 @@ using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Infrastructure;
 using HRMS.Infrastructure.Persistence;
+using HRMS.Infrastructure.Security;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi;
 using Serilog;
@@ -31,10 +32,13 @@ try
     // token service, auth service, validators).
     builder.Services.AddApplication();
     builder.Services.AddInfrastructure(builder.Configuration);
+    builder.Services.AddSingleton<IPlatformTokenService, PlatformJwtTokenService>();
+    builder.Services.AddScoped<IPlatformAuthService, PlatformAuthService>();
 
     // Tenant identity is resolved per-request from JWT claims (server-side, never from client input).
     builder.Services.AddHttpContextAccessor();
     builder.Services.AddScoped<ITenantContext, HttpTenantContext>();
+    builder.Services.AddScoped<IPlatformContext, HttpPlatformContext>();
 
     // JWT bearer authentication plus one authorization policy per permission.
     builder.Services.AddJwtAuthentication(builder.Configuration);
@@ -155,6 +159,7 @@ try
 
     // Resolves the host to an organization before the rate limiter partitions, before authentication reads
     // claims, and before any controller can open a tenant database.
+    app.UsePlatformRequestRouting();
     app.UseTenantShardResolution();
 
     app.UseRateLimiter();

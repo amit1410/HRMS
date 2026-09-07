@@ -32,6 +32,12 @@ public class HrmsCatalogDbContext : DbContext, IHrmsCatalogDbContext
 
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<TenantBranding> TenantBranding => Set<TenantBranding>();
+    public DbSet<PlatformUser> PlatformUsers => Set<PlatformUser>();
+    public DbSet<PlatformRole> PlatformRoles => Set<PlatformRole>();
+    public DbSet<PlatformPermission> PlatformPermissions => Set<PlatformPermission>();
+    public DbSet<PlatformUserRole> PlatformUserRoles => Set<PlatformUserRole>();
+    public DbSet<PlatformRolePermission> PlatformRolePermissions => Set<PlatformRolePermission>();
+    public DbSet<PlatformRefreshToken> PlatformRefreshTokens => Set<PlatformRefreshToken>();
 
     /// <summary>
     /// Matches <see cref="HrmsDbContext.ConfigureConventions"/>: a timestamp means the same thing in both
@@ -53,6 +59,12 @@ public class HrmsCatalogDbContext : DbContext, IHrmsCatalogDbContext
         // graph into the routing database.
         modelBuilder.ApplyConfiguration(new CatalogTenantConfiguration());
         modelBuilder.ApplyConfiguration(new CatalogTenantBrandingConfiguration());
+        modelBuilder.ApplyConfiguration(new PlatformUserConfiguration());
+        modelBuilder.ApplyConfiguration(new PlatformRoleConfiguration());
+        modelBuilder.ApplyConfiguration(new PlatformPermissionConfiguration());
+        modelBuilder.ApplyConfiguration(new PlatformUserRoleConfiguration());
+        modelBuilder.ApplyConfiguration(new PlatformRolePermissionConfiguration());
+        modelBuilder.ApplyConfiguration(new PlatformRefreshTokenConfiguration());
 
         // Ordering is load-bearing: an Ignore placed *before* a configuration is silently undone by it, so
         // this has to sit after the two calls above. Tenant.Users is already ignored inside
