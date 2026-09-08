@@ -12,6 +12,21 @@ import type {
   PagedResult,
 } from './types.ts'
 
+export interface PortalAccount {
+  employeeId: string
+  state: 'NotCreated' | 'InvitationPending' | 'Active' | 'Disabled'
+  userId?: string | null
+  email?: string | null
+  invitationExpiresAtUtc?: string | null
+  lastInviteSentAtUtc?: string | null
+}
+
+export interface CreatePortalAccountResponse {
+  account: PortalAccount
+  developmentInviteUrl?: string | null
+  message: string
+}
+
 /**
  * Employee reads, writes and the CSV export.
  *
@@ -96,6 +111,22 @@ export function deleteEmployee(id: string, signal?: AbortSignal): Promise<boolea
   return request<boolean>(() =>
     api.delete<ApiResponse<boolean>>(`/api/employees/${id}`, { signal }),
   )
+}
+
+export function getPortalAccount(id: string, signal?: AbortSignal): Promise<PortalAccount> {
+  return request<PortalAccount>(() => api.get<ApiResponse<PortalAccount>>(`/api/employees/${id}/portal-account`, { signal }))
+}
+
+export function createPortalAccount(id: string, loginEmail?: string): Promise<CreatePortalAccountResponse> {
+  return request<CreatePortalAccountResponse>(() => api.post<ApiResponse<CreatePortalAccountResponse>>(`/api/employees/${id}/portal-account`, { loginEmail: loginEmail || null }))
+}
+
+export function resendPortalInvite(id: string): Promise<CreatePortalAccountResponse> {
+  return request<CreatePortalAccountResponse>(() => api.post<ApiResponse<CreatePortalAccountResponse>>(`/api/employees/${id}/portal-account/resend-invite`))
+}
+
+export function revokePortalInvite(id: string): Promise<PortalAccount> {
+  return request<PortalAccount>(() => api.post<ApiResponse<PortalAccount>>(`/api/employees/${id}/portal-account/revoke-invite`))
 }
 
 export interface ExportedFile {

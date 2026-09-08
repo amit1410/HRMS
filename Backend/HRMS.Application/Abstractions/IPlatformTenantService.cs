@@ -18,4 +18,8 @@ public interface IPlatformTenantService
         Guid id,
         RetryPlatformTenantRequest request,
         CancellationToken cancellationToken = default);
+    Task<Result<ResetTenantAdminPasswordResponse>> ResetTenantAdminPasswordAsync(
+        Guid id,
+        ResetTenantAdminPasswordRequest request,
+        CancellationToken cancellationToken = default);
 }

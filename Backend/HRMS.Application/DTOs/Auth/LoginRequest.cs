@@ -9,7 +9,13 @@ namespace HRMS.Application.DTOs.Auth;
 /// </summary>
 public class LoginRequest
 {
-    public string Email { get; set; } = string.Empty;
+    /// <summary>Canonical login input. It may be an email address or employee code.</summary>
+    public string? Identifier { get; set; }
+
+    /// <summary>Legacy request name retained for existing API clients during the transition.</summary>
+    public string? Email { get; set; }
 
     public string Password { get; set; } = string.Empty;
+
+    public string EffectiveIdentifier => Identifier ?? Email ?? string.Empty;
 }

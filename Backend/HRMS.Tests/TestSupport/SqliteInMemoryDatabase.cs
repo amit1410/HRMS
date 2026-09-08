@@ -74,7 +74,7 @@ public sealed class SqliteInMemoryDatabase : IDisposable
     public async Task SeedAsync()
     {
         using var catalog = CreateCatalogContext();
-        await DatabaseSeeder.SeedCatalogAsync(catalog, CancellationToken.None);
+        await DatabaseSeeder.SeedCatalogAsync(catalog, seedDemoTenants: true, CancellationToken.None);
 
         var tenants = await catalog.Tenants.AsNoTracking().ToListAsync();
 

@@ -53,6 +53,18 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
             throw new TenantProvisioningException("MySqlMigrationFailed", "The MySQL tenant migration failed.", ex);
         }
 
+        if (shard.DatabaseProvider == DatabaseProviderType.MySql)
+        {
+            try
+            {
+                await VerifyMySqlDatabaseIsCurrentAsync(db, databaseName: GetMySqlDatabaseName(db.Database.GetDbConnection().ConnectionString), cancellationToken);
+            }
+            catch (MySqlException ex)
+            {
+                throw new TenantProvisioningException("MySqlMigrationFailed", "The MySQL tenant migration failed.", ex);
+            }
+        }
+
         _logger.LogInformation(
             "Seeding organization {TenantCode} on shard {ShardKey}.", shard.TenantCode, shard.ShardKey);
 
@@ -178,42 +190,50 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
                 "MySqlDatabaseStateUnexpected",
                 $"MySQL tenant database '{databaseName}' exists without migration history; retry is stopped for operator diagnosis.", ex);
         }
-
-        const string expectedMigration = "20260905172008_InitialMySqlTenantSchema";
-        if (applied.Count != 1 || !string.Equals(applied[0], expectedMigration, StringComparison.Ordinal))
-            throw new TenantProvisioningException(
-                "MySqlDatabaseStateUnexpected",
-                $"MySQL tenant database '{databaseName}' has incomplete or unexpected migration history; retry is stopped.");
-
-        await using var tableCommand = existingConnection.CreateCommand();
-        tableCommand.CommandText = "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE()";
-        var actualTables = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            await using var tableReader = await tableCommand.ExecuteReaderAsync(cancellationToken);
-            while (await tableReader.ReadAsync(cancellationToken))
-                actualTables.Add(tableReader.GetString(0));
-        }
         catch (MySqlException ex)
         {
             throw new TenantProvisioningException(
                 "MySqlDatabaseStateUnexpected",
-                $"MySQL tenant database '{databaseName}' could not be inspected safely.",
-                ex);
+                $"MySQL tenant database '{databaseName}' has unreadable migration history; retry is stopped for operator diagnosis.", ex);
         }
 
-        var expectedTables = db.Model.GetEntityTypes()
-            .Select(entity => entity.GetTableName())
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Select(name => name!)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        expectedTables.Add("__EFMigrationsHistory");
-        var missingTables = expectedTables.Where(table => !actualTables.Contains(table)).ToArray();
-        if (missingTables.Length > 0)
-            throw new TenantProvisioningException(
-                "MySqlDatabaseStateUnexpected",
-                $"MySQL tenant database '{databaseName}' has incomplete schema; retry is stopped. Missing {string.Join(", ", missingTables)}.");
+        ValidateMySqlMigrationHistory(applied, db.Database.GetMigrations().ToArray(), databaseName);
     }
+
+    private static async Task VerifyMySqlDatabaseIsCurrentAsync(
+        HrmsDbContext db,
+        string databaseName,
+        CancellationToken cancellationToken)
+    {
+        var applied = (await db.Database.GetAppliedMigrationsAsync(cancellationToken)).ToArray();
+        ValidateMySqlMigrationHistory(applied, db.Database.GetMigrations().ToArray(), databaseName);
+
+        var pending = (await db.Database.GetPendingMigrationsAsync(cancellationToken)).ToArray();
+        if (pending.Length > 0)
+            throw new TenantProvisioningException(
+                "MySqlMigrationFailed",
+                $"MySQL tenant database '{databaseName}' still has pending migrations after preparation.");
+    }
+
+    internal static void ValidateMySqlMigrationHistory(
+        IReadOnlyList<string> applied,
+        IReadOnlyList<string> known,
+        string databaseName)
+    {
+        if (known.Count == 0 || applied.Count == 0 || applied.Count > known.Count)
+            throw UnexpectedMigrationHistory(databaseName);
+
+        for (var index = 0; index < applied.Count; index++)
+        {
+            if (!string.Equals(applied[index], known[index], StringComparison.Ordinal))
+                throw UnexpectedMigrationHistory(databaseName);
+        }
+    }
+
+    private static TenantProvisioningException UnexpectedMigrationHistory(string databaseName) =>
+        new(
+            "MySqlDatabaseStateUnexpected",
+            $"MySQL tenant database '{databaseName}' has incomplete or unexpected migration history; retry is stopped.");
 
     internal static string GetMySqlDatabaseName(string connectionString) =>
         new MySqlConnectionStringBuilder(connectionString).Database;

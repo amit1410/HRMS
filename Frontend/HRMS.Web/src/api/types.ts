@@ -63,9 +63,11 @@ export const MAX_PAGE_SIZE = 100
  * checked — so it is not something a caller can state or mistype.
  */
 export interface LoginRequest {
-  email: string
+  identifier: string
   password: string
 }
+
+export type TenantLoginIdentifierMode = 'EmailOnly' | 'EmployeeCodeOnly' | 'EmailOrEmployeeCode'
 
 /**
  * `DTOs/Tenants/TenantBrandingDto.cs` — what the sign-in screen shows for the organization at the
@@ -84,7 +86,15 @@ export interface TenantBranding {
   supportEmail?: string | null
   ssoEnabled: boolean
   ssoProviderName?: string | null
+  loginIdentifierMode?: TenantLoginIdentifierMode
+  passwordRecoveryEnabled?: boolean
 }
+
+export type PasswordRecoveryChannel = 'Email' | 'Sms'
+export interface RecoveryChannel { channel: PasswordRecoveryChannel; maskedDestination: string }
+export interface RecoveryChallenge { challengeId: string; availableChannels: RecoveryChannel[]; message: string }
+export interface RecoverySendOtp { challengeId: string; channel: PasswordRecoveryChannel; maskedDestination: string; developmentOtp?: string | null; message: string }
+export interface RecoveryVerification { resetToken: string; message: string }
 
 /** `DTOs/Auth/LoginResponse.cs`. Returned by both `/api/auth/login` and `/api/auth/refresh`. */
 export interface LoginResponse {
@@ -124,6 +134,51 @@ export interface EmployeeIdentity {
   employmentEligibility: 'NotLinked' | 'FutureJoining' | 'NoApplicableEmployment' | 'ActiveEmployment' | 'Separated' | 'RequiresReview'
   businessDate: string | null
 }
+
+export interface MyEmployeeProfile {
+  employeeCode?: string | null
+  salutation?: string | null
+  firstName: string
+  middleName?: string | null
+  lastName: string
+  fullName: string
+  gender: string
+  dateOfBirth?: string | null
+  bloodGroup: string
+  maritalStatus: string
+  citizenship?: string | null
+  birthCountry?: string | null
+  birthState?: string | null
+  birthCity?: string | null
+  religion?: string | null
+  caste?: string | null
+  maskedAadhaar?: string | null
+  maskedPan?: string | null
+  maskedUan?: string | null
+  maskedPf?: string | null
+  maskedEsic?: string | null
+  mediclaimNumber?: string | null
+  esicApplicable: boolean
+  gratuity: boolean
+  pension: boolean
+  dateOfJoining: string
+  groupDateOfJoining?: string | null
+  employeeType?: string | null
+  jobStatus?: string | null
+  status: string
+  groupId?: string | null
+  payrollLocation?: string | null
+  costCenterCode?: string | null
+  profilePictureUrl?: string | null
+  contact: { email?: string | null; phone?: string | null }
+  currentAddress?: MyEmployeeAddress | null
+  permanentAddress?: MyEmployeeAddress | null
+  currentEmployment?: MyCurrentEmployment | null
+  bankDetails: MyEmployeeBank[]
+}
+export interface MyEmployeeAddress { country?: string | null; state?: string | null; district?: string | null; city?: string | null; zipCode?: string | null; addressLine1?: string | null; addressLine2?: string | null; houseNumber?: string | null }
+export interface MyCurrentEmployment { holdingCompany?: string | null; lob?: string | null; organization?: string | null; department?: string | null; subDepartment?: string | null; section?: string | null; subSection?: string | null; function?: string | null; subFunction?: string | null; grade?: string | null; designation?: string | null; employeeType?: string | null; country?: string | null; workLocation?: string | null; costCenter?: string | null; effectiveFrom: string; reportingManager?: string | null; employmentType: string; employmentStatus: string }
+export interface MyEmployeeBank { bankName: string; maskedAccountNumber: string; maskedIfsc?: string | null; branch?: string | null; accountType: string; effectiveFrom?: string | null }
 
 // ---------------------------------------------------------------------------------------------
 // Organization

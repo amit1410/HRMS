@@ -1,4 +1,5 @@
 import { Permissions } from '../auth/permissions.ts'
+import type { AuthenticatedUser } from '../api/types.ts'
 
 export interface NavItem {
   label: string
@@ -12,6 +13,7 @@ export interface NavItem {
    * built is shown greyed with a "soon" marker rather than linking to a 404.
    */
   available: boolean
+  requiresEmployeeIdentity?: boolean
 }
 
 /**
@@ -23,6 +25,8 @@ export interface NavItem {
  */
 export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Dashboard', to: '/dashboard', available: true },
+  { label: 'My Profile', to: '/my-profile', available: true, requiresEmployeeIdentity: true },
+  { label: 'Change Password', to: '/change-password', available: true },
   {
     label: 'Employees',
     to: '/employees',
@@ -35,6 +39,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
     permission: Permissions.employeeCodeConfiguration.view,
     available: true,
   },
+  { label: 'Login Settings', to: '/configuration/login-settings', permission: Permissions.user.edit, available: true },
+  { label: 'Password Recovery', to: '/configuration/password-recovery', permission: Permissions.user.edit, available: true },
   {
     label: 'Masters',
     to: '/masters/holding-companies',
@@ -55,9 +61,10 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Leave Approvals', to: '/leave-management/approvals', permission: Permissions.leave.approve, available: true },
 ]
 
-export function visibleNavItems(can: (permission: string) => boolean): NavItem[] {
+export function visibleNavItems(can: (permission: string) => boolean, user?: AuthenticatedUser | null): NavItem[] {
   return NAV_ITEMS.filter((item) =>
     (item.permission === undefined || can(item.permission)) &&
-    (item.anyPermission === undefined || item.anyPermission.some(can)),
+    (item.anyPermission === undefined || item.anyPermission.some(can)) &&
+    (!item.requiresEmployeeIdentity || user?.employeeIdentity?.status === 'Linked'),
   )
 }

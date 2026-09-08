@@ -23,6 +23,68 @@ public class AuthServiceLoginTests
     private const string Demo02 = AuthTestHarness.Demo02Host;
 
     [Fact]
+    public async Task Login_identifier_mode_defaults_to_email_or_employee_code_and_accepts_employee_code()
+    {
+        using var harness = await AuthTestHarness.CreateAsync();
+        var employeeId = OrganizationTestHarness.EmployeeId(SeedData.TenantIds.Demo01, "EMP-001");
+        var linkId = Guid.NewGuid();
+        using (var arrange = harness.CreateUnscopedContext())
+        {
+            arrange.AccountEmployeeLinkEvents.Add(new HRMS.Domain.Entities.AccountEmployeeLinkEvent
+            {
+                Id = linkId, TenantId = SeedData.TenantIds.Demo01, SubjectUserId = SeedData.Users[0].Id,
+                ActorUserId = SeedData.Users[0].Id, Sequence = 1, Operation = "Link", NewLinkId = linkId,
+                AfterEmployeeId = employeeId, OccurredAtUtc = DateTime.UtcNow, Reason = "login test",
+                CorrelationId = Guid.NewGuid().ToString("N")
+            });
+            arrange.AccountEmployeeCurrentLinks.Add(new HRMS.Domain.Entities.AccountEmployeeCurrentLink
+            { LinkId = linkId, TenantId = SeedData.TenantIds.Demo01, UserId = SeedData.Users[0].Id, EmployeeId = employeeId });
+            await arrange.SaveChangesAsync();
+        }
+
+        var result = await harness.At(Demo01).CreateService().LoginAsync(new LoginRequest
+        { Identifier = " emp-001 ", Password = Password });
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(SeedData.Users[0].Id, result.Value!.User.Id);
+    }
+
+    [Fact]
+    public async Task Employee_code_only_keeps_tenant_admin_email_login_available()
+    {
+        using var harness = await AuthTestHarness.CreateAsync();
+        using (var catalog = harness.Database.CreateCatalogContext())
+        {
+            var branding = await catalog.TenantBranding.SingleAsync(x => x.TenantId == SeedData.TenantIds.Demo01);
+            branding.LoginIdentifierMode = TenantLoginIdentifierMode.EmployeeCodeOnly;
+            await catalog.SaveChangesAsync();
+        }
+
+        var result = await harness.At(Demo01).CreateService().LoginAsync(new LoginRequest
+        { Identifier = "admin@demo01.com", Password = Password });
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task Employee_code_only_rejects_email_for_non_admin_account_generically()
+    {
+        using var harness = await AuthTestHarness.CreateAsync();
+        using (var catalog = harness.Database.CreateCatalogContext())
+        {
+            var branding = await catalog.TenantBranding.SingleAsync(x => x.TenantId == SeedData.TenantIds.Demo01);
+            branding.LoginIdentifierMode = TenantLoginIdentifierMode.EmployeeCodeOnly;
+            await catalog.SaveChangesAsync();
+        }
+
+        var result = await harness.At(Demo01).CreateService().LoginAsync(new LoginRequest
+        { Identifier = "hr@demo01.com", Password = Password });
+
+        Assert.Equal(ResultStatus.Unauthorized, result.Status);
+        Assert.Equal("Invalid login identifier or password.", result.Message);
+    }
+
+    [Fact]
     public async Task Login_with_valid_credentials_returns_tokens_and_profile()
     {
         using var harness = await AuthTestHarness.CreateAsync();

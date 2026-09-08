@@ -27,6 +27,8 @@ public interface IHrmsDbContext
     DbSet<UserRole> UserRoles { get; }
     DbSet<RolePermission> RolePermissions { get; }
     DbSet<RefreshToken> RefreshTokens { get; }
+    DbSet<UserInvitation> UserInvitations { get; }
+    DbSet<PasswordResetOtp> PasswordResetOtps { get; }
     DbSet<Department> Departments { get; }
     DbSet<Designation> Designations { get; }
     DbSet<Bank> Banks { get; }

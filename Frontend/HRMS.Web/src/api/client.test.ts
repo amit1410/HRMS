@@ -208,7 +208,7 @@ describe('api client', () => {
       }))
 
       await expect(
-        login({ email: 'nobody@demo01.test', password: 'wrong' }),
+        login({ identifier: 'nobody@demo01.test', password: 'wrong' }),
       ).rejects.toMatchObject({ status: 401, message: 'Invalid credentials.' })
 
       expect(stub.callsTo('post', '/api/auth/refresh')).toHaveLength(0)
@@ -229,18 +229,18 @@ describe('api client', () => {
       stub.on('post', '/api/auth/login', () => ({
         status: 400,
         data: fail('Validation failed.', [
-          { field: 'email', message: 'Email is required.' },
+          { field: 'identifier', message: 'Email or Employee Code is required.' },
           { field: 'password', message: 'Password is required.' },
         ]),
       }))
 
-      const error = await login({ email: '', password: '' }).catch(
+      const error = await login({ identifier: '', password: '' }).catch(
         (caught: unknown) => caught,
       )
 
       expect(error).toBeInstanceOf(ApiError)
       expect((error as ApiError).fieldErrors).toEqual({
-        email: 'Email is required.',
+        identifier: 'Email or Employee Code is required.',
         password: 'Password is required.',
       })
     })

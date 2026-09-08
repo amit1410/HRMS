@@ -1,12 +1,17 @@
+using HRMS.Domain.Enums;
+
 namespace HRMS.Application.DTOs.Tenants;
+
+public sealed record TenantRecoverySettingsDto(bool PasswordRecoveryEnabled, bool AllowEmailOtp, bool AllowSmsOtp, int OtpExpiryMinutes, int OtpMaxAttempts, int OtpResendCooldownSeconds, int OtpMaxResends);
+public sealed record UpdateTenantRecoverySettingsRequest(bool PasswordRecoveryEnabled, bool AllowEmailOtp, bool AllowSmsOtp, int OtpExpiryMinutes, int OtpMaxAttempts, int OtpResendCooldownSeconds, int OtpMaxResends);
 
 /// <summary>
 /// The branding a sign-in screen may show for the organization at the address the request arrived at,
 /// before anyone has authenticated.
 /// <para>
-/// Every field is optional, and that is what makes this DTO safe to return to anonymous callers: an
-/// address no organization uses, one whose organization is not active, and one whose organization has not
-/// opted in all produce the same all-null response. A caller cannot tell the three apart.
+/// Custom fields are optional. Active organizations still receive a usable display name and accent color
+/// from the service when custom branding is absent; unknown, inactive, and unpublished organizations fail
+/// with a not-found result.
 /// </para>
 /// <para>
 /// There is no organization identifier here, not even an echoed one. The caller supplied no identifier —
@@ -15,7 +20,7 @@ namespace HRMS.Application.DTOs.Tenants;
 /// them anything at all.
 /// </para>
 /// </summary>
-/// <param name="DisplayName">The organization's name, or null when there is no branding to show.</param>
+/// <param name="DisplayName">The organization's name, including the tenant-name fallback.</param>
 /// <param name="LogoUrl">An absolute <c>https</c> logo URL. Never any other scheme — see the service.</param>
 /// <param name="PrimaryColor">An accent colour as <c>#RRGGBB</c>. Never any other shape — see the service.</param>
 /// <param name="WelcomeMessage">A short line to show above the form.</param>
@@ -33,16 +38,19 @@ public record TenantBrandingDto(
     string? WelcomeMessage,
     string? SupportEmail,
     bool SsoEnabled,
-    string? SsoProviderName)
+    string? SsoProviderName,
+    TenantLoginIdentifierMode LoginIdentifierMode,
+    bool PasswordRecoveryEnabled = true,
+    bool AllowEmailOtp = true,
+    bool AllowSmsOtp = true,
+    int OtpExpiryMinutes = 5,
+    int OtpMaxAttempts = 5,
+    int OtpResendCooldownSeconds = 60,
+    int OtpMaxResends = 5)
 {
     /// <summary>
-    /// The response for "there is nothing to show" — whatever the reason. Used for an address that resolves
-    /// to no organization, an inactive organization, and one that has not made its branding public, so that
-    /// all three are one indistinguishable answer rather than three distinguishable ones.
-    /// <para>
-    /// A single shared instance rather than a factory: it takes no input now, and one instance makes it
-    /// impossible for two callers to produce responses that differ in any way.
-    /// </para>
+    /// Retained for compatibility with provider/client code that models an empty branding payload. The
+    /// current active-tenant service path returns fallback branding instead of using this value.
     /// </summary>
-    public static TenantBrandingDto Neutral { get; } = new(null, null, null, null, null, false, null);
+    public static TenantBrandingDto Neutral { get; } = new(null, null, null, null, null, false, null, TenantLoginIdentifierMode.EmailOrEmployeeCode);
 }

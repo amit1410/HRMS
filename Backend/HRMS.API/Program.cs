@@ -31,7 +31,7 @@ try
     // Application + Infrastructure services (DbContext with configurable provider, password hasher,
     // token service, auth service, validators).
     builder.Services.AddApplication();
-    builder.Services.AddInfrastructure(builder.Configuration);
+    builder.Services.AddInfrastructure(builder.Configuration, builder.Environment);
     builder.Services.AddSingleton<IPlatformTokenService, PlatformJwtTokenService>();
     builder.Services.AddScoped<IPlatformAuthService, PlatformAuthService>();
 
@@ -42,7 +42,7 @@ try
 
     // JWT bearer authentication plus one authorization policy per permission.
     builder.Services.AddJwtAuthentication(builder.Configuration);
-    builder.Services.AddHrmsRateLimiting(builder.Configuration);
+    builder.Services.AddHrmsRateLimiting(builder.Configuration, builder.Environment);
 
     builder.Services.AddControllers(options =>
         {
@@ -122,7 +122,8 @@ try
     await DatabaseInitializer.InitializeIfEnabledAsync(
         app.Services,
         app.Environment.IsDevelopment(),
-        app.Configuration.GetValue<bool>("Database:SkipInitialization"));
+        app.Configuration.GetValue<bool>("Database:SkipInitialization"),
+        app.Configuration.GetValue<bool>("Database:SeedDemoTenants"));
 
     // Centralized exception handling must sit at the top of the pipeline.
     app.UseMiddleware<ExceptionHandlingMiddleware>();

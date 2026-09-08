@@ -12,9 +12,15 @@ import { EmployeeFormPage } from './pages/employees/EmployeeFormPage.tsx'
 import { EmployeesPage } from './pages/employees/EmployeesPage.tsx'
 import { ForbiddenPage } from './pages/ForbiddenPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
+import { SetPasswordPage } from './pages/SetPasswordPage.tsx'
 import { WorkspacePickerPage } from './pages/WorkspacePickerPage.tsx'
 import { NotFoundPage } from './pages/NotFoundPage.tsx'
 import { EmployeeCodeConfigurationPage } from './pages/EmployeeCodeConfigurationPage.tsx'
+import { MyProfilePage } from './pages/MyProfilePage.tsx'
+import { TenantLoginSettingsPage } from './pages/TenantLoginSettingsPage.tsx'
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage.tsx'
+import { ChangePasswordPage } from './pages/ChangePasswordPage.tsx'
+import { TenantPasswordRecoverySettingsPage } from './pages/TenantPasswordRecoverySettingsPage.tsx'
 import { isApexHost } from './lib/isApexHost.ts'
 import { isPlatformHost } from './lib/isPlatformHost.ts'
 import { MasterManagementPage } from './pages/masters/MasterManagementPage.tsx'
@@ -90,11 +96,17 @@ function TenantApplication() {
           ) : (
             <>
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/set-password" element={<SetPasswordPage />} />
+              <Route path="/forgot-password" element={<ForgotPasswordPage />} />
 
               <Route element={<RequireAuth />}>
                 <Route element={<AppLayout />}>
                   <Route index element={<Navigate to="/dashboard" replace />} />
                   <Route path="dashboard" element={<DashboardPage />} />
+                  <Route path="my-profile" element={<MyProfilePage />} />
+                  <Route path="change-password" element={<ChangePasswordPage />} />
+                  <Route path="configuration/login-settings" element={<RequirePermission permission={Permissions.user.edit}><TenantLoginSettingsPage /></RequirePermission>} />
+                  <Route path="configuration/password-recovery" element={<RequirePermission permission={Permissions.user.edit}><TenantPasswordRecoverySettingsPage /></RequirePermission>} />
                   <Route path="administration/account-employee-links" element={<RequirePermission permission={Permissions.accountEmployeeLink.view}><AccountEmployeeLinksPage /></RequirePermission>} />
                   <Route path="masters/:kind" element={<MasterManagementPage />} />
                   <Route

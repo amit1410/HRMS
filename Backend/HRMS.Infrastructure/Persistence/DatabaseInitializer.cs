@@ -34,6 +34,7 @@ public static class DatabaseInitializer
         IServiceProvider services,
         bool isDevelopment,
         bool skipInitialization,
+        bool seedDemoTenants,
         CancellationToken cancellationToken = default)
     {
         var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("HRMS.DatabaseInitializer");
@@ -46,14 +47,17 @@ public static class DatabaseInitializer
             return;
         }
 
-        await InitializeAsync(services, cancellationToken);
+        await InitializeAsync(services, seedDemoTenants, cancellationToken);
     }
 
-    public static async Task InitializeAsync(IServiceProvider services, CancellationToken cancellationToken = default)
+    public static async Task InitializeAsync(
+        IServiceProvider services,
+        bool seedDemoTenants = false,
+        CancellationToken cancellationToken = default)
     {
         var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("HRMS.DatabaseInitializer");
 
-        var organizations = await InitializeCatalogAsync(services, logger, cancellationToken);
+        var organizations = await InitializeCatalogAsync(services, logger, seedDemoTenants, cancellationToken);
 
         var provisioning = services.GetRequiredService<ITenantProvisioningService>();
         var provisioned = 0;
@@ -90,6 +94,7 @@ public static class DatabaseInitializer
     private static async Task<List<ShardDescriptor>> InitializeCatalogAsync(
         IServiceProvider services,
         ILogger logger,
+        bool seedDemoTenants,
         CancellationToken cancellationToken)
     {
         using var scope = services.CreateScope();
@@ -98,7 +103,7 @@ public static class DatabaseInitializer
         await SchemaPreparer.PrepareAsync(catalog, "catalog", logger, cancellationToken);
 
         logger.LogInformation("Seeding catalog organizations and branding.");
-        await DatabaseSeeder.SeedCatalogAsync(catalog, cancellationToken);
+        await DatabaseSeeder.SeedCatalogAsync(catalog, seedDemoTenants, cancellationToken);
 
         // Inactive organizations are provisioned too. Their databases have to be current for a suspension to
         // be reversible by flipping a status back — and a schema left behind by an older model would

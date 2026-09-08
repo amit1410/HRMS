@@ -4,6 +4,7 @@ using HRMS.Application.Services;
 using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Security;
 using HRMS.Infrastructure.Sharding;
+using HRMS.Infrastructure.Persistence.Catalog;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -28,6 +29,7 @@ public sealed class AuthTestHarness : IDisposable
     public const string Demo02Host = TestShards.Demo02Host;
 
     private readonly List<HrmsDbContext> _contexts = [];
+    private readonly List<HrmsCatalogDbContext> _catalogContexts = [];
 
     private AuthTestHarness(SqliteInMemoryDatabase database)
     {
@@ -109,8 +111,11 @@ public sealed class AuthTestHarness : IDisposable
     /// Creates an AuthService over a caller-supplied context. Sharing one context between two services is
     /// not how the app runs, but it is the only way to reproduce a stale read deterministically.
     /// </summary>
-    public AuthService CreateService(HrmsDbContext context) =>
-        new(
+    public AuthService CreateService(HrmsDbContext context)
+    {
+        var catalog = Database.CreateCatalogContext();
+        _catalogContexts.Add(catalog);
+        return new(
             context,
             PasswordHasher,
             TokenService,
@@ -118,7 +123,9 @@ public sealed class AuthTestHarness : IDisposable
             BuildShardContext(),
             Options.Create(JwtSettings),
             TimeProvider.System,
-            NullLogger<AuthService>.Instance);
+            NullLogger<AuthService>.Instance,
+            new TenantBrandingService(catalog, BuildShardContext()));
+    }
 
     /// <summary>
     /// The real scoped implementation, one per service, selected exactly as the middleware selects it.
@@ -149,6 +156,8 @@ public sealed class AuthTestHarness : IDisposable
         {
             context.Dispose();
         }
+
+        foreach (var context in _catalogContexts) context.Dispose();
 
         Database.Dispose();
     }

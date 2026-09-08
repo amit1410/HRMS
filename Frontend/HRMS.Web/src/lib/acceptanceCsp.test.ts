@@ -41,6 +41,10 @@ describe('development CSP destinations', () => {
   })
 
   it('uses explicit deployment or acceptance sources when configured', () => {
-    expect(cspConnectSources('development', ['https://api.example.test'])).toEqual(['https://api.example.test'])
+    expect(cspConnectSources('development', ['https://api.example.test'])).toEqual([
+      'https://api.example.test',
+      'ws://platform.localhost:5173',
+      'ws://*.localhost:5173',
+    ])
   })
 })

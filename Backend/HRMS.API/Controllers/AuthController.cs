@@ -19,10 +19,26 @@ namespace HRMS.API.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly IEmployeePortalAccountService _portalAccounts;
+    private readonly IPasswordRecoveryService _recovery;
 
-    public AuthController(IAuthService authService)
+    public AuthController(IAuthService authService, IEmployeePortalAccountService portalAccounts, IPasswordRecoveryService recovery)
     {
         _authService = authService;
+        _portalAccounts = portalAccounts;
+        _recovery = recovery;
+    }
+
+    [HttpPost("set-password")]
+    [AllowAnonymous]
+    [EnableRateLimiting(RateLimitingPolicies.Authentication)]
+    [ProducesResponseType(typeof(ApiResponse<bool>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<bool>>> SetPassword(
+        [FromBody] SetPasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        return (await _portalAccounts.SetPasswordAsync(request, cancellationToken)).ToActionResult();
     }
 
     /// <summary>Signs in with an email address and password.</summary>
@@ -46,6 +62,36 @@ public class AuthController : ControllerBase
         var result = await _authService.LoginAsync(request, cancellationToken);
         return result.ToActionResult();
     }
+
+    [HttpPost("forgot-password")]
+    [AllowAnonymous]
+    [EnableRateLimiting(RateLimitingPolicies.PasswordRecovery)]
+    public async Task<ActionResult<ApiResponse<RecoveryChallengeDto>>> ForgotPassword(ForgotPasswordRequest request, CancellationToken ct)
+    { Response.Headers.CacheControl = "no-store"; return (await _recovery.IdentifyAsync(request, ct)).ToActionResult(); }
+
+    [HttpPost("forgot-password/send-otp")]
+    [AllowAnonymous]
+    [EnableRateLimiting(RateLimitingPolicies.PasswordRecovery)]
+    public async Task<ActionResult<ApiResponse<RecoverySendOtpDto>>> SendOtp(SendRecoveryOtpRequest request, CancellationToken ct)
+    { Response.Headers.CacheControl = "no-store"; return (await _recovery.SendOtpAsync(request, ct)).ToActionResult(); }
+
+    [HttpPost("forgot-password/resend-otp")]
+    [AllowAnonymous]
+    [EnableRateLimiting(RateLimitingPolicies.PasswordRecovery)]
+    public async Task<ActionResult<ApiResponse<RecoverySendOtpDto>>> ResendOtp(ResendRecoveryOtpRequest request, CancellationToken ct)
+    { Response.Headers.CacheControl = "no-store"; return (await _recovery.ResendOtpAsync(request, ct)).ToActionResult(); }
+
+    [HttpPost("forgot-password/verify-otp")]
+    [AllowAnonymous]
+    [EnableRateLimiting(RateLimitingPolicies.PasswordRecovery)]
+    public async Task<ActionResult<ApiResponse<RecoveryVerificationDto>>> VerifyOtp(VerifyRecoveryOtpRequest request, CancellationToken ct)
+    { Response.Headers.CacheControl = "no-store"; return (await _recovery.VerifyOtpAsync(request, ct)).ToActionResult(); }
+
+    [HttpPost("forgot-password/reset")]
+    [AllowAnonymous]
+    [EnableRateLimiting(RateLimitingPolicies.PasswordRecovery)]
+    public async Task<ActionResult<ApiResponse<bool>>> ResetPassword(ResetPasswordRequest request, CancellationToken ct)
+    { Response.Headers.CacheControl = "no-store"; return (await _recovery.ResetPasswordAsync(request, ct)).ToActionResult(); }
 
     /// <summary>Exchanges a valid refresh token for a new access/refresh token pair.</summary>
     /// <remarks>

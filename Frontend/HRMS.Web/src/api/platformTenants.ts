@@ -45,6 +45,15 @@ export interface RetryPlatformTenantRequest {
   initialAdminEmail: string
 }
 
+export interface ResetTenantAdminPasswordResponse {
+  tenantId: string
+  tenantCode: string
+  tenantName: string
+  adminEmail: string
+  temporaryPassword: string
+  message: string
+}
+
 export function listPlatformTenants(signal?: AbortSignal) {
   return request<PlatformTenant[]>(() => platformApi.get<ApiResponse<PlatformTenant[]>>('/api/platform/tenants', { signal }))
 }
@@ -63,4 +72,8 @@ export function updateInactivePlatformTenant(id: string, body: UpdateInactivePla
 
 export function retryPlatformTenant(id: string, body: RetryPlatformTenantRequest) {
   return request<PlatformTenant>(() => platformApi.post<ApiResponse<PlatformTenant>>(`/api/platform/tenants/${id}/retry-provisioning`, body))
+}
+
+export function resetTenantAdminPassword(id: string, adminEmail?: string) {
+  return request<ResetTenantAdminPasswordResponse>(() => platformApi.post<ApiResponse<ResetTenantAdminPasswordResponse>>(`/api/platform/tenants/${id}/reset-admin-password`, { adminEmail: adminEmail || null }))
 }

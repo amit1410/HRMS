@@ -121,6 +121,8 @@ public sealed class PlatformTenantService : IPlatformTenantService
         var phase = "CatalogCreated";
         try
         {
+            phase = "CatalogBrandingCreated";
+            await EnsureDefaultBrandingAsync(tenant, cancellationToken);
             var shard = new ShardDescriptor(
                 tenant.Id, tenant.TenantCode, tenant.Host, tenant.ShardKey, tenant.Status, tenant.DatabaseProvider);
             phase = "DatabaseProvisioning";
@@ -219,6 +221,8 @@ public sealed class PlatformTenantService : IPlatformTenantService
         var phase = "CatalogCreated";
         try
         {
+            phase = "CatalogBrandingCreated";
+            await EnsureDefaultBrandingAsync(tenant, cancellationToken);
             var shard = new ShardDescriptor(
                 tenant.Id, tenant.TenantCode, tenant.Host, tenant.ShardKey, tenant.Status, tenant.DatabaseProvider);
             phase = "DatabaseProvisioning";
@@ -248,6 +252,81 @@ public sealed class PlatformTenantService : IPlatformTenantService
         }
     }
 
+    public async Task<Result<ResetTenantAdminPasswordResponse>> ResetTenantAdminPasswordAsync(
+        Guid id,
+        ResetTenantAdminPasswordRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_environment.IsDevelopment())
+            return Result<ResetTenantAdminPasswordResponse>.Forbidden(
+                "Tenant administrator password reset is available only in Development.");
+
+        var tenant = await _catalog.Tenants.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (tenant is null)
+            return Result<ResetTenantAdminPasswordResponse>.NotFound("Tenant was not found.");
+        if (tenant.Status != TenantStatus.Active)
+            return Result<ResetTenantAdminPasswordResponse>.Conflict(
+                "Tenant administrator password reset requires an Active tenant.");
+
+        var requestedEmail = string.IsNullOrWhiteSpace(request.AdminEmail)
+            ? null
+            : request.AdminEmail.Trim().ToLowerInvariant();
+
+        using var scope = _scopeFactory.CreateScope();
+        var provider = scope.ServiceProvider;
+        var shard = new ShardDescriptor(
+            tenant.Id, tenant.TenantCode, tenant.Host, tenant.ShardKey, tenant.Status, tenant.DatabaseProvider);
+        provider.GetRequiredService<IShardContext>().Use(shard);
+        var db = provider.GetRequiredService<HrmsDbContext>();
+
+        var admins = await db.Users.IgnoreQueryFilters()
+            .Where(user => user.TenantId == tenant.Id && user.IsActive
+                && db.UserRoles.IgnoreQueryFilters().Any(role => role.UserId == user.Id
+                    && role.TenantId == tenant.Id
+                    && role.RoleId == SeedData.RoleId(RoleNames.TenantAdmin)))
+            .OrderBy(user => user.Email)
+            .ToListAsync(cancellationToken);
+
+        if (admins.Count == 0)
+            return Result<ResetTenantAdminPasswordResponse>.Conflict(
+                "No active TenantAdmin account exists for this tenant.");
+
+        User? target;
+        if (requestedEmail is null)
+        {
+            if (admins.Count != 1)
+                return Result<ResetTenantAdminPasswordResponse>.Conflict(
+                    "Multiple active TenantAdmin accounts exist. Specify AdminEmail to select one.");
+            target = admins[0];
+        }
+        else
+        {
+            target = admins.SingleOrDefault(user =>
+                string.Equals(user.Email, requestedEmail, StringComparison.OrdinalIgnoreCase));
+            if (target is null)
+                return Result<ResetTenantAdminPasswordResponse>.NotFound(
+                    "The selected active TenantAdmin account was not found.");
+        }
+
+        var temporaryPassword = GenerateTemporaryPassword();
+        target.PasswordHash = _passwordHasher.Hash(temporaryPassword);
+        await db.SaveChangesAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Development TenantAdmin password reset completed by {ActorUserId}: {TenantId} {TenantCode} {UserId}.",
+            _actor.UserId, tenant.Id, tenant.TenantCode, target.Id);
+
+        return Result<ResetTenantAdminPasswordResponse>.Success(
+            new ResetTenantAdminPasswordResponse(
+                tenant.Id,
+                tenant.TenantCode,
+                tenant.TenantName,
+                target.Email,
+                temporaryPassword,
+                "Temporary password generated. Copy it now; it will not be shown again."));
+    }
+
     private async Task ActivateTenantCopyAsync(Tenant tenant, CancellationToken cancellationToken)
     {
         using var scope = _scopeFactory.CreateScope();
@@ -258,6 +337,25 @@ public sealed class PlatformTenantService : IPlatformTenantService
         var tenantCopy = await db.Tenants.SingleAsync(x => x.Id == tenant.Id, cancellationToken);
         tenantCopy.Status = TenantStatus.Active;
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task EnsureDefaultBrandingAsync(Tenant tenant, CancellationToken cancellationToken)
+    {
+        if (await _catalog.TenantBranding.AnyAsync(x => x.TenantId == tenant.Id, cancellationToken))
+            return;
+
+        _catalog.TenantBranding.Add(new TenantBranding
+        {
+            TenantId = tenant.Id,
+            IsPublic = true,
+            DisplayName = tenant.TenantName,
+            PrimaryColor = "#1D4ED8",
+            WelcomeMessage = null,
+            SupportEmail = tenant.Email,
+            SsoEnabled = false,
+            SsoProviderName = null
+        });
+        await _catalog.SaveChangesAsync(cancellationToken);
     }
 
     private async Task<string> CreateInitialAdminAsync(

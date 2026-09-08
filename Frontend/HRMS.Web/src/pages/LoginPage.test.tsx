@@ -48,20 +48,62 @@ describe('LoginPage', () => {
   it('asks for the credentials only - never for an organization', async () => {
     renderLogin(vi.fn())
     expect(screen.queryByLabelText(/tenant code|organization/i)).not.toBeInTheDocument()
-    await waitFor(() => expect(screen.getByLabelText('Email')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByLabelText('Email or Employee Code')).toBeInTheDocument())
     expect(screen.getByLabelText('Password')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['EmailOnly', 'Email', 'name@company.com'],
+    ['EmployeeCodeOnly', 'Employee Code', 'ANV_1001'],
+    ['EmailOrEmployeeCode', 'Email or Employee Code', 'name@company.com or ANV_1001'],
+  ] as const)('uses the %s login identifier presentation', async (mode, label, placeholder) => {
+    stub.on('get', '/api/tenants/current/branding', () => ({ data: ok({ ...publishedBranding, loginIdentifierMode: mode }) }))
+    renderLogin(vi.fn())
+    const input = await screen.findByLabelText(label)
+    expect(input).toHaveAttribute('placeholder', placeholder)
+  })
+
+  it.each([
+    ['EmailOrEmployeeCode', 'Email or Employee Code', 'nehaa0210@gmail.com'],
+    ['EmployeeCodeOnly', 'Employee Code', 'ANV_1001'],
+    ['EmailOnly', 'Email', 'nehaa0210@gmail.com'],
+  ] as const)('submits the canonical identifier in %s mode', async (mode, label, value) => {
+    stub.on('get', '/api/tenants/current/branding', () => ({ data: ok({ ...publishedBranding, loginIdentifierMode: mode }) }))
+    const login = vi.fn().mockResolvedValue(undefined)
+    renderLogin(login)
+
+    await userEvent.type(await screen.findByLabelText(label), value)
+    await userEvent.type(screen.getByLabelText('Password'), 'pw')
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(login).toHaveBeenCalledWith({ identifier: value, password: 'pw' })
+    expect(screen.queryByText(/email is required/i)).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['EmailOnly', 'Email', 'Email is required.'],
+    ['EmployeeCodeOnly', 'Employee Code', 'Employee Code is required.'],
+    ['EmailOrEmployeeCode', 'Email or Employee Code', 'Email or Employee Code is required.'],
+  ] as const)('uses the mode-specific required message in %s mode', async (mode, label, message) => {
+    stub.on('get', '/api/tenants/current/branding', () => ({ data: ok({ ...publishedBranding, loginIdentifierMode: mode }) }))
+    renderLogin(vi.fn())
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Sign in' }))
+
+    expect(await screen.findByText(message)).toBeInTheDocument()
+    expect(screen.getByLabelText(label)).toHaveAttribute('aria-invalid', 'true')
   })
 
   it('sends trimmed values, and does not touch the password', async () => {
     const login = vi.fn().mockResolvedValue(undefined)
     renderLogin(login)
 
-    await userEvent.type(await screen.findByLabelText('Email'), ' hr@demo01.test ')
+    await userEvent.type(await screen.findByLabelText('Email or Employee Code'), ' hr@demo01.test ')
     await userEvent.type(screen.getByLabelText('Password'), ' pw with spaces ')
     await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
     expect(login).toHaveBeenCalledWith({
-      email: 'hr@demo01.test',
+      identifier: 'hr@demo01.test',
       password: ' pw with spaces ',
     })
   })
@@ -70,7 +112,7 @@ describe('LoginPage', () => {
     const login = vi.fn().mockResolvedValue(undefined)
     renderLogin(login)
 
-    await userEvent.type(await screen.findByLabelText('Email'), 'hr@demo01.test')
+    await userEvent.type(await screen.findByLabelText('Email or Employee Code'), 'hr@demo01.test')
     await userEvent.type(screen.getByLabelText('Password'), 'pw')
     await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
@@ -81,7 +123,7 @@ describe('LoginPage', () => {
     const login = vi.fn().mockRejectedValue(new ApiError('Invalid credentials.', { status: 401 }))
     renderLogin(login)
 
-    await userEvent.type(await screen.findByLabelText('Email'), 'hr@demo01.test')
+    await userEvent.type(await screen.findByLabelText('Email or Employee Code'), 'hr@demo01.test')
     await userEvent.type(screen.getByLabelText('Password'), 'wrong')
     await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
@@ -94,7 +136,7 @@ describe('LoginPage', () => {
     const login = vi.fn().mockRejectedValue(
       new ApiError('Validation failed.', {
         status: 400,
-        fieldErrors: { email: 'Email is required.', password: 'Password is required.' },
+        fieldErrors: { identifier: 'Email or Employee Code is required.', password: 'Password is required.' },
       }),
     )
     renderLogin(login)
@@ -102,9 +144,9 @@ describe('LoginPage', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument())
     await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
-    expect(await screen.findByText('Email is required.')).toBeInTheDocument()
+    expect(await screen.findByText('Email or Employee Code is required.')).toBeInTheDocument()
     expect(screen.getByText('Password is required.')).toBeInTheDocument()
-    expect(screen.getByLabelText('Email')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByLabelText('Email or Employee Code')).toHaveAttribute('aria-invalid', 'true')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
@@ -113,6 +155,8 @@ describe('LoginPage', () => {
     renderLogin(login)
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument())
+    await userEvent.type(screen.getByLabelText('Email or Employee Code'), 'hr@demo01.test')
+    await userEvent.type(screen.getByLabelText('Password'), 'pw')
     const submit = screen.getByRole('button', { name: /^Sign in$/ })
     await userEvent.click(submit)
 
@@ -179,6 +223,7 @@ describe('LoginPage', () => {
 
   it('shows the workspace-unavailable state when branding is neutral', async () => {
     stub.on('get', '/api/tenants/current/branding', () => ({
+      status: 404,
       data: ok({
         displayName: null,
         logoUrl: null,
@@ -190,7 +235,19 @@ describe('LoginPage', () => {
     renderLogin(vi.fn())
     expect(await screen.findByText('Workspace not found')).toBeInTheDocument()
     expect(screen.getByText('There is no organization at this address.')).toBeInTheDocument()
-    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Email or Employee Code')).not.toBeInTheDocument()
+  })
+
+  it('renders the login page when the server supplies fallback branding', async () => {
+    stub.on('get', '/api/tenants/current/branding', () => ({
+      status: 200,
+      data: ok({ displayName: 'Anevra Technologies', primaryColor: '#1D4ED8', ssoEnabled: false }),
+    }))
+    renderLogin(vi.fn())
+
+    expect(await screen.findByText('Anevra Technologies')).toBeInTheDocument()
+    expect(screen.getByLabelText('Email or Employee Code')).toBeInTheDocument()
+    expect(screen.queryByText('Workspace not found')).not.toBeInTheDocument()
   })
 
   it('shows an error when branding fetch fails', async () => {
@@ -200,6 +257,6 @@ describe('LoginPage', () => {
     }))
     renderLogin(vi.fn())
     expect(await screen.findByText('Workspace unavailable')).toBeInTheDocument()
-    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Email or Employee Code')).not.toBeInTheDocument()
   })
 })

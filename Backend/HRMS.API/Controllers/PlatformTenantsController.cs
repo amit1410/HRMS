@@ -63,4 +63,16 @@ public sealed class PlatformTenantsController : ControllerBase
         Response.Headers.CacheControl = "no-store";
         return (await _service.RetryProvisioningAsync(id, request, cancellationToken)).ToActionResult();
     }
+
+    [HttpPost("{id:guid}/reset-admin-password")]
+    [PlatformPermission(PlatformPermissions.TenantCreate)]
+    [ProducesResponseType(typeof(ApiResponse<ResetTenantAdminPasswordResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<ResetTenantAdminPasswordResponse>>> ResetAdminPassword(
+        Guid id,
+        ResetTenantAdminPasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        return (await _service.ResetTenantAdminPasswordAsync(id, request, cancellationToken)).ToActionResult();
+    }
 }

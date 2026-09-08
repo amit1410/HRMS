@@ -1,5 +1,6 @@
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Tenants;
+using HRMS.Domain.Enums;
 
 namespace HRMS.Application.Abstractions;
 
@@ -14,8 +15,8 @@ namespace HRMS.Application.Abstractions;
 public interface ITenantBrandingService
 {
     /// <summary>
-    /// Branding for the organization the request was addressed to, or the neutral response when there is
-    /// none to show.
+    /// Branding for the active organization the request was addressed to. Missing custom branding is filled
+    /// with product defaults; unknown, inactive, and unpublished workspaces return <c>NotFound</c>.
     /// <para>
     /// Takes no organization argument, and that is the design: the caller is anonymous and cannot be
     /// trusted to say which organization it is, so the only trustworthy answer to that question is the host
@@ -23,9 +24,12 @@ public interface ITenantBrandingService
     /// ask about organizations other than the one being visited.
     /// </para>
     /// <para>
-    /// Succeeds for every request, including ones addressed to no organization at all. See the
-    /// implementation for why a not-found result would be a security problem rather than a nicety.
-    /// </para>
     /// </summary>
     Task<Result<TenantBrandingDto>> GetForCurrentOrganizationAsync(CancellationToken cancellationToken = default);
+
+    Task<Result<TenantLoginIdentifierMode>> GetLoginIdentifierModeAsync(CancellationToken cancellationToken = default);
+
+    Task<Result<TenantLoginIdentifierMode>> SetLoginIdentifierModeAsync(TenantLoginIdentifierMode mode, CancellationToken cancellationToken = default);
+    Task<Result<TenantRecoverySettingsDto>> GetRecoverySettingsAsync(CancellationToken cancellationToken = default);
+    Task<Result<TenantRecoverySettingsDto>> SetRecoverySettingsAsync(UpdateTenantRecoverySettingsRequest request, CancellationToken cancellationToken = default);
 }

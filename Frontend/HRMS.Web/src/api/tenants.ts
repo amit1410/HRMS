@@ -6,9 +6,8 @@ import type { ApiResponse, TenantBranding } from './types.ts'
  *
  * There is exactly one, and nothing in it names an organization: the host the request leaves from
  * decides whose branding comes back — see `apiOrigin.ts` for how the base URL follows the address
- * bar. The endpoint answers `200` with {@link TenantBranding} whatever the address is; an unknown,
- * inactive or opted-out organization all produce the same all-null payload rather than a `404`,
- * so callers cannot probe which addresses belong to somebody.
+ * bar. Active tenants answer `200` with fallback values when custom branding is absent; unknown,
+ * inactive, and unpublished workspaces answer `404`.
  */
 
 export function fetchCurrentTenantBranding(signal?: AbortSignal): Promise<TenantBranding> {
@@ -18,10 +17,8 @@ export function fetchCurrentTenantBranding(signal?: AbortSignal): Promise<Tenant
 }
 
 /**
- * Whether a branding response carries nothing to show — every field absent and no SSO advertised.
- *
- * This mirrors the API's `TenantBrandingDto.Neutral` exactly, including `ssoEnabled: false`: any
- * single field present means the organization did publish something, even if the rest is null.
+ * Whether a branding response carries no custom fields. This is not an existence check: a successful
+ * active-tenant response may contain fallback fields or may intentionally leave optional fields absent.
  */
 export function isNeutralBranding(branding: TenantBranding): boolean {
   return (

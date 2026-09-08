@@ -86,7 +86,7 @@ describe('App', () => {
     // Only the anonymous branding endpoint was fetched — no authenticated calls on behalf of a visitor.
     expect(stub.callsTo('get', '/api/tenants/current/branding')).toHaveLength(1)
 
-    await userEvent.type(screen.getByLabelText('Email'), 'hr@demo01.test')
+    await userEvent.type(screen.getByLabelText('Email or Employee Code'), 'hr@demo01.test')
     await userEvent.type(screen.getByLabelText('Password'), 'pw')
     await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 
@@ -100,7 +100,7 @@ describe('App', () => {
 
     renderApp('/login')
 
-    await userEvent.type(await screen.findByLabelText('Email'), 'hr@demo01.test')
+    await userEvent.type(await screen.findByLabelText('Email or Employee Code'), 'hr@demo01.test')
     await userEvent.type(screen.getByLabelText('Password'), 'pw')
     await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
 

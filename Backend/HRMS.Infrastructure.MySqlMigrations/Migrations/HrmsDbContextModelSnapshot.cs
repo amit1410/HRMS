@@ -436,13 +436,13 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<DateOnly?>("DateOfBirth")
+                    b.Property<DateTime?>("DateOfBirth")
                         .HasColumnType("date");
 
-                    b.Property<DateOnly>("DateOfJoining")
+                    b.Property<DateTime>("DateOfJoining")
                         .HasColumnType("date");
 
-                    b.Property<DateOnly?>("DateOfLeaving")
+                    b.Property<DateTime?>("DateOfLeaving")
                         .HasColumnType("date");
 
                     b.Property<Guid?>("DepartmentId")
@@ -485,7 +485,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<bool>("Gratuity")
                         .HasColumnType("tinyint(1)");
 
-                    b.Property<DateOnly?>("GroupDateOfJoining")
+                    b.Property<DateTime?>("GroupDateOfJoining")
                         .HasColumnType("date");
 
                     b.Property<string>("GroupId")
@@ -713,7 +713,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<DateOnly?>("EffectiveDate")
+                    b.Property<DateTime?>("EffectiveDate")
                         .HasColumnType("date");
 
                     b.Property<string>("EmployeeCode")
@@ -819,7 +819,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("varchar(500)");
 
-                    b.Property<DateOnly?>("EffectiveFrom")
+                    b.Property<DateTime?>("EffectiveFrom")
                         .HasColumnType("date");
 
                     b.Property<Guid>("EmployeeId")
@@ -867,10 +867,10 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<DateOnly>("EffectiveFrom")
+                    b.Property<DateTime>("EffectiveFrom")
                         .HasColumnType("date");
 
-                    b.Property<DateOnly?>("EffectiveTo")
+                    b.Property<DateTime?>("EffectiveTo")
                         .HasColumnType("date");
 
                     b.Property<int?>("GenerationMethod")
@@ -918,10 +918,10 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<DateOnly>("EffectiveFrom")
+                    b.Property<DateTime>("EffectiveFrom")
                         .HasColumnType("date");
 
-                    b.Property<DateOnly?>("EffectiveTo")
+                    b.Property<DateTime?>("EffectiveTo")
                         .HasColumnType("date");
 
                     b.Property<Guid>("EmployeeCodeConfigId")
@@ -1321,22 +1321,22 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("char(36)");
 
-                    b.Property<DateOnly?>("ConfirmationDate")
+                    b.Property<DateTime?>("ConfirmationDate")
                         .HasColumnType("date");
 
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<DateOnly>("DateOfJoining")
+                    b.Property<DateTime>("DateOfJoining")
                         .HasColumnType("date");
 
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("char(36)");
 
-                    b.Property<DateOnly>("FirstHiredDate")
+                    b.Property<DateTime>("FirstHiredDate")
                         .HasColumnType("date");
 
-                    b.Property<DateOnly?>("GroupDateOfJoining")
+                    b.Property<DateTime?>("GroupDateOfJoining")
                         .HasColumnType("date");
 
                     b.Property<string>("JobStatus")
@@ -1426,10 +1426,10 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("varchar(200)");
 
-                    b.Property<DateOnly>("EffectiveFrom")
+                    b.Property<DateTime>("EffectiveFrom")
                         .HasColumnType("date");
 
-                    b.Property<DateOnly?>("EffectiveTo")
+                    b.Property<DateTime?>("EffectiveTo")
                         .HasColumnType("date");
 
                     b.Property<Guid>("EmployeeId")
@@ -1553,7 +1553,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<DateOnly?>("DateOfBirth")
+                    b.Property<DateTime?>("DateOfBirth")
                         .HasColumnType("date");
 
                     b.Property<Guid>("EmployeeId")
@@ -1710,10 +1710,10 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("char(36)");
 
-                    b.Property<DateOnly?>("TenureFrom")
+                    b.Property<DateTime?>("TenureFrom")
                         .HasColumnType("date");
 
-                    b.Property<DateOnly?>("TenureTill")
+                    b.Property<DateTime?>("TenureTill")
                         .HasColumnType("date");
 
                     b.HasKey("Id");
@@ -2107,7 +2107,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<DateOnly>("EffectiveDate")
+                    b.Property<DateTime>("EffectiveDate")
                         .HasColumnType("date");
 
                     b.Property<Guid>("EmployeeId")
@@ -2214,7 +2214,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<DateOnly>("EndDate")
+                    b.Property<DateTime>("EndDate")
                         .HasColumnType("date");
 
                     b.Property<bool>("IsActive")
@@ -2234,7 +2234,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasMaxLength(150)
                         .HasColumnType("varchar(150)");
 
-                    b.Property<DateOnly>("StartDate")
+                    b.Property<DateTime>("StartDate")
                         .HasColumnType("date");
 
                     b.Property<Guid>("TenantId")
@@ -2773,10 +2773,10 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<DateOnly>("EffectiveFrom")
+                    b.Property<DateTime>("EffectiveFrom")
                         .HasColumnType("date");
 
-                    b.Property<DateOnly?>("EffectiveTo")
+                    b.Property<DateTime?>("EffectiveTo")
                         .HasColumnType("date");
 
                     b.Property<Guid>("LeavePolicyId")
@@ -2826,7 +2826,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("char(36)");
 
-                    b.Property<DateOnly>("EndDate")
+                    b.Property<DateTime>("EndDate")
                         .HasColumnType("date");
 
                     b.Property<string>("IdempotencyKey")
@@ -2866,7 +2866,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsRequired()
                         .HasColumnType("binary(16)");
 
-                    b.Property<DateOnly>("StartDate")
+                    b.Property<DateTime>("StartDate")
                         .HasColumnType("date");
 
                     b.Property<int>("Status")
@@ -2916,7 +2916,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<DateOnly>("Date")
+                    b.Property<DateTime>("Date")
                         .HasColumnType("date");
 
                     b.Property<string>("DayClassification")
@@ -3151,6 +3151,85 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsUnique();
 
                     b.ToTable("Organisations", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PasswordResetOtp", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ChallengeIdHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<int>("Channel")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ConsumedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("CorrelationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("DestinationHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("LastSentAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("MaskedDestination")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("OtpHash")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<int>("Purpose")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ResendCount")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("RevokedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("VerifiedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ExpiresAtUtc");
+
+                    b.HasIndex("TenantId", "ChallengeIdHash", "Channel")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "UserId", "RevokedAtUtc", "ConsumedAtUtc");
+
+                    b.ToTable("PasswordResetOtps", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Permission", b =>
@@ -3663,6 +3742,54 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsUnique();
 
                     b.ToTable("Users", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.UserInvitation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("LastSentAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Purpose")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("RevokedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<DateTime?>("UsedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "UserId", "Purpose", "UsedAtUtc", "RevokedAtUtc");
+
+                    b.ToTable("UserInvitations", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.UserRole", b =>
@@ -5085,6 +5212,24 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PasswordResetOtp", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PositionChangeReason", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -5220,6 +5365,26 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsRequired();
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.UserInvitation", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "UserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.UserRole", b =>

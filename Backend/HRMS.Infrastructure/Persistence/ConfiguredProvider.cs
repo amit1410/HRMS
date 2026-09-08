@@ -18,7 +18,7 @@ internal static class ConfiguredProvider
         Sqlite
     }
 
-    /// <summary>True when configuration selects the SQLite development fallback. SQL Server is the default.</summary>
+    /// <summary>True when configuration selects the SQLite development fallback.</summary>
     internal static bool IsSqlite(IConfiguration configuration) =>
         string.Equals(configuration["Database:Provider"] ?? "SqlServer", SqliteProviderName, StringComparison.OrdinalIgnoreCase);
 
@@ -38,6 +38,11 @@ internal static class ConfiguredProvider
                 $"DatabaseProviderNotSupported: catalog provider '{explicitProvider}' is not supported.");
         }
 
-        return IsSqlite(configuration) ? CatalogProviderKind.Sqlite : CatalogProviderKind.SqlServer;
+        if (IsSqlite(configuration))
+            return CatalogProviderKind.Sqlite;
+
+        return string.Equals(configuration["Database:Provider"], "MySql", StringComparison.OrdinalIgnoreCase)
+            ? CatalogProviderKind.MySql
+            : CatalogProviderKind.SqlServer;
     }
 }

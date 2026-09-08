@@ -27,7 +27,7 @@ internal static class TenantMapping
     /// Applies the table, key, columns and unique indexes. Does <em>not</em> touch navigations: the shard
     /// maps <c>Users</c> and ignores <c>Branding</c>, and the catalog does the opposite.
     /// </summary>
-    internal static void ApplyColumns(EntityTypeBuilder<Tenant> builder)
+    internal static void ApplyColumns(EntityTypeBuilder<Tenant> builder, bool includeDatabaseProvider = true)
     {
         builder.ToTable("Tenants");
         builder.HasKey(t => t.Id);
@@ -35,7 +35,8 @@ internal static class TenantMapping
         builder.Property(t => t.TenantCode).IsRequired().HasMaxLength(TenantCodeMaxLength);
         builder.Property(t => t.Host).IsRequired().HasMaxLength(HostMaxLength);
         builder.Property(t => t.ShardKey).IsRequired().HasMaxLength(ShardKeyMaxLength);
-        builder.Property(t => t.DatabaseProvider).HasConversion<string>().HasMaxLength(32).IsRequired();
+        if (includeDatabaseProvider)
+            builder.Property(t => t.DatabaseProvider).HasConversion<string>().HasMaxLength(32).IsRequired();
         builder.Property(t => t.TenantName).IsRequired().HasMaxLength(200);
         builder.Property(t => t.Email).HasMaxLength(256);
         builder.Property(t => t.Phone).HasMaxLength(30);

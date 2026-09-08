@@ -135,8 +135,13 @@ public sealed class HrmsApiFactory : WebApplicationFactory<Program>
     /// uses <c>localhost</c>, which resolves to no organization — so anything that has to sign in, or to read
     /// tenant data, needs one of these instead.
     /// </summary>
-    public HttpClient CreateClientFor(string host) =>
-        CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri(host) });
+    public HttpClient CreateClientFor(string host)
+    {
+        var uri = new Uri(host);
+        var client = CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = uri });
+        client.DefaultRequestHeaders.Host = uri.Host;
+        return client;
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -146,12 +151,14 @@ public sealed class HrmsApiFactory : WebApplicationFactory<Program>
             new Dictionary<string, string?>
             {
                 ["Database:Provider"] = "Sqlite",
+                ["Database:CatalogProvider"] = "Sqlite",
                 ["ConnectionStrings:Sqlite"] = _tenantConnection.ConnectionString,
                 ["ConnectionStrings:SqliteCatalog"] = _catalogConnection.ConnectionString,
                 // The test databases are deliberately initialized by the normal startup path. This explicit
                 // false value prevents an inherited Database__SkipInitialization environment variable from
                 // leaving the isolated catalog without its Tenants table.
                 ["Database:SkipInitialization"] = "false",
+                ["Database:SeedDemoTenants"] = "true",
                 ["Jwt:Issuer"] = Issuer,
                 ["Jwt:Audience"] = Audience,
                 ["Jwt:SecretKey"] = SigningKey,

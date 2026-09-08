@@ -191,7 +191,7 @@ public class TenantProvisioningTests : IDisposable
     private async Task InitializeAsync()
     {
         await using var provider = BuildProvider();
-        await DatabaseInitializer.InitializeAsync(provider);
+        await DatabaseInitializer.InitializeAsync(provider, seedDemoTenants: true);
     }
 
     private ServiceProvider BuildProvider()

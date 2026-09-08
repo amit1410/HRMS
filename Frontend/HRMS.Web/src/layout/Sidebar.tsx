@@ -5,9 +5,11 @@ import { useAuth } from '../auth/useAuth.ts'
 import { initials } from '../lib/format.ts'
 import { visibleNavItems } from './navigation.ts'
 
+function LockNavIcon() { return <span className="nav-icon nav-lock-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg></span> }
+
 export function Sidebar({ branding, open, onClose }: { branding: TenantBranding | null; open: boolean; onClose: () => void }) {
   const { can, user } = useAuth()
-  const items = visibleNavItems(can)
+  const items = visibleNavItems(can, user)
   useEffect(() => {
     if (!open) return
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
@@ -32,7 +34,7 @@ export function Sidebar({ branding, open, onClose }: { branding: TenantBranding 
                 className={({ isActive }) => (isActive ? 'nav-link is-active' : 'nav-link')}
                 onClick={onClose}
               >
-                <NavItemIcon label={item.label} />{item.label}
+                {item.label === 'Change Password' ? <LockNavIcon /> : <NavItemIcon label={item.label} />}{item.label}
               </NavLink>
             </li>
           ) : (
@@ -46,7 +48,7 @@ export function Sidebar({ branding, open, onClose }: { branding: TenantBranding 
           ),
         )}
       </ul>
-      {user && <div className="sidebar-profile"><span className="sidebar-profile-avatar">{initials(user.fullName)}</span><span className="sidebar-profile-text"><strong>{user.fullName}</strong><small>{user.roles[0] || 'User'}</small></span></div>}
+      {user && <div className="sidebar-profile"><span className="sidebar-profile-avatar">{initials(user.fullName)}</span><div className="sidebar-profile-details"><strong className="sidebar-profile-name">{user.fullName}</strong><span className="sidebar-profile-role">{user.roles[0] || 'User'}</span><span className="sidebar-profile-status"><span className="sidebar-profile-status-dot" aria-hidden="true" />Online</span></div></div>}
     </nav>
   )
 }

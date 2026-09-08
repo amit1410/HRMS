@@ -3,11 +3,13 @@ using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Persistence.Catalog;
 using HRMS.Infrastructure.Security;
+using HRMS.Infrastructure.Email;
 using HRMS.Infrastructure.Sharding;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MySql.EntityFrameworkCore.Extensions;
 
@@ -20,8 +22,17 @@ namespace HRMS.Infrastructure;
 /// </summary>
 public static class DependencyInjection
 {
-    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        IHostEnvironment? hostEnvironment = null)
     {
+        // A host supplies the real environment. The Development fallback keeps the infrastructure
+        // registration usable by lightweight tests that call this extension without a Generic Host.
+        var providerOptions = PasswordRecoveryProviderOptions.Load(configuration, hostEnvironment?.IsDevelopment() ?? true);
+        providerOptions.Validate(configuration);
+        services.AddSingleton(providerOptions);
+
         // Bound and validated here rather than through ValidateOnStart, which would pull the hosting
         // abstractions into the persistence layer. Eager is also strictly earlier: a template missing its
         // placeholder fails while services are being registered, before a host exists to serve anything.
@@ -118,6 +129,21 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.TryAddScoped<IPlatformContext, NullPlatformContext>();
+        services.AddSingleton<IEmailSender>(serviceProvider =>
+            string.Equals(providerOptions.EmailProvider, "Fake", StringComparison.OrdinalIgnoreCase)
+                ? new DevelopmentEmailSender(
+                    serviceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DevelopmentEmailSender>>(),
+                    hostEnvironment?.IsDevelopment() ?? true)
+                : new SmtpEmailSender(configuration));
+        services.AddHttpClient<Msg91SmsOtpSender>(client =>
+        {
+            client.BaseAddress = new Uri(configuration["Msg91:BaseUrl"] ?? "https://api.msg91.com/api/");
+            client.Timeout = TimeSpan.FromSeconds(10);
+        });
+        services.AddSingleton<ISmsOtpSender>(serviceProvider =>
+            string.Equals(providerOptions.SmsProvider, "Fake", StringComparison.OrdinalIgnoreCase)
+                ? new DevelopmentSmsOtpSender(hostEnvironment?.IsDevelopment() ?? true)
+                : serviceProvider.GetRequiredService<Msg91SmsOtpSender>());
 
         // Singleton: it creates the scope each organization is provisioned in rather than living in one.
         services.AddSingleton<ITenantProvisioningService, TenantProvisioningService>();

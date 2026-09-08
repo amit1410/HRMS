@@ -35,5 +35,13 @@ public class CatalogTenantBrandingConfiguration : IEntityTypeConfiguration<Tenan
         builder.Property(b => b.SupportEmail).HasMaxLength(256);
         builder.Property(b => b.SsoEnabled).IsRequired();
         builder.Property(b => b.SsoProviderName).HasMaxLength(50);
+        builder.Property(b => b.LoginIdentifierMode).IsRequired().HasDefaultValue(HRMS.Domain.Enums.TenantLoginIdentifierMode.EmailOrEmployeeCode);
+        builder.Property(b => b.PasswordRecoveryEnabled).IsRequired().HasDefaultValue(true);
+        builder.Property(b => b.AllowEmailOtp).IsRequired().HasDefaultValue(true);
+        builder.Property(b => b.AllowSmsOtp).IsRequired().HasDefaultValue(true);
+        builder.Property(b => b.OtpExpiryMinutes).IsRequired().HasDefaultValue(5);
+        builder.Property(b => b.OtpMaxAttempts).IsRequired().HasDefaultValue(5);
+        builder.Property(b => b.OtpResendCooldownSeconds).IsRequired().HasDefaultValue(60);
+        builder.Property(b => b.OtpMaxResends).IsRequired().HasDefaultValue(5);
     }
 }

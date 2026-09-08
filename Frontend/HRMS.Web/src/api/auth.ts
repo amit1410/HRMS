@@ -59,3 +59,7 @@ export async function logout(): Promise<void> {
     session.clear()
   }
 }
+
+export function setPassword(body: { token: string; password: string; confirmPassword: string }) {
+  return request<boolean>(() => api.post<ApiResponse<boolean>>('/api/auth/set-password', body))
+}

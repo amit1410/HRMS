@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 namespace HRMS.Infrastructure.Persistence.Seed;
 
 /// <summary>
-/// Idempotent seeding of reference data and demo tenants/users. Safe to run on every startup: each
+/// Idempotent seeding of reference data and optional demo tenants/users. Safe to run on every startup: each
 /// step inserts only what is missing (matched on natural keys), so it never duplicates or overwrites.
 /// Tenant-scoped reads use IgnoreQueryFilters() because seeding runs without a resolved tenant.
 /// <para>
@@ -28,11 +28,19 @@ namespace HRMS.Infrastructure.Persistence.Seed;
 public static class DatabaseSeeder
 {
     /// <summary>
-    /// Seeds the catalog: the tenants themselves and the branding their sign-in screens show. Insert-only,
-    /// like every other step here.
+    /// Seeds optional development/demo catalog tenants and their branding. Reference schema and platform
+    /// identity data are prepared independently by the initializer and are not controlled by this flag.
     /// </summary>
-    public static async Task SeedCatalogAsync(HrmsCatalogDbContext catalog, CancellationToken ct = default)
+    public static async Task SeedCatalogAsync(
+        HrmsCatalogDbContext catalog,
+        bool seedDemoTenants,
+        CancellationToken ct = default)
     {
+        if (!seedDemoTenants)
+        {
+            return;
+        }
+
         await SeedCatalogTenantsAsync(catalog, ct);
         await SeedTenantBrandingAsync(catalog, ct);
     }

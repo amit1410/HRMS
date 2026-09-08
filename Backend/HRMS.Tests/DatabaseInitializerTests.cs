@@ -37,7 +37,8 @@ public class DatabaseInitializerTests : IDisposable
         await DatabaseInitializer.InitializeIfEnabledAsync(
             services.BuildServiceProvider(),
             isDevelopment: true,
-            skipInitialization: true);
+            skipInitialization: true,
+            seedDemoTenants: false);
     }
 
     [Fact]
@@ -118,6 +119,20 @@ public class DatabaseInitializerTests : IDisposable
         Assert.True(await catalog.TenantBranding.AnyAsync(b => b.TenantId == demo01.Id));
     }
 
+    [Fact]
+    public async Task Initializes_catalog_schema_without_seeding_demo_tenants_when_disabled()
+    {
+        await InitializeAsync(seedDemoTenants: false);
+
+        await using var provider = BuildProvider();
+        var catalog = provider.GetRequiredService<HrmsCatalogDbContext>();
+
+        Assert.Empty(await catalog.Tenants.AsNoTracking().ToListAsync());
+        Assert.Empty(await catalog.TenantBranding.AsNoTracking().ToListAsync());
+        Assert.True(await catalog.Database.CanConnectAsync());
+        Assert.Contains("PlatformUsers", await CatalogTableNamesAsync(catalog));
+    }
+
     /// <summary>
     /// The catalog holds the two tables that have to be readable before a tenant database is chosen, and
     /// nothing else. Getting this wrong fails open — the catalog quietly grows the tenant tables through
@@ -166,10 +181,17 @@ public class DatabaseInitializerTests : IDisposable
             db.Model.GetEntityTypes().Select(entityType => entityType.GetTableName()));
     }
 
-    private async Task InitializeAsync()
+    private async Task InitializeAsync(bool seedDemoTenants = true)
     {
         await using var provider = BuildProvider();
-        await DatabaseInitializer.InitializeAsync(provider);
+        await DatabaseInitializer.InitializeAsync(provider, seedDemoTenants);
+    }
+
+    private static async Task<List<string>> CatalogTableNamesAsync(HrmsCatalogDbContext catalog)
+    {
+        return await catalog.Database
+            .SqlQuery<string>($"SELECT name AS \"Value\" FROM sqlite_master WHERE type = 'table'")
+            .ToListAsync();
     }
 
     private ServiceProvider BuildProvider()

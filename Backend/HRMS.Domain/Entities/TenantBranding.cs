@@ -1,3 +1,5 @@
+using HRMS.Domain.Enums;
+
 namespace HRMS.Domain.Entities;
 
 /// <summary>
@@ -76,6 +78,17 @@ public class TenantBranding
 
     /// <summary>The provider's display name ("Contoso ID"). A label only — it selects no code path.</summary>
     public string? SsoProviderName { get; set; }
+
+    /// <summary>Controls the identifier accepted by the tenant sign-in form.</summary>
+    public TenantLoginIdentifierMode LoginIdentifierMode { get; set; } = TenantLoginIdentifierMode.EmailOrEmployeeCode;
+
+    public bool PasswordRecoveryEnabled { get; set; } = true;
+    public bool AllowEmailOtp { get; set; } = true;
+    public bool AllowSmsOtp { get; set; } = true;
+    public int OtpExpiryMinutes { get; set; } = 5;
+    public int OtpMaxAttempts { get; set; } = 5;
+    public int OtpResendCooldownSeconds { get; set; } = 60;
+    public int OtpMaxResends { get; set; } = 5;
 
     // Navigation
     public Tenant? Tenant { get; set; }

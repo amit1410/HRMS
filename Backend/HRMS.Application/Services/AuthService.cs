@@ -3,6 +3,7 @@ using HRMS.Application.Common;
 using HRMS.Application.DTOs.Auth;
 using HRMS.Application.Security;
 using HRMS.Domain.Entities;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -26,7 +27,7 @@ public class AuthService : IAuthService
 {
     // Generic message for every pre-authentication failure. Using one message for "unknown email" and
     // "wrong password" prevents probing for valid accounts.
-    private const string InvalidCredentialsMessage = "Invalid email address or password.";
+    private const string InvalidCredentialsMessage = "Invalid login identifier or password.";
     private const string InvalidRefreshTokenMessage = "The session is no longer valid. Please sign in again.";
 
     // Its own message, deliberately not folded into the generic one. Which organization a request belongs
@@ -44,6 +45,7 @@ public class AuthService : IAuthService
     private readonly IJwtTokenService _tokenService;
     private readonly ITenantContext _tenantContext;
     private readonly IShardContext _shardContext;
+    private readonly ITenantBrandingService _tenantBranding;
     private readonly JwtSettings _jwtSettings;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AuthService> _logger;
@@ -56,13 +58,15 @@ public class AuthService : IAuthService
         IShardContext shardContext,
         IOptions<JwtSettings> jwtSettings,
         TimeProvider timeProvider,
-        ILogger<AuthService> logger)
+        ILogger<AuthService> logger,
+        ITenantBrandingService? tenantBranding = null)
     {
         _db = db;
         _passwordHasher = passwordHasher;
         _tokenService = tokenService;
         _tenantContext = tenantContext;
         _shardContext = shardContext;
+        _tenantBranding = tenantBranding!;
         _jwtSettings = jwtSettings.Value;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -79,8 +83,8 @@ public class AuthService : IAuthService
             return Result<LoginResponse>.Unauthorized(UnknownWorkspaceMessage);
         }
 
-        var email = (request.Email ?? string.Empty).Trim();
-        var normalizedEmail = email.ToLowerInvariant();
+        var identifier = request.EffectiveIdentifier.Trim();
+        var normalizedIdentifier = identifier.ToLowerInvariant();
 
         // Read from the organization's own database rather than trusting the descriptor, which is built
         // from the catalog and cached: the name shown to the user and the status enforced below have to be
@@ -108,11 +112,26 @@ public class AuthService : IAuthService
         // required — and in the shared-database deployment this predicate is the whole isolation.
         // Compared lower-cased so sign-in is case-insensitive on every provider (SQL Server's default
         // collation already is; SQLite is not).
-        var user = await _db.Users
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(
-                u => u.TenantId == tenant.Id && u.Email.ToLower() == normalizedEmail,
-                cancellationToken);
+        var modeResult = _tenantBranding is null
+            ? null
+            : await _tenantBranding.GetForCurrentOrganizationAsync(cancellationToken);
+        var mode = modeResult?.Value?.LoginIdentifierMode ?? TenantLoginIdentifierMode.EmailOrEmployeeCode;
+        User? user = null;
+        if (mode is TenantLoginIdentifierMode.EmailOnly or TenantLoginIdentifierMode.EmailOrEmployeeCode)
+        {
+            user = await FindByEmailAsync(tenant.Id, normalizedIdentifier, cancellationToken);
+        }
+        if (user is null && (mode is TenantLoginIdentifierMode.EmployeeCodeOnly or TenantLoginIdentifierMode.EmailOrEmployeeCode))
+        {
+            user = await FindByEmployeeCodeAsync(tenant.Id, normalizedIdentifier, cancellationToken);
+        }
+        // Tenant administrators are deliberately never locked out by EmployeeCodeOnly. This fallback is
+        // still tenant-scoped and does not infer an employee from email.
+        if (user is null && mode == TenantLoginIdentifierMode.EmployeeCodeOnly)
+        {
+            var emailUser = await FindByEmailAsync(tenant.Id, normalizedIdentifier, cancellationToken);
+            if (emailUser is not null && await IsPrivilegedAdminAsync(emailUser.Id, tenant.Id, cancellationToken)) user = emailUser;
+        }
 
         if (user is null)
         {
@@ -120,7 +139,7 @@ public class AuthService : IAuthService
             // the account exists.
             VerifyAgainstDummyHash(request.Password);
             _logger.LogWarning(
-                "Sign-in rejected: no account for {Email} in tenant {TenantCode}.", email, tenant.TenantCode);
+                "Sign-in rejected: no matching account in tenant {TenantCode}.", tenant.TenantCode);
             return Result<LoginResponse>.Unauthorized(InvalidCredentialsMessage);
         }
 
@@ -158,6 +177,23 @@ public class AuthService : IAuthService
 
         return Result<LoginResponse>.Success(response, "Sign-in successful.");
     }
+
+    private Task<User?> FindByEmailAsync(Guid tenantId, string normalizedEmail, CancellationToken ct) =>
+        _db.Users.IgnoreQueryFilters().FirstOrDefaultAsync(
+            u => u.TenantId == tenantId && u.Email.ToLower() == normalizedEmail, ct);
+
+    private Task<User?> FindByEmployeeCodeAsync(Guid tenantId, string normalizedCode, CancellationToken ct) =>
+        (from link in _db.AccountEmployeeCurrentLinks.IgnoreQueryFilters()
+         join employee in _db.Employees.IgnoreQueryFilters() on new { link.TenantId, link.EmployeeId } equals new { employee.TenantId, EmployeeId = employee.Id }
+         join user in _db.Users.IgnoreQueryFilters() on new { link.TenantId, link.UserId } equals new { user.TenantId, UserId = user.Id }
+         where link.TenantId == tenantId && employee.EmployeeCode != null && employee.EmployeeCode.ToLower() == normalizedCode
+         select user).FirstOrDefaultAsync(ct);
+
+    private Task<bool> IsPrivilegedAdminAsync(Guid userId, Guid tenantId, CancellationToken ct) =>
+        (from ur in _db.UserRoles.IgnoreQueryFilters()
+         join role in _db.Roles on ur.RoleId equals role.Id
+         where ur.TenantId == tenantId && ur.UserId == userId && (role.Name == RoleNames.TenantAdmin || role.Name == RoleNames.SuperAdmin)
+         select ur).AnyAsync(ct);
 
     public async Task<Result<LoginResponse>> RefreshAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default)
     {

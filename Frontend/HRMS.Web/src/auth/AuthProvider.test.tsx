@@ -23,7 +23,7 @@ function Probe() {
         onClick={async () => {
           setError('')
           try {
-            await login({ email: 'hr@demo01.test', password: 'pw' })
+            await login({ identifier: 'hr@demo01.test', password: 'pw' })
           } catch (caught) {
             setError(caught instanceof Error ? caught.message : 'failed')
           }

@@ -32,7 +32,7 @@ public sealed class CreatePlatformTenantRequest
     public string TenantName { get; set; } = string.Empty;
     public string TenantCode { get; set; } = string.Empty;
     public string Host { get; set; } = string.Empty;
-    public DatabaseProviderType DatabaseProvider { get; set; }
+    public DatabaseProviderType DatabaseProvider { get; set; } = DatabaseProviderType.MySql;
     public string ShardKey { get; set; } = string.Empty;
     public string? Email { get; set; }
     public string? Phone { get; set; }
@@ -54,3 +54,16 @@ public sealed class RetryPlatformTenantRequest
     public string LastName { get; set; } = string.Empty;
     public string InitialAdminEmail { get; set; } = string.Empty;
 }
+
+public sealed class ResetTenantAdminPasswordRequest
+{
+    public string? AdminEmail { get; set; }
+}
+
+public sealed record ResetTenantAdminPasswordResponse(
+    Guid TenantId,
+    string TenantCode,
+    string TenantName,
+    string AdminEmail,
+    string TemporaryPassword,
+    string Message);

@@ -51,12 +51,7 @@ public class ForwardedHeadersTests
         using var client = factory.CreateClientFor(HrmsApiFactory.UnknownHost);
         client.DefaultRequestHeaders.Add("X-Forwarded-Host", ClaimedHost);
 
-        var branding = await ReadBrandingAsync(client);
-
-        // The neutral answer an unregistered address gets: the header was ignored, so the request is still at
-        // nobody.localhost.
-        Assert.Null(branding.DisplayName);
-        Assert.Null(branding.PrimaryColor);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(BrandingRoute)).StatusCode);
     }
 
     /// <summary>
@@ -106,9 +101,7 @@ public class ForwardedHeadersTests
         using var factory = HrmsApiFactory.BehindALoopbackProxy();
         using var client = factory.CreateClientFor(HrmsApiFactory.UnknownHost);
 
-        var branding = await ReadBrandingAsync(client);
-
-        Assert.Null(branding.DisplayName);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(BrandingRoute)).StatusCode);
     }
 
     /// <summary>

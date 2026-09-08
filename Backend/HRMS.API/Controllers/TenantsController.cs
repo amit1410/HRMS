@@ -3,6 +3,8 @@ using HRMS.API.Security;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Tenants;
+using HRMS.Domain.Authorization;
+using HRMS.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -31,9 +33,8 @@ public class TenantsController : ControllerBase
 
     /// <summary>Returns the branding to show on the sign-in screen at this address.</summary>
     /// <remarks>
-    /// Always <c>200</c>, never <c>404</c>. An address no organization uses, an organization that is not
-    /// active and one that has not published its branding all return the same empty response. See
-    /// <c>TenantBrandingService</c>.
+    /// Active tenants always receive usable branding, including product defaults when no custom branding row
+    /// exists. Unknown, inactive, and unpublished workspaces return <c>404</c>.
     /// <para>
     /// <c>current</c> is a literal, not a placeholder: there is no variant of this route that names an
     /// organization. A caller can only be shown the branding of the address it is visiting, so the endpoint
@@ -49,6 +50,7 @@ public class TenantsController : ControllerBase
     [AllowAnonymous]
     [EnableRateLimiting(RateLimitingPolicies.Authentication)]
     [ProducesResponseType(typeof(ApiResponse<TenantBrandingDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<ActionResult<ApiResponse<TenantBrandingDto>>> GetCurrentBranding(
         CancellationToken cancellationToken)
@@ -56,4 +58,38 @@ public class TenantsController : ControllerBase
         var result = await _brandingService.GetForCurrentOrganizationAsync(cancellationToken);
         return result.ToActionResult();
     }
+
+    [HttpGet("current/login-settings")]
+    [HasPermission(Permissions.User.Edit)]
+    public async Task<ActionResult<ApiResponse<TenantLoginSettingsDto>>> GetLoginSettings(CancellationToken cancellationToken)
+    {
+        var result = await _brandingService.GetLoginIdentifierModeAsync(cancellationToken);
+        if (result.Succeeded) return Ok(ApiResponse<TenantLoginSettingsDto>.Ok(new(result.Value)));
+        return Failure<TenantLoginSettingsDto>(result);
+    }
+
+    [HttpPut("current/login-settings")]
+    [HasPermission(Permissions.User.Edit)]
+    public async Task<ActionResult<ApiResponse<TenantLoginSettingsDto>>> UpdateLoginSettings(
+        UpdateTenantLoginSettingsRequest request, CancellationToken cancellationToken)
+    {
+        var result = await _brandingService.SetLoginIdentifierModeAsync(request.LoginIdentifierMode, cancellationToken);
+        if (result.Succeeded) return Ok(ApiResponse<TenantLoginSettingsDto>.Ok(new(result.Value), result.Message));
+        return Failure<TenantLoginSettingsDto>(result);
+    }
+
+    [HttpGet("current/password-recovery-settings")]
+    [HasPermission(Permissions.User.Edit)]
+    public async Task<ActionResult<ApiResponse<TenantRecoverySettingsDto>>> GetPasswordRecoverySettings(CancellationToken cancellationToken) =>
+        (await _brandingService.GetRecoverySettingsAsync(cancellationToken)).ToActionResult();
+
+    [HttpPut("current/password-recovery-settings")]
+    [HasPermission(Permissions.User.Edit)]
+    public async Task<ActionResult<ApiResponse<TenantRecoverySettingsDto>>> UpdatePasswordRecoverySettings(
+        UpdateTenantRecoverySettingsRequest request, CancellationToken cancellationToken) =>
+        (await _brandingService.SetRecoverySettingsAsync(request, cancellationToken)).ToActionResult();
+
+    private ActionResult<ApiResponse<T>> Failure<T>(Result<TenantLoginIdentifierMode> result) =>
+        new ObjectResult(ApiResponse<T>.Fail(result.Message, result.Errors))
+        { StatusCode = result.Status switch { ResultStatus.NotFound => 404, ResultStatus.Forbidden => 403, ResultStatus.Unauthorized => 401, _ => 400 } };
 }

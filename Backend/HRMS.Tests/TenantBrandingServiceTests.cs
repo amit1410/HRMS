@@ -69,8 +69,8 @@ public class TenantBrandingServiceTests
 
         var result = await ReadAsync(database, shard: null);
 
-        Assert.True(result.Succeeded);
-        Assert.Same(TenantBrandingDto.Neutral, result.Value);
+        Assert.False(result.Succeeded);
+        Assert.Equal(ResultStatus.NotFound, result.Status);
     }
 
     /// <summary>
@@ -87,8 +87,10 @@ public class TenantBrandingServiceTests
         var optedOut = await ReadAsync(database, TestShards.For(TestShards.Demo01Host));
         var unknown = await ReadAsync(database, shard: null);
 
-        Assert.True(optedOut.Succeeded);
-        Assert.Equal(unknown.Value, optedOut.Value);
+        Assert.False(optedOut.Succeeded);
+        Assert.Equal(ResultStatus.NotFound, optedOut.Status);
+        Assert.False(unknown.Succeeded);
+        Assert.Equal(ResultStatus.NotFound, unknown.Status);
     }
 
     /// <summary>
@@ -111,12 +113,12 @@ public class TenantBrandingServiceTests
         // The descriptor still says Active, which is exactly the stale state being covered.
         var suspended = await ReadAsync(database, TestShards.For(TestShards.Demo01Host));
 
-        Assert.True(suspended.Succeeded);
-        Assert.Equal(TenantBrandingDto.Neutral, suspended.Value);
+        Assert.False(suspended.Succeeded);
+        Assert.Equal(ResultStatus.NotFound, suspended.Status);
     }
 
     [Fact]
-    public async Task An_organization_with_no_branding_row_gets_the_neutral_response()
+    public async Task An_active_organization_with_no_branding_row_gets_fallback_branding()
     {
         using var database = await CreateDatabaseAsync();
 
@@ -131,7 +133,10 @@ public class TenantBrandingServiceTests
         var result = await ReadAsync(database, TestShards.For(TestShards.Demo01Host));
 
         Assert.True(result.Succeeded);
-        Assert.Equal(TenantBrandingDto.Neutral, result.Value);
+        Assert.Equal("Demo Organization", result.Value!.DisplayName);
+        Assert.Equal("#1D4ED8", result.Value.PrimaryColor);
+        Assert.Equal("contact@demo01.com", result.Value.SupportEmail);
+        Assert.False(result.Value.SsoEnabled);
     }
 
     /// <summary>
@@ -145,8 +150,8 @@ public class TenantBrandingServiceTests
 
         var result = await ReadAsync(database, TestShards.Unprovisioned);
 
-        Assert.True(result.Succeeded);
-        Assert.Equal(TenantBrandingDto.Neutral, result.Value);
+        Assert.False(result.Succeeded);
+        Assert.Equal(ResultStatus.NotFound, result.Status);
     }
 
     /// <summary>
@@ -174,7 +179,7 @@ public class TenantBrandingServiceTests
 
         var result = await ReadAsync(database, TestShards.For(TestShards.Demo01Host));
 
-        Assert.Null(result.Value!.PrimaryColor);
+        Assert.Equal("#1D4ED8", result.Value!.PrimaryColor);
         Assert.Equal("Demo Organization", result.Value.DisplayName);
     }
 
@@ -226,9 +231,9 @@ public class TenantBrandingServiceTests
 
         var result = await ReadAsync(database, TestShards.For(TestShards.Demo01Host));
 
-        Assert.Null(result.Value!.DisplayName);
+        Assert.Equal("Demo Organization", result.Value!.DisplayName);
         Assert.Null(result.Value.WelcomeMessage);
-        Assert.Null(result.Value.SupportEmail);
+        Assert.Equal("contact@demo01.com", result.Value.SupportEmail);
         Assert.Null(result.Value.SsoProviderName);
     }
 

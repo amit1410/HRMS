@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Tenants;
 using HRMS.Infrastructure.Persistence.Catalog;
@@ -36,15 +38,48 @@ public class TenantBrandingEndpointsTests : IClassFixture<HrmsApiFactory>
         using var client = _factory.CreateClientFor(HrmsApiFactory.Demo01Host);
 
         var response = await client.GetAsync(Route);
-
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Null(client.DefaultRequestHeaders.Authorization);
 
-        var body = await response.Content.ReadFromJsonAsync<ApiResponse<TenantBrandingDto>>();
+        var body = await response.Content.ReadFromJsonAsync<ApiResponse<TenantBrandingDto>>(new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new JsonStringEnumConverter() }
+        });
         Assert.NotNull(body);
-        Assert.True(body.Success);
+        Assert.True(body.Success, JsonSerializer.Serialize(body));
         Assert.Equal("Demo Organization", body.Data!.DisplayName);
         Assert.Equal("#0F766E", body.Data.PrimaryColor);
+    }
+
+    [Fact]
+    public async Task An_active_organization_without_a_branding_row_gets_fallback_branding()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var catalog = scope.ServiceProvider.GetRequiredService<HrmsCatalogDbContext>();
+        var branding = await catalog.TenantBranding.SingleAsync(b => b.Tenant!.Host == "demo01.localhost");
+        catalog.TenantBranding.Remove(branding);
+        await catalog.SaveChangesAsync();
+
+        try
+        {
+            using var client = _factory.CreateClientFor(HrmsApiFactory.Demo01Host);
+            var response = await client.GetAsync(Route);
+            var body = await response.Content.ReadFromJsonAsync<ApiResponse<TenantBrandingDto>>(new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                Converters = { new JsonStringEnumConverter() }
+            });
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("Demo Organization", body!.Data!.DisplayName);
+            Assert.Equal("#1D4ED8", body.Data.PrimaryColor);
+        }
+        finally
+        {
+            catalog.TenantBranding.Add(branding);
+            await catalog.SaveChangesAsync();
+        }
     }
 
     /// <summary>
@@ -76,13 +111,7 @@ public class TenantBrandingEndpointsTests : IClassFixture<HrmsApiFactory>
 
         var response = await client.GetAsync(Route);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-
-        var body = await response.Content.ReadFromJsonAsync<ApiResponse<TenantBrandingDto>>();
-        Assert.True(body!.Success);
-        Assert.Null(body.Data!.DisplayName);
-        Assert.Null(body.Data.PrimaryColor);
-        Assert.False(body.Data.SsoEnabled);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     /// <summary>
@@ -100,14 +129,7 @@ public class TenantBrandingEndpointsTests : IClassFixture<HrmsApiFactory>
         await SetBrandingPublicAsync(TestShards.Demo02Host, isPublic: false);
 
         using var optedOut = _factory.CreateClientFor(HrmsApiFactory.Demo02Host);
-        using var unregistered = _factory.CreateClientFor(HrmsApiFactory.UnknownHost);
-
-        var optedOutBody = await (await optedOut.GetAsync(Route)).Content.ReadAsStringAsync();
-        var unregisteredBody = await (await unregistered.GetAsync(Route)).Content.ReadAsStringAsync();
-
-        Assert.Equal(unregisteredBody, optedOutBody);
-        Assert.DoesNotContain("DEMO02", optedOutBody, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Sample", optedOutBody, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.NotFound, (await optedOut.GetAsync(Route)).StatusCode);
     }
 
     /// <summary>
@@ -185,8 +207,14 @@ public class TenantBrandingEndpointsTests : IClassFixture<HrmsApiFactory>
         var response = await client.GetAsync(Route);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        var body = await response.Content.ReadFromJsonAsync<ApiResponse<TenantBrandingDto>>();
-        return body!.Data;
+        var body = await response.Content.ReadFromJsonAsync<ApiResponse<TenantBrandingDto>>(new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new JsonStringEnumConverter() }
+        });
+        Assert.NotNull(body);
+        Assert.True(body.Success, JsonSerializer.Serialize(body));
+        return body.Data;
     }
 
     private async Task SetBrandingPublicAsync(string host, bool isPublic)

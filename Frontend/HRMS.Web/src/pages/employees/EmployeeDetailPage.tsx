@@ -17,6 +17,7 @@ import { EmployeeProfileSidebar, type EmployeeSection } from './EmployeeProfileS
 import { FamilyDetailsForm } from './FamilyDetailsForm.tsx'
 import { PreviousEmploymentForm } from './PreviousEmploymentForm.tsx'
 import { SupervisorSectionForm } from './SupervisorSectionForm.tsx'
+import { PortalAccessCard } from './PortalAccessCard.tsx'
 
 type DetailTab = EmployeeSection
 
@@ -89,6 +90,8 @@ export function EmployeeDetailPage() {
           </>
         }
       />
+
+      <PortalAccessCard employeeId={employee.id} />
 
       <div className="tab-nav employee-top-tabs" role="tablist" aria-label="Employee sections">
         {TABS.map((item) => (

@@ -11,6 +11,7 @@ public static class RateLimitingPolicies
 {
     /// <summary>Throttles credential-handling endpoints (sign-in, refresh).</summary>
     public const string Authentication = "auth";
+    public const string PasswordRecovery = "password-recovery";
 }
 
 /// <summary>
@@ -19,13 +20,24 @@ public static class RateLimitingPolicies
 /// </summary>
 public static class RateLimitingServiceCollectionExtensions
 {
-    public static IServiceCollection AddHrmsRateLimiting(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddHrmsRateLimiting(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        IHostEnvironment? hostEnvironment = null)
     {
         services.AddOptions<AuthenticationRateLimitSettings>()
             .Bind(configuration.GetSection(AuthenticationRateLimitSettings.SectionName))
             .Validate(settings => settings.Validate() is null,
                 $"The '{AuthenticationRateLimitSettings.SectionName}' configuration section is invalid.")
             .ValidateOnStart();
+
+        var recoverySettings = PasswordRecoveryRateLimitSettings.Load(
+            configuration,
+            hostEnvironment?.IsDevelopment() ?? false);
+        if (recoverySettings.Validate() is { } recoveryProblem)
+            throw new InvalidOperationException(recoveryProblem);
+
+        services.AddSingleton(Options.Create(recoverySettings));
 
         services.AddRateLimiter(options =>
         {
@@ -55,6 +67,23 @@ public static class RateLimitingServiceCollectionExtensions
                     {
                         PermitLimit = settings.PermitLimit,
                         Window = TimeSpan.FromSeconds(settings.WindowSeconds),
+                        QueueLimit = 0,
+                        QueueProcessingOrder = QueueProcessingOrder.OldestFirst
+                    });
+            });
+
+            options.AddPolicy(RateLimitingPolicies.PasswordRecovery, httpContext =>
+            {
+                var tenant = httpContext.RequestServices.GetRequiredService<IShardContext>().Current;
+                var address = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+                var settings = httpContext.RequestServices
+                    .GetRequiredService<IOptions<PasswordRecoveryRateLimitSettings>>().Value;
+                return RateLimitPartition.GetFixedWindowLimiter(
+                    tenant is null ? address : $"{tenant.TenantId:N}|{address}",
+                    _ => new FixedWindowRateLimiterOptions
+                    {
+                        PermitLimit = settings.PermitLimit,
+                        Window = TimeSpan.FromMinutes(settings.WindowMinutes),
                         QueueLimit = 0,
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst
                     });

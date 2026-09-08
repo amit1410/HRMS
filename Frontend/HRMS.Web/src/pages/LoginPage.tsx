@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
-import { Navigate, useLocation, useNavigate } from 'react-router-dom'
-import { hasFieldErrors, toApiError, type ApiError } from '../api/errors.ts'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { ApiError, hasFieldErrors, toApiError } from '../api/errors.ts'
 import { useAuth } from '../auth/useAuth.ts'
 import { FullPageSpinner, Spinner } from '../components/Spinner.tsx'
 import { useDocumentTitle } from '../hooks/useDocumentTitle.ts'
@@ -10,21 +10,52 @@ export function LoginPage() {
   useDocumentTitle('Sign in')
   const { status, login } = useAuth(); const navigate = useNavigate(); const location = useLocation()
   const { branding, isLoading: brandingLoading, error: brandingError } = useTenantBranding()
-  const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [passwordVisible, setPasswordVisible] = useState(false)
+  const [identifier, setIdentifier] = useState(''); const [password, setPassword] = useState(''); const [passwordVisible, setPasswordVisible] = useState(false)
   const [error, setError] = useState<ApiError | null>(null); const [submitting, setSubmitting] = useState(false); const calendarDate = useLocalCalendarDate()
   const workspaceStyle = useMemo<CSSProperties | undefined>(() => branding?.primaryColor ? { '--ws-accent': branding.primaryColor } as CSSProperties : undefined, [branding?.primaryColor])
   if (status === 'restoring') return <FullPageSpinner label="Restoring your session…" />
   if (status === 'authenticated') return <Navigate to={redirectTarget(location.state)} replace />
   if (brandingLoading) return <div className="login-page" style={workspaceStyle}><FullPageSpinner label="Loading workspace…" /></div>
-  if (brandingError && !branding) return <Unavailable title="Workspace unavailable" subtitle="We couldn't load this workspace's sign-in page." error={brandingError.message || 'Unable to connect to the server. Please try again later.'} style={workspaceStyle} />
-  const isUnavailable = branding !== null && !branding.displayName && !branding.logoUrl
-  if (isUnavailable) return <Unavailable title="Workspace not found" subtitle="There is no organization at this address." error="Check the address you used, or ask your administrator for the correct workspace URL." style={workspaceStyle} />
+  if (brandingError && !branding) {
+    const notFound = brandingError.status === 404
+    return <Unavailable title={notFound ? 'Workspace not found' : 'Workspace unavailable'} subtitle={notFound ? 'There is no organization at this address.' : "We couldn't load this workspace's sign-in page."} error={notFound ? 'Check the address you used, or ask your administrator for the correct workspace URL.' : brandingError.message || 'Unable to connect to the server. Please try again later.'} style={workspaceStyle} />
+  }
   const displayName = branding?.displayName || 'HRMS'; const fieldError = (field: string) => error?.fieldErrors[field]
-  async function onSubmit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (submitting) return; setSubmitting(true); setError(null); try { await login({ email: email.trim(), password }); navigate(redirectTarget(location.state), { replace: true }) } catch (caught) { setError(toApiError(caught)) } finally { setSubmitting(false) } }
+  const loginMode = branding?.loginIdentifierMode ?? 'EmailOrEmployeeCode'; const identifierLabel = loginMode === 'EmailOnly' ? 'Email' : loginMode === 'EmployeeCodeOnly' ? 'Employee Code' : 'Email or Employee Code'; const identifierPlaceholder = loginMode === 'EmailOnly' ? 'name@company.com' : loginMode === 'EmployeeCodeOnly' ? 'ANV_1001' : 'name@company.com or ANV_1001'
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (submitting) return
+
+    const trimmedIdentifier = identifier.trim()
+    const fieldErrors: Record<string, string> = {}
+    if (!trimmedIdentifier) {
+      fieldErrors.identifier = loginMode === 'EmailOnly'
+        ? 'Email is required.'
+        : loginMode === 'EmployeeCodeOnly'
+          ? 'Employee Code is required.'
+          : 'Email or Employee Code is required.'
+    }
+    if (!password) fieldErrors.password = 'Password is required.'
+    if (Object.keys(fieldErrors).length > 0) {
+      setError(new ApiError('Validation failed.', { fieldErrors }))
+      return
+    }
+
+    setSubmitting(true)
+    setError(null)
+    try {
+      await login({ identifier: trimmedIdentifier, password })
+      navigate(redirectTarget(location.state), { replace: true })
+    } catch (caught) {
+      setError(toApiError(caught))
+    } finally {
+      setSubmitting(false)
+    }
+  }
   const month = calendarDate.toLocaleString('en-US', { month: 'long' }).toUpperCase(); const day = String(calendarDate.getDate()).padStart(2, '0')
   return <div className="login-page" data-testid="login-page" style={workspaceStyle}><div className="login-layout">
     <section className="login-visual" aria-label={`${displayName} workspace`}><div className="login-glow login-glow-one" aria-hidden="true" /><div className="login-glow login-glow-two" aria-hidden="true" /><svg className="login-curves" viewBox="0 0 700 760" aria-hidden="true" focusable="false"><path d="M-40 170C150 80 180 300 390 220s180-100 360-30" /><path d="M-80 610c170-130 240 30 390-40s190-170 420-110" /></svg><div className="login-visual-content"><BrandMark displayName={displayName} logoUrl={branding?.logoUrl} /><div className="login-hero-copy"><p className="login-eyebrow">{displayName} workspace</p><h1>A better workday<br />starts here.</h1><p>Your people. Your workspace. Everything connected.</p>{branding?.welcomeMessage && <span className="login-welcome-note">{branding.welcomeMessage}</span>}</div><div className="login-decorations" aria-hidden="true"><div className="login-team-card"><div className="login-avatar">A</div><div><strong>People first</strong><span>Team workspace</span></div><span className="login-status-dot" /></div><div className="login-calendar-card"><div className="calendar-top"><span>{month}</span><strong>{day}</strong></div><div className="calendar-lines"><i /><i /><i /><i /><i /><i /></div><span className="calendar-check">✓</span></div><span className="login-check check-one">✓</span><span className="login-check check-two">✓</span><span className="login-spark spark-one">✦</span><span className="login-spark spark-two">✦</span></div></div><p className="login-visual-footer">Built around your people</p></section>
-    <section className="login-form-panel"><div className="login-form-wrap"><div className="login-workspace-badge">{displayName.toUpperCase()} WORKSPACE</div><div className="login-form-heading"><h2>Welcome back</h2><p>Sign in to your organization workspace.</p></div>{error && !hasFieldErrors(error) && <p className="form-error login-error" role="alert">{error.message}</p>}<form className="login-form" onSubmit={onSubmit} noValidate><LoginField id="email" label="Email" type="email" value={email} onChange={setEmail} autoComplete="username" placeholder="you@company.com" error={fieldError('email')} icon={<EmailIcon />} /><LoginField id="password" label="Password" type={passwordVisible ? 'text' : 'password'} value={password} onChange={setPassword} autoComplete="current-password" placeholder="Enter your password" error={fieldError('password')} icon={<LockIcon />} trailing={<button type="button" className="password-toggle" onClick={() => setPasswordVisible((visible) => !visible)} aria-label={passwordVisible ? 'Hide password' : 'Show password'}>{passwordVisible ? <EyeOffIcon /> : <EyeIcon />}</button>} /><button type="submit" className="login-submit" disabled={submitting}>{submitting ? <Spinner size={17} label="Signing in…" /> : <><span>Sign in</span><ArrowIcon /></>}</button></form><p className="login-supporting-text">Use the credentials provided by your organization.</p><p className="login-form-footer">Need access? Contact your HR administrator.</p></div></section>
+    <section className="login-form-panel"><div className="login-form-wrap"><div className="login-workspace-badge">{displayName.toUpperCase()} WORKSPACE</div><div className="login-form-heading"><h2>Welcome back</h2><p>Sign in to your organization workspace.</p></div>{error && !hasFieldErrors(error) && <p className="form-error login-error" role="alert">{error.message}</p>}<form className="login-form" onSubmit={onSubmit} noValidate><LoginField id="identifier" label={identifierLabel} type={loginMode === 'EmailOnly' ? 'email' : 'text'} value={identifier} onChange={setIdentifier} autoComplete="username" placeholder={identifierPlaceholder} error={fieldError('identifier')} icon={<EmailIcon />} /><LoginField id="password" label="Password" type={passwordVisible ? 'text' : 'password'} value={password} onChange={setPassword} autoComplete="current-password" placeholder="Enter your password" error={fieldError('password')} icon={<LockIcon />} trailing={<button type="button" className="password-toggle" onClick={() => setPasswordVisible((visible) => !visible)} aria-label={passwordVisible ? 'Hide password' : 'Show password'}>{passwordVisible ? <EyeOffIcon /> : <EyeIcon />}</button>} /><button type="submit" className="login-submit" disabled={submitting}>{submitting ? <Spinner size={17} label="Signing in…" /> : <><span>Sign in</span><ArrowIcon /></>}</button></form>{branding?.passwordRecoveryEnabled !== false && <p className="login-supporting-text"><Link to="/forgot-password">Forgot password?</Link></p>}<p className="login-supporting-text">Use the credentials provided by your organization.</p><p className="login-form-footer">Need access? Contact your HR administrator.</p></div></section>
   </div></div>
 }
 

@@ -57,6 +57,26 @@ start-frontend.ps1
 .claude/settings.local.json
 ~/
 
+# Browser acceptance/runtime state (may contain credentials or tokens)
+tools/phase3b-browser-state.credentials.txt
+tools/phase3b-browser-state.json
+tools/phase3b-browser-state.manifest.json
+tools/phase3b-browser-state.processes.json
+tools/phase3b-resume-attempt-*/
+tools/phase3b-tls-original-config-*.json
+
+# Temporary validation output
+.phase*-obj/
+.phase*-build/
+.phase*-restore-diagnostic/
+.recovery-*-obj*/
+artifacts/
+allocated-single-test.txt
+mysql-provider-test.txt
+provider-routing-test.txt
+--project
+0
+
 # OS
 Thumbs.db
 .DS_Store

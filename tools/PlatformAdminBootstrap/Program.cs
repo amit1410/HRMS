@@ -28,17 +28,20 @@ CopyOptionalEnvironmentSetting(configuration, "ConnectionStrings:Catalog", "Conn
 
 var catalogProvider = configuration["Database:CatalogProvider"];
 if (string.IsNullOrWhiteSpace(catalogProvider))
-    catalogProvider = string.Equals(configuration["Database:Provider"], "Sqlite", StringComparison.OrdinalIgnoreCase) ? "Sqlite" : "SqlServer";
+    catalogProvider = string.Equals(configuration["Database:Provider"], "Sqlite", StringComparison.OrdinalIgnoreCase)
+        ? "Sqlite"
+        : "MySql";
 configuration["Database:CatalogProvider"] = catalogProvider;
-if (!string.Equals(catalogProvider, "SqlServer", StringComparison.OrdinalIgnoreCase))
-    throw new InvalidOperationException("Platform bootstrap requires Database:CatalogProvider=SqlServer.");
+if (!string.Equals(catalogProvider, "MySql", StringComparison.OrdinalIgnoreCase)
+    && !string.Equals(catalogProvider, "SqlServer", StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException("Platform bootstrap supports Database:CatalogProvider=MySql or SqlServer.");
 if (string.IsNullOrWhiteSpace(configuration["ConnectionStrings:Catalog"]))
     throw new InvalidOperationException("Missing required setting: ConnectionStrings:Catalog.");
 configuration["Sharding:CacheSeconds"] = "30";
 configuration["Sharding:UnknownHostCacheSeconds"] = "5";
 
 Console.WriteLine($"Environment: {environmentName}");
-Console.WriteLine("Catalog provider: SqlServer");
+Console.WriteLine($"Catalog provider: {catalogProvider}");
 
 var email = ReadRequired("Platform administrator email");
 var firstName = ReadRequired("First name");
@@ -212,10 +215,12 @@ static async Task VerifyCatalogIdentityAsync(HrmsCatalogDbContext catalog)
     try
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT DB_NAME();";
+        command.CommandText = connection.GetType().Name.Contains("MySql", StringComparison.OrdinalIgnoreCase)
+            ? "SELECT DATABASE();"
+            : "SELECT DB_NAME();";
         var database = Convert.ToString(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
-        if (!string.Equals(database, "HRMS_Catalog", StringComparison.Ordinal))
-            throw new InvalidOperationException($"Catalog database identity mismatch: expected HRMS_Catalog, received {database}.");
+        if (!string.Equals(database, "hrms_catalog", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Catalog database identity mismatch: expected hrms_catalog, received {database}.");
     }
     finally
     {
@@ -226,12 +231,18 @@ static async Task VerifyCatalogIdentityAsync(HrmsCatalogDbContext catalog)
 static async Task VerifyCatalogPrerequisitesAsync(HrmsCatalogDbContext catalog)
 {
     var migrations = (await catalog.Database.GetAppliedMigrationsAsync()).ToArray();
-    var expectedMigrations = new[]
-    {
-        "20260823113202_InitialCatalog",
-        "20260905142921_AddTenantDatabaseProvider",
-        "20260906130913_AddPlatformIdentity"
-    };
+    var expectedMigrations = ConnectionProvider(catalog) is "MySql"
+        ? new[]
+        {
+            "20260905181639_InitialMySqlCatalogSchema",
+            "20260906130913_AddPlatformIdentity"
+        }
+        : new[]
+        {
+            "20260823113202_InitialCatalog",
+            "20260905142921_AddTenantDatabaseProvider",
+            "20260906130913_AddPlatformIdentity"
+        };
     if (!migrations.SequenceEqual(expectedMigrations, StringComparer.Ordinal))
         throw new InvalidOperationException("Catalog migration prerequisites are not satisfied.");
 
@@ -250,6 +261,11 @@ static async Task VerifyCatalogPrerequisitesAsync(HrmsCatalogDbContext catalog)
     if (grantCount != PlatformPermissions.All.Count)
         throw new InvalidOperationException("PlatformSuperAdmin must have exactly three grants before bootstrap.");
 }
+
+static string ConnectionProvider(HrmsCatalogDbContext catalog) =>
+    catalog.Database.GetDbConnection().GetType().Name.Contains("MySql", StringComparison.OrdinalIgnoreCase)
+        ? "MySql"
+        : "SqlServer";
 
 static async Task VerifyCreatedUserAsync(HrmsCatalogDbContext catalog, Guid userId, string normalizedEmail, int roleId)
 {

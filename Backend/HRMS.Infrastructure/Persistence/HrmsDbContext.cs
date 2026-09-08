@@ -41,6 +41,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<UserRole> UserRoles => Set<UserRole>();
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<UserInvitation> UserInvitations => Set<UserInvitation>();
+    public DbSet<PasswordResetOtp> PasswordResetOtps => Set<PasswordResetOtp>();
     public DbSet<Department> Departments => Set<Department>();
     public DbSet<Designation> Designations => Set<Designation>();
     public DbSet<Bank> Banks => Set<Bank>();
@@ -270,6 +272,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         // (TenantId == null) the predicate matches no rows: reads must be tenant-scoped, and bootstrap
         // paths (login lookup, seeding) opt out explicitly with IgnoreQueryFilters().
         modelBuilder.Entity<User>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<UserInvitation>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AccountEmployeeCurrentLink>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AccountEmployeeLinkEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<UserRole>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

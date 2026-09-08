@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import {
-  createPlatformTenant, listPlatformTenants, retryPlatformTenant, updateInactivePlatformTenant,
-  type CreatePlatformTenantRequest, type PlatformTenant, type RetryPlatformTenantRequest,
+  createPlatformTenant, listPlatformTenants, resetTenantAdminPassword, retryPlatformTenant, updateInactivePlatformTenant,
+  type CreatePlatformTenantRequest, type PlatformTenant, type ResetTenantAdminPasswordResponse, type RetryPlatformTenantRequest,
 } from '../../api/platformTenants.ts'
 import { toApiError } from '../../api/errors.ts'
 import { usePlatformAuth } from '../../auth/PlatformAuthProvider.tsx'
@@ -9,7 +9,7 @@ import { PlatformPermissions } from '../../auth/platformPermissions.ts'
 import { PageHeader } from '../../components/PageHeader.tsx'
 
 const initialForm: CreatePlatformTenantRequest = {
-  tenantName: '', tenantCode: '', host: '', databaseProvider: 'SqlServer', shardKey: '',
+  tenantName: '', tenantCode: '', host: '', databaseProvider: 'MySql', shardKey: '',
   email: '', phone: '', address: '', firstName: '', lastName: '', initialAdminEmail: '',
 }
 const initialRetry: RetryPlatformTenantRequest = { firstName: '', lastName: '', initialAdminEmail: '' }
@@ -34,6 +34,9 @@ export function PlatformTenantsPage() {
   const [editName, setEditName] = useState('')
   const [retrying, setRetrying] = useState<PlatformTenant | null>(null)
   const [retryForm, setRetryForm] = useState(initialRetry)
+  const [resetting, setResetting] = useState<PlatformTenant | null>(null)
+  const [resetResult, setResetResult] = useState<ResetTenantAdminPasswordResponse | null>(null)
+  const [resetAdminEmail, setResetAdminEmail] = useState('')
 
   useEffect(() => {
     if (!can(PlatformPermissions.view)) return
@@ -82,9 +85,23 @@ export function PlatformTenantsPage() {
     } catch (reason) { setError(toApiError(reason).message) } finally { setSaving(false) }
   }
 
+  async function resetAdminPassword() {
+    if (!resetting) return
+    setError(''); setMessage(''); setSaving(true)
+    try {
+      const result = await resetTenantAdminPassword(resetting.id, resetAdminEmail.trim() || undefined)
+      setResetResult(result); setResetting(null); setResetAdminEmail('')
+    } catch (reason) { setError(toApiError(reason).message) } finally { setSaving(false) }
+  }
+
+  function closeResetResult() {
+    setResetResult(null)
+  }
+
   if (!can(PlatformPermissions.view)) return <p role="alert">You do not have permission to view platform tenants.</p>
 
   return <section>
+    {import.meta.env.DEV && can(PlatformPermissions.create) && <div className="card"><h2>Development tenant administration</h2>{tenants.filter((tenant) => tenant.status === 'Active').map((tenant) => <p key={tenant.id}><strong>{tenant.tenantCode}</strong>{' '}<button type="button" onClick={() => { setResetting(tenant); setResetAdminEmail('') }}>Reset Tenant Admin Password</button></p>)}</div>}
     <PageHeader title="Platform tenants" subtitle="Create and inspect tenant workspaces. Provider credentials remain server-side." />
     {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
     {created && <div className="card" role="status"><strong>Tenant created successfully</strong><p>{created.tenantCode} · {created.databaseProvider} · {created.status}</p><p>Web URL: {localTenantUrl(created.host)}</p>{created.developmentTemporaryPassword && <p>Development temporary administrator password: <code>{created.developmentTemporaryPassword}</code></p>}<a href={localTenantUrl(created.host)}>Open Tenant</a></div>}
@@ -92,5 +109,7 @@ export function PlatformTenantsPage() {
     {editing && <form className="card" onSubmit={(event) => void saveEdit(event)}><h2>Edit inactive tenant</h2><p>{editing.tenantCode} · {editing.databaseProvider} · {editing.shardKey}</p><label>Tenant Name *<input required value={editName} onChange={(e) => setEditName(e.target.value)} /></label><label>Host *<input required value={editHost} onChange={(e) => setEditHost(e.target.value)} /></label><button type="submit" disabled={saving}>Save</button>{' '}<button type="button" onClick={() => setEditing(null)}>Cancel</button></form>}
     {retrying && <form className="card" onSubmit={(event) => void retry(event)}><h2>Retry provisioning</h2><p>Tenant: <strong>{retrying.tenantCode}</strong> · Provider: <strong>{retrying.databaseProvider}</strong> · Host: <strong>{retrying.host}</strong></p><p>Database preview: <code>{retrying.databaseProvider === 'MySql' ? `HRMS_${retrying.shardKey}` : 'Shared SQL Server HRMS'}</code></p><label>Initial Administrator First Name *<input required value={retryForm.firstName} onChange={(e) => updateRetry('firstName', e.target.value)} /></label><label>Initial Administrator Last Name *<input required value={retryForm.lastName} onChange={(e) => updateRetry('lastName', e.target.value)} /></label><label>Initial Administrator Email *<input required type="email" value={retryForm.initialAdminEmail} onChange={(e) => updateRetry('initialAdminEmail', e.target.value)} /></label><button type="submit" disabled={saving}>Confirm retry</button>{' '}<button type="button" onClick={() => setRetrying(null)}>Cancel</button></form>}
     {can(PlatformPermissions.create) && <form className="card" onSubmit={(event) => void submit(event)}><h2>Create tenant</h2><label>Tenant Name *<input required value={form.tenantName} onChange={(e) => update('tenantName', e.target.value)} /></label><label>Tenant Code *<input required pattern="[A-Za-z0-9_-]{2,20}" value={form.tenantCode} onChange={(e) => update('tenantCode', e.target.value)} /></label><label>Host *<input required value={form.host} onChange={(e) => update('host', e.target.value)} /></label><label>Database Provider *<select value={form.databaseProvider} onChange={(e) => update('databaseProvider', e.target.value)}><option value="SqlServer">SQL Server</option><option value="MySql">MySQL</option></select></label><label>Shard Key *<input required value={form.shardKey} onChange={(e) => update('shardKey', e.target.value)} /></label>{form.databaseProvider === 'MySql' ? <p>Database preview: <code>{mysqlPreview}</code> (preview only)</p> : <p>Database routing: Shared SQL Server database</p>}<label>Contact Email<input type="email" value={form.email} onChange={(e) => update('email', e.target.value)} /></label><label>Phone<input value={form.phone} onChange={(e) => update('phone', e.target.value)} /></label><label>Address<textarea value={form.address} onChange={(e) => update('address', e.target.value)} /></label><h3>Initial Administrator</h3><label>First Name *<input required value={form.firstName} onChange={(e) => update('firstName', e.target.value)} /></label><label>Last Name *<input required value={form.lastName} onChange={(e) => update('lastName', e.target.value)} /></label><label>Email *<input required type="email" value={form.initialAdminEmail} onChange={(e) => update('initialAdminEmail', e.target.value)} /></label><button type="submit" disabled={saving}>{saving ? 'Provisioning…' : 'Create Tenant'}</button></form>}
+    {resetting && <form className="card" onSubmit={(event) => { event.preventDefault(); if (window.confirm(`Reset the TenantAdmin password for ${resetting.tenantCode}?`)) void resetAdminPassword() }}><h2>Reset Tenant Admin Password</h2><p>Generate a new Development-only temporary password for <strong>{resetting.tenantCode}</strong>.</p><label>Admin email (optional when exactly one active TenantAdmin exists)<input type="email" value={resetAdminEmail} onChange={(e) => setResetAdminEmail(e.target.value)} /></label><button type="submit" disabled={saving}>Confirm reset</button>{' '}<button type="button" onClick={() => { setResetting(null); setResetAdminEmail('') }}>Cancel</button></form>}
+    {resetResult && <div className="card" role="dialog" aria-modal="true"><h2>Temporary password</h2><p>Tenant: <strong>{resetResult.tenantName}</strong></p><p>Admin email: <strong>{resetResult.adminEmail}</strong></p><p><strong>Copy this password now. It will not be shown again.</strong></p><code>{resetResult.temporaryPassword}</code>{' '}<button type="button" onClick={() => void navigator.clipboard?.writeText(resetResult.temporaryPassword)}>Copy</button><p>{resetResult.message}</p><button type="button" onClick={closeResetResult}>Close</button></div>}
   </section>
 }

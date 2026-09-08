@@ -23,11 +23,41 @@ namespace HRMS.API.Controllers;
 public class EmployeesController : ControllerBase
 {
     private readonly IEmployeeService _employeeService;
+    private readonly IEmployeePortalAccountService _portalAccounts;
 
-    public EmployeesController(IEmployeeService employeeService)
+    public EmployeesController(IEmployeeService employeeService, IEmployeePortalAccountService portalAccounts)
     {
         _employeeService = employeeService;
+        _portalAccounts = portalAccounts;
     }
+
+    [HttpGet("{id:guid}/portal-account")]
+    [HasPermission(Permissions.User.View)]
+    public async Task<ActionResult<ApiResponse<PortalAccountDto>>> GetPortalAccount(Guid id, CancellationToken cancellationToken) =>
+        (await _portalAccounts.GetAsync(id, cancellationToken)).ToActionResult();
+
+    [HttpPost("{id:guid}/portal-account")]
+    [HasPermission(Permissions.User.Create)]
+    [ProducesResponseType(typeof(ApiResponse<CreatePortalAccountResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<CreatePortalAccountResponse>>> CreatePortalAccount(
+        Guid id, CreatePortalAccountRequest request, CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        return (await _portalAccounts.CreateAsync(id, request, cancellationToken)).ToActionResult();
+    }
+
+    [HttpPost("{id:guid}/portal-account/resend-invite")]
+    [HasPermission(Permissions.User.Create)]
+    public async Task<ActionResult<ApiResponse<CreatePortalAccountResponse>>> ResendPortalInvite(Guid id, CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        return (await _portalAccounts.ResendAsync(id, cancellationToken)).ToActionResult();
+    }
+
+    [HttpPost("{id:guid}/portal-account/revoke-invite")]
+    [HasPermission(Permissions.User.Create)]
+    public async Task<ActionResult<ApiResponse<PortalAccountDto>>> RevokePortalInvite(Guid id, CancellationToken cancellationToken) =>
+        (await _portalAccounts.RevokeAsync(id, cancellationToken)).ToActionResult();
 
     /// <summary>Lists the employees of the signed-in user's organization.</summary>
     /// <remarks>

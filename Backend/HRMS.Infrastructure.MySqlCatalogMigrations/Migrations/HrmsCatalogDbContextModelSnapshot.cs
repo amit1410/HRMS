@@ -244,6 +244,16 @@ namespace HRMS.Infrastructure.MySqlCatalogMigrations.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("char(36)");
 
+                    b.Property<bool>("AllowEmailOtp")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("AllowSmsOtp")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true);
+
                     b.Property<string>("DisplayName")
                         .HasMaxLength(100)
                         .HasColumnType("varchar(100)");
@@ -251,9 +261,39 @@ namespace HRMS.Infrastructure.MySqlCatalogMigrations.Migrations
                     b.Property<bool>("IsPublic")
                         .HasColumnType("tinyint(1)");
 
+                    b.Property<int>("LoginIdentifierMode")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(2);
+
                     b.Property<string>("LogoUrl")
                         .HasMaxLength(512)
                         .HasColumnType("varchar(512)");
+
+                    b.Property<int>("OtpExpiryMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(5);
+
+                    b.Property<int>("OtpMaxAttempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(5);
+
+                    b.Property<int>("OtpMaxResends")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(5);
+
+                    b.Property<int>("OtpResendCooldownSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(60);
+
+                    b.Property<bool>("PasswordRecoveryEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true);
 
                     b.Property<string>("PrimaryColor")
                         .HasMaxLength(7)

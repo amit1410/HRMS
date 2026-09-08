@@ -19,6 +19,7 @@ public static class DependencyInjection
         services.TryAddSingletonTimeProvider();
 
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<IPasswordRecoveryService, PasswordRecoveryService>();
         services.AddScoped<IAccountEmployeeLinkService, AccountEmployeeLinkService>();
         services.AddScoped<ITenantBrandingService, TenantBrandingService>();
         services.AddScoped<IDepartmentService, DepartmentService>();
@@ -27,6 +28,7 @@ public static class DependencyInjection
         services.AddScoped<IStateService, StateService>();
         services.AddScoped<ICityService, CityService>();
         services.AddScoped<IEmployeeService, EmployeeService>();
+        services.AddScoped<IEmployeePortalAccountService, EmployeePortalAccountService>();
         services.AddScoped<IEmployeeCodeConfigurationService, EmployeeCodeConfigurationService>();
         services.AddScoped<IEmployeeCodeSequenceService, EmployeeCodeSequenceService>();
         services.AddSingleton<EmployeeCodes.EmployeeCodeRuleMatcher>();
@@ -53,6 +55,7 @@ public static class DependencyInjection
         services.AddScoped<ILeaveBalanceAccountingService, LeaveBalanceAccountingService>();
         services.AddScoped<IEmployeeIdentityResolver, EmployeeIdentityResolver>();
         services.AddScoped<IEffectiveEmploymentResolver, EffectiveEmploymentResolver>();
+        services.AddScoped<IMyEmployeeProfileService, MyEmployeeProfileService>();
         services.AddScoped<ILeaveConfigurationService, LeaveConfigurationService>();
         services.AddScoped<ILeaveRequestValidationService, LeaveRequestValidationService>();
         services.AddScoped<ILeaveRequestSubmissionService, LeaveRequestSubmissionService>();

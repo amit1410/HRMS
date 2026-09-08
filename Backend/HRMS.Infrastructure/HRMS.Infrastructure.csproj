@@ -10,6 +10,7 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
     <PackageReference Include="MySql.EntityFrameworkCore" Version="10.0.9" />
     <!-- Host-to-shard resolution: a short-lived cache in front of the catalog, and the "Sharding"
          configuration section bound to ShardingOptions. Both arrive transitively through EF Core, but they
