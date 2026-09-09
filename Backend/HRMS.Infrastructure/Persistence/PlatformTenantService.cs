@@ -159,16 +159,16 @@ public sealed class PlatformTenantService : IPlatformTenantService
         UpdateInactivePlatformTenantRequest request,
         CancellationToken cancellationToken = default)
     {
-        var tenant = await _catalog.Tenants.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+        var tenant = await _catalog.Tenants.Include(x => x.Branding).SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (tenant is null)
             return Result<PlatformTenantDetailDto>.NotFound("Tenant was not found.");
-        if (tenant.Status != TenantStatus.Inactive)
-            return Result<PlatformTenantDetailDto>.Conflict("Only an Inactive tenant can be edited before retrying provisioning.");
 
         var host = request.Host.Trim().ToLowerInvariant();
         var shapeError = ValidateNormalizedValues(tenant.TenantCode, host, tenant.ShardKey, _environment.IsDevelopment());
         if (shapeError is not null)
             return Result<PlatformTenantDetailDto>.Invalid(shapeError.Value.Field, shapeError.Value.Message);
+        if (IsReservedPlatformHost(host))
+            return Result<PlatformTenantDetailDto>.Invalid(nameof(request.Host), "The platform host is reserved for platform administration.");
         if (string.IsNullOrWhiteSpace(request.TenantName))
             return Result<PlatformTenantDetailDto>.Invalid(nameof(request.TenantName), "TenantName is required.");
         if (await _catalog.Tenants.AnyAsync(x => x.Id != id && x.Host.ToLower() == host, cancellationToken))
@@ -176,8 +176,61 @@ public sealed class PlatformTenantService : IPlatformTenantService
 
         tenant.Host = host;
         tenant.TenantName = request.TenantName.Trim();
-        await _catalog.SaveChangesAsync(cancellationToken);
-        return Result<PlatformTenantDetailDto>.Success(ToDetail(tenant), "Inactive tenant details updated.");
+        tenant.Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim();
+        tenant.Phone = string.IsNullOrWhiteSpace(request.Phone) ? null : request.Phone.Trim();
+        tenant.Address = string.IsNullOrWhiteSpace(request.Address) ? null : request.Address.Trim();
+        if (tenant.Branding is not null)
+        {
+            tenant.Branding.DisplayName = tenant.TenantName;
+            tenant.Branding.SupportEmail = tenant.Email;
+        }
+
+        try
+        {
+            await _catalog.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            return Result<PlatformTenantDetailDto>.Conflict("Tenant details could not be saved because the host is already in use.");
+        }
+
+        _logger.LogInformation("Platform tenant {Action} by {ActorUserId}: {TenantId} {TenantCode}.",
+            "edited", _actor.UserId, tenant.Id, tenant.TenantCode);
+        return Result<PlatformTenantDetailDto>.Success(ToDetail(tenant), "Tenant details updated.");
+    }
+
+    public Task<Result<PlatformTenantDetailDto>> ActivateAsync(Guid id, CancellationToken cancellationToken = default) =>
+        SetStatusAsync(id, TenantStatus.Active, cancellationToken);
+
+    public Task<Result<PlatformTenantDetailDto>> DeactivateAsync(Guid id, CancellationToken cancellationToken = default) =>
+        SetStatusAsync(id, TenantStatus.Inactive, cancellationToken);
+
+    private async Task<Result<PlatformTenantDetailDto>> SetStatusAsync(
+        Guid id,
+        TenantStatus status,
+        CancellationToken cancellationToken)
+    {
+        var tenant = await _catalog.Tenants.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (tenant is null)
+            return Result<PlatformTenantDetailDto>.NotFound("Tenant was not found.");
+        if (tenant.Status == status)
+            return Result<PlatformTenantDetailDto>.Success(ToDetail(tenant), $"Tenant is already {status}.");
+        if (tenant.Status == TenantStatus.Suspended)
+            return Result<PlatformTenantDetailDto>.Conflict("Suspended tenants must be handled by the existing suspension workflow.");
+
+        tenant.Status = status;
+        try
+        {
+            await _catalog.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            return Result<PlatformTenantDetailDto>.Conflict("Tenant status could not be updated.");
+        }
+
+        _logger.LogInformation("Platform tenant {Action} by {ActorUserId}: {TenantId} {TenantCode} at {UtcNow}.",
+            status == TenantStatus.Active ? "activated" : "deactivated", _actor.UserId, tenant.Id, tenant.TenantCode, DateTime.UtcNow);
+        return Result<PlatformTenantDetailDto>.Success(ToDetail(tenant), $"Tenant {status.ToString().ToLowerInvariant()} successfully.");
     }
 
     public async Task<Result<PlatformTenantDetailDto>> RetryProvisioningAsync(
@@ -435,6 +488,13 @@ public sealed class PlatformTenantService : IPlatformTenantService
 
     private string WebUrl(string host) => (_configuration["Frontend:TenantWebUrlTemplate"] ?? "http://{host}")
         .Replace("{host}", host, StringComparison.Ordinal);
+
+    private bool IsReservedPlatformHost(string host)
+    {
+        var configuredHosts = _configuration.GetSection("Platform:AllowedHosts").Get<string[]>()
+            ?? ["platform.localhost"];
+        return configuredHosts.Any(configured => string.Equals(configured, host, StringComparison.OrdinalIgnoreCase));
+    }
 
     private static string SafeErrorCode(Exception exception) => exception is TenantProvisioningException classified
         ? classified.Code

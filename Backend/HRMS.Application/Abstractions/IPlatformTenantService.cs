@@ -14,6 +14,8 @@ public interface IPlatformTenantService
         Guid id,
         UpdateInactivePlatformTenantRequest request,
         CancellationToken cancellationToken = default);
+    Task<Result<PlatformTenantDetailDto>> ActivateAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<Result<PlatformTenantDetailDto>> DeactivateAsync(Guid id, CancellationToken cancellationToken = default);
     Task<Result<PlatformTenantDetailDto>> RetryProvisioningAsync(
         Guid id,
         RetryPlatformTenantRequest request,

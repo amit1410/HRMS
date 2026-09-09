@@ -53,6 +53,16 @@ public sealed class PlatformTenantsController : ControllerBase
         return (await _service.UpdateInactiveAsync(id, request, cancellationToken)).ToActionResult();
     }
 
+    [HttpPost("{id:guid}/activate")]
+    [PlatformPermission(PlatformPermissions.TenantUpdateStatus)]
+    public async Task<ActionResult<ApiResponse<PlatformTenantDetailDto>>> Activate(Guid id, CancellationToken cancellationToken) =>
+        (await _service.ActivateAsync(id, cancellationToken)).ToActionResult();
+
+    [HttpPost("{id:guid}/deactivate")]
+    [PlatformPermission(PlatformPermissions.TenantUpdateStatus)]
+    public async Task<ActionResult<ApiResponse<PlatformTenantDetailDto>>> Deactivate(Guid id, CancellationToken cancellationToken) =>
+        (await _service.DeactivateAsync(id, cancellationToken)).ToActionResult();
+
     [HttpPost("{id:guid}/retry-provisioning")]
     [PlatformPermission(PlatformPermissions.TenantCreate)]
     public async Task<ActionResult<ApiResponse<PlatformTenantDetailDto>>> RetryProvisioning(

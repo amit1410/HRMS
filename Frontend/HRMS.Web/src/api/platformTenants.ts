@@ -37,6 +37,9 @@ export interface CreatePlatformTenantRequest {
 export interface UpdateInactivePlatformTenantRequest {
   tenantName: string
   host: string
+  email?: string
+  phone?: string
+  address?: string
 }
 
 export interface RetryPlatformTenantRequest {
@@ -66,8 +69,19 @@ export function createPlatformTenant(body: CreatePlatformTenantRequest) {
   return request<PlatformTenant>(() => platformApi.post<ApiResponse<PlatformTenant>>('/api/platform/tenants', body))
 }
 
-export function updateInactivePlatformTenant(id: string, body: UpdateInactivePlatformTenantRequest) {
+export function updatePlatformTenant(id: string, body: UpdateInactivePlatformTenantRequest) {
   return request<PlatformTenant>(() => platformApi.put<ApiResponse<PlatformTenant>>(`/api/platform/tenants/${id}`, body))
+}
+
+/** @deprecated Use updatePlatformTenant; metadata edits are supported for active and inactive tenants. */
+export const updateInactivePlatformTenant = updatePlatformTenant
+
+export function activatePlatformTenant(id: string) {
+  return request<PlatformTenant>(() => platformApi.post<ApiResponse<PlatformTenant>>(`/api/platform/tenants/${id}/activate`))
+}
+
+export function deactivatePlatformTenant(id: string) {
+  return request<PlatformTenant>(() => platformApi.post<ApiResponse<PlatformTenant>>(`/api/platform/tenants/${id}/deactivate`))
 }
 
 export function retryPlatformTenant(id: string, body: RetryPlatformTenantRequest) {

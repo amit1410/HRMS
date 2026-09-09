@@ -21,6 +21,7 @@ export interface PlatformLoginResponse {
   user: PlatformUser
 }
 
+let platformRefreshInFlight: Promise<PlatformLoginResponse | null> | null = null
 
 export async function platformLogin(email: string, password: string): Promise<PlatformLoginResponse> {
   const response = await platformApi.post<ApiResponse<PlatformLoginResponse>>('/api/platform/auth/login', { email, password })
@@ -29,7 +30,14 @@ export async function platformLogin(email: string, password: string): Promise<Pl
   return result
 }
 
-export async function platformRefresh(): Promise<PlatformLoginResponse | null> {
+export function platformRefresh(): Promise<PlatformLoginResponse | null> {
+  platformRefreshInFlight ??= performPlatformRefresh().finally(() => {
+    platformRefreshInFlight = null
+  })
+  return platformRefreshInFlight
+}
+
+async function performPlatformRefresh(): Promise<PlatformLoginResponse | null> {
   const refreshToken = platformSession.getRefreshToken()
   if (!refreshToken) return null
   try {

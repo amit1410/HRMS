@@ -9,5 +9,8 @@ public sealed class UpdateInactivePlatformTenantRequestValidator : AbstractValid
     {
         RuleFor(x => x.TenantName).NotEmpty().MaximumLength(200);
         RuleFor(x => x.Host).NotEmpty().MaximumLength(253);
+        RuleFor(x => x.Email).EmailAddress().When(x => !string.IsNullOrWhiteSpace(x.Email)).MaximumLength(256);
+        RuleFor(x => x.Phone).MaximumLength(30);
+        RuleFor(x => x.Address).MaximumLength(500);
     }
 }
