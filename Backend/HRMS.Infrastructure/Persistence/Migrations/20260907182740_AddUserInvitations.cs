@@ -45,7 +45,7 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                 });
 
             migrationBuilder.CreateIndex(
-                name: "IX_UserInvitations_TenantId_UserId_Purpose_UsedAtUtc_RevokedAtUtc",
+                name: "IX_UserInvitations_UserPurposeStatus",
                 table: "UserInvitations",
                 columns: new[] { "TenantId", "UserId", "Purpose", "UsedAtUtc", "RevokedAtUtc" });
 

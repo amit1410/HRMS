@@ -3790,7 +3790,8 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.HasIndex("TokenHash")
                         .IsUnique();
 
-                    b.HasIndex("TenantId", "UserId", "Purpose", "UsedAtUtc", "RevokedAtUtc");
+                    b.HasIndex("TenantId", "UserId", "Purpose", "UsedAtUtc", "RevokedAtUtc")
+                        .HasDatabaseName("IX_UserInvitations_UserPurposeStatus");
 
                     b.ToTable("UserInvitations", (string)null);
                 });
