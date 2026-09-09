@@ -69,10 +69,10 @@ public sealed class PlatformTenantService : IPlatformTenantService
         CreatePlatformTenantRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (!_environment.IsDevelopment())
+        if (!InitialAdministratorInvitationsConfigured())
         {
             return Result<PlatformTenantDetailDto>.Invalid(
-                "Initial administrator invitations are not configured outside Development. Onboarding is unavailable until an invitation provider is configured.");
+                "Initial administrator invitations are not configured. Onboarding is unavailable until the SMTP invitation provider is configured.");
         }
 
         var tenantCode = request.TenantCode.Trim().ToUpperInvariant();
@@ -238,9 +238,9 @@ public sealed class PlatformTenantService : IPlatformTenantService
         RetryPlatformTenantRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (!_environment.IsDevelopment())
+        if (!InitialAdministratorInvitationsConfigured())
             return Result<PlatformTenantDetailDto>.Invalid(
-                "Initial administrator invitations are not configured outside Development. Retry is unavailable until an invitation provider is configured.");
+                "Initial administrator invitations are not configured. Retry is unavailable until the SMTP invitation provider is configured.");
 
         var tenant = await _catalog.Tenants.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (tenant is null)
@@ -529,5 +529,12 @@ public sealed class PlatformTenantService : IPlatformTenantService
         var bytes = RandomNumberGenerator.GetBytes(24);
         return Convert.ToBase64String(bytes).Replace('+', 'x').Replace('/', 'y').TrimEnd('=');
     }
+
+    private bool InitialAdministratorInvitationsConfigured() =>
+        _environment.IsDevelopment()
+        || string.Equals(
+            _configuration["PasswordRecoveryProviders:EmailProvider"],
+            "Smtp",
+            StringComparison.OrdinalIgnoreCase);
 
 }
