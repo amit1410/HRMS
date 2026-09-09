@@ -23,6 +23,8 @@
 const REFRESH_TOKEN_KEY = 'hrms.refreshToken.v1'
 
 let accessToken: string | null = null
+let refreshTokenInMemory: string | null = null
+let rememberRefreshToken: boolean | null = null
 
 /** `localStorage` throws in some privacy modes; a failure to persist must not break sign-in. */
 function safeLocalStorage(): Storage | null {
@@ -50,17 +52,22 @@ export const session = {
 
   getRefreshToken(): string | null {
     try {
-      return safeLocalStorage()?.getItem(REFRESH_TOKEN_KEY) ?? null
+      const storedToken = safeLocalStorage()?.getItem(REFRESH_TOKEN_KEY) ?? null
+      return rememberRefreshToken === false ? refreshTokenInMemory : storedToken
     } catch {
-      return null
+      return rememberRefreshToken === false ? refreshTokenInMemory : null
     }
   },
 
   /** Stores both halves of a fresh pair — from sign-in, or from a rotation. */
-  save(tokens: TokenPair): void {
+  save(tokens: TokenPair, remember = rememberRefreshToken ?? true): void {
     accessToken = tokens.accessToken
+    refreshTokenInMemory = tokens.refreshToken
+    rememberRefreshToken = remember
     try {
-      safeLocalStorage()?.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken)
+      const storage = safeLocalStorage()
+      if (remember) storage?.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken)
+      else storage?.removeItem(REFRESH_TOKEN_KEY)
     } catch {
       // Storage unavailable: the session still works for this tab, it just will not survive a reload.
     }
@@ -68,11 +75,18 @@ export const session = {
 
   clear(): void {
     accessToken = null
+    refreshTokenInMemory = null
+    rememberRefreshToken = null
     try {
       safeLocalStorage()?.removeItem(REFRESH_TOKEN_KEY)
     } catch {
       // Nothing to do — the in-memory token is gone, which is what ends the session for this tab.
     }
+  },
+
+  /** Selects whether the next successful sign-in's refresh token survives a browser restart. */
+  setRememberMe(remember: boolean): void {
+    rememberRefreshToken = remember
   },
 
   /**

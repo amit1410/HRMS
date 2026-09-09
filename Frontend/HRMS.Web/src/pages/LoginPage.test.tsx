@@ -12,6 +12,7 @@ import { LoginPage } from './LoginPage.tsx'
 const routes = (
   <Routes>
     <Route path="/login" element={<LoginPage />} />
+    <Route path="/forgot-password" element={<p>forgot password</p>} />
     <Route path="/dashboard" element={<p>dashboard</p>} />
   </Routes>
 )
@@ -50,6 +51,39 @@ describe('LoginPage', () => {
     expect(screen.queryByLabelText(/tenant code|organization/i)).not.toBeInTheDocument()
     await waitFor(() => expect(screen.getByLabelText('Email or Employee Code')).toBeInTheDocument())
     expect(screen.getByLabelText('Password')).toBeInTheDocument()
+  })
+
+  it('renders forgot password as a secondary navigation button', async () => {
+    renderLogin(vi.fn())
+
+    const forgotPassword = await screen.findByRole('link', { name: 'Forgot password' })
+    expect(forgotPassword).toHaveClass('forgot-password-button')
+    expect(forgotPassword).toHaveAttribute('href', '/forgot-password')
+  })
+
+  it('navigates to forgot password without submitting the login form', async () => {
+    const login = vi.fn()
+    renderLogin(login)
+
+    await userEvent.click(await screen.findByRole('link', { name: 'Forgot password' }))
+
+    expect(await screen.findByText('forgot password')).toBeInTheDocument()
+    expect(login).not.toHaveBeenCalled()
+  })
+
+  it('keeps Remember Me behavior unchanged', async () => {
+    const login = vi.fn().mockResolvedValue(undefined)
+    renderLogin(login)
+
+    const rememberMe = await screen.findByRole('checkbox', { name: 'Remember Me' })
+    expect(rememberMe).not.toBeChecked()
+    await userEvent.click(rememberMe)
+    await userEvent.type(screen.getByLabelText('Email or Employee Code'), 'hr@demo01.test')
+    await userEvent.type(screen.getByLabelText('Password'), 'pw')
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(rememberMe).toBeChecked()
+    expect(window.localStorage.getItem('hrms.rememberedIdentifier.v1')).toBe('hr@demo01.test')
   })
 
   it.each([
