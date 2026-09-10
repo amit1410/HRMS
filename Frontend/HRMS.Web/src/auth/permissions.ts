@@ -61,6 +61,8 @@ export const Permissions = {
   },
   leave: {
     dashboardViewAll: 'LeaveDashboard.ViewAll',
+    reportsView: 'LeaveReports.View',
+    reportsExport: 'LeaveReports.Export',
     typeManage: 'Leave.TypeManage',
     periodManage: 'Leave.PeriodManage',
     policyView: 'Leave.PolicyView',

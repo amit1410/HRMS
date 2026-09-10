@@ -36,6 +36,7 @@ import { LeaveApprovalDetailPage, LeaveApprovalsPage } from './pages/leave/Leave
 import { TeamLeaveCalendarPage } from './pages/leave/TeamLeaveCalendarPage.tsx'
 import { LeaveBalanceImportPage } from './pages/leave/LeaveBalanceImportPage.tsx'
 import { LeaveDashboardPage } from './pages/leave/LeaveDashboardPage.tsx'
+import { LeaveReportsPage } from './pages/leave/LeaveReportsPage.tsx'
 import { PlatformTenantsPage } from './pages/platform/PlatformTenantsPage.tsx'
 import { PlatformLoginPage } from './pages/platform/PlatformLoginPage.tsx'
 import { PlatformAuthProvider, usePlatformAuth } from './auth/PlatformAuthProvider.tsx'
@@ -124,6 +125,7 @@ function TenantApplication() {
                   <Route path="leave-management/types" element={<RequirePermission permission={Permissions.leave.typeManage}><LeaveTypesPage /></RequirePermission>} />
                   <Route path="leave-management/working-day-calendar" element={<RequirePermission permission={Permissions.leave.policyView}><LeaveWorkingDayCalendarPage /></RequirePermission>} />
                   <Route path="leave-management" element={<LeaveDashboardPage />} />
+                  <Route path="leave-management/reports" element={<RequirePermission permission={Permissions.leave.reportsView}><LeaveReportsPage /></RequirePermission>} />
                   <Route path="leave-management/periods" element={<RequirePermission permission={Permissions.leave.periodManage}><LeavePeriodsPage /></RequirePermission>} />
                   <Route path="leave-management/policies" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePoliciesPage /></RequirePermission>} />
                   <Route path="leave-management/policies/:policyId" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePolicyEditorPage /></RequirePermission>} />
