@@ -87,6 +87,10 @@ public interface IHrmsDbContext
     DbSet<LeavePolicyApplicabilitySet> LeavePolicyApplicabilitySets { get; }
     DbSet<EmployeeLeaveBalance> EmployeeLeaveBalances { get; }
     DbSet<LeaveBalanceTransaction> LeaveBalanceTransactions { get; }
+    DbSet<LeaveEntitlementGrant> LeaveEntitlementGrants { get; }
+    DbSet<LeaveBalanceReservationAllocation> LeaveBalanceReservationAllocations { get; }
+    DbSet<LeaveAccrualOccurrence> LeaveAccrualOccurrences { get; }
+    DbSet<LeavePeriodCloseOccurrence> LeavePeriodCloseOccurrences { get; }
     DbSet<LeaveRequest> LeaveRequests { get; }
     DbSet<LeaveRequestDay> LeaveRequestDays { get; }
     DbSet<LeaveRequestEvent> LeaveRequestEvents { get; }

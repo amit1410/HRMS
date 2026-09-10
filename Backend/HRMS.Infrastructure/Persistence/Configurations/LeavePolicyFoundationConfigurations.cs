@@ -105,6 +105,10 @@ public sealed class LeavePolicyEntitlementRuleConfiguration : IEntityTypeConfigu
         b.Property(x => x.EntitlementQuantity).HasPrecision(9, 3);
         b.Property(x => x.AccrualFrequency).HasConversion<int>().IsRequired();
         b.Property(x => x.AccrualTiming).HasConversion<int>();
+        b.Property(x => x.ProratePartialPeriod).IsRequired();
+        b.Property(x => x.MaximumAccumulation).HasPrecision(9, 3);
+        b.Property(x => x.MaximumCarryForwardQuantity).HasPrecision(9, 3);
+        b.Property(x => x.CarryForwardExpiryDays);
         b.HasAlternateKey(x => new { x.TenantId, x.Id });
         b.HasIndex(x => new { x.TenantId, x.LeavePolicyRuleId }).IsUnique();
         b.HasOne(x => x.LeavePolicyRule).WithOne(x => x.EntitlementRule)

@@ -172,7 +172,7 @@ export interface LeavePolicyEligibilityRuleRequest {
 }
 export type EntitlementMode = 'Allocated' | 'Unlimited' | 'NoBalanceRequired'
 export type EntitlementSource = 'PolicyAccrual' | 'ExternalGrant' | 'NoBalanceRequired'
-export type AccrualFrequency = 'None' | 'Upfront' | 'Monthly' | 'Quarterly' | 'SemiAnnual' | 'Annual'
+export type AccrualFrequency = 'None' | 'Upfront' | 'Monthly' | 'Quarterly' | 'SemiAnnual' | 'Annual' | 'Daily' | 'Yearly'
 export type AccrualTiming = 'StartOfPeriod' | 'EndOfPeriod'
 export interface LeavePolicyEntitlementRule {
   id: string
@@ -182,6 +182,11 @@ export interface LeavePolicyEntitlementRule {
   entitlementQuantity?: number | null
   accrualFrequency: AccrualFrequency
   accrualTiming?: AccrualTiming | null
+  proratePartialPeriod?: boolean
+  maximumAccumulation?: number | null
+  carryForwardEnabled?: boolean
+  maximumCarryForwardQuantity?: number | null
+  carryForwardExpiryDays?: number | null
   concurrencyToken: string
 }
 export interface LeavePolicyEntitlementRuleRequest {
@@ -190,6 +195,11 @@ export interface LeavePolicyEntitlementRuleRequest {
   entitlementQuantity?: number | null
   accrualFrequency: AccrualFrequency
   accrualTiming?: AccrualTiming | null
+  proratePartialPeriod?: boolean
+  maximumAccumulation?: number | null
+  carryForwardEnabled?: boolean
+  maximumCarryForwardQuantity?: number | null
+  carryForwardExpiryDays?: number | null
   concurrencyToken?: string | null
 }
 export type PartialDayMode = 'FullDayOnly' | 'HalfDayAllowed'

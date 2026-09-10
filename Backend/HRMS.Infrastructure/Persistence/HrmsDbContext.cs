@@ -101,6 +101,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<LeavePolicyApplicabilitySet> LeavePolicyApplicabilitySets => Set<LeavePolicyApplicabilitySet>();
     public DbSet<EmployeeLeaveBalance> EmployeeLeaveBalances => Set<EmployeeLeaveBalance>();
     public DbSet<LeaveBalanceTransaction> LeaveBalanceTransactions => Set<LeaveBalanceTransaction>();
+    public DbSet<LeaveEntitlementGrant> LeaveEntitlementGrants => Set<LeaveEntitlementGrant>();
+    public DbSet<LeaveBalanceReservationAllocation> LeaveBalanceReservationAllocations => Set<LeaveBalanceReservationAllocation>();
+    public DbSet<LeaveAccrualOccurrence> LeaveAccrualOccurrences => Set<LeaveAccrualOccurrence>();
+    public DbSet<LeavePeriodCloseOccurrence> LeavePeriodCloseOccurrences => Set<LeavePeriodCloseOccurrence>();
     public DbSet<LeaveRequest> LeaveRequests => Set<LeaveRequest>();
     public DbSet<LeaveRequestDay> LeaveRequestDays => Set<LeaveRequestDay>();
     public DbSet<LeaveRequestEvent> LeaveRequestEvents => Set<LeaveRequestEvent>();

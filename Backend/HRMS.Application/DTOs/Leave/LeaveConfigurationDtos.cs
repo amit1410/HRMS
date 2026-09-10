@@ -156,12 +156,19 @@ public sealed class LeavePolicyEntitlementRuleRequest
     public decimal? EntitlementQuantity { get; set; }
     public AccrualFrequency AccrualFrequency { get; set; } = AccrualFrequency.None;
     public AccrualTiming? AccrualTiming { get; set; }
+    public bool ProratePartialPeriod { get; set; }
+    public decimal? MaximumAccumulation { get; set; }
+    public bool CarryForwardEnabled { get; set; }
+    public decimal? MaximumCarryForwardQuantity { get; set; }
+    public int? CarryForwardExpiryDays { get; set; }
     public string? ConcurrencyToken { get; set; }
 }
 
 public sealed record LeavePolicyEntitlementRuleDto(
     Guid Id, Guid LeavePolicyRuleId, EntitlementMode EntitlementMode, EntitlementSource EntitlementSource,
     decimal? EntitlementQuantity, AccrualFrequency AccrualFrequency, AccrualTiming? AccrualTiming,
+    bool ProratePartialPeriod, decimal? MaximumAccumulation, bool CarryForwardEnabled,
+    decimal? MaximumCarryForwardQuantity, int? CarryForwardExpiryDays,
     string ConcurrencyToken);
 
 public sealed class LeavePolicyRequestRuleRequest

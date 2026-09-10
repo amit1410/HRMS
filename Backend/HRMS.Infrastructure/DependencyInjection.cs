@@ -14,6 +14,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MySql.EntityFrameworkCore.Extensions;
 using HRMS.Infrastructure.Reminders;
+using HRMS.Infrastructure.Accrual;
 
 namespace HRMS.Infrastructure;
 
@@ -55,6 +56,12 @@ public static class DependencyInjection
         services.AddSingleton(reminderOptions);
         services.AddSingleton(Options.Create(reminderOptions));
         services.AddHostedService<LeaveApprovalReminderWorker>();
+
+        var accrualOptions = configuration.GetSection(LeaveAccrualOptions.SectionName).Get<LeaveAccrualOptions>()
+            ?? new LeaveAccrualOptions();
+        services.AddSingleton(accrualOptions);
+        services.AddSingleton(Options.Create(accrualOptions));
+        services.AddHostedService<LeaveAccrualWorker>();
 
         services.AddMemoryCache();
         services.AddScoped<IShardContext, ShardContext>();

@@ -593,6 +593,10 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveReminderDeliveries` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveBalanceImportRows` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveBalanceImportBatches` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveAccrualOccurrences` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeavePeriodCloseOccurrences` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveBalanceReservationAllocations` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveEntitlementGrants` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveRequestEvents` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveRequestDays` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveBalanceTransactions` WHERE `TenantId` = {TenantId}");

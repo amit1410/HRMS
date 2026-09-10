@@ -9,13 +9,17 @@ public enum LeaveBalanceTransactionType
     ReservationRelease = 4,
     Consumption = 5,
     CancellationRestore = 6
+    ,CarryForward = 7
+    ,Expiry = 8
 }
 
 public enum LeaveBalanceSourceType
 {
     Policy = 0,
     External = 1,
-    BalanceImport = 2
+    BalanceImport = 2,
+    CarryForward = 3,
+    LegacyOpening = 4
 }
 
 public enum LeaveBalanceActorType

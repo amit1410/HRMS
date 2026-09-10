@@ -98,6 +98,11 @@ public sealed class LeavePolicyEntitlementRule : BaseEntity, ITenantEntity
     public decimal? EntitlementQuantity { get; set; }
     public AccrualFrequency AccrualFrequency { get; set; } = AccrualFrequency.None;
     public AccrualTiming? AccrualTiming { get; set; }
+    public bool ProratePartialPeriod { get; set; }
+    public decimal? MaximumAccumulation { get; set; }
+    public bool CarryForwardEnabled { get; set; }
+    public decimal? MaximumCarryForwardQuantity { get; set; }
+    public int? CarryForwardExpiryDays { get; set; }
     public LeavePolicyRule? LeavePolicyRule { get; set; }
 }
 

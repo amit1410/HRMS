@@ -35,8 +35,8 @@ public sealed class LeaveBalanceTransactionPoster : ILeaveBalanceTransactionPost
             return Result<LeaveBalanceCreditResult>.Unauthorized("The requested tenant is not the authenticated tenant.");
         if (command.EmployeeId == Guid.Empty || command.LeaveTypeId == Guid.Empty || command.LeavePeriodId == Guid.Empty)
             return Result<LeaveBalanceCreditResult>.Invalid("A valid Employee, LeaveType, and LeavePeriod are required.");
-        if (!Enum.IsDefined(command.TransactionType) || command.TransactionType is not (LeaveBalanceTransactionType.Opening or LeaveBalanceTransactionType.Accrual or LeaveBalanceTransactionType.ExternalGrant))
-            return Result<LeaveBalanceCreditResult>.Invalid("transactionType", "Only Opening, Accrual, and ExternalGrant credits are supported.");
+        if (!Enum.IsDefined(command.TransactionType) || command.TransactionType is not (LeaveBalanceTransactionType.Opening or LeaveBalanceTransactionType.Accrual or LeaveBalanceTransactionType.ExternalGrant or LeaveBalanceTransactionType.CarryForward))
+            return Result<LeaveBalanceCreditResult>.Invalid("transactionType", "Only Opening, Accrual, ExternalGrant, and CarryForward credits are supported.");
         if (command.Quantity <= 0)
             return Result<LeaveBalanceCreditResult>.Invalid("quantity", "Quantity must be greater than zero.");
         if (string.IsNullOrWhiteSpace(command.IdempotencyKey))
@@ -125,6 +125,15 @@ public sealed class LeaveBalanceTransactionPoster : ILeaveBalanceTransactionPost
             };
             _db.LeaveBalanceTransactions.Add(ledger);
             await _db.SaveChangesAsync(cancellationToken);
+            _db.LeaveEntitlementGrants.Add(new LeaveEntitlementGrant
+            {
+                Id = Guid.NewGuid(), TenantId = tenantId, EmployeeLeaveBalanceId = balance.Id,
+                EmployeeId = command.EmployeeId, LeaveTypeId = command.LeaveTypeId, LeavePeriodId = command.LeavePeriodId,
+                LeaveBalanceTransactionId = ledger.Id, SourceType = command.SourceType,
+                SourceReference = command.SourceReference ?? command.IdempotencyKey, GrantedQuantity = command.Quantity,
+                GrantedOn = command.EffectiveDate, ExpiresOn = command.ExpiresOn
+            });
+            await _db.SaveChangesAsync(cancellationToken);
             if (ownsTransaction) await transaction.CommitAsync(cancellationToken);
             return Result<LeaveBalanceCreditResult>.Success(ToResult(ledger, balance));
         }
@@ -140,6 +149,50 @@ public sealed class LeaveBalanceTransactionPoster : ILeaveBalanceTransactionPost
         }
     }
 
+    public async Task<Result<LeaveBalanceDebitResult>> PostDebitAsync(LeaveBalanceDebitCommand command, CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId || tenantId != command.TenantId)
+            return Result<LeaveBalanceDebitResult>.Unauthorized("The requested tenant is not the authenticated tenant.");
+        if (command.TransactionType != LeaveBalanceTransactionType.Expiry || command.Quantity <= 0 || string.IsNullOrWhiteSpace(command.IdempotencyKey))
+            return Result<LeaveBalanceDebitResult>.Invalid("debit", "Only positive Expiry debits with an idempotency key are supported.");
+        var existing = await _db.LeaveBalanceTransactions.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.IdempotencyKey == command.IdempotencyKey, cancellationToken);
+        if (existing is not null)
+        {
+            var balance = await _db.EmployeeLeaveBalances.AsNoTracking().SingleAsync(x => x.TenantId == tenantId && x.Id == existing.EmployeeLeaveBalanceId, cancellationToken);
+            return Result<LeaveBalanceDebitResult>.Success(new(existing.Id, balance.Id, balance.GrantedQuantity, balance.ReservedQuantity, balance.ConsumedQuantity, balance.AvailableQuantity));
+        }
+        var balanceRow = await _db.EmployeeLeaveBalances.SingleOrDefaultAsync(x => x.TenantId == tenantId && x.EmployeeId == command.EmployeeId && x.LeaveTypeId == command.LeaveTypeId && x.LeavePeriodId == command.LeavePeriodId, cancellationToken);
+        var grant = command.GrantId is Guid grantId
+            ? await _db.LeaveEntitlementGrants.SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == grantId, cancellationToken)
+            : null;
+        if (balanceRow is null || balanceRow.AvailableQuantity < command.Quantity ||
+            (grant is not null && (grant.EmployeeLeaveBalanceId != balanceRow.Id || grant.AvailableQuantity < command.Quantity)))
+            return Result<LeaveBalanceDebitResult>.Conflict("The available balance is insufficient for expiry.");
+
+        var transaction = _db.CurrentTransaction;
+        var ownsTransaction = transaction is null;
+        transaction ??= await _db.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            balanceRow.GrantedQuantity -= command.Quantity;
+            var ledger = new LeaveBalanceTransaction { Id = Guid.NewGuid(), TenantId = tenantId, EmployeeLeaveBalanceId = balanceRow.Id, EmployeeId = command.EmployeeId, LeaveTypeId = command.LeaveTypeId, LeavePeriodId = command.LeavePeriodId, TransactionType = command.TransactionType, Quantity = command.Quantity, EffectiveDate = command.EffectiveDate, OccurredAtUtc = _timeProvider.GetUtcNow().UtcDateTime, LeavePolicyVersionId = command.LeavePolicyVersionId, LeavePolicyRuleId = command.LeavePolicyRuleId, SourceType = command.SourceType, SourceReference = command.SourceReference, ActorType = command.ActorType, ActorUserId = command.ActorUserId, ActorEmployeeId = command.ActorEmployeeId, CorrelationId = command.CorrelationId, IdempotencyKey = command.IdempotencyKey, PayloadFingerprint = "system-expiry" };
+            _db.LeaveBalanceTransactions.Add(ledger);
+            if (grant is not null)
+            {
+                grant.ExpiredQuantity += command.Quantity;
+                if (grant.AvailableQuantity == 0) grant.Status = "Expired";
+            }
+            await _db.SaveChangesAsync(cancellationToken);
+            if (ownsTransaction) await transaction.CommitAsync(cancellationToken);
+            return Result<LeaveBalanceDebitResult>.Success(new(ledger.Id, balanceRow.Id, balanceRow.GrantedQuantity, balanceRow.ReservedQuantity, balanceRow.ConsumedQuantity, balanceRow.AvailableQuantity));
+        }
+        catch (DbUpdateException)
+        {
+            if (ownsTransaction) await transaction.RollbackAsync(cancellationToken);
+            return Result<LeaveBalanceDebitResult>.Conflict("The expiry changed concurrently; retry with the same idempotency key.");
+        }
+    }
+
     private async Task<Result<LeaveBalanceCreditResult>> ExistingResultAsync(LeaveBalanceTransaction existing, CancellationToken ct)
     {
         var balance = await _db.EmployeeLeaveBalances.AsNoTracking().SingleOrDefaultAsync(x =>
@@ -151,8 +204,10 @@ public sealed class LeaveBalanceTransactionPoster : ILeaveBalanceTransactionPost
 
     private static (string Field, string Message)? ValidateSource(LeaveBalanceCreditCommand command)
     {
-        if ((command.TransactionType is LeaveBalanceTransactionType.Opening or LeaveBalanceTransactionType.Accrual) && command.SourceType is not (LeaveBalanceSourceType.Policy or LeaveBalanceSourceType.BalanceImport))
-            return ("sourceType", "Opening and Accrual require the Policy or BalanceImport source.");
+        if ((command.TransactionType is LeaveBalanceTransactionType.Opening or LeaveBalanceTransactionType.Accrual or LeaveBalanceTransactionType.Expiry) && command.SourceType is not (LeaveBalanceSourceType.Policy or LeaveBalanceSourceType.BalanceImport or LeaveBalanceSourceType.CarryForward))
+            return ("sourceType", "Policy balance transactions require the Policy or BalanceImport source.");
+        if (command.TransactionType == LeaveBalanceTransactionType.CarryForward && command.SourceType != LeaveBalanceSourceType.CarryForward)
+            return ("sourceType", "CarryForward requires the CarryForward source.");
         if (command.TransactionType == LeaveBalanceTransactionType.Opening && command.SourceType == LeaveBalanceSourceType.BalanceImport && string.IsNullOrWhiteSpace(command.SourceReference))
             return ("sourceReference", "An imported opening balance requires a batch source reference.");
         if (command.TransactionType == LeaveBalanceTransactionType.ExternalGrant && command.SourceType != LeaveBalanceSourceType.External)

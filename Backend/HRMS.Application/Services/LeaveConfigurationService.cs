@@ -201,7 +201,12 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
                         Id = Guid.NewGuid(), TenantId = version.TenantId, LeavePolicyRuleId = cloned.Id,
                         EntitlementMode = x.EntitlementRule.EntitlementMode, EntitlementSource = x.EntitlementRule.EntitlementSource,
                         EntitlementQuantity = x.EntitlementRule.EntitlementQuantity, AccrualFrequency = x.EntitlementRule.AccrualFrequency,
-                        AccrualTiming = x.EntitlementRule.AccrualTiming
+                        AccrualTiming = x.EntitlementRule.AccrualTiming,
+                        ProratePartialPeriod = x.EntitlementRule.ProratePartialPeriod,
+                        MaximumAccumulation = x.EntitlementRule.MaximumAccumulation,
+                        CarryForwardEnabled = x.EntitlementRule.CarryForwardEnabled,
+                        MaximumCarryForwardQuantity = x.EntitlementRule.MaximumCarryForwardQuantity,
+                        CarryForwardExpiryDays = x.EntitlementRule.CarryForwardExpiryDays
                     };
                 }
                 if (x.RequestRule is not null)
@@ -351,6 +356,11 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         entity.EntitlementQuantity = request.EntitlementMode == EntitlementMode.Allocated ? request.EntitlementQuantity : null;
         entity.AccrualFrequency = request.AccrualFrequency;
         entity.AccrualTiming = request.AccrualFrequency == AccrualFrequency.None ? null : request.AccrualTiming;
+        entity.ProratePartialPeriod = request.AccrualFrequency != AccrualFrequency.None && request.ProratePartialPeriod;
+        entity.MaximumAccumulation = request.MaximumAccumulation;
+        entity.CarryForwardEnabled = request.CarryForwardEnabled;
+        entity.MaximumCarryForwardQuantity = request.CarryForwardEnabled ? request.MaximumCarryForwardQuantity : null;
+        entity.CarryForwardExpiryDays = request.CarryForwardEnabled ? request.CarryForwardExpiryDays : null;
         if (rule.EntitlementRule is null) _db.LeavePolicyEntitlementRules.Add(entity);
         version.ModifiedDate = DateTime.UtcNow;
         try { await _db.SaveChangesAsync(ct); }
@@ -545,7 +555,7 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         return errors;
     }
     private static bool IsBaseline(LeavePolicyEligibilityRuleRequest request) => request.EligibilityMode == EligibilityMode.Immediate && request.MinimumServiceValue is null && request.MinimumServiceUnit is null && request.ProbationMode == ProbationMode.Allowed && request.NoticePeriodMode == NoticePeriodMode.Allowed;
-    private static List<ValidationError> ValidateEntitlement(LeavePolicyEntitlementRule? rule) => rule is null ? [] : ValidateEntitlement(new LeavePolicyEntitlementRuleRequest { EntitlementMode = rule.EntitlementMode, EntitlementSource = rule.EntitlementSource, EntitlementQuantity = rule.EntitlementQuantity, AccrualFrequency = rule.AccrualFrequency, AccrualTiming = rule.AccrualTiming });
+    private static List<ValidationError> ValidateEntitlement(LeavePolicyEntitlementRule? rule) => rule is null ? [] : ValidateEntitlement(new LeavePolicyEntitlementRuleRequest { EntitlementMode = rule.EntitlementMode, EntitlementSource = rule.EntitlementSource, EntitlementQuantity = rule.EntitlementQuantity, AccrualFrequency = rule.AccrualFrequency, AccrualTiming = rule.AccrualTiming, ProratePartialPeriod = rule.ProratePartialPeriod, MaximumAccumulation = rule.MaximumAccumulation, CarryForwardEnabled = rule.CarryForwardEnabled, MaximumCarryForwardQuantity = rule.MaximumCarryForwardQuantity, CarryForwardExpiryDays = rule.CarryForwardExpiryDays });
     private static List<ValidationError> ValidateEntitlement(LeavePolicyEntitlementRuleRequest request)
     {
         var errors = new List<ValidationError>();
@@ -562,6 +572,10 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         if (request.AccrualFrequency != AccrualFrequency.None && request.AccrualTiming is null) errors.Add(new("accrualTiming", "Accrual timing is required when accrual is configured."));
         if (request.AccrualFrequency == AccrualFrequency.Quarterly) errors.Add(new("accrualFrequency", "Quarterly accrual is unavailable until business approval is recorded."));
         if (request.AccrualFrequency != AccrualFrequency.None && request.EntitlementSource != EntitlementSource.PolicyAccrual) errors.Add(new("entitlementSource", "Scheduled accrual requires the PolicyAccrual source."));
+        if (request.MaximumAccumulation is <= 0) errors.Add(new("maximumAccumulation", "Maximum accumulation must be positive when supplied."));
+        if (!request.CarryForwardEnabled && (request.MaximumCarryForwardQuantity is not null || request.CarryForwardExpiryDays is not null)) errors.Add(new("carryForward", "Carry-forward limits are only valid when carry forward is enabled."));
+        if (request.MaximumCarryForwardQuantity is <= 0) errors.Add(new("maximumCarryForwardQuantity", "Maximum carry-forward quantity must be positive when supplied."));
+        if (request.CarryForwardExpiryDays is <= 0) errors.Add(new("carryForwardExpiryDays", "Carry-forward expiry must be positive when supplied."));
         return errors;
     }
     private static List<ValidationError> ValidateRequestRule(LeavePolicyRequestRule? rule) => rule is null ? [] : ValidateRequestRule(new LeavePolicyRequestRuleRequest { MinimumRequestQuantity = rule.MinimumRequestQuantity, MaximumRequestQuantity = rule.MaximumRequestQuantity, MaximumConsecutiveQuantity = rule.MaximumConsecutiveQuantity, MinimumAdvanceNoticeDays = rule.MinimumAdvanceNoticeDays, BackdatedRequestMode = rule.BackdatedRequestMode, MaximumBackdatedDays = rule.MaximumBackdatedDays, MaximumRequestsPerPeriod = rule.MaximumRequestsPerPeriod, MaximumQuantityPerPeriod = rule.MaximumQuantityPerPeriod, RequestLimitPeriod = rule.RequestLimitPeriod, PartialDayMode = rule.PartialDayMode });
@@ -631,7 +645,7 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
     private static LeavePolicyVersionDto ToDto(LeavePolicyVersion x) => new(x.Id, x.VersionNumber, x.EffectiveFrom, x.EffectiveTo, x.Status, x.Priority, x.Rules?.Count(r => r.IsActive) ?? 0, x.ApplicabilitySets?.Count ?? 0, x.CreatedDate, x.CreatedBy, x.ModifiedDate, Token(x), new(x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Published, true));
     private static LeaveApplicabilityGroupDto ToDto(LeavePolicyApplicabilitySet x) => new(x.Id, x.Gender, x.HoldingCompanyId, x.LobId, x.OrganisationId, x.DepartmentId, x.SubDepartmentId, x.SectionId, x.SubSectionId, x.FunctionId, x.SubFunctionId, x.GradeId, x.DesignationId, x.EmployeeTypeId, x.CountryLocationId, x.WorkLocationId, x.CostCenterId);
     private static LeavePolicyEligibilityRuleDto ToDto(LeavePolicyEligibilityRule x) => new(x.Id, x.LeavePolicyRuleId, x.EligibilityMode, x.MinimumServiceValue, x.MinimumServiceUnit, x.ProbationMode, x.NoticePeriodMode, Token(x));
-    private static LeavePolicyEntitlementRuleDto ToDto(LeavePolicyEntitlementRule x) => new(x.Id, x.LeavePolicyRuleId, x.EntitlementMode, x.EntitlementSource, x.EntitlementQuantity, x.AccrualFrequency, x.AccrualTiming, Token(x));
+    private static LeavePolicyEntitlementRuleDto ToDto(LeavePolicyEntitlementRule x) => new(x.Id, x.LeavePolicyRuleId, x.EntitlementMode, x.EntitlementSource, x.EntitlementQuantity, x.AccrualFrequency, x.AccrualTiming, x.ProratePartialPeriod, x.MaximumAccumulation, x.CarryForwardEnabled, x.MaximumCarryForwardQuantity, x.CarryForwardExpiryDays, Token(x));
     private static LeavePolicyRequestRuleDto ToDto(LeavePolicyRequestRule x) => new(x.Id, x.LeavePolicyRuleId, x.MinimumRequestQuantity, x.MaximumRequestQuantity, x.MaximumConsecutiveQuantity, x.MinimumAdvanceNoticeDays, x.BackdatedRequestMode, x.MaximumBackdatedDays, x.MaximumRequestsPerPeriod, x.MaximumQuantityPerPeriod, x.RequestLimitPeriod, x.PartialDayMode, Token(x));
     private static LeavePolicyCalendarRuleDto ToDto(LeavePolicyCalendarRule x) => new(x.Id, x.LeavePolicyRuleId, x.HolidayTreatment, x.WeekOffTreatment, x.SandwichMode, x.ApplyToPrefix, x.ApplyToSuffix, x.ApplyToBetween, Token(x));
     private static LeavePolicyAttachmentRuleDto ToDto(LeavePolicyAttachmentRule x) => new(x.Id, x.LeavePolicyRuleId, x.AttachmentRequirement, x.ThresholdQuantity, x.DocumentLabel, Token(x));

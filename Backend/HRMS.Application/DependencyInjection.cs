@@ -54,6 +54,9 @@ public static class DependencyInjection
         services.AddScoped<ILeaveBalanceReader, LeaveBalanceReader>();
         services.AddScoped<ILeaveBalanceSummaryReader, LeaveBalanceSummaryReader>();
         services.AddScoped<ILeaveBalanceImportService, LeaveBalanceImportService>();
+        services.AddScoped<ILeaveAccrualProcessor, LeaveAccrualProcessor>();
+        services.AddScoped<ILeavePeriodCloseProcessor, LeavePeriodCloseProcessor>();
+        services.AddScoped<ILeaveEntitlementExpiryProcessor, LeaveEntitlementExpiryProcessor>();
         services.AddScoped<ILeaveBalanceAccountingService, LeaveBalanceAccountingService>();
         services.AddScoped<IEmployeeIdentityResolver, EmployeeIdentityResolver>();
         services.AddScoped<IEffectiveEmploymentResolver, EffectiveEmploymentResolver>();

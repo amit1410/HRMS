@@ -2146,6 +2146,99 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("ImportBatches", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveAccrualOccurrence", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("AccrualFrequency")
+                        .HasColumnType("int");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("CalculatedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<string>("ClaimToken")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("CreditedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("LastAttemptAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("LeavePeriodId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeavePolicyVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeaveTypeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateOnly>("OccurrenceDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("OccurrenceKey")
+                        .IsRequired()
+                        .HasMaxLength(220)
+                        .HasColumnType("nvarchar(220)");
+
+                    b.Property<DateTime?>("ProcessedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.HasIndex("TenantId", "LeavePeriodId");
+
+                    b.HasIndex("TenantId", "LeavePolicyRuleId");
+
+                    b.HasIndex("TenantId", "LeavePolicyVersionId");
+
+                    b.HasIndex("TenantId", "LeaveTypeId");
+
+                    b.HasIndex("TenantId", "OccurrenceKey")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "Status", "OccurrenceDate");
+
+                    b.ToTable("LeaveAccrualOccurrences", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveBalanceImportBatch", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2303,6 +2396,55 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("LeaveBalanceImportRows", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveBalanceReservationAllocation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("ConsumedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("LeaveEntitlementGrantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeaveRequestId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("ReleasedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<decimal>("ReservedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "LeaveEntitlementGrantId");
+
+                    b.HasIndex("TenantId", "LeaveRequestId", "Status");
+
+                    b.ToTable("LeaveBalanceReservationAllocations", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveBalanceTransaction", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2384,8 +2526,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasAlternateKey("TenantId", "Id");
-
                     b.HasIndex("TenantId", "ActorEmployeeId");
 
                     b.HasIndex("TenantId", "ActorUserId");
@@ -2413,6 +2553,91 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         {
                             t.HasCheckConstraint("CK_LeaveBalanceTransactions_PositiveQuantity", "[Quantity] > 0");
                         });
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveEntitlementGrant", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("ConsumedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("EmployeeLeaveBalanceId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("ExpiredQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<DateOnly?>("ExpiresOn")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly>("GrantedOn")
+                        .HasColumnType("date");
+
+                    b.Property<decimal>("GrantedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<Guid?>("LeaveBalanceTransactionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeavePeriodId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeaveTypeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("ReservedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<string>("SourceReference")
+                        .IsRequired()
+                        .HasMaxLength(220)
+                        .HasColumnType("nvarchar(220)");
+
+                    b.Property<int>("SourceType")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeLeaveBalanceId");
+
+                    b.HasIndex("TenantId", "LeaveBalanceTransactionId");
+
+                    b.HasIndex("TenantId", "EmployeeId", "LeaveTypeId", "LeavePeriodId", "ExpiresOn", "GrantedOn");
+
+                    b.HasIndex("TenantId", "EmployeeId", "LeaveTypeId", "LeavePeriodId", "SourceType", "SourceReference")
+                        .IsUnique();
+
+                    b.ToTable("LeaveEntitlementGrants", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.LeavePeriod", b =>
@@ -2465,6 +2690,87 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("LeavePeriods", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePeriodCloseOccurrence", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("CarriedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<string>("ClaimToken")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<decimal>("ClosingQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("DestinationLeavePeriodId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal>("LapsedQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<Guid>("LeavePolicyRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeavePolicyVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("LeaveTypeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("OccurrenceKey")
+                        .IsRequired()
+                        .HasMaxLength(220)
+                        .HasColumnType("nvarchar(220)");
+
+                    b.Property<DateTime?>("ProcessedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("SourceLeavePeriodId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "OccurrenceKey")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "Status", "SourceLeavePeriodId");
+
+                    b.ToTable("LeavePeriodCloseOccurrences", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicy", b =>
@@ -2849,6 +3155,12 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<int?>("AccrualTiming")
                         .HasColumnType("int");
 
+                    b.Property<bool>("CarryForwardEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<int?>("CarryForwardExpiryDays")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime2");
 
@@ -2865,8 +3177,19 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("LeavePolicyRuleId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<decimal?>("MaximumAccumulation")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<decimal?>("MaximumCarryForwardQuantity")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime2");
+
+                    b.Property<bool>("ProratePartialPeriod")
+                        .HasColumnType("bit");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uniqueidentifier");
@@ -5081,6 +5404,62 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveAccrualOccurrence", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePeriod", "LeavePeriod")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeavePeriodId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyRule", "LeavePolicyRule")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeavePolicyRuleId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyVersion", "LeavePolicyVersion")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeavePolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveType", "LeaveType")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeaveTypeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("LeavePeriod");
+
+                    b.Navigation("LeavePolicyRule");
+
+                    b.Navigation("LeavePolicyVersion");
+
+                    b.Navigation("LeaveType");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveBalanceImportBatch", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -5141,6 +5520,35 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("LeavePeriodEntity");
 
                     b.Navigation("LeaveType");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveBalanceReservationAllocation", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveEntitlementGrant", "LeaveEntitlementGrant")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeaveEntitlementGrantId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveRequest", "LeaveRequest")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeaveRequestId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LeaveEntitlementGrant");
+
+                    b.Navigation("LeaveRequest");
 
                     b.Navigation("Tenant");
                 });
@@ -5226,6 +5634,22 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("LeaveType");
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveEntitlementGrant", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.EmployeeLeaveBalance", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeLeaveBalanceId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveBalanceTransaction", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeaveBalanceTransactionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.LeavePeriod", b =>

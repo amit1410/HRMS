@@ -9,6 +9,9 @@ public interface ILeaveBalanceTransactionPoster
     Task<Result<LeaveBalanceCreditResult>> PostCreditAsync(
         LeaveBalanceCreditCommand command,
         CancellationToken cancellationToken = default);
+    Task<Result<LeaveBalanceDebitResult>> PostDebitAsync(
+        LeaveBalanceDebitCommand command,
+        CancellationToken cancellationToken = default);
 }
 
 public interface ILeaveBalanceImportService
@@ -86,7 +89,8 @@ public sealed record LeaveBalanceCreditCommand(
     Guid? ActorUserId,
     Guid? ActorEmployeeId,
     string IdempotencyKey,
-    string? CorrelationId);
+    string? CorrelationId,
+    DateOnly? ExpiresOn = null);
 
 public sealed record LeaveBalanceCreditResult(
     Guid TransactionId,
@@ -95,6 +99,17 @@ public sealed record LeaveBalanceCreditResult(
     decimal ReservedQuantity,
     decimal ConsumedQuantity,
     decimal AvailableQuantity);
+
+public sealed record LeaveBalanceDebitCommand(
+    Guid TenantId, Guid EmployeeId, Guid LeaveTypeId, Guid LeavePeriodId,
+    LeaveBalanceTransactionType TransactionType, decimal Quantity, DateOnly EffectiveDate,
+    Guid? LeavePolicyVersionId, Guid? LeavePolicyRuleId, LeaveBalanceSourceType SourceType,
+    string? SourceReference, LeaveBalanceActorType ActorType, Guid? ActorUserId,
+    Guid? ActorEmployeeId, string IdempotencyKey, string? CorrelationId, Guid? GrantId = null);
+
+public sealed record LeaveBalanceDebitResult(
+    Guid TransactionId, Guid BalanceId, decimal GrantedQuantity, decimal ReservedQuantity,
+    decimal ConsumedQuantity, decimal AvailableQuantity);
 
 public sealed record LeaveBalanceSnapshot(
     Guid BalanceId,

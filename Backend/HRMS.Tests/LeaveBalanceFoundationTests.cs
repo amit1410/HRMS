@@ -47,6 +47,48 @@ public sealed class LeaveBalanceFoundationTests
     }
 
     [Fact]
+    public async Task Credit_creates_one_source_aware_grant_linked_to_the_ledger()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var ids = await SeedAsync(db);
+        using var context = db.CreateContext(new TestTenantContext(ids.Tenant));
+        var poster = new LeaveBalanceTransactionPoster(context, new TestTenantContext(ids.Tenant), TimeProvider.System);
+
+        var result = await poster.PostCreditAsync(Command(ids, LeaveBalanceTransactionType.CarryForward, 5m, "carry-1", LeaveBalanceSourceType.CarryForward, "close-1"));
+
+        Assert.True(result.Succeeded);
+        var ledger = await context.LeaveBalanceTransactions.SingleAsync();
+        var grant = await context.LeaveEntitlementGrants.SingleAsync();
+        Assert.Equal(ledger.Id, grant.LeaveBalanceTransactionId);
+        Assert.Equal(LeaveBalanceSourceType.CarryForward, grant.SourceType);
+        Assert.Equal("close-1", grant.SourceReference);
+        Assert.Equal(5m, grant.AvailableQuantity);
+    }
+
+    [Fact]
+    public async Task Grant_targeted_expiry_debits_the_same_source_once()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var ids = await SeedAsync(db);
+        using var context = db.CreateContext(new TestTenantContext(ids.Tenant));
+        var tenant = new TestTenantContext(ids.Tenant);
+        var poster = new LeaveBalanceTransactionPoster(context, tenant, TimeProvider.System);
+        var credit = await poster.PostCreditAsync(Command(ids, LeaveBalanceTransactionType.CarryForward, 10m, "carry-2", LeaveBalanceSourceType.CarryForward, "close-2"));
+        var grant = await context.LeaveEntitlementGrants.SingleAsync();
+
+        var expiry = await poster.PostDebitAsync(new(ids.Tenant, ids.Employee, ids.LeaveType, ids.LeavePeriod, LeaveBalanceTransactionType.Expiry, 6m, new(2027, 4, 1), null, null, LeaveBalanceSourceType.Policy, $"LeaveEntitlementGrant:{grant.Id:D}", LeaveBalanceActorType.System, null, null, "expiry-2", null, grant.Id));
+        var replay = await poster.PostDebitAsync(new(ids.Tenant, ids.Employee, ids.LeaveType, ids.LeavePeriod, LeaveBalanceTransactionType.Expiry, 6m, new(2027, 4, 1), null, null, LeaveBalanceSourceType.Policy, $"LeaveEntitlementGrant:{grant.Id:D}", LeaveBalanceActorType.System, null, null, "expiry-2", null, grant.Id));
+
+        Assert.True(credit.Succeeded);
+        Assert.True(expiry.Succeeded);
+        Assert.True(replay.Succeeded);
+        grant = await context.LeaveEntitlementGrants.SingleAsync();
+        Assert.Equal(6m, grant.ExpiredQuantity);
+        Assert.Equal(4m, grant.AvailableQuantity);
+        Assert.Single(context.LeaveBalanceTransactions.Where(x => x.TransactionType == LeaveBalanceTransactionType.Expiry));
+    }
+
+    [Fact]
     public async Task Same_idempotency_key_replays_but_different_payload_conflicts()
     {
         using var db = new SqliteInMemoryDatabase();

@@ -78,6 +78,10 @@ public sealed class LeaveBalanceAccountingService : ILeaveBalanceAccountingServi
         if (failure is not null)
             return failure;
 
+        var allocationFailure = await ApplyGrantAllocationsAsync(command, transactionType, balance, cancellationToken);
+        if (allocationFailure is not null)
+            return allocationFailure;
+
         var occurredAt = _timeProvider.GetUtcNow().UtcDateTime;
         var ledger = new LeaveBalanceTransaction
         {
@@ -109,6 +113,87 @@ public sealed class LeaveBalanceAccountingService : ILeaveBalanceAccountingServi
         // BeginTransactionAsync or CommitAsync, so request, event, projection, and ledger can commit together.
         await _db.SaveChangesAsync(cancellationToken);
         return Result<LeaveBalanceAccountingResult>.Success(ToResult(ledger, balance, false));
+    }
+
+    private async Task<Result<LeaveBalanceAccountingResult>?> ApplyGrantAllocationsAsync(
+        LeaveBalanceAccountingCommand command, LeaveBalanceTransactionType operation, EmployeeLeaveBalance balance, CancellationToken ct)
+    {
+        var grants = await _db.LeaveEntitlementGrants.Where(x => x.TenantId == command.TenantId && x.EmployeeLeaveBalanceId == balance.Id).ToListAsync(ct);
+        // Balances created before source-aware grants remain usable. New balances/credits always have grants.
+        if (grants.Count == 0) return null;
+
+        if (operation == LeaveBalanceTransactionType.Reservation)
+        {
+            grants = grants.OrderBy(x => x.ExpiresOn is null).ThenBy(x => x.ExpiresOn).ThenBy(x => x.GrantedOn).ThenBy(x => x.Id).ToList();
+            var remaining = command.Quantity;
+            if (grants.Sum(x => x.AvailableQuantity) < remaining)
+                return Result<LeaveBalanceAccountingResult>.Conflict($"{LeaveBalanceAccountingErrorCodes.InsufficientLeaveBalance}: Source grants do not contain enough available quantity.");
+            foreach (var grant in grants)
+            {
+                var amount = Math.Min(remaining, grant.AvailableQuantity);
+                if (amount <= 0) continue;
+                grant.ReservedQuantity += amount;
+                _db.LeaveBalanceReservationAllocations.Add(new LeaveBalanceReservationAllocation
+                {
+                    Id = Guid.NewGuid(), TenantId = command.TenantId, LeaveRequestId = command.LeaveRequestId,
+                    LeaveEntitlementGrantId = grant.Id, ReservedQuantity = amount
+                });
+                remaining -= amount;
+                if (remaining == 0) break;
+            }
+            return null;
+        }
+
+        var allocationsQuery = _db.LeaveBalanceReservationAllocations
+            .Where(x => x.TenantId == command.TenantId && x.LeaveRequestId == command.LeaveRequestId);
+        allocationsQuery = operation == LeaveBalanceTransactionType.CancellationRestore
+            ? allocationsQuery.Where(x => x.ConsumedQuantity > 0)
+            : allocationsQuery.Where(x => x.Status == "Reserved" && x.ReservedQuantity > 0);
+        var allocations = await allocationsQuery
+            .Include(x => x.LeaveEntitlementGrant).ToListAsync(ct);
+        if (allocations.Count == 0) return null;
+        var available = operation == LeaveBalanceTransactionType.Consumption
+            ? allocations.Sum(x => x.ReservedQuantity)
+            : operation == LeaveBalanceTransactionType.ReservationRelease ? allocations.Sum(x => x.ReservedQuantity) : allocations.Sum(x => x.ConsumedQuantity);
+        if (available < command.Quantity)
+            return Result<LeaveBalanceAccountingResult>.Conflict("The source reservation allocation is inconsistent with the requested operation.");
+        var remainingOperation = command.Quantity;
+        foreach (var allocation in allocations.OrderBy(x => x.Id))
+        {
+            var source = operation == LeaveBalanceTransactionType.CancellationRestore ? allocation.ConsumedQuantity : allocation.ReservedQuantity;
+            var amount = Math.Min(remainingOperation, source);
+            if (amount <= 0) continue;
+            if (operation == LeaveBalanceTransactionType.Consumption)
+            { allocation.ReservedQuantity -= amount; allocation.ConsumedQuantity += amount; allocation.LeaveEntitlementGrant!.ReservedQuantity -= amount; allocation.LeaveEntitlementGrant.ConsumedQuantity += amount; }
+            else if (operation == LeaveBalanceTransactionType.ReservationRelease)
+            {
+                allocation.ReservedQuantity -= amount;
+                allocation.ReleasedQuantity += amount;
+                allocation.LeaveEntitlementGrant!.ReservedQuantity -= amount;
+                if (allocation.LeaveEntitlementGrant.ExpiresOn is DateOnly expiresOn && expiresOn <= DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime))
+                {
+                    balance.GrantedQuantity -= amount;
+                    allocation.LeaveEntitlementGrant.ExpiredQuantity += amount;
+                    _db.LeaveBalanceTransactions.Add(new LeaveBalanceTransaction
+                    {
+                        Id = Guid.NewGuid(), TenantId = command.TenantId, EmployeeLeaveBalanceId = balance.Id,
+                        EmployeeId = command.EmployeeId, LeaveTypeId = command.LeaveTypeId, LeavePeriodId = command.LeavePeriodId,
+                        LeaveRequestId = command.LeaveRequestId, TransactionType = LeaveBalanceTransactionType.Expiry,
+                        Quantity = amount, EffectiveDate = expiresOn, OccurredAtUtc = _timeProvider.GetUtcNow().UtcDateTime,
+                        LeavePolicyVersionId = command.LeavePolicyVersionId, LeavePolicyRuleId = command.LeavePolicyRuleId,
+                        SourceType = LeaveBalanceSourceType.Policy, SourceReference = $"LeaveEntitlementGrant:{allocation.LeaveEntitlementGrantId:D}",
+                        ActorType = LeaveBalanceActorType.System, IdempotencyKey = $"{OperationKey(command, operation)}:expiry:{allocation.LeaveEntitlementGrantId:D}:{amount:0.000}",
+                        PayloadFingerprint = "reservation-release-after-expiry"
+                    });
+                }
+            }
+            else
+            { allocation.ConsumedQuantity -= amount; allocation.LeaveEntitlementGrant!.ConsumedQuantity -= amount; }
+            if (allocation.ReservedQuantity == 0 && allocation.ConsumedQuantity == 0) allocation.Status = operation == LeaveBalanceTransactionType.CancellationRestore ? "Restored" : operation == LeaveBalanceTransactionType.ReservationRelease ? "Released" : "Consumed";
+            remainingOperation -= amount;
+            if (remainingOperation == 0) break;
+        }
+        return null;
     }
 
     private async Task<Result<LeaveBalanceAccountingResult>> ReplayAsync(LeaveBalanceTransaction existing, CancellationToken cancellationToken)
