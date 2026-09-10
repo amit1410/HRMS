@@ -462,7 +462,7 @@ public sealed class MySqlTenantRuntimeIntegrationTests
         public Guid EmployeeCId { get; } = Guid.NewGuid();
         public Guid ApprovalUserId { get; } = Guid.NewGuid();
         public int ApprovalRoleId { get; } = Random.Shared.Next(100000, 2000000000);
-        public int ApprovalPermissionId { get; } = Random.Shared.Next(100000, 2000000000);
+        public int ApprovalPermissionId { get; private set; }
         public Guid ApprovalRequestId { get; } = Guid.NewGuid();
         public Guid ApprovalSecondRequestId { get; } = Guid.NewGuid();
         public Guid EmployeeHistoryId { get; } = Guid.NewGuid();
@@ -556,8 +556,9 @@ public sealed class MySqlTenantRuntimeIntegrationTests
             if (_includeApprovalData)
             {
                 context.Users.Add(new User { Id = ApprovalUserId, TenantId = TenantId, Email = $"{TenantId:N}@approval.mysql.test", PasswordHash = "test", FirstName = "Approval", LastName = "User", IsActive = true });
+                var approvePermission = await context.Permissions.SingleAsync(x => x.Name == Permissions.Leave.Approve);
+                ApprovalPermissionId = approvePermission.Id;
                 context.Roles.Add(new Role { Id = ApprovalRoleId, Name = $"mysql-approval-{TenantId:N}" });
-                context.Permissions.Add(new Permission { Id = ApprovalPermissionId, Name = Permissions.Leave.Approve });
                 context.UserRoles.Add(new UserRole { UserId = ApprovalUserId, RoleId = ApprovalRoleId, TenantId = TenantId });
                 context.RolePermissions.Add(new RolePermission { RoleId = ApprovalRoleId, PermissionId = ApprovalPermissionId });
                 context.LeaveRequests.AddRange(
@@ -593,7 +594,6 @@ public sealed class MySqlTenantRuntimeIntegrationTests
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `RolePermissions` WHERE `RoleId` = {ApprovalRoleId}");
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Users` WHERE `Id` = {ApprovalUserId}");
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Roles` WHERE `Id` = {ApprovalRoleId}");
-            await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Permissions` WHERE `Id` = {ApprovalPermissionId}");
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeCodeSequences` WHERE `TenantId` = {TenantId}");
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeCodeRules` WHERE `TenantId` = {TenantId}");
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeCodeConfigs` WHERE `TenantId` = {TenantId}");
