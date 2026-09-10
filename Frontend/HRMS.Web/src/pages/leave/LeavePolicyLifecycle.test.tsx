@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -48,6 +48,17 @@ describe('Leave Policy lifecycle UI', () => {
     await userEvent.clear(screen.getByLabelText(/^Priority/))
     await userEvent.type(screen.getByLabelText(/^Priority/), '20')
     expect(await screen.findByText(/Configuration has changed since the last validation/)).toBeInTheDocument()
+  })
+
+  it('prevents duplicate validation requests while the Draft is being validated', async () => {
+    setup({ isValid: true, errors: [], warnings: [] })
+    stub.on('post', '/api/leave-policies/policy-1/versions/version-3/validate', () => ({ data: ok({ isValid: true, errors: [], warnings: [] }), delay: true }))
+    renderPage([Permissions.leave.policyView, Permissions.leave.policyManage])
+    const button = await screen.findByRole('button', { name: 'Validate Draft' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    await screen.findByText('Valid')
+    expect(stub.callsTo('post', '/api/leave-policies/policy-1/versions/version-3/validate')).toHaveLength(1)
   })
 
   it('keeps Validate available but hides Publish and Retire without PolicyPublish', async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { ApiError } from '../../api/errors.ts'
 import { createLeavePolicyVersion, getLeavePolicyEditor, listLeavePolicyVersions, publishLeavePolicyVersion, retireLeavePolicyVersion, updateLeavePolicyVersion, validateLeavePolicyVersion, type LeavePolicyEditor, type LeavePolicyValidation, type LeavePolicyVersion } from '../../api/leaveConfiguration.ts'
@@ -30,6 +30,8 @@ export function LeavePolicyEditorPage() {
   const [versions, setVersions] = useState<LeavePolicyVersion[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [validationBusy, setValidationBusy] = useState(false)
+  const validationBusyRef = useRef(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<ApiError | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -53,7 +55,7 @@ export function LeavePolicyEditorPage() {
   function markConfigurationChanged() { if (validation) setValidationStale(true) }
   function editDraft<K extends keyof typeof draft>(key: K, value: (typeof draft)[K]) { markConfigurationChanged(); setDraft(previous => ({ ...previous, [key]: value })) }
   async function saveDraft(event: FormEvent) { event.preventDefault(); if (!editor?.currentVersion) return; if (draft.effectiveTo && draft.effectiveFrom > draft.effectiveTo) { setError(new ApiError('Effective From must be on or before Effective To.')); return } markConfigurationChanged(); setSaving(true); setError(null); setNotice(null); try { await updateLeavePolicyVersion(policyId, editor.currentVersion.id, { effectiveFrom: draft.effectiveFrom, effectiveTo: draft.effectiveTo || null, priority: Number(draft.priority), concurrencyToken: editor.currentVersion.concurrencyToken }); setNotice('Draft version saved.'); setSearchParams({ versionId: editor.currentVersion.id }) } catch (caught) { setError(caught instanceof ApiError ? caught : new ApiError('Unable to save Draft version.')) } finally { setSaving(false) } }
-  async function validateDraft() { if (!editor?.currentVersion) return; setError(null); setNotice(null); try { const result = await validateLeavePolicyVersion(policyId, editor.currentVersion.id); setValidation(result); setValidationStale(false) } catch (caught) { setError(caught instanceof ApiError ? caught : new ApiError('Unable to validate Draft version.')) } }
+  async function validateDraft() { if (!editor?.currentVersion || validationBusyRef.current || lifecycleBusy) return; validationBusyRef.current = true; setValidationBusy(true); setError(null); setNotice(null); try { const result = await validateLeavePolicyVersion(policyId, editor.currentVersion.id); setValidation(result); setValidationStale(false) } catch (caught) { setError(caught instanceof ApiError ? caught : new ApiError('Unable to validate Draft version.')) } finally { validationBusyRef.current = false; setValidationBusy(false) } }
   async function performLifecycleAction() { if (!editor?.currentVersion || !lifecycleAction) return; setLifecycleBusy(true); setError(null); try { if (lifecycleAction === 'publish') await publishLeavePolicyVersion(policyId, editor.currentVersion.id); else await retireLeavePolicyVersion(policyId, editor.currentVersion.id); setNotice(lifecycleAction === 'publish' ? 'Policy version published.' : 'Policy version retired.'); setValidation(null); setValidationStale(false); versionsQuery.refetch(); setReloadKey(value => value + 1) } catch (caught) { setError(caught instanceof ApiError ? caught : new ApiError(`Unable to ${lifecycleAction} Policy version.`)); } finally { setLifecycleBusy(false) } }
   async function createDraft(copyFromVersionId?: string) { setCreating(true); setError(null); try { const created = await createLeavePolicyVersion(policyId, { effectiveFrom: new Date().toISOString().slice(0, 10), effectiveTo: null, priority: 0, copyFromVersionId: copyFromVersionId || null }); setSearchParams({ versionId: created.id }); setNotice(`Draft version ${created.versionNumber} created.`); versionsQuery.refetch() } catch (caught) { setError(caught instanceof ApiError ? caught : new ApiError('Unable to create Draft version.')) } finally { setCreating(false) } }
   const current = editor?.currentVersion
@@ -67,7 +69,7 @@ export function LeavePolicyEditorPage() {
   const canPublish = Boolean(current && current.status === 'Draft' && can(Permissions.leave.policyPublish) && current.allowedActions.canPublish)
   const canRetire = Boolean(current && current.status === 'Published' && can(Permissions.leave.policyPublish) && current.allowedActions.canRetire)
 
-  return <div className="leave-admin-page">
+  return <div className="leave-admin-page" aria-busy={validationBusy || lifecycleBusy}>
     <PageHeader title={`${editor.policy.code} — ${editor.policy.name}`} subtitle="Leave Policy configuration shell" actions={<Link className="button button-secondary" to="/leave-management/policies">Back to Policies</Link>} />
     {notice ? <Notice tone="success" onDismiss={() => setNotice(null)}>{notice}</Notice> : null}
     {error ? <Notice tone="error">{error.message}{error.isConflict ? ' Reload the latest version before saving.' : ''}</Notice> : null}
