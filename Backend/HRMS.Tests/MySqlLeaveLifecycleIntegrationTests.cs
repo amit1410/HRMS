@@ -89,6 +89,23 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                 Assert.True(replay.Value!.IdempotentReplay);
                 Assert.Equal(submitted.Value.RequestId, replay.Value.RequestId);
 
+                var pendingManagerCalendar = await new LeaveCalendarService(
+                    context,
+                    new EmployeeIdentityResolver(context, fixture.ManagerTenant),
+                    new EmployeeManagerResolver(context, fixture.ManagerTenant))
+                    .GetAsync(new DateOnly(2026, 9, 30), new DateOnly(2026, 10, 2));
+                Assert.True(pendingManagerCalendar.Succeeded);
+                Assert.Contains(pendingManagerCalendar.Value!, item => item.RequestId == submitted.Value.RequestId &&
+                    item.Status == LeaveRequestStatus.PendingApproval);
+
+                var pendingEmployeeCalendar = await new LeaveCalendarService(
+                    context,
+                    new EmployeeIdentityResolver(context, fixture.EmployeeTenant),
+                    new EmployeeManagerResolver(context, fixture.EmployeeTenant))
+                    .GetAsync(new DateOnly(2026, 9, 30), new DateOnly(2026, 10, 2));
+                Assert.True(pendingEmployeeCalendar.Succeeded);
+                Assert.DoesNotContain(pendingEmployeeCalendar.Value!, item => item.RequestId == submitted.Value.RequestId);
+
                 var balanceAfterSubmit = await context.EmployeeLeaveBalances
                     .SingleAsync(x => x.Id == fixture.BalanceId);
                 Assert.Equal(1m, balanceAfterSubmit.ReservedQuantity);
@@ -112,6 +129,36 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                 Assert.Equal(1, await context.LeaveBalanceTransactions.CountAsync(x =>
                     x.LeaveRequestId == submitted.Value.RequestId &&
                     x.TransactionType == LeaveBalanceTransactionType.Consumption));
+
+                var managerCalendar = await new LeaveCalendarService(
+                    context,
+                    new EmployeeIdentityResolver(context, fixture.ManagerTenant),
+                    new EmployeeManagerResolver(context, fixture.ManagerTenant))
+                    .GetAsync(new DateOnly(2026, 9, 30), new DateOnly(2026, 10, 2));
+                Assert.True(managerCalendar.Succeeded);
+                Assert.Contains(managerCalendar.Value!, item => item.RequestId == submitted.Value.RequestId &&
+                    item.EmployeeId == fixture.EmployeeId && item.Status == LeaveRequestStatus.Approved &&
+                    item.EmployeeName == "Leave Employee" && item.LeaveTypeName == "Casual Leave");
+                Assert.DoesNotContain(typeof(LeaveCalendarEventDto).GetProperties(), property =>
+                    property.Name.Contains("Reason", StringComparison.OrdinalIgnoreCase) ||
+                    property.Name.Contains("Comment", StringComparison.OrdinalIgnoreCase));
+
+                var employeeCalendar = await new LeaveCalendarService(
+                    context,
+                    new EmployeeIdentityResolver(context, fixture.EmployeeTenant),
+                    new EmployeeManagerResolver(context, fixture.EmployeeTenant))
+                    .GetAsync(new DateOnly(2026, 10, 1), new DateOnly(2026, 10, 31));
+                Assert.True(employeeCalendar.Succeeded);
+                Assert.Contains(employeeCalendar.Value!, item => item.RequestId == submitted.Value.RequestId);
+                Assert.DoesNotContain(employeeCalendar.Value!, item => item.Status == LeaveRequestStatus.PendingApproval);
+
+                var outsideCalendar = await new LeaveCalendarService(
+                    context,
+                    new EmployeeIdentityResolver(context, fixture.ManagerTenant),
+                    new EmployeeManagerResolver(context, fixture.ManagerTenant))
+                    .GetAsync(new DateOnly(2026, 11, 1), new DateOnly(2026, 11, 30));
+                Assert.True(outsideCalendar.Succeeded);
+                Assert.DoesNotContain(outsideCalendar.Value!, item => item.RequestId == submitted.Value.RequestId);
 
                 var cancellation = new LeaveRequestCancellationService(
                     context,
