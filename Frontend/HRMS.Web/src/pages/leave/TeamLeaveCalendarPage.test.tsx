@@ -21,7 +21,9 @@ describe('TeamLeaveCalendarPage', () => {
   it('shows an explicit empty state and requests another range when navigating', async () => {
     stub.on('get', '/api/leave-calendar', () => ({ data: ok([]) }))
     renderAsUser(<TeamLeaveCalendarPage />, { user: makeUser() })
-    expect(await screen.findByText('No leave in this month')).toBeInTheDocument()
+    expect(await screen.findByText('No team leave this month')).toBeInTheDocument()
+    expect(screen.getByText('There are no authorized team absences in the selected date range.')).toBeInTheDocument()
+    expect(screen.getByText('Showing leave for your authorized team members only. Private leave request details are not exposed.')).toBeInTheDocument()
     await screen.getByRole('button', { name: 'Next month' }).click()
     await waitFor(() => expect(stub.calls.filter(call => call.method === 'get' && call.url === '/api/leave-calendar').length).toBeGreaterThan(1))
   })
