@@ -21,6 +21,55 @@ namespace HRMS.Tests;
 public sealed class MySqlLeaveLifecycleIntegrationTests
 {
     [Fact]
+    public async Task MySql_working_day_calendar_drives_preview_submission_consumption_and_cancellation()
+    {
+        var connection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connection)) throw SkipException.ForSkip("MySQL working-day test not executed: HRMS_MYSQL_TEST_CONNECTION is absent.");
+        var fixture = new Fixture(connection);
+        try
+        {
+            await fixture.SeedAsync();
+            await using (var setup = fixture.CreateContext(new TestTenantContext(fixture.TenantId)))
+            {
+                setup.Holidays.Add(new Holiday { Id = Guid.NewGuid(), TenantId = fixture.TenantId, Name = "Calendar Test Holiday", Date = new(2026, 10, 2) });
+                var weekly = new WeeklyOffConfiguration { Id = Guid.NewGuid(), TenantId = fixture.TenantId, EffectiveFrom = new(2026, 1, 1), EffectiveTo = new(2026, 12, 31) };
+                weekly.Days.Add(new WeeklyOffDay { Id = Guid.NewGuid(), TenantId = fixture.TenantId, WeeklyOffConfigurationId = weekly.Id, DayOfWeek = DayOfWeek.Saturday });
+                weekly.Days.Add(new WeeklyOffDay { Id = Guid.NewGuid(), TenantId = fixture.TenantId, WeeklyOffConfigurationId = weekly.Id, DayOfWeek = DayOfWeek.Sunday });
+                setup.WeeklyOffConfigurations.Add(weekly);
+                await setup.SaveChangesAsync();
+            }
+
+            await using var db = fixture.CreateContext();
+            var employment = new EffectiveEmploymentResolver(db, fixture.EmployeeTenant);
+            var validation = new LeaveRequestValidationService(db, new EmployeeIdentityResolver(db, fixture.EmployeeTenant), employment, new LeavePeriodResolver(db, fixture.EmployeeTenant), new LeavePolicyResolver(db, employment, fixture.EmployeeTenant), new WorkingDayCalendarResolver(db, fixture.EmployeeTenant, employment));
+            var preview = await validation.ValidateAsync(new(fixture.LeaveTypeId, new(2026, 10, 1), new(2026, 10, 5), "mysql-working-day-preview"));
+            Assert.True(preview.Succeeded, preview.Message);
+            Assert.Equal(2m, preview.Value!.ChargeableQuantity);
+            Assert.Equal(1, preview.Value.RequestDays.Count(x => x.DayClassification == "Holiday" && x.ChargeableQuantity == 0));
+            Assert.Equal(2, preview.Value.RequestDays.Count(x => x.DayClassification == "WeeklyOff" && x.ChargeableQuantity == 0));
+
+            var accounting = new LeaveBalanceAccountingService(db, fixture.EmployeeTenant, TimeProvider.System);
+            var submission = new LeaveRequestSubmissionService(db, new EmployeeIdentityResolver(db, fixture.EmployeeTenant), validation, new MySqlLeaveRequestSubmissionLock(db), TimeProvider.System, balanceAccountingService: accounting);
+            var submitted = await submission.SubmitAsync(new(fixture.LeaveTypeId, new(2026, 10, 1), new(2026, 10, 5), "mysql-working-day-submit"));
+            Assert.True(submitted.Succeeded, submitted.Message);
+            Assert.Equal(2m, submitted.Value!.ChargeableQuantity);
+            Assert.Equal(2m, (await db.EmployeeLeaveBalances.SingleAsync(x => x.Id == fixture.BalanceId)).ReservedQuantity);
+
+            var approval = new LeaveRequestApprovalService(db, new EmployeeIdentityResolver(db, fixture.ManagerTenant), new EmployeeManagerResolver(db, fixture.ManagerTenant), new MySqlLeaveRequestSubmissionLock(db), TimeProvider.System, balanceAccountingService: accounting);
+            Assert.True((await approval.ApproveAsync(submitted.Value.RequestId)).Succeeded);
+            Assert.Equal(2m, (await db.EmployeeLeaveBalances.SingleAsync(x => x.Id == fixture.BalanceId)).ConsumedQuantity);
+            var cancellation = new LeaveRequestCancellationService(db, new EmployeeIdentityResolver(db, fixture.EmployeeTenant), new MySqlLeaveRequestSubmissionLock(db), TimeProvider.System, balanceAccountingService: accounting);
+            Assert.True((await cancellation.CancelAsync(submitted.Value.RequestId)).Succeeded);
+            var finalBalance = await db.EmployeeLeaveBalances.SingleAsync(x => x.Id == fixture.BalanceId);
+            Assert.Equal(0m, finalBalance.ReservedQuantity);
+            Assert.Equal(0m, finalBalance.ConsumedQuantity);
+            Assert.Equal(2m, await db.LeaveBalanceTransactions.Where(x => x.LeaveRequestId == submitted.Value.RequestId && x.TransactionType == LeaveBalanceTransactionType.Consumption).Select(x => x.Quantity).SingleAsync());
+            Assert.Equal(2m, await db.LeaveBalanceTransactions.Where(x => x.LeaveRequestId == submitted.Value.RequestId && x.TransactionType == LeaveBalanceTransactionType.CancellationRestore).Select(x => x.Quantity).SingleAsync());
+        }
+        finally { await fixture.CleanupAsync(); }
+    }
+
+    [Fact]
     public async Task MySql_leave_balance_import_posts_opening_ledger_once()
     {
         var connection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
@@ -554,6 +603,9 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeavePolicyRules` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeavePolicyVersions` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeavePolicies` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `WeeklyOffDays` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `WeeklyOffConfigurations` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Holidays` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeavePeriods` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveTypes` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `AccountEmployeeCurrentLinks` WHERE `TenantId` = {TenantId}");

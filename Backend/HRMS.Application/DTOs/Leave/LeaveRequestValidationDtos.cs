@@ -57,7 +57,13 @@ public sealed record LeaveRequestPreviewResponse(
     EntitlementMode EntitlementMode,
     bool BalanceReservationRequired,
     bool AttachmentRequired,
-    string PayloadFingerprint);
+    string PayloadFingerprint)
+{
+    public int CalendarDays => RequestDays.Count;
+    public decimal WorkingLeaveDays => RequestDays.Sum(x => x.ChargeableQuantity);
+    public int ExcludedHolidayDays => RequestDays.Count(x => x.DayClassification == "Holiday" && x.ChargeableQuantity == 0);
+    public int ExcludedWeeklyOffDays => RequestDays.Count(x => x.DayClassification == "WeeklyOff" && x.ChargeableQuantity == 0);
+}
 
 public sealed record LeaveRequestPreviewDay(
     DateOnly Date,
@@ -88,7 +94,13 @@ public sealed record LeaveRequestSubmissionResponse(
     decimal ChargeableQuantity,
     DateTime SubmittedAtUtc,
     IReadOnlyList<LeaveRequestSubmissionDayResponse> RequestDays,
-    bool IsReplay);
+    bool IsReplay)
+{
+    public int CalendarDays => RequestDays.Count;
+    public decimal WorkingLeaveDays => RequestDays.Sum(x => x.ChargeableQuantity);
+    public int ExcludedHolidayDays => RequestDays.Count(x => x.DayClassification == "Holiday" && x.ChargeableQuantity == 0);
+    public int ExcludedWeeklyOffDays => RequestDays.Count(x => x.DayClassification == "WeeklyOff" && x.ChargeableQuantity == 0);
+}
 
 public sealed record LeaveRequestSubmissionDayResponse(
     DateOnly Date,

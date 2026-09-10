@@ -105,6 +105,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<LeaveRequestDay> LeaveRequestDays => Set<LeaveRequestDay>();
     public DbSet<LeaveRequestEvent> LeaveRequestEvents => Set<LeaveRequestEvent>();
     public DbSet<LeaveReminderDelivery> LeaveReminderDeliveries => Set<LeaveReminderDelivery>();
+    public DbSet<Holiday> Holidays => Set<Holiday>();
+    public DbSet<WeeklyOffConfiguration> WeeklyOffConfigurations => Set<WeeklyOffConfiguration>();
+    public DbSet<WeeklyOffDay> WeeklyOffDays => Set<WeeklyOffDay>();
     public DbSet<LeaveBalanceImportBatch> LeaveBalanceImportBatches => Set<LeaveBalanceImportBatch>();
     public DbSet<LeaveBalanceImportRow> LeaveBalanceImportRows => Set<LeaveBalanceImportRow>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
@@ -321,6 +324,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<LeaveRequestDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveRequestEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveReminderDelivery>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Holiday>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<WeeklyOffConfiguration>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<WeeklyOffDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
 
         // Organizational hierarchy master query filters
         modelBuilder.Entity<HoldingCompany>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

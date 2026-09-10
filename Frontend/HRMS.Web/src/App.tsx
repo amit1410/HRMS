@@ -30,6 +30,7 @@ import { LeavePeriodsPage } from './pages/leave/LeavePeriodsPage.tsx'
 import { LeavePoliciesPage } from './pages/leave/LeavePoliciesPage.tsx'
 import { LeavePolicyEditorPage } from './pages/leave/LeavePolicyEditorPage.tsx'
 import { LeaveRequestPreviewPage } from './pages/leave/LeaveRequestPreviewPage.tsx'
+import { LeaveWorkingDayCalendarPage } from './pages/leave/LeaveWorkingDayCalendarPage.tsx'
 import { MyLeaveRequestDetailPage, MyLeaveRequestsPage } from './pages/leave/MyLeaveRequestsPage.tsx'
 import { LeaveApprovalDetailPage, LeaveApprovalsPage } from './pages/leave/LeaveApprovalsPage.tsx'
 import { TeamLeaveCalendarPage } from './pages/leave/TeamLeaveCalendarPage.tsx'
@@ -121,6 +122,7 @@ function TenantApplication() {
                     }
                   />
                   <Route path="leave-management/types" element={<RequirePermission permission={Permissions.leave.typeManage}><LeaveTypesPage /></RequirePermission>} />
+                  <Route path="leave-management/working-day-calendar" element={<RequirePermission permission={Permissions.leave.policyView}><LeaveWorkingDayCalendarPage /></RequirePermission>} />
                   <Route path="leave-management" element={<LeaveDashboardPage />} />
                   <Route path="leave-management/periods" element={<RequirePermission permission={Permissions.leave.periodManage}><LeavePeriodsPage /></RequirePermission>} />
                   <Route path="leave-management/policies" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePoliciesPage /></RequirePermission>} />

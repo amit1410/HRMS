@@ -34,6 +34,10 @@ export interface LeaveRequestPreview {
   balanceReservationRequired: boolean
   attachmentRequired: boolean
   payloadFingerprint: string
+  calendarDays?: number
+  workingLeaveDays?: number
+  excludedHolidayDays?: number
+  excludedWeeklyOffDays?: number
 }
 
 export function previewLeaveRequest(body: LeaveRequestPreviewRequest): Promise<LeaveRequestPreview> {
@@ -69,6 +73,10 @@ export interface LeaveRequestSubmission {
   submittedAtUtc: string
   requestDays: LeaveRequestSubmissionDay[]
   isReplay: boolean
+  calendarDays?: number
+  workingLeaveDays?: number
+  excludedHolidayDays?: number
+  excludedWeeklyOffDays?: number
 }
 
 export function submitLeaveRequest(body: LeaveRequestSubmissionRequest): Promise<LeaveRequestSubmission> {

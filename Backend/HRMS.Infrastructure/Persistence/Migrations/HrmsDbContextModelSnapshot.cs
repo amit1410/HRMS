@@ -2033,6 +2033,61 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("HoldingCompanies", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.Holiday", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("CountryLocationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
+                    b.Property<string>("ModifiedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("WorkLocationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("CountryLocationId");
+
+                    b.HasIndex("TenantId", "WorkLocationId");
+
+                    b.HasIndex("TenantId", "Date", "WorkLocationId", "CountryLocationId");
+
+                    b.ToTable("Holidays", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.ImportBatch", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2980,11 +3035,11 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<int>("AttemptCount")
                         .HasColumnType("int");
 
-                    b.Property<DateTime?>("ClaimedAtUtc")
-                        .HasColumnType("datetime2");
-
                     b.Property<Guid?>("ClaimToken")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ClaimedAtUtc")
+                        .HasColumnType("datetime2");
 
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime2");
@@ -4053,6 +4108,88 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("UserRoles", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.WeeklyOffConfiguration", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("CountryLocationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
+                    b.Property<string>("ModifiedBy")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("WorkLocationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CountryLocationId");
+
+                    b.HasIndex("TenantId", "WorkLocationId");
+
+                    b.HasIndex("TenantId", "EffectiveFrom", "EffectiveTo", "WorkLocationId", "CountryLocationId");
+
+                    b.ToTable("WeeklyOffConfigurations", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.WeeklyOffDay", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("DayOfWeek")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("WeeklyOffConfigurationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "WeeklyOffConfigurationId", "DayOfWeek")
+                        .IsUnique();
+
+                    b.ToTable("WeeklyOffDays", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.WorkLocation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4907,6 +5044,32 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.Holiday", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Country", "CountryLocation")
+                        .WithMany()
+                        .HasForeignKey("CountryLocationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.WorkLocation", "WorkLocation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "WorkLocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("CountryLocation");
+
+                    b.Navigation("Tenant");
+
+                    b.Navigation("WorkLocation");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.ImportBatch", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -5737,6 +5900,52 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.WeeklyOffConfiguration", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Country", "CountryLocation")
+                        .WithMany()
+                        .HasForeignKey("CountryLocationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.WorkLocation", "WorkLocation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "WorkLocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("CountryLocation");
+
+                    b.Navigation("Tenant");
+
+                    b.Navigation("WorkLocation");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.WeeklyOffDay", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.WeeklyOffConfiguration", "WeeklyOffConfiguration")
+                        .WithMany("Days")
+                        .HasForeignKey("TenantId", "WeeklyOffConfigurationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+
+                    b.Navigation("WeeklyOffConfiguration");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.WorkLocation", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -5897,6 +6106,11 @@ namespace HRMS.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("HRMS.Domain.Entities.User", b =>
                 {
                     b.Navigation("UserRoles");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.WeeklyOffConfiguration", b =>
+                {
+                    b.Navigation("Days");
                 });
 #pragma warning restore 612, 618
         }

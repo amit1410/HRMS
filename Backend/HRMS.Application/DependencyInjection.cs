@@ -57,6 +57,8 @@ public static class DependencyInjection
         services.AddScoped<ILeaveBalanceAccountingService, LeaveBalanceAccountingService>();
         services.AddScoped<IEmployeeIdentityResolver, EmployeeIdentityResolver>();
         services.AddScoped<IEffectiveEmploymentResolver, EffectiveEmploymentResolver>();
+        services.AddScoped<IWorkingDayCalendarResolver, WorkingDayCalendarResolver>();
+        services.AddScoped<ILeaveWorkingDayConfigurationService, LeaveWorkingDayConfigurationService>();
         services.AddScoped<IMyEmployeeProfileService, MyEmployeeProfileService>();
         services.AddScoped<ILeaveConfigurationService, LeaveConfigurationService>();
         services.AddScoped<ILeaveRequestValidationService, LeaveRequestValidationService>();

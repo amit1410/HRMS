@@ -91,6 +91,9 @@ public interface IHrmsDbContext
     DbSet<LeaveRequestDay> LeaveRequestDays { get; }
     DbSet<LeaveRequestEvent> LeaveRequestEvents { get; }
     DbSet<LeaveReminderDelivery> LeaveReminderDeliveries { get; }
+    DbSet<Holiday> Holidays { get; }
+    DbSet<WeeklyOffConfiguration> WeeklyOffConfigurations { get; }
+    DbSet<WeeklyOffDay> WeeklyOffDays { get; }
     DbSet<LeaveBalanceImportBatch> LeaveBalanceImportBatches { get; }
     DbSet<LeaveBalanceImportRow> LeaveBalanceImportRows { get; }
 

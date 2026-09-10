@@ -33,19 +33,22 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
     private readonly IEffectiveEmploymentResolver _employmentResolver;
     private readonly ILeavePeriodResolver _periodResolver;
     private readonly ILeavePolicyResolver _policyResolver;
+    private readonly IWorkingDayCalendarResolver? _workingDayCalendarResolver;
 
     public LeaveRequestValidationService(
         IHrmsDbContext db,
         IEmployeeIdentityResolver identityResolver,
         IEffectiveEmploymentResolver employmentResolver,
         ILeavePeriodResolver periodResolver,
-        ILeavePolicyResolver policyResolver)
+        ILeavePolicyResolver policyResolver,
+        IWorkingDayCalendarResolver? workingDayCalendarResolver = null)
     {
         _db = db;
         _identityResolver = identityResolver;
         _employmentResolver = employmentResolver;
         _periodResolver = periodResolver;
         _policyResolver = policyResolver;
+        _workingDayCalendarResolver = workingDayCalendarResolver;
     }
 
     public async Task<Result<LeaveRequestValidationResult>> ValidateAsync(
@@ -111,8 +114,16 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
         if (!span.Succeeded)
             return span.Error!;
 
-        var days = BuildFullDayResults(input.StartDate, input.EndDate);
+        var calendar = _workingDayCalendarResolver is null
+            ? Result<WorkingDayCalculationResult>.Success(new(input.StartDate, input.EndDate, BuildBaselineCalendarDetails(input.StartDate, input.EndDate)))
+            : await _workingDayCalendarResolver.CalculateAsync(subject.EmployeeId, input.StartDate, input.EndDate, cancellationToken);
+        if (!calendar.Succeeded || calendar.Value is null)
+            return Result<LeaveRequestValidationResult>.Failure(calendar.Status, calendar.Message, calendar.Errors);
+
+        var days = BuildDayResults(calendar.Value, rule.CalendarRule);
         var quantity = days.Sum(x => x.ChargeableQuantity);
+        if (quantity == 0)
+            return Result<LeaveRequestValidationResult>.Invalid("dateRange", "The selected date range contains no working days.");
         var requestRule = rule.RequestRule;
         if (requestRule?.MinimumRequestQuantity is decimal min && quantity < min)
             return LimitFailure(LeaveRequestValidationErrorCodes.MinimumRequestQuantityNotMet, "The request is below the configured minimum quantity.");
@@ -265,8 +276,6 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
 
         var calendar = rule.CalendarRule;
         if (calendar is not null && (calendar.SandwichMode != SandwichMode.Disabled ||
-            calendar.HolidayTreatment != HolidayTreatment.Exclude ||
-            calendar.WeekOffTreatment != WeekOffTreatment.Exclude ||
             calendar.ApplyToPrefix || calendar.ApplyToSuffix || calendar.ApplyToBetween))
             return "The resolved Calendar configuration requires an unavailable calendar or Sandwich source.";
 
@@ -279,17 +288,33 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
         return null;
     }
 
-    private static IReadOnlyList<LeaveRequestDayValidationResult> BuildFullDayResults(DateOnly start, DateOnly end)
+    private static IReadOnlyList<WorkingDayDetail> BuildBaselineCalendarDetails(DateOnly start, DateOnly end)
     {
-        var days = new List<LeaveRequestDayValidationResult>();
+        var days = new List<WorkingDayDetail>();
         for (var date = start; ; date = date.AddDays(1))
         {
-            // The restricted MVP has no authoritative calendar source, so it deliberately leaves
-            // classification/reason unset instead of fabricating a WorkingDay classification.
-            days.Add(new(date, 1.000m, 1.000m, null, null, true));
+            days.Add(new(date, true, null, null));
             if (date == end) break;
         }
         return days;
+    }
+
+    private static IReadOnlyList<LeaveRequestDayValidationResult> BuildDayResults(
+        WorkingDayCalculationResult calendar,
+        LeavePolicyCalendarRule? policyCalendar)
+    {
+        var excludeHoliday = policyCalendar?.HolidayTreatment != HolidayTreatment.Include;
+        var excludeWeeklyOff = policyCalendar?.WeekOffTreatment != WeekOffTreatment.Include;
+        return calendar.Days.Select(day =>
+        {
+            var excluded = day.ExclusionReason == WorkingDayExclusionReason.Holiday ? excludeHoliday :
+                day.ExclusionReason == WorkingDayExclusionReason.WeeklyOff && excludeWeeklyOff;
+            var classification = day.ExclusionReason?.ToString() ?? "WorkingDay";
+            var reason = day.ExclusionReason is null ? "Working day" :
+                excluded ? day.ExclusionReason == WorkingDayExclusionReason.Holiday ? $"Holiday: {day.HolidayName}" : "Weekly off" :
+                "Included by Leave policy";
+            return new LeaveRequestDayValidationResult(day.Date, 1.000m, excluded ? 0m : 1.000m, classification, reason, true);
+        }).ToList();
     }
 
     private async Task<Result<LeaveRequestValidationResult>?> ValidatePeriodLimitsAsync(

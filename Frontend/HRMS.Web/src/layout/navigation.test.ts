@@ -26,8 +26,8 @@ describe('visibleNavItems', () => {
 
   it('returns public signed-in entries when the user has no module permissions', () => {
     const items = visibleNavItems(canNever)
-    expect(items).toHaveLength(4)
-    expect(items.map(item => item.label)).toEqual(['Dashboard', 'Change Password', 'Apply Leave (Preview)', 'My Leave Requests'])
+    expect(items).toHaveLength(6)
+    expect(items.map(item => item.label)).toEqual(['Dashboard', 'Change Password', 'Leave Dashboard', 'Apply Leave (Preview)', 'My Leave Requests', 'Team Leave Calendar'])
   })
 
   it('hides items whose required permission the user lacks', () => {
