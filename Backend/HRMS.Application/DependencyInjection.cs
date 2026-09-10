@@ -74,6 +74,7 @@ public static class DependencyInjection
         services.AddScoped<ILeaveApprovalReminderProcessor, LeaveApprovalReminderProcessor>();
         services.AddScoped<ILeaveCalendarService, LeaveCalendarService>();
         services.AddScoped<ILeaveRequestReadService, LeaveRequestReadService>();
+        services.AddScoped<IHrLeaveDashboardService, HrLeaveDashboardService>();
         services.AddScoped<ILeaveRequestSubmissionRetryPolicy, LeaveRequestSubmissionRetryPolicy>();
         services.AddScoped<IImportBatchService, ImportBatchService>();
         services.AddScoped<IMasterLookupService, MasterLookupService>();

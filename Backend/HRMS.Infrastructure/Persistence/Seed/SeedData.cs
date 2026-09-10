@@ -147,6 +147,7 @@ public static class SeedData
             [DomainPermissions.Leave.BalanceAdjust] = 37,
             [DomainPermissions.Leave.BalanceImport] = 38,
             [DomainPermissions.Leave.BalanceViewImportHistory] = 39,
+            [DomainPermissions.Leave.DashboardViewAll] = 40,
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>
@@ -213,6 +214,7 @@ public static class SeedData
             DomainPermissions.Department.Delete,
             DomainPermissions.Designation.View, DomainPermissions.Designation.Create, DomainPermissions.Designation.Edit,
             DomainPermissions.Designation.Delete,
+            DomainPermissions.Leave.DashboardViewAll,
             DomainPermissions.User.View, DomainPermissions.User.Create, DomainPermissions.User.Edit
         },
         [RoleNames.HRManager] = new[]

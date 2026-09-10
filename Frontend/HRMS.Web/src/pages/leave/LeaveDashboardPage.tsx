@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { listMyLeaveBalances, type LeaveBalanceSummary } from '../../api/leaveBalances.ts'
 import { listLeaveApprovals, listMyLeaveRequests, type LeaveApprovalListItem, type LeaveRequestListItem, type LeaveRequestStatus } from '../../api/leaveRequests.ts'
 import { listLeaveCalendar, type LeaveCalendarEvent } from '../../api/leaveCalendar.ts'
+import { getHrLeaveDashboardSummary, type HrLeaveDashboardSummary } from '../../api/leaveDashboard.ts'
 import { Permissions } from '../../auth/permissions.ts'
 import { useAuth } from '../../auth/useAuth.ts'
 import { Badge, type BadgeTone } from '../../components/Badge.tsx'
@@ -27,14 +28,16 @@ export function LeaveDashboardPage() {
   const { user, can } = useAuth()
   const linked = user?.employeeIdentity?.status === 'Linked' && Boolean(user.employeeIdentity.employee)
   const canApprove = can(Permissions.leave.approve)
+  const canViewHrDashboard = can(Permissions.leave.dashboardViewAll)
   const today = dateValue(new Date())
   const calendarTo = dateValue(addDays(new Date(), 30))
   const balances = useApiQuery(signal => linked ? listMyLeaveBalances(signal) : Promise.resolve([]), [linked])
   const requests = useApiQuery(() => linked ? listMyLeaveRequests(1, 25) : Promise.resolve(emptyPage), [linked])
   const approvals = useApiQuery(() => canApprove ? listLeaveApprovals(1, 5) : Promise.resolve(emptyPage), [canApprove])
   const calendar = useApiQuery(signal => linked ? listLeaveCalendar(today, calendarTo, signal) : Promise.resolve([]), [linked, today, calendarTo])
+  const hrDashboard = useApiQuery(signal => canViewHrDashboard ? getHrLeaveDashboardSummary(undefined, signal) : Promise.resolve(null), [canViewHrDashboard])
 
-  if (!linked) return <div className="leave-admin-page"><PageHeader title="Leave Dashboard" subtitle="Your Leave overview" /><Card><EmptyState title="Leave access needs an employee link" message="Your account is not linked to an active employee. Contact HR before applying for or viewing Leave." /></Card></div>
+  if (!linked) return <div className="leave-admin-page"><PageHeader title="Leave Dashboard" subtitle="Your Leave overview" />{canViewHrDashboard && <HrDashboardCard query={hrDashboard} /> }<Card><EmptyState title="Leave access needs an employee link" message="Your account is not linked to an active employee. Contact HR before applying for or viewing Leave." /></Card></div>
 
   const requestItems = requests.data?.items ?? []
   const upcoming = requestItems.filter(item => item.status === 'Approved' && item.endDate >= today).sort((a, b) => a.startDate.localeCompare(b.startDate)).slice(0, 5)
@@ -52,6 +55,7 @@ export function LeaveDashboardPage() {
       <SummaryStat label="Upcoming Leave" value={requests.isLoading ? '…' : upcoming.length} hint="Approved requests" href="/leave-management/my-requests" />
     </div>
     <div className="leave-dashboard-grid">
+      {canViewHrDashboard && <HrDashboardCard query={hrDashboard} />}
       <BalanceCard query={balances} />
       <RequestListCard title="Upcoming Leave" subtitle="Your next approved absences" items={upcoming} loading={requests.isLoading} error={requests.error?.message} empty="No upcoming approved Leave." />
       <RequestListCard title="Recent status" subtitle="Latest completed requests" items={recent} loading={requests.isLoading} error={requests.error?.message} empty="No completed Leave requests yet." />
@@ -59,6 +63,20 @@ export function LeaveDashboardPage() {
       <TeamCard events={teamEvents} loading={calendar.isLoading} error={calendar.error?.message} />
     </div>
   </div>
+}
+
+function HrDashboardCard({ query }: { query: { data: HrLeaveDashboardSummary | null; error: { message: string } | null; isLoading: boolean } }) {
+  const data = query.data
+  return <Card title="HR / Admin overview" subtitle={data ? `${data.from} → ${data.to}${data.currentLeavePeriodName ? ` · ${data.currentLeavePeriodName}` : ''}` : 'Tenant-wide Leave operations'} actions={<Link className="row-action" to="/leave-management/team-calendar">Open calendar</Link>}>
+    {query.isLoading ? <Spinner label="Loading HR Leave dashboard" /> : query.error ? <Notice tone="error">{query.error.message}</Notice> : !data ? <EmptyState title="No HR dashboard data" /> : <>
+      <div className="leave-dashboard-stat-grid"><SummaryStat label="On Leave today" value={`${data.kpis.employeesOnLeaveToday} / ${data.kpis.activeEmployeeCount}`} hint="Active employees" href="/leave-management/team-calendar" /><SummaryStat label="Pending approvals" value={data.kpis.pendingApprovalRequests} hint="Tenant-wide" href="/leave-management/approvals" /><SummaryStat label="Upcoming Leave" value={data.kpis.upcomingApprovedRequests} hint="Next 30 days" href="/leave-management/team-calendar" /><SummaryStat label="Approved in scope" value={data.kpis.approvedRequests} hint="Approved requests" href="/leave-management/team-calendar" /></div>
+      <div className="leave-dashboard-grid"><DashboardList title="Leave type usage" rows={data.leaveTypeUsage.map(item => `${item.name}: ${formatQuantity(item.quantity)} day(s) · ${item.requestCount} request(s)`)} empty="No approved Leave usage in this period." /><DashboardList title="Request status" rows={data.statusBreakdown.map(item => `${item.status}: ${item.requestCount} · ${formatQuantity(item.quantity)} day(s)`)} empty="No requests in this period." /><DashboardList title="Approval aging" rows={data.approvalAging.map(item => `${item.bucket}: ${item.requestCount}`)} empty="No pending approvals." /><DashboardList title="Upcoming absences" rows={data.upcomingAbsences.slice(0, 5).map(item => `${item.employeeName || item.employeeCode} · ${item.leaveTypeName} · ${item.startDate} → ${item.endDate}`)} empty="No upcoming approved Leave." /><DashboardList title="Balance overview" rows={data.balances.map(item => item.entitlementMode === 'Unlimited' ? `${item.name}: Unlimited` : `${item.name}: ${formatQuantity(item.available ?? 0)} available`)} empty="No balance allocations." /><DashboardList title="Departments" rows={data.departments.slice(0, 5).map(item => `${item.name}: ${item.employeeCount} employee(s) · ${formatQuantity(item.quantity)} day(s)`)} empty="No department usage." /><DashboardList title="Work locations" rows={data.workLocations.slice(0, 5).map(item => `${item.name}: ${item.employeeCount} employee(s) · ${formatQuantity(item.quantity)} day(s)`)} empty="No location usage." /><DashboardList title="Approved trend" rows={data.trend.slice(-6).map(item => `${item.period}: ${formatQuantity(item.quantity)} day(s)`)} empty="No approved Leave trend." /></div>
+    </>}
+  </Card>
+}
+
+function DashboardList({ title, rows, empty }: { title: string; rows: string[]; empty: string }) {
+  return <Card title={title}>{rows.length ? <ul className="leave-dashboard-list">{rows.map(row => <li key={row}><span>{row}</span></li>)}</ul> : <EmptyState title={empty} />}</Card>
 }
 
 function QuickActions({ canApprove, canConfigure }: { canApprove: boolean; canConfigure: boolean }) {

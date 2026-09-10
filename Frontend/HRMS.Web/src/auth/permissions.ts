@@ -60,6 +60,7 @@ export const Permissions = {
     manage: 'AccountEmployeeLink.Manage',
   },
   leave: {
+    dashboardViewAll: 'LeaveDashboard.ViewAll',
     typeManage: 'Leave.TypeManage',
     periodManage: 'Leave.PeriodManage',
     policyView: 'Leave.PolicyView',

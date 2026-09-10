@@ -75,6 +75,7 @@ public static class Permissions
 
     public static class Leave
     {
+        public const string DashboardViewAll = "LeaveDashboard.ViewAll";
         public const string TypeManage = "Leave.TypeManage";
         public const string PeriodManage = "Leave.PeriodManage";
         public const string PolicyView = "Leave.PolicyView";
@@ -99,7 +100,7 @@ public static class Permissions
         Designation.View, Designation.Create, Designation.Edit, Designation.Delete,
         User.View, User.Create, User.Edit, User.Delete,
         AccountEmployeeLink.View, AccountEmployeeLink.ViewHistory, AccountEmployeeLink.Manage,
-        Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
+        Leave.DashboardViewAll, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory
     };
 }
