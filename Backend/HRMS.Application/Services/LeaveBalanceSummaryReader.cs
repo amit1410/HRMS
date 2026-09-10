@@ -1,5 +1,6 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
+using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
@@ -8,11 +9,15 @@ public sealed class LeaveBalanceSummaryReader : ILeaveBalanceSummaryReader
 {
     private readonly IHrmsDbContext _db;
     private readonly IEmployeeIdentityResolver _identity;
+    private readonly ILeavePolicyResolver _policyResolver;
+    private readonly TimeProvider _timeProvider;
 
-    public LeaveBalanceSummaryReader(IHrmsDbContext db, IEmployeeIdentityResolver identity)
+    public LeaveBalanceSummaryReader(IHrmsDbContext db, IEmployeeIdentityResolver identity, ILeavePolicyResolver policyResolver, TimeProvider timeProvider)
     {
         _db = db;
         _identity = identity;
+        _policyResolver = policyResolver;
+        _timeProvider = timeProvider;
     }
 
     public async Task<Result<IReadOnlyList<LeaveBalanceSummaryDto>>> GetMineAsync(CancellationToken cancellationToken = default)
@@ -21,31 +26,55 @@ public sealed class LeaveBalanceSummaryReader : ILeaveBalanceSummaryReader
         if (!identity.Succeeded || identity.Value is null)
             return Result<IReadOnlyList<LeaveBalanceSummaryDto>>.Failure(identity.Status, identity.Message, identity.Errors);
 
-        var rows = await _db.EmployeeLeaveBalances.AsNoTracking()
+        var balances = await _db.EmployeeLeaveBalances.AsNoTracking()
             .Where(x => x.TenantId == identity.Value.TenantId && x.EmployeeId == identity.Value.EmployeeId)
             .Select(x => new
             {
-                x.Id,
                 x.LeaveTypeId,
                 LeaveTypeCode = x.LeaveType!.Code,
                 LeaveTypeName = x.LeaveType.Name,
-                x.LeavePeriodId,
-                LeavePeriodCode = x.LeavePeriod!.Code,
-                LeavePeriodName = x.LeavePeriod.Name,
-                PeriodStartDate = x.LeavePeriod.StartDate,
-                PeriodEndDate = x.LeavePeriod.EndDate,
+                LeavePeriodName = x.LeavePeriod!.Name,
                 x.GrantedQuantity,
                 x.ReservedQuantity,
                 x.ConsumedQuantity,
                 AvailableQuantity = x.GrantedQuantity - x.ReservedQuantity - x.ConsumedQuantity
             })
-            .OrderBy(x => x.PeriodEndDate)
-            .ThenBy(x => x.LeaveTypeCode)
             .ToListAsync(cancellationToken);
 
-        return Result<IReadOnlyList<LeaveBalanceSummaryDto>>.Success(rows.Select(x => new LeaveBalanceSummaryDto(
-            x.Id, x.LeaveTypeId, x.LeaveTypeCode, x.LeaveTypeName, x.LeavePeriodId, x.LeavePeriodCode,
-            x.LeavePeriodName, x.PeriodStartDate, x.PeriodEndDate, x.GrantedQuantity, x.ReservedQuantity,
-            x.ConsumedQuantity, x.AvailableQuantity)).ToList());
+        var leaveTypes = await _db.LeaveTypes.AsNoTracking()
+            .Where(x => x.TenantId == identity.Value.TenantId && x.IsActive)
+            .OrderBy(x => x.Code)
+            .Select(x => new { x.Id, x.Code, x.Name })
+            .ToListAsync(cancellationToken);
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+        var result = new List<LeaveBalanceSummaryDto>();
+
+        foreach (var leaveType in leaveTypes)
+        {
+            var typeBalances = balances.Where(x => x.LeaveTypeId == leaveType.Id)
+                .OrderBy(x => x.LeavePeriodName)
+                .ToList();
+            var policy = await _policyResolver.ResolveAsync(identity.Value.TenantId, identity.Value.EmployeeId, leaveType.Id, today, cancellationToken);
+            if (policy.Status == LeavePolicyResolutionStatus.Resolved && policy.LeavePolicyRuleId is Guid ruleId)
+            {
+                var mode = await _db.LeavePolicyEntitlementRules.AsNoTracking()
+                    .Where(x => x.TenantId == identity.Value.TenantId && x.LeavePolicyRuleId == ruleId)
+                    .Select(x => (EntitlementMode?)x.EntitlementMode)
+                    .SingleOrDefaultAsync(cancellationToken);
+                if (mode == EntitlementMode.Unlimited)
+                {
+                    result.Add(new(leaveType.Code, leaveType.Name, EntitlementMode.Unlimited, null, null, null, null, null));
+                    continue;
+                }
+                if (mode == EntitlementMode.NoBalanceRequired)
+                    continue;
+            }
+
+            result.AddRange(typeBalances.Select(balance => new LeaveBalanceSummaryDto(
+                leaveType.Code, leaveType.Name, EntitlementMode.Allocated, balance.LeavePeriodName,
+                balance.GrantedQuantity, balance.ReservedQuantity, balance.ConsumedQuantity, balance.AvailableQuantity)));
+        }
+
+        return Result<IReadOnlyList<LeaveBalanceSummaryDto>>.Success(result);
     }
 }

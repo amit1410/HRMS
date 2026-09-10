@@ -1,4 +1,5 @@
 using HRMS.Application.Common;
+using HRMS.Domain.Enums;
 
 namespace HRMS.Application.Abstractions;
 
@@ -8,16 +9,11 @@ public interface ILeaveBalanceSummaryReader
 }
 
 public sealed record LeaveBalanceSummaryDto(
-    Guid BalanceId,
-    Guid LeaveTypeId,
     string LeaveTypeCode,
     string LeaveTypeName,
-    Guid LeavePeriodId,
-    string LeavePeriodCode,
-    string LeavePeriodName,
-    DateOnly PeriodStartDate,
-    DateOnly PeriodEndDate,
-    decimal GrantedQuantity,
-    decimal ReservedQuantity,
-    decimal ConsumedQuantity,
-    decimal AvailableQuantity);
+    EntitlementMode EntitlementMode,
+    string? LeavePeriodName,
+    decimal? GrantedQuantity,
+    decimal? ReservedQuantity,
+    decimal? ConsumedQuantity,
+    decimal? AvailableQuantity);

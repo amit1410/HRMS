@@ -234,6 +234,44 @@ public sealed class MySqlTenantRuntimeIntegrationTests
     }
 
     [Fact]
+    public async Task MySql_leave_balance_summary_returns_finite_and_current_unlimited_entitlements_without_fake_balance()
+    {
+        await RunScenarioAsync(async scenario =>
+        {
+            await using var context = scenario.CreateContext(new TestTenantContext(scenario.TenantId));
+            var tenantContext = new TestTenantContext(scenario.TenantId);
+            context.LeavePolicyEntitlementRules.Add(new LeavePolicyEntitlementRule
+            {
+                Id = Guid.NewGuid(), TenantId = scenario.TenantId, LeavePolicyRuleId = scenario.MultiRuleId,
+                EntitlementMode = EntitlementMode.Unlimited, EntitlementSource = EntitlementSource.PolicyAccrual
+            });
+            context.EmployeeLeaveBalances.Add(new EmployeeLeaveBalance
+            {
+                Id = Guid.NewGuid(), TenantId = scenario.TenantId, EmployeeId = scenario.EmployeeId,
+                LeaveTypeId = scenario.SecondLeaveTypeId, LeavePeriodId = scenario.LeavePeriodId,
+                GrantedQuantity = 10, ReservedQuantity = 2, ConsumedQuantity = 3
+            });
+            await context.SaveChangesAsync();
+
+            var resolver = new LeavePolicyResolver(context, new EffectiveEmploymentResolver(context, tenantContext), tenantContext);
+            var reader = new LeaveBalanceSummaryReader(context, new FixedIdentity(scenario.TenantId, Guid.NewGuid(), scenario.EmployeeId), resolver, new FixedClock(new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero)));
+            var result = await reader.GetMineAsync();
+
+            Assert.True(result.Succeeded, result.Message);
+            var rows = result.Value!;
+            var leaveTypeCode = await context.LeaveTypes.Where(t => t.Id == scenario.LeaveTypeId).Select(t => t.Code).SingleAsync();
+            var secondLeaveTypeCode = await context.LeaveTypes.Where(t => t.Id == scenario.SecondLeaveTypeId).Select(t => t.Code).SingleAsync();
+            var unlimited = Assert.Single(rows, x => x.LeaveTypeCode == leaveTypeCode);
+            Assert.Equal(EntitlementMode.Unlimited, unlimited.EntitlementMode);
+            Assert.Null(unlimited.AvailableQuantity);
+            var finite = Assert.Single(rows, x => x.LeaveTypeCode == secondLeaveTypeCode);
+            Assert.Equal(EntitlementMode.Allocated, finite.EntitlementMode);
+            Assert.Equal(5m, finite.AvailableQuantity);
+            Assert.Equal(0, await context.LeaveBalanceTransactions.CountAsync(x => x.EmployeeId == scenario.EmployeeId));
+        });
+    }
+
+    [Fact]
     public async Task MySql_leave_configuration_collection_predicates_execute_on_real_provider()
     {
         await RunScenarioAsync(async scenario =>
@@ -598,6 +636,7 @@ public sealed class MySqlTenantRuntimeIntegrationTests
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeCodeRules` WHERE `TenantId` = {TenantId}");
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeCodeConfigs` WHERE `TenantId` = {TenantId}");
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeLeaveBalances` WHERE `TenantId` = {TenantId}");
+            await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeavePolicyEntitlementRules` WHERE `TenantId` = {TenantId}");
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeavePolicyRules` WHERE `TenantId` = {TenantId}");
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeavePolicyVersions` WHERE `TenantId` = {TenantId}");
             await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeavePolicies` WHERE `TenantId` = {TenantId}");

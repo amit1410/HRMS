@@ -15,7 +15,7 @@ describe('LeaveDashboardPage', () => {
   afterEach(() => stub.restore())
 
   function seed() {
-    stub.on('get', '/api/leave-balances/mine', () => ({ data: ok([{ balanceId: 'balance-1', leaveTypeId: 'type-1', leaveTypeCode: 'AL', leaveTypeName: 'Annual Leave', leavePeriodId: 'period-1', leavePeriodCode: 'FY26', leavePeriodName: 'FY 2026', periodStartDate: '2026-01-01', periodEndDate: '2026-12-31', grantedQuantity: 20, reservedQuantity: 2, consumedQuantity: 5, availableQuantity: 13 }]) }))
+    stub.on('get', '/api/leave-balances/mine', () => ({ data: ok([{ leaveTypeCode: 'AL', leaveTypeName: 'Annual Leave', entitlementMode: 'Allocated', leavePeriodName: 'FY 2026', grantedQuantity: 20, reservedQuantity: 2, consumedQuantity: 5, availableQuantity: 13 }]) }))
     stub.on('get', '/api/leave-requests', () => ({ data: ok({ ...emptyPage, items: [{ requestId: 'request-1', leaveTypeId: 'type-1', leaveTypeCode: 'AL', leaveTypeName: 'Annual Leave', startDate: '2099-04-01', endDate: '2099-04-03', requestedQuantity: 3, chargeableQuantity: 3, status: 'Approved', submittedAtUtc: '2099-01-01T00:00:00Z', leavePeriodId: 'period-1', leavePolicyVersionId: 'version-1' }, { requestId: 'request-2', leaveTypeId: 'type-1', leaveTypeCode: 'AL', leaveTypeName: 'Annual Leave', startDate: '2099-05-01', endDate: '2099-05-02', requestedQuantity: 2, chargeableQuantity: 2, status: 'PendingApproval', submittedAtUtc: '2099-02-01T00:00:00Z', leavePeriodId: 'period-1', leavePolicyVersionId: 'version-1' }], totalCount: 2, totalPages: 1 }) }))
     stub.on('get', '/api/leave-approvals', () => ({ data: ok({ ...emptyPage, pageSize: 5, items: [{ requestId: 'request-3', employeeId: 'employee-2', employeeCode: 'EMP-2', employeeName: 'Nadia Farrell', leaveTypeId: 'type-1', leaveTypeCode: 'AL', leaveTypeName: 'Annual Leave', startDate: '2099-06-01', endDate: '2099-06-02', requestedQuantity: 2, chargeableQuantity: 2, status: 'PendingApproval', submittedAtUtc: '2099-02-02T00:00:00Z' }], totalCount: 1, totalPages: 1 }) }))
     stub.on('get', '/api/leave-calendar', () => ({ data: ok([{ requestId: 'request-4', employeeId: 'employee-2', employeeCode: 'EMP-2', employeeName: 'Nadia Farrell', leaveTypeCode: 'AL', leaveTypeName: 'Annual Leave', startDate: '2099-06-01', endDate: '2099-06-02', chargeableQuantity: 2, status: 'Approved' }]) }))
@@ -38,6 +38,15 @@ describe('LeaveDashboardPage', () => {
     expect(await screen.findByText('Manager approvals')).toBeInTheDocument()
     expect(screen.getByText('Approvals waiting')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Manager Approvals/ })).toHaveAttribute('href', '/leave-management/approvals')
+  })
+
+  it('renders Unlimited without a numeric balance alongside finite balances', async () => {
+    seed()
+    stub.on('get', '/api/leave-balances/mine', () => ({ data: ok([{ leaveTypeCode: 'AL', leaveTypeName: 'Annual Leave', entitlementMode: 'Allocated', leavePeriodName: 'FY 2026', grantedQuantity: 20, reservedQuantity: 2, consumedQuantity: 5, availableQuantity: 13 }, { leaveTypeCode: 'SL', leaveTypeName: 'Sick Leave', entitlementMode: 'Unlimited' }]) }))
+    renderAsUser(<LeaveDashboardPage />, { user: makeUser({ employeeIdentity: linkedIdentity }) })
+    expect(await screen.findByText('Unlimited')).toBeInTheDocument()
+    expect(screen.getByText('13 available')).toBeInTheDocument()
+    expect(screen.queryByText('0 available')).not.toBeInTheDocument()
   })
 
   it('does not request or render meaningless summaries without an employee link', () => {

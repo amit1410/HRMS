@@ -1,20 +1,16 @@
 import { api, request } from './client.ts'
 import type { ApiResponse } from './types.ts'
+import type { EntitlementMode } from './leaveRequests.ts'
 
 export interface LeaveBalanceSummary {
-  balanceId: string
-  leaveTypeId: string
   leaveTypeCode: string
   leaveTypeName: string
-  leavePeriodId: string
-  leavePeriodCode: string
-  leavePeriodName: string
-  periodStartDate: string
-  periodEndDate: string
-  grantedQuantity: number
-  reservedQuantity: number
-  consumedQuantity: number
-  availableQuantity: number
+  entitlementMode: EntitlementMode
+  leavePeriodName?: string | null
+  grantedQuantity?: number | null
+  reservedQuantity?: number | null
+  consumedQuantity?: number | null
+  availableQuantity?: number | null
 }
 
 export function listMyLeaveBalances(signal?: AbortSignal): Promise<LeaveBalanceSummary[]> {
