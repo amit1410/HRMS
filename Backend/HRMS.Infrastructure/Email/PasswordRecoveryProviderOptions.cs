@@ -18,7 +18,9 @@ public sealed class PasswordRecoveryProviderOptions
             EmailProvider = configuration["Email:Provider"]
                 ?? section["EmailProvider"]
                 ?? (isDevelopment ? "Fake" : "Smtp"),
-            SmsProvider = section["SmsProvider"] ?? (isDevelopment ? "Fake" : "Msg91")
+            SmsProvider = configuration["Sms:Provider"]
+                ?? section["SmsProvider"]
+                ?? (isDevelopment ? "Fake" : "Msg91")
         };
     }
 

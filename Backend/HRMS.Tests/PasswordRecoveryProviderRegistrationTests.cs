@@ -71,6 +71,21 @@ public sealed class PasswordRecoveryProviderRegistrationTests
     }
 
     [Fact]
+    public void Nested_sms_provider_is_preferred_over_legacy_provider_selection()
+    {
+        var configuration = Configuration(new Dictionary<string, string?>
+        {
+            ["Sms:Provider"] = "Fake",
+            ["PasswordRecoveryProviders:SmsProvider"] = "Msg91"
+        });
+
+        var options = PasswordRecoveryProviderOptions.Load(configuration, isDevelopment: false);
+
+        Assert.Equal("Fake", options.SmsProvider);
+        options.Validate(configuration);
+    }
+
+    [Fact]
     public void Unselected_smtp_does_not_require_smtp_settings()
     {
         var configuration = Configuration(new Dictionary<string, string?>
