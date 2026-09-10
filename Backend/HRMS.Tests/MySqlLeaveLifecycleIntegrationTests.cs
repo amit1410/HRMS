@@ -5,6 +5,7 @@ using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence;
+using HRMS.Infrastructure.Security;
 using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
 using Xunit.Sdk;
@@ -150,11 +151,12 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
         }
     }
 
-    private sealed class Fixture
+    internal sealed class Fixture
     {
         private readonly string _connection;
         public Guid TenantId { get; } = Guid.NewGuid();
         public Guid OtherTenantId { get; } = Guid.NewGuid();
+        public string TenantCode => $"ML{TenantId:N}"[..8];
         public Guid EmployeeId { get; } = Guid.NewGuid();
         public Guid ManagerId { get; } = Guid.NewGuid();
         public Guid EmployeeUserId { get; } = Guid.NewGuid();
@@ -174,10 +176,15 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
         public DateOnly RequestDate { get; } = new(2026, 10, 1);
         public TestTenantContext EmployeeTenant { get; }
         public TestTenantContext ManagerTenant { get; }
+        public string Host => $"ml-{TenantId:N}.localhost";
+        public string HttpHost => $"http://{Host}";
+        public string EmployeeEmail => $"user-{EmployeeUserId:N}@test.invalid";
+        public string ManagerEmail => $"manager-{ManagerUserId:N}@test.invalid";
+        public const string Password = "Passw0rd!123";
 
         public Fixture(string connection)
         {
-            _connection = connection;
+            _connection = MySqlApiFactory.NormalizeConnectionString(connection);
             EmployeeTenant = new(TenantId, EmployeeUserId);
             ManagerTenant = new(TenantId, ManagerUserId);
         }
@@ -192,12 +199,13 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
         {
             await using var db = CreateContext(new TestTenantContext());
             db.Tenants.AddRange(
-                new Tenant { Id = TenantId, TenantCode = $"ML{TenantId:N}"[..8], TenantName = "MySQL Leave Lifecycle", Host = $"ml-{TenantId:N}.localhost", ShardKey = $"ml{TenantId:N}"[..10], Status = TenantStatus.Active, DatabaseProvider = DatabaseProviderType.MySql },
+                new Tenant { Id = TenantId, TenantCode = TenantCode, TenantName = "MySQL Leave Lifecycle", Host = $"ml-{TenantId:N}.localhost", ShardKey = $"ml{TenantId:N}"[..10], Status = TenantStatus.Active, DatabaseProvider = DatabaseProviderType.MySql },
                 new Tenant { Id = OtherTenantId, TenantCode = $"MO{OtherTenantId:N}"[..8], TenantName = "Other Tenant", Host = $"mo-{OtherTenantId:N}.localhost", ShardKey = $"mo{OtherTenantId:N}"[..10], Status = TenantStatus.Active, DatabaseProvider = DatabaseProviderType.MySql });
 
+            var passwordHash = new IdentityPasswordHasher().Hash(Password);
             db.Users.AddRange(
-                new User { Id = EmployeeUserId, TenantId = TenantId, Email = $"user-{EmployeeUserId:N}@test.invalid", PasswordHash = "test", FirstName = "Leave", LastName = "Employee", IsActive = true },
-                new User { Id = ManagerUserId, TenantId = TenantId, Email = $"manager-{ManagerUserId:N}@test.invalid", PasswordHash = "test", FirstName = "Leave", LastName = "Manager", IsActive = true });
+                new User { Id = EmployeeUserId, TenantId = TenantId, Email = EmployeeEmail, PasswordHash = passwordHash, FirstName = "Leave", LastName = "Employee", IsActive = true },
+                new User { Id = ManagerUserId, TenantId = TenantId, Email = ManagerEmail, PasswordHash = passwordHash, FirstName = "Leave", LastName = "Manager", IsActive = true });
             db.Employees.AddRange(
                 new Employee { Id = EmployeeId, TenantId = TenantId, EmployeeCode = $"E{EmployeeId:N}"[..8], FirstName = "Leave", LastName = "Employee", Email = $"employee-{EmployeeId:N}@test.invalid", DateOfJoining = new(2020, 1, 1), Status = EmployeeStatus.Active, ReportingManagerId = ManagerId },
                 new Employee { Id = ManagerId, TenantId = TenantId, EmployeeCode = $"M{ManagerId:N}"[..8], FirstName = "Leave", LastName = "Manager", Email = $"manager-{ManagerId:N}@test.invalid", DateOfJoining = new(2020, 1, 1), Status = EmployeeStatus.Active });

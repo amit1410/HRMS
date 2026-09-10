@@ -3,6 +3,7 @@ using HRMS.Application.Security;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,7 +20,7 @@ namespace HRMS.Tests.TestSupport;
 /// ordinary tests are not throttled; the throttling test constructs its own factory with a low limit).
 /// </para>
 /// </summary>
-public sealed class HrmsApiFactory : WebApplicationFactory<Program>
+public class HrmsApiFactory : WebApplicationFactory<global::Program>
 {
     /// <summary>Held while a host is under construction; see <see cref="CreateHost"/> for why.</summary>
     private static readonly Lock HostBuildGate = new();
@@ -145,9 +146,31 @@ public sealed class HrmsApiFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        // Keep minimal-hosting discovery anchored to the API entry assembly. This is required by the
+        // .NET 10 WebApplicationFactory resolver when the test project also contains specialized factories.
+        builder.UseSetting(WebHostDefaults.ApplicationKey, typeof(global::Program).Assembly.GetName().Name!);
+        builder.UseSetting("PasswordRecoveryProviders:EmailProvider", "Fake");
+        builder.UseSetting("PasswordRecoveryProviders:SmsProvider", "Fake");
         builder.UseEnvironment(Environments.Development);
 
-        builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(
+        builder.ConfigureAppConfiguration(configuration => ConfigureTestConfiguration(configuration));
+        builder.ConfigureTestServices(ConfigureTestServices);
+
+        if (_remoteAddress is not null)
+        {
+            var address = _remoteAddress;
+            builder.ConfigureServices(services =>
+                services.AddTransient<IStartupFilter>(_ => new RemoteAddressFilter(address)));
+        }
+    }
+
+    /// <summary>
+    /// Adds the isolated test configuration. SQLite remains the default; provider-specific integration
+    /// fixtures override this hook so the real startup and routing pipeline can use another provider.
+    /// </summary>
+    protected virtual void ConfigureTestConfiguration(IConfigurationBuilder configuration)
+    {
+        configuration.AddInMemoryCollection(
             new Dictionary<string, string?>
             {
                 ["Database:Provider"] = "Sqlite",
@@ -159,6 +182,10 @@ public sealed class HrmsApiFactory : WebApplicationFactory<Program>
                 // leaving the isolated catalog without its Tenants table.
                 ["Database:SkipInitialization"] = "false",
                 ["Database:SeedDemoTenants"] = "true",
+                // Keep external password-recovery transports out of integration tests even when the
+                // process inherits a production environment or provider selection.
+                ["PasswordRecoveryProviders:EmailProvider"] = "Fake",
+                ["PasswordRecoveryProviders:SmsProvider"] = "Fake",
                 ["Jwt:Issuer"] = Issuer,
                 ["Jwt:Audience"] = Audience,
                 ["Jwt:SecretKey"] = SigningKey,
@@ -178,15 +205,15 @@ public sealed class HrmsApiFactory : WebApplicationFactory<Program>
                 ["Serilog:MinimumLevel:Default"] = "Warning",
                 ["Serilog:MinimumLevel:Override:Microsoft.AspNetCore"] = "Warning",
                 ["Serilog:MinimumLevel:Override:Microsoft.EntityFrameworkCore.Database.Command"] = "Warning"
-            }));
+            });
 
-        if (_remoteAddress is not null)
-        {
-            var address = _remoteAddress;
-            builder.ConfigureServices(services =>
-                services.AddTransient<IStartupFilter>(_ => new RemoteAddressFilter(address)));
-        }
     }
+
+    /// <summary>Allows provider-specific test factories to add infrastructure-only test services.</summary>
+    protected virtual void ConfigureTestServices(IServiceCollection services) { }
+
+    /// <summary>Whether this fixture expects the normal startup initializer to run.</summary>
+    protected virtual bool RequireInitialization => true;
 
     /// <summary>
     /// Stamps a remote address on every request before the app's own pipeline runs, because the test host
@@ -242,7 +269,7 @@ public sealed class HrmsApiFactory : WebApplicationFactory<Program>
         }
 
         var configuration = host.Services.GetRequiredService<IConfiguration>();
-        if (configuration.GetValue<bool>("Database:SkipInitialization"))
+        if (RequireInitialization && configuration.GetValue<bool>("Database:SkipInitialization"))
         {
             throw new InvalidOperationException(
                 "The integration host unexpectedly inherited Database:SkipInitialization; its isolated " +

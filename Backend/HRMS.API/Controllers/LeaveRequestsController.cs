@@ -6,6 +6,7 @@ using HRMS.API.Security;
 using HRMS.Domain.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace HRMS.API.Controllers;
 
@@ -49,6 +50,7 @@ public sealed class LeaveRequestsController : ControllerBase
     {
     }
 
+    [ActivatorUtilitiesConstructor]
     public LeaveRequestsController(
         ILeaveRequestValidationService validationService,
         ILeaveRequestSubmissionService? submissionService,
