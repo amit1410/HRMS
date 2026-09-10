@@ -16,6 +16,7 @@ public sealed class LeaveReminderDeliveryConfiguration : IEntityTypeConfiguratio
         b.Property(x => x.Status).HasMaxLength(20).IsRequired();
         b.Property(x => x.DueAtUtc).IsRequired();
         b.Property(x => x.AttemptCount).IsRequired();
+        b.Property(x => x.ClaimToken);
         b.Property(x => x.LastError).HasMaxLength(500);
         b.HasAlternateKey(x => new { x.TenantId, x.Id });
         b.HasIndex(x => new { x.TenantId, x.OccurrenceKey }).IsUnique();

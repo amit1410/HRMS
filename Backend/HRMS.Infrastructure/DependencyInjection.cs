@@ -54,7 +54,6 @@ public static class DependencyInjection
             throw new InvalidOperationException(reminderProblem);
         services.AddSingleton(reminderOptions);
         services.AddSingleton(Options.Create(reminderOptions));
-        services.AddScoped<ILeaveApprovalReminderProcessor, LeaveApprovalReminderProcessor>();
         services.AddHostedService<LeaveApprovalReminderWorker>();
 
         services.AddMemoryCache();

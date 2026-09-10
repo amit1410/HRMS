@@ -2983,6 +2983,9 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("ClaimedAtUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<Guid?>("ClaimToken")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime2");
 

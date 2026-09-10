@@ -75,7 +75,9 @@ public sealed class LeaveNotificationService : ILeaveNotificationService
             var managerEmail = await ResolveLinkedEmailAsync(request.TenantId, managerId, cancellationToken);
             if (string.IsNullOrWhiteSpace(managerEmail)) return LeaveNotificationDeliveryResult.Skipped;
 
-            var body = $"Hello,\n\n{request.EmployeeName}'s {request.Name} request from {request.StartDate:yyyy-MM-dd} to {request.EndDate:yyyy-MM-dd} ({request.ChargeableQuantity} day(s)) is still Pending Approval.\n\nPlease review it in HRMS.";
+            // A relative link keeps the message bound to the tenant workspace that the manager
+            // already uses; it never embeds a database identifier other than the request route.
+            var body = $"Hello,\n\n{request.EmployeeName}'s {request.Name} request from {request.StartDate:yyyy-MM-dd} to {request.EndDate:yyyy-MM-dd} ({request.ChargeableQuantity} day(s)) is still Pending Approval.\n\nReview the request: /leave-management/approvals/{requestId}";
             await _email.SendLeaveNotificationAsync(new(managerEmail, "Leave approval reminder", body), cancellationToken);
             return LeaveNotificationDeliveryResult.Sent;
         }

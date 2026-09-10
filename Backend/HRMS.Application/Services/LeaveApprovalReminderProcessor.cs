@@ -64,7 +64,8 @@ public sealed class LeaveApprovalReminderProcessor : ILeaveApprovalReminderProce
             var elapsed = now - request.SubmittedAtUtc.AddHours(_options.InitialDelayHours);
             var occurrence = elapsed.Ticks / TimeSpan.FromHours(_options.RepeatIntervalHours).Ticks;
             var occurrenceKey = $"{request.Id:N}:{occurrence}";
-            var claim = await TryClaimAsync(request, managerId, occurrenceKey, now, cancellationToken);
+            var claimToken = Guid.NewGuid();
+            var claim = await TryClaimAsync(request, managerId, occurrenceKey, claimToken, now, cancellationToken);
             if (!claim) { skipped++; continue; }
 
             try
@@ -73,18 +74,18 @@ public sealed class LeaveApprovalReminderProcessor : ILeaveApprovalReminderProce
                 if (delivery == LeaveNotificationDeliveryResult.Failed)
                 {
                     failed++;
-                    await FailAsync(request.TenantId, occurrenceKey, new InvalidOperationException("Notification provider failure."), now, cancellationToken);
+                    await FailAsync(request.TenantId, occurrenceKey, claimToken, new InvalidOperationException("Notification provider failure."), now, cancellationToken);
                 }
                 else
                 {
-                    await CompleteAsync(request.TenantId, occurrenceKey, delivery == LeaveNotificationDeliveryResult.Sent, now, cancellationToken);
+                    await CompleteAsync(request.TenantId, occurrenceKey, claimToken, delivery == LeaveNotificationDeliveryResult.Sent, now, cancellationToken);
                     if (delivery == LeaveNotificationDeliveryResult.Sent) sent++; else skipped++;
                 }
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 failed++;
-                await FailAsync(request.TenantId, occurrenceKey, exception, now, cancellationToken);
+                await FailAsync(request.TenantId, occurrenceKey, claimToken, exception, now, cancellationToken);
                 _logger.LogWarning(exception, "Leave approval reminder failed for request {LeaveRequestId}.", request.Id);
             }
         }
@@ -92,10 +93,10 @@ public sealed class LeaveApprovalReminderProcessor : ILeaveApprovalReminderProce
         return new(requests.Count, sent, skipped, failed);
     }
 
-    private async Task<bool> TryClaimAsync(ReminderCandidate request, Guid managerId, string occurrenceKey, DateTime now, CancellationToken ct)
+    private async Task<bool> TryClaimAsync(ReminderCandidate request, Guid managerId, string occurrenceKey, Guid claimToken, DateTime now, CancellationToken ct)
     {
-        await using var transaction = await _db.BeginTransactionAsync(ct);
-        var existing = await _db.LeaveReminderDeliveries.SingleOrDefaultAsync(x => x.OccurrenceKey == occurrenceKey, ct);
+        var existing = await _db.LeaveReminderDeliveries.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.TenantId == request.TenantId && x.OccurrenceKey == occurrenceKey, ct);
         if (existing is not null)
         {
             if (existing.Status == Sent || existing.Status == Skipped || existing.AttemptCount >= _options.MaxAttempts)
@@ -104,26 +105,37 @@ public sealed class LeaveApprovalReminderProcessor : ILeaveApprovalReminderProce
                 return false;
             if (existing.Status == Failed && existing.NextAttemptAtUtc > now)
                 return false;
-            existing.Status = Claimed;
-            existing.RecipientEmployeeId = managerId;
-            existing.ClaimedAtUtc = now;
-            existing.LeaseExpiresAtUtc = now.AddMinutes(_options.ClaimLeaseMinutes);
-            existing.AttemptCount++;
-            existing.LastError = null;
+
+            // The predicate is the claim. This prevents two workers that both observed an
+            // expired lease from both acquiring it and sending the same email.
+            var updated = await _db.LeaveReminderDeliveries
+                .Where(x => x.TenantId == request.TenantId && x.Id == existing.Id
+                    && x.Status != Sent && x.Status != Skipped
+                    && x.AttemptCount < _options.MaxAttempts
+                    && (x.Status != Claimed || x.LeaseExpiresAtUtc == null || x.LeaseExpiresAtUtc <= now)
+                    && (x.Status != Failed || x.NextAttemptAtUtc == null || x.NextAttemptAtUtc <= now))
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.Status, Claimed)
+                    .SetProperty(x => x.RecipientEmployeeId, managerId)
+                    .SetProperty(x => x.ClaimedAtUtc, now)
+                    .SetProperty(x => x.LeaseExpiresAtUtc, now.AddMinutes(_options.ClaimLeaseMinutes))
+                    .SetProperty(x => x.ClaimToken, claimToken)
+                    .SetProperty(x => x.AttemptCount, x => x.AttemptCount + 1)
+                    .SetProperty(x => x.LastError, (string?)null), ct);
+            return updated == 1;
         }
-        else
+
+        await using var transaction = await _db.BeginTransactionAsync(ct);
+        try
         {
             _db.LeaveReminderDeliveries.Add(new LeaveReminderDelivery
             {
                 Id = Guid.NewGuid(), TenantId = request.TenantId, LeaveRequestId = request.Id,
                 RecipientEmployeeId = managerId, OccurrenceKey = occurrenceKey, NotificationType = NotificationType,
                 Status = Claimed, DueAtUtc = request.SubmittedAtUtc.AddHours(_options.InitialDelayHours),
-                ClaimedAtUtc = now, LeaseExpiresAtUtc = now.AddMinutes(_options.ClaimLeaseMinutes), AttemptCount = 1
+                ClaimedAtUtc = now, LeaseExpiresAtUtc = now.AddMinutes(_options.ClaimLeaseMinutes),
+                ClaimToken = claimToken, AttemptCount = 1
             });
-        }
-
-        try
-        {
             await _db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
             return true;
@@ -134,26 +146,30 @@ public sealed class LeaveApprovalReminderProcessor : ILeaveApprovalReminderProce
         }
     }
 
-    private async Task CompleteAsync(Guid tenantId, string occurrenceKey, bool delivered, DateTime now, CancellationToken ct)
+    private async Task CompleteAsync(Guid tenantId, string occurrenceKey, Guid claimToken, bool delivered, DateTime now, CancellationToken ct)
     {
-        var row = await _db.LeaveReminderDeliveries.SingleAsync(x => x.TenantId == tenantId && x.OccurrenceKey == occurrenceKey, ct);
-        row.Status = delivered ? Sent : Skipped;
-        row.SentAtUtc = delivered ? now : null;
-        row.ClaimedAtUtc = null;
-        row.LeaseExpiresAtUtc = null;
-        row.NextAttemptAtUtc = null;
-        await _db.SaveChangesAsync(ct);
+        await _db.LeaveReminderDeliveries
+            .Where(x => x.TenantId == tenantId && x.OccurrenceKey == occurrenceKey && x.ClaimToken == claimToken)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, delivered ? Sent : Skipped)
+                .SetProperty(x => x.SentAtUtc, delivered ? now : (DateTime?)null)
+                .SetProperty(x => x.ClaimedAtUtc, (DateTime?)null)
+                .SetProperty(x => x.LeaseExpiresAtUtc, (DateTime?)null)
+                .SetProperty(x => x.ClaimToken, (Guid?)null)
+                .SetProperty(x => x.NextAttemptAtUtc, (DateTime?)null), ct);
     }
 
-    private async Task FailAsync(Guid tenantId, string occurrenceKey, Exception exception, DateTime now, CancellationToken ct)
+    private async Task FailAsync(Guid tenantId, string occurrenceKey, Guid claimToken, Exception exception, DateTime now, CancellationToken ct)
     {
-        var row = await _db.LeaveReminderDeliveries.SingleAsync(x => x.TenantId == tenantId && x.OccurrenceKey == occurrenceKey, ct);
-        row.Status = Failed;
-        row.LastError = exception.GetType().Name;
-        row.ClaimedAtUtc = null;
-        row.LeaseExpiresAtUtc = null;
-        row.NextAttemptAtUtc = now.AddHours(_options.RepeatIntervalHours);
-        await _db.SaveChangesAsync(ct);
+        await _db.LeaveReminderDeliveries
+            .Where(x => x.TenantId == tenantId && x.OccurrenceKey == occurrenceKey && x.ClaimToken == claimToken)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, Failed)
+                .SetProperty(x => x.LastError, exception.GetType().Name)
+                .SetProperty(x => x.ClaimedAtUtc, (DateTime?)null)
+                .SetProperty(x => x.LeaseExpiresAtUtc, (DateTime?)null)
+                .SetProperty(x => x.ClaimToken, (Guid?)null)
+                .SetProperty(x => x.NextAttemptAtUtc, now.AddHours(_options.RepeatIntervalHours)), ct);
     }
 
     private sealed record ReminderCandidate(Guid Id, Guid TenantId, Guid EmployeeId, DateOnly StartDate, DateTime SubmittedAtUtc);

@@ -14,6 +14,8 @@ public sealed class LeaveReminderDelivery : BaseEntity, ITenantEntity
     public DateTime DueAtUtc { get; set; }
     public DateTime? ClaimedAtUtc { get; set; }
     public DateTime? LeaseExpiresAtUtc { get; set; }
+    /// <summary>Identifies the worker that currently owns the claim.</summary>
+    public Guid? ClaimToken { get; set; }
     public DateTime? SentAtUtc { get; set; }
     public DateTime? NextAttemptAtUtc { get; set; }
     public int AttemptCount { get; set; }
