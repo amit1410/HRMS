@@ -533,7 +533,7 @@ public sealed class PlatformTenantService : IPlatformTenantService
     private bool InitialAdministratorInvitationsConfigured() =>
         _environment.IsDevelopment()
         || string.Equals(
-            _configuration["PasswordRecoveryProviders:EmailProvider"],
+            _configuration["Email:Provider"] ?? _configuration["PasswordRecoveryProviders:EmailProvider"],
             "Smtp",
             StringComparison.OrdinalIgnoreCase);
 

@@ -49,6 +49,93 @@ public sealed class PasswordRecoveryProviderRegistrationTests
     }
 
     [Fact]
+    public void Nested_email_configuration_is_supported_and_selected_provider_is_validated()
+    {
+        var configuration = Configuration(new Dictionary<string, string?>
+        {
+            ["Email:Provider"] = "Smtp",
+            ["Email:Smtp:Host"] = "smtp.example.test",
+            ["Email:Smtp:Port"] = "465",
+            ["Email:Smtp:Username"] = "user",
+            ["Email:Smtp:Password"] = "password",
+            ["Email:Smtp:EnableSsl"] = "true",
+            ["Email:FromEmail"] = "hrms@example.test",
+            ["Email:FromName"] = "HRMS",
+            ["PasswordRecoveryProviders:SmsProvider"] = "Fake"
+        });
+
+        var options = PasswordRecoveryProviderOptions.Load(configuration, isDevelopment: true);
+        options.Validate(configuration);
+
+        Assert.Equal("Smtp", options.EmailProvider);
+    }
+
+    [Fact]
+    public void Unselected_smtp_does_not_require_smtp_settings()
+    {
+        var configuration = Configuration(new Dictionary<string, string?>
+        {
+            ["Email:Provider"] = "Fake",
+            ["PasswordRecoveryProviders:SmsProvider"] = "Fake"
+        });
+
+        var options = PasswordRecoveryProviderOptions.Load(configuration, isDevelopment: false);
+        options.Validate(configuration);
+    }
+
+    [Fact]
+    public void Missing_selected_nested_smtp_setting_names_the_nested_key()
+    {
+        var configuration = Configuration(new Dictionary<string, string?>
+        {
+            ["Email:Provider"] = "Smtp",
+            ["PasswordRecoveryProviders:SmsProvider"] = "Fake"
+        });
+
+        var options = PasswordRecoveryProviderOptions.Load(configuration, isDevelopment: true);
+        var exception = Assert.Throws<InvalidOperationException>(() => options.Validate(configuration));
+
+        Assert.Contains("Email:Smtp:Host", exception.Message);
+    }
+
+    [Fact]
+    public void Environment_variables_override_appsettings_values_for_nested_email_configuration()
+    {
+        const string prefix = "HRMS_TEST_NESTED_";
+        var values = new Dictionary<string, string?>
+        {
+            [prefix + "Email__Provider"] = "Smtp",
+            [prefix + "Email__Smtp__Host"] = "smtp.environment.test",
+            [prefix + "Email__Smtp__Port"] = "465",
+            [prefix + "Email__Smtp__Username"] = "environment-user",
+            [prefix + "Email__Smtp__Password"] = "environment-password",
+            [prefix + "Email__Smtp__EnableSsl"] = "true",
+            [prefix + "Email__FromEmail"] = "environment@example.test",
+            [prefix + "Email__FromName"] = "Environment",
+            [prefix + "PasswordRecoveryProviders__SmsProvider"] = "Fake"
+        };
+
+        try
+        {
+            foreach (var (key, value) in values) System.Environment.SetEnvironmentVariable(key, value);
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Email:Provider"] = "Fake" })
+                .AddEnvironmentVariables(prefix)
+                .Build();
+
+            var options = PasswordRecoveryProviderOptions.Load(configuration, isDevelopment: false);
+            options.Validate(configuration);
+
+            Assert.Equal("Smtp", options.EmailProvider);
+            Assert.Equal("environment@example.test", configuration["Email:FromEmail"]);
+        }
+        finally
+        {
+            foreach (var key in values.Keys) System.Environment.SetEnvironmentVariable(key, null);
+        }
+    }
+
+    [Fact]
     public void Environment_variables_bind_email_from_email_and_from_name_keys()
     {
         const string prefix = "HRMS_TEST_";

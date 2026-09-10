@@ -36,6 +36,9 @@ coverage/
 .env
 .env.*
 !.env.example
+*.env
+.codex-local-env
+hrms-api.env
 
 # Local runtime artifacts and generated checks
 _buildcheck/

@@ -66,11 +66,11 @@ public sealed class SmtpEmailSender(IConfiguration configuration) : IEmailSender
     }
 
     private static SmtpEmailSettings ReadSettings(IConfiguration configuration) => new(
-        configuration["Email:SmtpHost"],
-        configuration.GetValue("Email:SmtpPort", 587),
-        configuration.GetValue("Email:EnableSsl", true),
-        configuration["Email:SmtpUsername"],
-        configuration["Email:SmtpPassword"],
+        configuration["Email:Smtp:Host"] ?? configuration["Email:SmtpHost"],
+        configuration.GetValue("Email:Smtp:Port", configuration.GetValue("Email:SmtpPort", 587)),
+        configuration.GetValue("Email:Smtp:EnableSsl", configuration.GetValue("Email:EnableSsl", true)),
+        configuration["Email:Smtp:Username"] ?? configuration["Email:SmtpUsername"],
+        configuration["Email:Smtp:Password"] ?? configuration["Email:SmtpPassword"],
         configuration["Email:FromEmail"],
         configuration["Email:FromName"] ?? string.Empty);
 }

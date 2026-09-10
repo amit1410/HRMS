@@ -15,7 +15,9 @@ public sealed class PasswordRecoveryProviderOptions
         var section = configuration.GetSection(SectionName);
         return new PasswordRecoveryProviderOptions
         {
-            EmailProvider = section["EmailProvider"] ?? (isDevelopment ? "Fake" : "Smtp"),
+            EmailProvider = configuration["Email:Provider"]
+                ?? section["EmailProvider"]
+                ?? (isDevelopment ? "Fake" : "Smtp"),
             SmsProvider = section["SmsProvider"] ?? (isDevelopment ? "Fake" : "Msg91")
         };
     }
@@ -30,16 +32,18 @@ public sealed class PasswordRecoveryProviderOptions
 
         if (string.Equals(EmailProvider, "Smtp", StringComparison.OrdinalIgnoreCase))
         {
-            Require(configuration, "Email:SmtpHost");
-            Require(configuration, "Email:SmtpPort");
-            Require(configuration, "Email:SmtpUsername");
-            Require(configuration, "Email:SmtpPassword");
+            var host = Value(configuration, "Email:Smtp:Host", "Email:SmtpHost");
+            var port = Value(configuration, "Email:Smtp:Port", "Email:SmtpPort");
+            Require(configuration, "Email:Smtp:Host", host);
+            Require(configuration, "Email:Smtp:Port", port);
+            Require(configuration, "Email:Smtp:Username", Value(configuration, "Email:Smtp:Username", "Email:SmtpUsername"));
+            Require(configuration, "Email:Smtp:Password", Value(configuration, "Email:Smtp:Password", "Email:SmtpPassword"));
             Require(configuration, "Email:FromEmail");
             Require(configuration, "Email:FromName");
-            Require(configuration, "Email:EnableSsl");
+            Require(configuration, "Email:Smtp:EnableSsl", Value(configuration, "Email:Smtp:EnableSsl", "Email:EnableSsl"));
 
-            if (!int.TryParse(configuration["Email:SmtpPort"], out var port) || port is < 1 or > 65535)
-                throw new InvalidOperationException("Email:SmtpPort must be a valid TCP port.");
+            if (!int.TryParse(port, out var parsedPort) || parsedPort is < 1 or > 65535)
+                throw new InvalidOperationException("Email:Smtp:Port must be a valid TCP port.");
         }
 
         if (string.Equals(SmsProvider, "Msg91", StringComparison.OrdinalIgnoreCase))
@@ -58,9 +62,12 @@ public sealed class PasswordRecoveryProviderOptions
     private static bool IsOneOf(string value, params string[] allowed) =>
         allowed.Any(candidate => string.Equals(value, candidate, StringComparison.OrdinalIgnoreCase));
 
-    private static void Require(IConfiguration configuration, string key)
+    private static string? Value(IConfiguration configuration, string preferredKey, string legacyKey) =>
+        configuration[preferredKey] ?? configuration[legacyKey];
+
+    private static void Require(IConfiguration configuration, string key, string? value = null)
     {
-        if (string.IsNullOrWhiteSpace(configuration[key]))
+        if (string.IsNullOrWhiteSpace(value ?? configuration[key]))
             throw new InvalidOperationException($"{key} is required for the selected password-recovery provider.");
     }
 }
