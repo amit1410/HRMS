@@ -408,7 +408,7 @@ public sealed class MySqlTenantRuntimeIntegrationTests
         if (string.IsNullOrWhiteSpace(connection))
             throw SkipException.ForSkip("MySQL integration tests not executed: HRMS_MYSQL_TEST_CONNECTION is absent.");
 
-        var scenario = new Scenario(connection, includeApprovalData);
+        var scenario = new Scenario(MySqlApiFactory.NormalizeConnectionString(connection), includeApprovalData);
         await scenario.SeedAsync();
         Exception? testFailure = null;
         try

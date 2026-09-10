@@ -4,6 +4,7 @@ using HRMS.Domain.Enums;
 using HRMS.Infrastructure;
 using HRMS.Infrastructure.Persistence.Catalog;
 using HRMS.Infrastructure.Sharding;
+using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -124,7 +125,7 @@ public sealed class MySqlCatalogRuntimeIntegrationTests
                 "MySQL catalog integration tests not executed: HRMS_MYSQL_CATALOG_TEST_CONNECTION is absent.");
         }
 
-        var scenario = new Scenario(connection);
+        var scenario = new Scenario(MySqlApiFactory.NormalizeConnectionString(connection));
         try
         {
             await using var scope = scenario.Provider.CreateAsyncScope();

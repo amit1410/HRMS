@@ -143,7 +143,7 @@ public sealed class ProviderCombinationRoutingTests : IAsyncLifetime
                 "Provider matrix MySQL catalog tests not executed: HRMS_MYSQL_CATALOG_TEST_CONNECTION is absent.");
         }
 
-        return connection;
+        return MySqlApiFactory.NormalizeConnectionString(connection);
     }
 
     private static ServiceProvider BuildProvider(
