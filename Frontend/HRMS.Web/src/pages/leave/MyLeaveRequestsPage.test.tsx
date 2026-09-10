@@ -1,4 +1,5 @@
 import { screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Route, Routes } from 'react-router-dom'
 import { MyLeaveRequestDetailPage, MyLeaveRequestsPage } from './MyLeaveRequestsPage.tsx'
@@ -56,6 +57,17 @@ describe('MyLeaveRequestsPage', () => {
     stub.on('get', '/api/leave-requests', () => ({ data: ok({ items: [], page: 1, pageSize: 25, totalCount: 0, totalPages: 0, hasPreviousPage: false, hasNextPage: false }) }))
     renderAsUser(<MyLeaveRequestsPage />, { user: makeUser() })
     expect(await screen.findByText('You have no leave requests yet.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Apply for Leave' })).toHaveAttribute('href', '/leave-management/apply')
+  })
+
+  it('filters requests by lifecycle status without changing the server contract', async () => {
+    stub.on('get', '/api/leave-requests', () => ({ data: ok({ items: [request, { ...request, requestId: 'request-2', status: 'Approved', leaveTypeName: 'Earned Leave' }], page: 1, pageSize: 25, totalCount: 2, totalPages: 1, hasPreviousPage: false, hasNextPage: false }) }))
+    renderAsUser(<MyLeaveRequestsPage />, { user: makeUser() })
+    await screen.findByText('Earned Leave')
+    await userEvent.selectOptions(screen.getByLabelText('Filter requests'), 'approved')
+    expect(screen.queryByText('Casual Leave')).not.toBeInTheDocument()
+    expect(screen.getByText('Earned Leave')).toBeInTheDocument()
+    expect(stub.callsTo('get', '/api/leave-requests')).toHaveLength(1)
   })
 
   it('renders an API error state', async () => {

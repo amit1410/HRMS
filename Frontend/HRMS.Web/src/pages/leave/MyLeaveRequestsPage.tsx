@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { cancelLeaveRequest, getMyLeaveRequest, listMyLeaveRequests, withdrawLeaveRequest, type LeaveRequestDetail, type LeaveRequestListItem, type LeaveRequestStatus } from '../../api/leaveRequests.ts'
 import { ApiError } from '../../api/errors.ts'
@@ -18,14 +18,16 @@ const statusLabels: Record<LeaveRequestStatus, string> = {
 
 export function MyLeaveRequestsPage() {
   const query = useApiQuery(() => listMyLeaveRequests(), [])
+  const [filter, setFilter] = useState<'all' | 'pending' | 'approved' | 'rejected' | 'closed'>('all')
 
   if (query.isLoading) return <div className="leave-admin-page"><p className="state-block"><Spinner label="Loading My Leave Requests" /></p></div>
   if (query.error) return <div className="leave-admin-page"><PageHeader title="My Leave Requests" /><Notice tone="error">{query.error.message}</Notice><button type="button" className="button button-secondary" onClick={query.refetch}>Retry</button></div>
 
-  const items = query.data?.items ?? []
+  const items = (query.data?.items ?? []).filter(item => filter === 'all' || filter === 'pending' && item.status === 'PendingApproval' || filter === 'approved' && item.status === 'Approved' || filter === 'rejected' && item.status === 'Rejected' || filter === 'closed' && (item.status === 'Withdrawn' || item.status === 'Cancelled'))
   return <div className="leave-admin-page">
     <PageHeader title="My Leave Requests" subtitle="Your submitted leave requests" />
-    {items.length === 0 ? <Card><p className="muted">You have no leave requests yet.</p></Card> : <LeaveRequestTable items={items} />}
+    <label className="field"><span>Filter requests</span><select className="input" value={filter} onChange={event => setFilter(event.target.value as typeof filter)}><option value="all">All requests</option><option value="pending">Pending approval</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="closed">Withdrawn or cancelled</option></select></label>
+    {items.length === 0 ? <Card><p className="muted">{filter === 'all' ? 'You have no leave requests yet.' : 'No leave requests match this filter.'}</p><Link className="button button-primary" to="/leave-management/apply">Apply for Leave</Link></Card> : <LeaveRequestTable items={items} />}
   </div>
 }
 
@@ -39,6 +41,7 @@ export function MyLeaveRequestDetailPage() {
   const [action, setAction] = useState<'withdraw' | 'cancel' | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const actionBusyRef = useRef(false)
 
   if (query.isLoading) return <div className="leave-admin-page"><p className="state-block"><Spinner label="Loading Leave Request" /></p></div>
   if (query.error || !query.data) return <div className="leave-admin-page"><PageHeader title="Leave Request Details" /><Notice tone="error">{detailErrorMessage(query.error)}</Notice><Link className="button button-secondary" to="/leave-management/my-requests">Back to My Leave Requests</Link></div>
@@ -48,7 +51,8 @@ export function MyLeaveRequestDetailPage() {
   const canCancel = detail.status === 'Approved'
 
   async function withdraw() {
-    if (action !== null || !window.confirm('Are you sure you want to withdraw this leave request?')) return
+    if (action !== null || actionBusyRef.current || !window.confirm('Are you sure you want to withdraw this leave request?')) return
+    actionBusyRef.current = true
     setAction('withdraw')
     setActionError(null)
     setSuccess(null)
@@ -58,13 +62,16 @@ export function MyLeaveRequestDetailPage() {
       query.refetch()
     } catch (error) {
       setActionError(withdrawErrorMessage(error))
+      if (error instanceof ApiError && error.status === 409) query.refetch()
     } finally {
+      actionBusyRef.current = false
       setAction(null)
     }
   }
 
   async function cancel() {
-    if (action !== null || !window.confirm('Are you sure you want to cancel this approved leave request?')) return
+    if (action !== null || actionBusyRef.current || !window.confirm('Are you sure you want to cancel this approved leave request?')) return
+    actionBusyRef.current = true
     setAction('cancel')
     setActionError(null)
     setSuccess(null)
@@ -74,7 +81,9 @@ export function MyLeaveRequestDetailPage() {
       query.refetch()
     } catch (error) {
       setActionError(cancelErrorMessage(error))
+      if (error instanceof ApiError && error.status === 409) query.refetch()
     } finally {
+      actionBusyRef.current = false
       setAction(null)
     }
   }
