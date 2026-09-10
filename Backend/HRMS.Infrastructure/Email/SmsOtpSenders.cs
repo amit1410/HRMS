@@ -16,24 +16,66 @@ public sealed class Msg91SmsOtpSender(HttpClient client, IConfiguration configur
     public async Task<string?> SendAsync(OtpDeliveryMessage message, CancellationToken cancellationToken = default)
     {
         var authKey = configuration["Msg91:AuthKey"];
-        if (string.IsNullOrWhiteSpace(authKey)) throw new InvalidOperationException("MSG91 configuration is incomplete.");
+        var flowId = configuration["Msg91:FlowId"];
+        var senderId = configuration["Msg91:SenderId"];
+        if (string.IsNullOrWhiteSpace(authKey) || string.IsNullOrWhiteSpace(flowId) || string.IsNullOrWhiteSpace(senderId))
+            throw new InvalidOperationException("MSG91 configuration is incomplete.");
+
         var mobile = TrustedPhoneNumber.Normalize(message.Destination, configuration["Msg91:DefaultCountryCode"] ?? "91");
-        var endpoint = configuration["Msg91:Endpoint"] ?? "sendotp.php";
-        var query = $"authkey={Uri.EscapeDataString(authKey)}&mobile={Uri.EscapeDataString(mobile)}&otp={Uri.EscapeDataString(message.Otp)}";
-        var sender = configuration["Msg91:SenderId"];
-        if (!string.IsNullOrWhiteSpace(sender)) query += $"&sender={Uri.EscapeDataString(sender)}";
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{endpoint}?{query}");
-        using var response = await client.SendAsync(request, cancellationToken);
-        if (!response.IsSuccessStatusCode) { logger.LogWarning("MSG91 OTP delivery failed with status {StatusCode}.", (int)response.StatusCode); throw new InvalidOperationException("SMS delivery failed."); }
+        var variableName = configuration["Msg91:OtpVariable"] ?? "VAR1";
+        var payload = new Dictionary<string, object?>
+        {
+            ["flow_id"] = flowId,
+            ["sender"] = senderId,
+            ["recipients"] = new[]
+            {
+                new Dictionary<string, string>
+                {
+                    ["mobiles"] = mobile,
+                    [variableName] = message.Otp
+                }
+            }
+        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, "flow/")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json")
+        };
+        request.Headers.TryAddWithoutValidation("authkey", authKey);
+        request.Headers.Accept.ParseAdd("application/json");
+
+        HttpResponseMessage response;
         try
         {
-            using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(cancellationToken));
-            if (!document.RootElement.TryGetProperty("type", out var type) || !string.Equals(type.GetString(), "success", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("SMS delivery failed.");
+            response = await client.SendAsync(request, cancellationToken);
         }
-        catch (JsonException)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new InvalidOperationException("SMS delivery failed.");
+            throw new InvalidOperationException("MSG91 SMS delivery timed out.");
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new InvalidOperationException("MSG91 SMS delivery failed due to a network error.", exception);
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogWarning("MSG91 SMS delivery failed with HTTP status {StatusCode}.", (int)response.StatusCode);
+                throw new InvalidOperationException("MSG91 SMS delivery failed.");
+            }
+
+            try
+            {
+                using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(cancellationToken));
+                if (!document.RootElement.TryGetProperty("type", out var type)
+                    || !string.Equals(type.GetString(), "success", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("MSG91 SMS delivery was rejected.");
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidOperationException("MSG91 returned an invalid response.", exception);
+            }
         }
         return null;
     }
@@ -43,9 +85,15 @@ internal static class TrustedPhoneNumber
 {
     public static string Normalize(string value, string defaultCountryCode)
     {
-        var digits = new string(value.Where(char.IsDigit).ToArray());
-        if (digits.StartsWith("00", StringComparison.Ordinal)) digits = digits[2..];
-        if (digits.Length == 10 && !string.IsNullOrWhiteSpace(defaultCountryCode)) digits = defaultCountryCode + digits;
+        if (string.IsNullOrWhiteSpace(value)) throw new InvalidOperationException("The trusted mobile number is invalid.");
+        var trimmed = value.Trim();
+        var digits = new string(trimmed.Where(char.IsDigit).ToArray());
+        if (digits.StartsWith("00", StringComparison.Ordinal))
+            digits = digits[2..];
+        else if (digits.Length == 11 && digits.StartsWith("0", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(defaultCountryCode))
+            digits = defaultCountryCode + digits[1..];
+        else if (digits.Length == 10 && !string.IsNullOrWhiteSpace(defaultCountryCode))
+            digits = defaultCountryCode + digits;
         if (digits.Length is < 10 or > 15) throw new InvalidOperationException("The trusted mobile number is invalid.");
         return digits;
     }

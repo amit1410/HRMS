@@ -137,7 +137,7 @@ public static class DependencyInjection
                 : new SmtpEmailSender(configuration));
         services.AddHttpClient<Msg91SmsOtpSender>(client =>
         {
-            client.BaseAddress = new Uri(configuration["Msg91:BaseUrl"] ?? "https://api.msg91.com/api/");
+            client.BaseAddress = new Uri(configuration["Msg91:BaseUrl"] ?? "https://control.msg91.com/api/v5/");
             client.Timeout = TimeSpan.FromSeconds(10);
         });
         services.AddSingleton<ISmsOtpSender>(serviceProvider =>

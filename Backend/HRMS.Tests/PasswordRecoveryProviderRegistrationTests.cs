@@ -38,8 +38,9 @@ public sealed class PasswordRecoveryProviderRegistrationTests
             ["Email:FromName"] = "HRMS",
             ["Email:EnableSsl"] = "true",
             ["Msg91:BaseUrl"] = "https://api.msg91.com/api/",
-            ["Msg91:Endpoint"] = "sendotp.php",
-            ["Msg91:AuthKey"] = "configured-outside-source"
+            ["Msg91:AuthKey"] = "configured-outside-source",
+            ["Msg91:FlowId"] = "flow-template-id",
+            ["Msg91:SenderId"] = "ANEVRA"
         }, isDevelopment: true);
         using var scope = provider.CreateScope();
 
@@ -73,6 +74,35 @@ public sealed class PasswordRecoveryProviderRegistrationTests
             Assert.Equal("no-reply@anevratechnologies.com", configuration["Email:FromEmail"]);
             Assert.Equal("Anevra Technologies", configuration["Email:FromName"]);
             Assert.Equal("Smtp", options.EmailProvider);
+        }
+        finally
+        {
+            foreach (var key in values.Keys) System.Environment.SetEnvironmentVariable(key, null);
+        }
+    }
+
+    [Fact]
+    public void Environment_variables_bind_msg91_configuration()
+    {
+        const string prefix = "HRMS_TEST_";
+        var values = new Dictionary<string, string?>
+        {
+            [prefix + "PasswordRecoveryProviders__SmsProvider"] = "Msg91",
+            [prefix + "Msg91__AuthKey"] = "configured-outside-source",
+            [prefix + "Msg91__BaseUrl"] = "https://control.msg91.com/api/v5/",
+            [prefix + "Msg91__FlowId"] = "flow-template-id",
+            [prefix + "Msg91__SenderId"] = "ANEVRA"
+        };
+        try
+        {
+            foreach (var (key, value) in values) System.Environment.SetEnvironmentVariable(key, value);
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            var options = PasswordRecoveryProviderOptions.Load(configuration, isDevelopment: true);
+            options.Validate(configuration);
+
+            Assert.Equal("Msg91", options.SmsProvider);
+            Assert.Equal("flow-template-id", configuration["Msg91:FlowId"]);
+            Assert.Equal("ANEVRA", configuration["Msg91:SenderId"]);
         }
         finally
         {

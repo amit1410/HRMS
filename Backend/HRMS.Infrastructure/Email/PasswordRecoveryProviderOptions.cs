@@ -46,7 +46,8 @@ public sealed class PasswordRecoveryProviderOptions
         {
             Require(configuration, "Msg91:AuthKey");
             Require(configuration, "Msg91:BaseUrl");
-            Require(configuration, "Msg91:Endpoint");
+            Require(configuration, "Msg91:FlowId");
+            Require(configuration, "Msg91:SenderId");
 
             if (!Uri.TryCreate(configuration["Msg91:BaseUrl"], UriKind.Absolute, out var baseUrl)
                 || baseUrl.Scheme is not ("http" or "https"))
