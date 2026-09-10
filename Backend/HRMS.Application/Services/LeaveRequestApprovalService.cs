@@ -21,6 +21,7 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
     private readonly ILeaveRequestSubmissionRetryPolicy? _retryPolicy;
     private readonly IDatabaseTransientErrorClassifier? _deadlockClassifier;
     private readonly ILeaveBalanceAccountingService? _balanceAccountingService;
+    private readonly ILeaveNotificationService? _notificationService;
 
     public LeaveRequestApprovalService(
         IHrmsDbContext db,
@@ -30,7 +31,8 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
         TimeProvider timeProvider,
         ILeaveRequestSubmissionRetryPolicy? retryPolicy = null,
         IDatabaseTransientErrorClassifier? deadlockClassifier = null,
-        ILeaveBalanceAccountingService? balanceAccountingService = null)
+        ILeaveBalanceAccountingService? balanceAccountingService = null,
+        ILeaveNotificationService? notificationService = null)
     {
         _db = db;
         _identityResolver = identityResolver;
@@ -40,6 +42,7 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
         _retryPolicy = retryPolicy;
         _deadlockClassifier = deadlockClassifier;
         _balanceAccountingService = balanceAccountingService;
+        _notificationService = notificationService;
     }
 
     public Task<Result<LeaveRequestApprovalResult>> ApproveAsync(Guid requestId, CancellationToken cancellationToken = default) =>
@@ -139,6 +142,8 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
 
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+            if (_notificationService is not null)
+                await _notificationService.NotifyAsync(request.Id, eventType, cancellationToken);
             return Result<LeaveRequestApprovalResult>.Success(new(request.Id, request.Status, eventType, occurredAt));
         }
         catch (DbUpdateConcurrencyException exception)

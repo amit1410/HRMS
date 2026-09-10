@@ -23,6 +23,7 @@ public sealed class LeaveRequestSubmissionService : ILeaveRequestSubmissionServi
     private readonly ILeaveRequestSubmissionRetryPolicy? _retryPolicy;
     private readonly IDatabaseTransientErrorClassifier? _deadlockClassifier;
     private readonly ILeaveBalanceAccountingService? _balanceAccountingService;
+    private readonly ILeaveNotificationService? _notificationService;
 
     public LeaveRequestSubmissionService(
         IHrmsDbContext db,
@@ -33,7 +34,8 @@ public sealed class LeaveRequestSubmissionService : ILeaveRequestSubmissionServi
         Action<Exception>? diagnosticObserver = null,
         ILeaveRequestSubmissionRetryPolicy? retryPolicy = null,
         IDatabaseTransientErrorClassifier? deadlockClassifier = null,
-        ILeaveBalanceAccountingService? balanceAccountingService = null)
+        ILeaveBalanceAccountingService? balanceAccountingService = null,
+        ILeaveNotificationService? notificationService = null)
     {
         _db = db;
         _identityResolver = identityResolver;
@@ -44,6 +46,7 @@ public sealed class LeaveRequestSubmissionService : ILeaveRequestSubmissionServi
         _retryPolicy = retryPolicy;
         _deadlockClassifier = deadlockClassifier;
         _balanceAccountingService = balanceAccountingService;
+        _notificationService = notificationService;
     }
 
     public async Task<Result<LeaveRequestSubmissionResult>> SubmitAsync(
@@ -201,6 +204,8 @@ public sealed class LeaveRequestSubmissionService : ILeaveRequestSubmissionServi
 
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+            if (_notificationService is not null)
+                await _notificationService.NotifyAsync(request.Id, LeaveRequestEventType.Submitted, cancellationToken);
 
             return Result<LeaveRequestSubmissionResult>.Success(ToResult(request, days, false));
         }

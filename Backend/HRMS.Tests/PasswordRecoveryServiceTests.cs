@@ -127,6 +127,8 @@ public sealed class PasswordRecoveryServiceTests
     {
         public string? Destination { get; private set; }
 
+        public Task SendLeaveNotificationAsync(LeaveNotificationEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
         public Task SendWelcomeInviteAsync(WelcomeEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task<string?> SendPasswordResetOtpAsync(OtpDeliveryMessage message, CancellationToken cancellationToken = default)

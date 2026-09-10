@@ -124,6 +124,7 @@ public sealed class EmployeePortalAccountServiceTests
 
     private sealed class RecordingEmailSender : IEmailSender
     {
+        public Task SendLeaveNotificationAsync(LeaveNotificationEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<string?> SendPasswordResetOtpAsync(OtpDeliveryMessage message, CancellationToken cancellationToken = default) => Task.FromResult<string?>(message.Otp);
         public WelcomeEmailMessage? Invite { get; private set; }
         public Task SendWelcomeInviteAsync(WelcomeEmailMessage message, CancellationToken cancellationToken = default) { Invite = message; return Task.CompletedTask; }

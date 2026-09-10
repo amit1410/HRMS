@@ -8,6 +8,7 @@ using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Security;
 using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit.Sdk;
 
 namespace HRMS.Tests;
@@ -18,6 +19,94 @@ namespace HRMS.Tests;
 /// </summary>
 public sealed class MySqlLeaveLifecycleIntegrationTests
 {
+    [Fact]
+    public async Task MySql_leave_state_remains_committed_when_email_delivery_fails()
+    {
+        var connection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connection))
+            throw SkipException.ForSkip("MySQL Leave notification test not executed: HRMS_MYSQL_TEST_CONNECTION is absent.");
+
+        var fixture = new Fixture(connection);
+        try
+        {
+            await fixture.SeedAsync();
+            fixture.Email.ThrowOnSend = true;
+
+            await using var context = fixture.CreateContext();
+            var validation = new LeaveRequestValidationService(
+                context,
+                new EmployeeIdentityResolver(context, fixture.EmployeeTenant),
+                new EffectiveEmploymentResolver(context, fixture.EmployeeTenant),
+                new LeavePeriodResolver(context, fixture.EmployeeTenant),
+                new LeavePolicyResolver(context, new EffectiveEmploymentResolver(context, fixture.EmployeeTenant), fixture.EmployeeTenant));
+            var result = await new LeaveRequestSubmissionService(
+                context,
+                new EmployeeIdentityResolver(context, fixture.EmployeeTenant),
+                validation,
+                new MySqlLeaveRequestSubmissionLock(context),
+                TimeProvider.System,
+                balanceAccountingService: new LeaveBalanceAccountingService(context, fixture.EmployeeTenant, TimeProvider.System),
+                notificationService: fixture.CreateNotificationService(context))
+                .SubmitAsync(new(fixture.LeaveTypeId, fixture.RequestDate, fixture.RequestDate, "mysql-notification-failure"));
+
+            Assert.True(result.Succeeded);
+            Assert.Equal(LeaveRequestStatus.PendingApproval, result.Value!.Status);
+            Assert.Empty(fixture.Email.Messages);
+            Assert.Equal(1m, await context.EmployeeLeaveBalances
+                .Where(x => x.Id == fixture.BalanceId)
+                .Select(x => x.ReservedQuantity)
+                .SingleAsync());
+        }
+        finally
+        {
+            await fixture.CleanupAsync();
+        }
+    }
+
+    [Fact]
+    public async Task MySql_leave_notification_does_not_guess_a_missing_manager_email()
+    {
+        var connection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connection))
+            throw SkipException.ForSkip("MySQL Leave notification test not executed: HRMS_MYSQL_TEST_CONNECTION is absent.");
+
+        var fixture = new Fixture(connection);
+        try
+        {
+            await fixture.SeedAsync();
+            await using (var setup = fixture.CreateContext(new TestTenantContext()))
+            {
+                var manager = await setup.Users.IgnoreQueryFilters().SingleAsync(x => x.Id == fixture.ManagerUserId);
+                manager.Email = string.Empty;
+                await setup.SaveChangesAsync();
+            }
+
+            await using var context = fixture.CreateContext();
+            var validation = new LeaveRequestValidationService(
+                context,
+                new EmployeeIdentityResolver(context, fixture.EmployeeTenant),
+                new EffectiveEmploymentResolver(context, fixture.EmployeeTenant),
+                new LeavePeriodResolver(context, fixture.EmployeeTenant),
+                new LeavePolicyResolver(context, new EffectiveEmploymentResolver(context, fixture.EmployeeTenant), fixture.EmployeeTenant));
+            var result = await new LeaveRequestSubmissionService(
+                context,
+                new EmployeeIdentityResolver(context, fixture.EmployeeTenant),
+                validation,
+                new MySqlLeaveRequestSubmissionLock(context),
+                TimeProvider.System,
+                balanceAccountingService: new LeaveBalanceAccountingService(context, fixture.EmployeeTenant, TimeProvider.System),
+                notificationService: fixture.CreateNotificationService(context))
+                .SubmitAsync(new(fixture.LeaveTypeId, fixture.RequestDate, fixture.RequestDate, "mysql-missing-recipient"));
+
+            Assert.True(result.Succeeded);
+            Assert.Empty(fixture.Email.Messages);
+        }
+        finally
+        {
+            await fixture.CleanupAsync();
+        }
+    }
+
     [Fact]
     public async Task MySql_leave_lifecycle_uses_linked_identity_policy_and_atomic_balance_accounting()
     {
@@ -75,19 +164,22 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                     validation,
                     new MySqlLeaveRequestSubmissionLock(context),
                     TimeProvider.System,
-                    balanceAccountingService: accounting);
+                    balanceAccountingService: accounting,
+                    notificationService: fixture.CreateNotificationService(context));
 
                 var submitted = await submission.SubmitAsync(new(
                     fixture.LeaveTypeId, fixture.RequestDate, fixture.RequestDate, "mysql-lifecycle-submit"));
                 Assert.True(submitted.Succeeded);
                 Assert.Equal(LeaveRequestStatus.PendingApproval, submitted.Value!.Status);
                 Assert.Equal(fixture.EmployeeId, submitted.Value.EmployeeId);
+                Assert.Contains(fixture.Email.Messages, message => message.Subject == "Leave approval required" && message.RecipientEmail == fixture.ManagerEmail);
 
                 var replay = await submission.SubmitAsync(new(
                     fixture.LeaveTypeId, fixture.RequestDate, fixture.RequestDate, "mysql-lifecycle-submit"));
                 Assert.True(replay.Succeeded);
                 Assert.True(replay.Value!.IdempotentReplay);
                 Assert.Equal(submitted.Value.RequestId, replay.Value.RequestId);
+                Assert.Equal(1, fixture.Email.Messages.Count(message => message.Subject == "Leave approval required"));
 
                 var pendingManagerCalendar = await new LeaveCalendarService(
                     context,
@@ -117,10 +209,13 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                     new EmployeeManagerResolver(context, fixture.ManagerTenant),
                     new MySqlLeaveRequestSubmissionLock(context),
                     TimeProvider.System,
-                    balanceAccountingService: accounting);
+                    balanceAccountingService: accounting,
+                    notificationService: fixture.CreateNotificationService(context));
                 var approved = await approval.ApproveAsync(submitted.Value.RequestId);
                 Assert.True(approved.Succeeded);
                 Assert.Equal(LeaveRequestStatus.Approved, approved.Value!.Status);
+                Assert.Contains(fixture.Email.Messages, message => message.Subject == "Leave request approved" && message.RecipientEmail == fixture.EmployeeEmail);
+                Assert.Equal(1, fixture.Email.Messages.Count(message => message.Subject == "Leave request approved"));
 
                 var balanceAfterApproval = await context.EmployeeLeaveBalances
                     .SingleAsync(x => x.Id == fixture.BalanceId);
@@ -165,10 +260,19 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                     new EmployeeIdentityResolver(context, fixture.EmployeeTenant),
                     new MySqlLeaveRequestSubmissionLock(context),
                     TimeProvider.System,
-                    balanceAccountingService: accounting);
+                    balanceAccountingService: accounting,
+                    notificationService: fixture.CreateNotificationService(context));
                 var cancelled = await cancellation.CancelAsync(submitted.Value.RequestId);
                 Assert.True(cancelled.Succeeded);
                 Assert.Equal(LeaveRequestStatus.Cancelled, cancelled.Value!.Status);
+                Assert.Equal(1, fixture.Email.Messages.Count(message => message.Subject == "Leave request cancelled" && message.RecipientEmail == fixture.EmployeeEmail));
+                Assert.Equal(1, fixture.Email.Messages.Count(message => message.Subject == "Leave request cancelled" && message.RecipientEmail == fixture.ManagerEmail));
+                Assert.DoesNotContain(fixture.Email.Messages, message => message.Body.Contains(fixture.TenantId.ToString(), StringComparison.OrdinalIgnoreCase));
+                Assert.DoesNotContain(fixture.Email.Messages, message => message.Body.Contains(submitted.Value.RequestId.ToString(), StringComparison.OrdinalIgnoreCase));
+
+                var cancellationReplay = await cancellation.CancelAsync(submitted.Value.RequestId);
+                Assert.False(cancellationReplay.Succeeded);
+                Assert.Equal(2, fixture.Email.Messages.Count(message => message.Subject == "Leave request cancelled"));
 
                 var balanceAfterCancellation = await context.EmployeeLeaveBalances
                     .SingleAsync(x => x.Id == fixture.BalanceId);
@@ -228,6 +332,7 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
         public string EmployeeEmail => $"user-{EmployeeUserId:N}@test.invalid";
         public string ManagerEmail => $"manager-{ManagerUserId:N}@test.invalid";
         public const string Password = "Passw0rd!123";
+        public RecordingLeaveEmailSender Email { get; } = new();
 
         public Fixture(string connection)
         {
@@ -241,6 +346,9 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                 .UseMySQL(_connection)
                 .AddInterceptors(new MySqlConcurrencyTokenInterceptor(new MySqlConcurrencyTokenGenerator()))
                 .Options, tenant ?? EmployeeTenant);
+
+        public ILeaveNotificationService CreateNotificationService(HrmsDbContext context) =>
+            new LeaveNotificationService(context, Email, new EmployeeManagerResolver(context, EmployeeTenant), NullLogger<LeaveNotificationService>.Instance);
 
         public async Task SeedAsync()
         {
@@ -293,18 +401,28 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
             await using var db = CreateContext();
             var accounting = new LeaveBalanceAccountingService(db, EmployeeTenant, TimeProvider.System);
             var validation = new LeaveRequestValidationService(db, new EmployeeIdentityResolver(db, EmployeeTenant), new EffectiveEmploymentResolver(db, EmployeeTenant), new LeavePeriodResolver(db, EmployeeTenant), new LeavePolicyResolver(db, new EffectiveEmploymentResolver(db, EmployeeTenant), EmployeeTenant));
-            var submission = new LeaveRequestSubmissionService(db, new EmployeeIdentityResolver(db, EmployeeTenant), validation, new MySqlLeaveRequestSubmissionLock(db), TimeProvider.System, balanceAccountingService: accounting);
+            var submission = new LeaveRequestSubmissionService(db, new EmployeeIdentityResolver(db, EmployeeTenant), validation, new MySqlLeaveRequestSubmissionLock(db), TimeProvider.System, balanceAccountingService: accounting, notificationService: CreateNotificationService(db));
             var rejected = await submission.SubmitAsync(new(LeaveTypeId, RequestDate.AddDays(1), RequestDate.AddDays(1), "mysql-lifecycle-reject"));
             Assert.True(rejected.Succeeded);
-            var approval = new LeaveRequestApprovalService(db, new EmployeeIdentityResolver(db, ManagerTenant), new EmployeeManagerResolver(db, ManagerTenant), new MySqlLeaveRequestSubmissionLock(db), TimeProvider.System, balanceAccountingService: accounting);
+            var approval = new LeaveRequestApprovalService(db, new EmployeeIdentityResolver(db, ManagerTenant), new EmployeeManagerResolver(db, ManagerTenant), new MySqlLeaveRequestSubmissionLock(db), TimeProvider.System, balanceAccountingService: accounting, notificationService: CreateNotificationService(db));
             var rejection = await approval.RejectAsync(rejected.Value!.RequestId);
             Assert.True(rejection.Succeeded);
+            Assert.Contains(Email.Messages, message => message.Subject == "Leave request rejected" && message.RecipientEmail == EmployeeEmail);
+            Assert.Equal(1, Email.Messages.Count(message => message.Subject == "Leave request rejected"));
+            var rejectionReplay = await approval.RejectAsync(rejected.Value.RequestId);
+            Assert.False(rejectionReplay.Succeeded);
+            Assert.Equal(1, Email.Messages.Count(message => message.Subject == "Leave request rejected"));
             var withdrawn = await submission.SubmitAsync(new(LeaveTypeId, RequestDate.AddDays(2), RequestDate.AddDays(2), "mysql-lifecycle-withdraw"));
             Assert.True(withdrawn.Succeeded);
-            var withdrawal = new LeaveRequestWithdrawalService(db, new EmployeeIdentityResolver(db, EmployeeTenant), new MySqlLeaveRequestSubmissionLock(db), TimeProvider.System, balanceAccountingService: accounting);
+            var withdrawal = new LeaveRequestWithdrawalService(db, new EmployeeIdentityResolver(db, EmployeeTenant), new MySqlLeaveRequestSubmissionLock(db), TimeProvider.System, balanceAccountingService: accounting, notificationService: CreateNotificationService(db));
             var result = await withdrawal.WithdrawAsync(withdrawn.Value!.RequestId);
             Assert.True(result.Succeeded);
             Assert.Equal(LeaveRequestStatus.Withdrawn, result.Value!.Status);
+            Assert.Contains(Email.Messages, message => message.Subject == "Leave request withdrawn" && message.RecipientEmail == ManagerEmail);
+            Assert.Equal(1, Email.Messages.Count(message => message.Subject == "Leave request withdrawn"));
+            var withdrawalReplay = await withdrawal.WithdrawAsync(withdrawn.Value.RequestId);
+            Assert.False(withdrawalReplay.Succeeded);
+            Assert.Equal(1, Email.Messages.Count(message => message.Subject == "Leave request withdrawn"));
         }
 
         public async Task AssertTenantIsolationAsync()
@@ -341,5 +459,19 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Tenants` WHERE `Id` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Tenants` WHERE `Id` = {OtherTenantId}");
         }
+    }
+
+    internal sealed class RecordingLeaveEmailSender : IEmailSender
+    {
+        public List<LeaveNotificationEmailMessage> Messages { get; } = [];
+        public bool ThrowOnSend { get; set; }
+        public Task SendLeaveNotificationAsync(LeaveNotificationEmailMessage message, CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnSend) throw new InvalidOperationException("test email provider failure");
+            Messages.Add(message);
+            return Task.CompletedTask;
+        }
+        public Task SendWelcomeInviteAsync(WelcomeEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<string?> SendPasswordResetOtpAsync(OtpDeliveryMessage message, CancellationToken cancellationToken = default) => Task.FromResult<string?>(null);
     }
 }

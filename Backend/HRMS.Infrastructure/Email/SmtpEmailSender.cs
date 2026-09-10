@@ -33,6 +33,22 @@ public sealed class SmtpEmailSender(IConfiguration configuration) : IEmailSender
         await transport.SendAsync(settings, mail, cancellationToken);
     }
 
+    public async Task SendLeaveNotificationAsync(LeaveNotificationEmailMessage message, CancellationToken cancellationToken = default)
+    {
+        var settings = ReadSettings(configuration);
+        if (string.IsNullOrWhiteSpace(settings.Host) || string.IsNullOrWhiteSpace(settings.FromEmail))
+            throw new InvalidOperationException("Email SMTP configuration is incomplete.");
+        using var mail = new MailMessage
+        {
+            From = new MailAddress(settings.FromEmail, settings.FromName),
+            Subject = message.Subject,
+            Body = message.Body,
+            IsBodyHtml = false
+        };
+        mail.To.Add(message.RecipientEmail);
+        await transport.SendAsync(settings, mail, cancellationToken);
+    }
+
     public async Task<string?> SendPasswordResetOtpAsync(OtpDeliveryMessage message, CancellationToken cancellationToken = default)
     {
         var settings = ReadSettings(configuration);

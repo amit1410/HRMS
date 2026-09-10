@@ -5,6 +5,7 @@ namespace HRMS.Infrastructure.Email;
 
 public sealed class DevelopmentEmailSender(ILogger<DevelopmentEmailSender> logger, bool exposeOtp = true) : IEmailSender
 {
+    public Task SendLeaveNotificationAsync(LeaveNotificationEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task SendWelcomeInviteAsync(WelcomeEmailMessage message, CancellationToken cancellationToken = default)
     {
         logger.LogInformation(

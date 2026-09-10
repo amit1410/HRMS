@@ -63,6 +63,7 @@ public static class DependencyInjection
         services.AddScoped<ILeaveRequestWithdrawalService, LeaveRequestWithdrawalService>();
         services.AddScoped<ILeaveRequestCancellationService, LeaveRequestCancellationService>();
         services.AddScoped<ILeaveApprovalReadService, LeaveApprovalReadService>();
+        services.AddScoped<ILeaveNotificationService, LeaveNotificationService>();
         services.AddScoped<ILeaveCalendarService, LeaveCalendarService>();
         services.AddScoped<ILeaveRequestReadService, LeaveRequestReadService>();
         services.AddScoped<ILeaveRequestSubmissionRetryPolicy, LeaveRequestSubmissionRetryPolicy>();

@@ -15,6 +15,7 @@ public sealed class LeaveRequestWithdrawalService : ILeaveRequestWithdrawalServi
     private readonly ILeaveRequestSubmissionRetryPolicy? _retryPolicy;
     private readonly IDatabaseTransientErrorClassifier? _deadlockClassifier;
     private readonly ILeaveBalanceAccountingService? _balanceAccountingService;
+    private readonly ILeaveNotificationService? _notificationService;
 
     public LeaveRequestWithdrawalService(
         IHrmsDbContext db,
@@ -23,7 +24,8 @@ public sealed class LeaveRequestWithdrawalService : ILeaveRequestWithdrawalServi
         TimeProvider timeProvider,
         ILeaveRequestSubmissionRetryPolicy? retryPolicy = null,
         IDatabaseTransientErrorClassifier? deadlockClassifier = null,
-        ILeaveBalanceAccountingService? balanceAccountingService = null)
+        ILeaveBalanceAccountingService? balanceAccountingService = null,
+        ILeaveNotificationService? notificationService = null)
     {
         _db = db;
         _identityResolver = identityResolver;
@@ -32,6 +34,7 @@ public sealed class LeaveRequestWithdrawalService : ILeaveRequestWithdrawalServi
         _retryPolicy = retryPolicy;
         _deadlockClassifier = deadlockClassifier;
         _balanceAccountingService = balanceAccountingService;
+        _notificationService = notificationService;
     }
 
     public async Task<Result<LeaveRequestWithdrawalResult>> WithdrawAsync(
@@ -135,6 +138,8 @@ public sealed class LeaveRequestWithdrawalService : ILeaveRequestWithdrawalServi
 
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+            if (_notificationService is not null)
+                await _notificationService.NotifyAsync(request.Id, LeaveRequestEventType.Withdrawn, cancellationToken);
             return Result<LeaveRequestWithdrawalResult>.Success(
                 new(request.Id, request.Status, LeaveRequestEventType.Withdrawn, occurredAt));
         }
