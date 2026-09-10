@@ -34,7 +34,8 @@ public sealed class PasswordRecoveryProviderOptions
             Require(configuration, "Email:SmtpPort");
             Require(configuration, "Email:SmtpUsername");
             Require(configuration, "Email:SmtpPassword");
-            Require(configuration, "Email:From");
+            Require(configuration, "Email:FromEmail");
+            Require(configuration, "Email:FromName");
             Require(configuration, "Email:EnableSsl");
 
             if (!int.TryParse(configuration["Email:SmtpPort"], out var port) || port is < 1 or > 65535)

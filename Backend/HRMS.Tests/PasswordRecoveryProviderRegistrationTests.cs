@@ -34,7 +34,8 @@ public sealed class PasswordRecoveryProviderRegistrationTests
             ["Email:SmtpPort"] = "587",
             ["Email:SmtpUsername"] = "user",
             ["Email:SmtpPassword"] = "password",
-            ["Email:From"] = "hrms@example.test",
+            ["Email:FromEmail"] = "hrms@example.test",
+            ["Email:FromName"] = "HRMS",
             ["Email:EnableSsl"] = "true",
             ["Msg91:BaseUrl"] = "https://api.msg91.com/api/",
             ["Msg91:Endpoint"] = "sendotp.php",
@@ -44,6 +45,39 @@ public sealed class PasswordRecoveryProviderRegistrationTests
 
         Assert.IsType<SmtpEmailSender>(scope.ServiceProvider.GetRequiredService<IEmailSender>());
         Assert.IsType<Msg91SmsOtpSender>(scope.ServiceProvider.GetRequiredService<ISmsOtpSender>());
+    }
+
+    [Fact]
+    public void Environment_variables_bind_email_from_email_and_from_name_keys()
+    {
+        const string prefix = "HRMS_TEST_";
+        var values = new Dictionary<string, string?>
+        {
+            [prefix + "Email__SmtpHost"] = "smtp.hostinger.com",
+            [prefix + "Email__SmtpPort"] = "587",
+            [prefix + "Email__SmtpUsername"] = "amit@anevratechnologies.com",
+            [prefix + "Email__SmtpPassword"] = "mailbox-password",
+            [prefix + "Email__FromEmail"] = "no-reply@anevratechnologies.com",
+            [prefix + "Email__FromName"] = "Anevra Technologies",
+            [prefix + "Email__EnableSsl"] = "true",
+            [prefix + "PasswordRecoveryProviders__EmailProvider"] = "Smtp",
+            [prefix + "PasswordRecoveryProviders__SmsProvider"] = "Fake"
+        };
+        try
+        {
+            foreach (var (key, value) in values) System.Environment.SetEnvironmentVariable(key, value);
+            var configuration = new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            var options = PasswordRecoveryProviderOptions.Load(configuration, isDevelopment: false);
+            options.Validate(configuration);
+
+            Assert.Equal("no-reply@anevratechnologies.com", configuration["Email:FromEmail"]);
+            Assert.Equal("Anevra Technologies", configuration["Email:FromName"]);
+            Assert.Equal("Smtp", options.EmailProvider);
+        }
+        finally
+        {
+            foreach (var key in values.Keys) System.Environment.SetEnvironmentVariable(key, null);
+        }
     }
 
     [Fact]
