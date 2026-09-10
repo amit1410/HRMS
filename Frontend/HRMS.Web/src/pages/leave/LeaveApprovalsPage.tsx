@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { approveLeaveRequest, getLeaveApproval, listLeaveApprovals, rejectLeaveRequest, type LeaveApprovalListItem, type LeaveRequestStatus } from '../../api/leaveRequests.ts'
 import { ApiError } from '../../api/errors.ts'
@@ -51,6 +51,7 @@ export function LeaveApprovalDetailPage() {
   const query = useApiQuery(() => getLeaveApproval(requestId), [requestId])
   const [action, setAction] = useState<'approve' | 'reject' | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const actionBusyRef = useRef(false)
 
   if (query.isLoading) return <div className="leave-admin-page"><p className="state-block"><Spinner label="Loading Leave Approval" /></p></div>
   if (query.error || !query.data) return <div className="leave-admin-page"><PageHeader title="Leave Approval" /><Notice tone="error">{approvalErrorMessage(query.error)}</Notice><Link className="button button-secondary" to="/leave-management/approvals">Back to Approvals</Link></div>
@@ -58,7 +59,8 @@ export function LeaveApprovalDetailPage() {
   const detail = query.data
   const actionable = detail.status === 'PendingApproval' && can('Leave.Approve')
   async function transition(kind: 'approve' | 'reject') {
-    if (!window.confirm(kind === 'approve' ? 'Approve this leave request?' : 'Reject this leave request?')) return
+    if (actionBusyRef.current || action !== null || !window.confirm(kind === 'approve' ? 'Approve this leave request?' : 'Reject this leave request?')) return
+    actionBusyRef.current = true
     setAction(kind)
     setActionError(null)
     try {
@@ -66,7 +68,10 @@ export function LeaveApprovalDetailPage() {
       navigate('/leave-management/approvals', { replace: true, state: { message: kind === 'approve' ? 'Leave request approved successfully.' : 'Leave request rejected successfully.' } })
     } catch (error) {
       setActionError(transitionErrorMessage(error))
+      if (error instanceof ApiError && error.status === 409) query.refetch()
       setAction(null)
+    } finally {
+      actionBusyRef.current = false
     }
   }
 

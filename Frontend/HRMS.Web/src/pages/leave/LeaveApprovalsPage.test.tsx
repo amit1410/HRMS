@@ -1,5 +1,5 @@
 import userEvent from '@testing-library/user-event'
-import { fireEvent, screen, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Route, Routes } from 'react-router-dom'
 import * as leaveRequestsApi from '../../api/leaveRequests.ts'
@@ -88,6 +88,18 @@ describe('LeaveApprovalsPage', () => {
     expect(approveSpy).toHaveBeenCalledTimes(1)
     resolveApprove(approvalResult)
     expect(await screen.findByText('No pending leave requests require your approval.')).toBeInTheDocument()
+  })
+
+  it('guards against two synchronous approval clicks', async () => {
+    stub.on('get', '/api/leave-approvals/request-1', () => ({ data: ok(detail) }))
+    stub.on('post', '/api/leave-requests/request-1/approve', () => ({ data: ok({ requestId: 'request-1', status: 'Approved', eventType: 'Approved', occurredAtUtc: '2026-12-02T10:00:00Z' }), delay: true }))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const approveSpy = vi.spyOn(leaveRequestsApi, 'approveLeaveRequest')
+    renderAsUser(<Routes><Route path="/leave-management/approvals/:requestId" element={<LeaveApprovalDetailPage />} /></Routes>, { user, route: '/leave-management/approvals/request-1' })
+    const approve = await screen.findByRole('button', { name: 'Approve' })
+    fireEvent.click(approve)
+    fireEvent.click(approve)
+    await waitFor(() => expect(approveSpy).toHaveBeenCalledTimes(1))
   })
 
   it('maps stale transition and permission errors without retrying', async () => {
