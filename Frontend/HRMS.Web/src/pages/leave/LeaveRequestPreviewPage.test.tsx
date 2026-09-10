@@ -32,6 +32,15 @@ describe('LeaveRequestPreviewPage', () => {
     expect(screen.queryByRole('button', { name: 'Preview Leave' })).not.toBeInTheDocument()
   })
 
+  it('renders the redesigned guidance rail and dashboard navigation', async () => {
+    renderPage()
+    expect(await screen.findByText('This is a preview only')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Back to Leave Dashboard/ })).toHaveAttribute('href', '/leave-management')
+    expect(screen.getByText('Quick Information')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /My Leave Requests/ })).toHaveAttribute('href', '/leave-management/my-requests')
+    expect(screen.getByRole('link', { name: /Team Leave Calendar/ })).toHaveAttribute('href', '/leave-management/team-calendar')
+  })
+
   it('does not let a late preview response restore a result for changed dates', async () => {
     stub.on('post', '/api/leave-requests/preview', () => ({ data: ok(preview), delay: true }))
     renderPage()
