@@ -143,6 +143,10 @@ public static class SeedData
             [DomainPermissions.Leave.PolicyManage] = 33,
             [DomainPermissions.Leave.PolicyPublish] = 34,
             [DomainPermissions.Leave.Approve] = 35,
+            [DomainPermissions.Leave.BalanceView] = 36,
+            [DomainPermissions.Leave.BalanceAdjust] = 37,
+            [DomainPermissions.Leave.BalanceImport] = 38,
+            [DomainPermissions.Leave.BalanceViewImportHistory] = 39,
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>

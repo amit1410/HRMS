@@ -14,7 +14,8 @@ public enum LeaveBalanceTransactionType
 public enum LeaveBalanceSourceType
 {
     Policy = 0,
-    External = 1
+    External = 1,
+    BalanceImport = 2
 }
 
 public enum LeaveBalanceActorType

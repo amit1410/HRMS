@@ -33,6 +33,7 @@ import { LeaveRequestPreviewPage } from './pages/leave/LeaveRequestPreviewPage.t
 import { MyLeaveRequestDetailPage, MyLeaveRequestsPage } from './pages/leave/MyLeaveRequestsPage.tsx'
 import { LeaveApprovalDetailPage, LeaveApprovalsPage } from './pages/leave/LeaveApprovalsPage.tsx'
 import { TeamLeaveCalendarPage } from './pages/leave/TeamLeaveCalendarPage.tsx'
+import { LeaveBalanceImportPage } from './pages/leave/LeaveBalanceImportPage.tsx'
 import { PlatformTenantsPage } from './pages/platform/PlatformTenantsPage.tsx'
 import { PlatformLoginPage } from './pages/platform/PlatformLoginPage.tsx'
 import { PlatformAuthProvider, usePlatformAuth } from './auth/PlatformAuthProvider.tsx'
@@ -126,6 +127,7 @@ function TenantApplication() {
                   <Route path="leave-management/my-requests" element={<MyLeaveRequestsPage />} />
                   <Route path="leave-management/my-requests/:requestId" element={<MyLeaveRequestDetailPage />} />
                   <Route path="leave-management/team-calendar" element={<TeamLeaveCalendarPage />} />
+                  <Route path="leave-management/balances/import" element={<RequirePermission permission={Permissions.leave.balanceImport}><LeaveBalanceImportPage /></RequirePermission>} />
                   <Route path="leave-management/approvals" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalsPage /></RequirePermission>} />
                   <Route path="leave-management/approvals/:requestId" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalDetailPage /></RequirePermission>} />
               <Route path="employees">

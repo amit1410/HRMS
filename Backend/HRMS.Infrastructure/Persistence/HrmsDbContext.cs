@@ -105,6 +105,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<LeaveRequestDay> LeaveRequestDays => Set<LeaveRequestDay>();
     public DbSet<LeaveRequestEvent> LeaveRequestEvents => Set<LeaveRequestEvent>();
     public DbSet<LeaveReminderDelivery> LeaveReminderDeliveries => Set<LeaveReminderDelivery>();
+    public DbSet<LeaveBalanceImportBatch> LeaveBalanceImportBatches => Set<LeaveBalanceImportBatch>();
+    public DbSet<LeaveBalanceImportRow> LeaveBalanceImportRows => Set<LeaveBalanceImportRow>();
+    public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
     /// Applies the UTC treatment to every DateTime property in the model, so a timestamp means the same
@@ -312,6 +315,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<LeavePolicyApplicabilitySet>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeLeaveBalance>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveBalanceTransaction>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeaveBalanceImportBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeaveBalanceImportRow>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveRequest>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveRequestDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveRequestEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

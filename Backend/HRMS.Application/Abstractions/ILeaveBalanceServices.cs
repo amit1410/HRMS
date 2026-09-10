@@ -1,4 +1,5 @@
 using HRMS.Application.Common;
+using HRMS.Application.DTOs.Leave;
 using HRMS.Domain.Enums;
 
 namespace HRMS.Application.Abstractions;
@@ -8,6 +9,15 @@ public interface ILeaveBalanceTransactionPoster
     Task<Result<LeaveBalanceCreditResult>> PostCreditAsync(
         LeaveBalanceCreditCommand command,
         CancellationToken cancellationToken = default);
+}
+
+public interface ILeaveBalanceImportService
+{
+    Task<Result<LeaveBalanceImportBatchDto>> ValidateAsync(string fileName, Stream content, CancellationToken cancellationToken = default);
+    Task<Result<LeaveBalanceImportBatchDto>> CommitAsync(Guid batchId, CancellationToken cancellationToken = default);
+    Task<Result<LeaveBalanceImportBatchDto>> GetAsync(Guid batchId, CancellationToken cancellationToken = default);
+    Task<Result<IReadOnlyList<LeaveBalanceImportBatchDto>>> HistoryAsync(CancellationToken cancellationToken = default);
+    Task<Result<IReadOnlyList<LeaveBalanceImportRowDto>>> ErrorsAsync(Guid batchId, CancellationToken cancellationToken = default);
 }
 
 public interface ILeaveBalanceReader

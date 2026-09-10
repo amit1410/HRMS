@@ -31,7 +31,7 @@ public sealed class MySqlConcurrencyTokenInterceptor(MySqlConcurrencyTokenGenera
         foreach (var entry in context.ChangeTracker.Entries())
         {
             if (entry.State is not (EntityState.Added or EntityState.Modified)
-                || entry.Entity is not (LeaveRequest or EmployeeLeaveBalance or EmployeeCodeSequence))
+                || entry.Entity is not (LeaveRequest or EmployeeLeaveBalance or EmployeeCodeSequence or LeaveBalanceImportBatch))
                 continue;
 
             entry.Property(nameof(LeaveRequest.RowVersion)).CurrentValue = generator.Create();

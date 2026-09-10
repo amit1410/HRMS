@@ -66,6 +66,10 @@ export const Permissions = {
     policyManage: 'Leave.PolicyManage',
     policyPublish: 'Leave.PolicyPublish',
     approve: 'Leave.Approve',
+    balanceView: 'LeaveBalance.View',
+    balanceAdjust: 'LeaveBalance.Adjust',
+    balanceImport: 'LeaveBalance.Import',
+    balanceViewImportHistory: 'LeaveBalance.ViewImportHistory',
   },
 } as const
 

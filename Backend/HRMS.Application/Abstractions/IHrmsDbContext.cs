@@ -91,8 +91,11 @@ public interface IHrmsDbContext
     DbSet<LeaveRequestDay> LeaveRequestDays { get; }
     DbSet<LeaveRequestEvent> LeaveRequestEvents { get; }
     DbSet<LeaveReminderDelivery> LeaveReminderDeliveries { get; }
+    DbSet<LeaveBalanceImportBatch> LeaveBalanceImportBatches { get; }
+    DbSet<LeaveBalanceImportRow> LeaveBalanceImportRows { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);
+    IDbContextTransaction? CurrentTransaction { get; }
     void ClearChangeTracker();
 }

@@ -81,6 +81,10 @@ public static class Permissions
         public const string PolicyManage = "Leave.PolicyManage";
         public const string PolicyPublish = "Leave.PolicyPublish";
         public const string Approve = "Leave.Approve";
+        public const string BalanceView = "LeaveBalance.View";
+        public const string BalanceAdjust = "LeaveBalance.Adjust";
+        public const string BalanceImport = "LeaveBalance.Import";
+        public const string BalanceViewImportHistory = "LeaveBalance.ViewImportHistory";
     }
 
     /// <summary>Every permission the system knows about. Used by the seeder and SuperAdmin/TenantAdmin grants.</summary>
@@ -95,6 +99,7 @@ public static class Permissions
         Designation.View, Designation.Create, Designation.Edit, Designation.Delete,
         User.View, User.Create, User.Edit, User.Delete,
         AccountEmployeeLink.View, AccountEmployeeLink.ViewHistory, AccountEmployeeLink.Manage,
-        Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve
+        Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
+        Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory
     };
 }

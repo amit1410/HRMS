@@ -1,6 +1,7 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.Services;
+using System.Text;
 using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
@@ -19,6 +20,29 @@ namespace HRMS.Tests;
 /// </summary>
 public sealed class MySqlLeaveLifecycleIntegrationTests
 {
+    [Fact]
+    public async Task MySql_leave_balance_import_posts_opening_ledger_once()
+    {
+        var connection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connection)) throw SkipException.ForSkip("MySQL Leave import test not executed: HRMS_MYSQL_TEST_CONNECTION is absent.");
+        var fixture = new Fixture(connection);
+        try
+        {
+            await fixture.SeedAsync();
+            await using var db = fixture.CreateContext();
+            var service = new LeaveBalanceImportService(db, fixture.EmployeeTenant, new LeaveBalanceTransactionPoster(db, fixture.EmployeeTenant, TimeProvider.System), TimeProvider.System);
+            var csv = $"EmployeeCode,LeaveTypeCode,LeavePeriod,OpeningBalance,EffectiveDate\n{fixture.EmployeeCode},{fixture.LeaveTypeCode},{fixture.LeavePeriodCode},2.500,2026-01-01,MySQL import\n";
+            var validated = await service.ValidateAsync("mysql-balances.csv", new MemoryStream(Encoding.UTF8.GetBytes(csv)));
+            Assert.True(validated.Succeeded);
+            var committed = await service.CommitAsync(validated.Value!.Id);
+            var replay = await service.CommitAsync(validated.Value.Id);
+            Assert.True(committed.Succeeded);
+            Assert.True(replay.Succeeded);
+            Assert.Equal(12.500m, await db.EmployeeLeaveBalances.Where(x => x.Id == fixture.BalanceId).Select(x => x.GrantedQuantity).SingleAsync());
+            Assert.Single(await db.LeaveBalanceTransactions.Where(x => x.SourceType == LeaveBalanceSourceType.BalanceImport && x.SourceReference == validated.Value.Id.ToString("D")).ToListAsync());
+        }
+        finally { await fixture.CleanupAsync(); }
+    }
     [Fact]
     public async Task MySql_leave_approval_reminder_is_durable_and_duplicate_suppressed()
     {
@@ -409,6 +433,9 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
         public string HttpHost => $"http://{Host}";
         public string EmployeeEmail => $"user-{EmployeeUserId:N}@test.invalid";
         public string ManagerEmail => $"manager-{ManagerUserId:N}@test.invalid";
+        public string EmployeeCode => $"E{EmployeeId:N}"[..8];
+        public string LeaveTypeCode => $"CL{TenantId:N}"[..8];
+        public string LeavePeriodCode => $"FY{TenantId:N}"[..8];
         public const string Password = "Passw0rd!123";
         public RecordingLeaveEmailSender Email { get; } = new();
 
@@ -421,7 +448,7 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
 
         public HrmsDbContext CreateContext(TestTenantContext? tenant = null) =>
             new(new DbContextOptionsBuilder<HrmsDbContext>()
-                .UseMySQL(_connection)
+                .UseMySQL(_connection, mysql => mysql.MigrationsAssembly("HRMS.Infrastructure.MySqlMigrations"))
                 .AddInterceptors(new MySqlConcurrencyTokenInterceptor(new MySqlConcurrencyTokenGenerator()))
                 .Options, tenant ?? EmployeeTenant);
 
@@ -431,6 +458,7 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
         public async Task SeedAsync()
         {
             await using var db = CreateContext(new TestTenantContext());
+            await db.Database.MigrateAsync();
             db.Tenants.AddRange(
                 new Tenant { Id = TenantId, TenantCode = TenantCode, TenantName = "MySQL Leave Lifecycle", Host = $"ml-{TenantId:N}.localhost", ShardKey = $"ml{TenantId:N}"[..10], Status = TenantStatus.Active, DatabaseProvider = DatabaseProviderType.MySql },
                 new Tenant { Id = OtherTenantId, TenantCode = $"MO{OtherTenantId:N}"[..8], TenantName = "Other Tenant", Host = $"mo-{OtherTenantId:N}.localhost", ShardKey = $"mo{OtherTenantId:N}"[..10], Status = TenantStatus.Active, DatabaseProvider = DatabaseProviderType.MySql });
@@ -440,7 +468,7 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                 new User { Id = EmployeeUserId, TenantId = TenantId, Email = EmployeeEmail, PasswordHash = passwordHash, FirstName = "Leave", LastName = "Employee", IsActive = true },
                 new User { Id = ManagerUserId, TenantId = TenantId, Email = ManagerEmail, PasswordHash = passwordHash, FirstName = "Leave", LastName = "Manager", IsActive = true });
             db.Employees.AddRange(
-                new Employee { Id = EmployeeId, TenantId = TenantId, EmployeeCode = $"E{EmployeeId:N}"[..8], FirstName = "Leave", LastName = "Employee", Email = $"employee-{EmployeeId:N}@test.invalid", DateOfJoining = new(2020, 1, 1), Status = EmployeeStatus.Active, ReportingManagerId = ManagerId },
+                new Employee { Id = EmployeeId, TenantId = TenantId, EmployeeCode = EmployeeCode, FirstName = "Leave", LastName = "Employee", Email = $"employee-{EmployeeId:N}@test.invalid", DateOfJoining = new(2020, 1, 1), Status = EmployeeStatus.Active, ReportingManagerId = ManagerId },
                 new Employee { Id = ManagerId, TenantId = TenantId, EmployeeCode = $"M{ManagerId:N}"[..8], FirstName = "Leave", LastName = "Manager", Email = $"manager-{ManagerId:N}@test.invalid", DateOfJoining = new(2020, 1, 1), Status = EmployeeStatus.Active });
             db.EmployeeEmploymentHistory.AddRange(
                 new EmployeeEmploymentHistory { Id = EmployeeHistoryId, TenantId = TenantId, EmployeeId = EmployeeId, EffectiveFrom = new(2020, 1, 1), ManagerId = ManagerId, EmploymentStatus = EmployeeStatus.Active },
@@ -456,8 +484,8 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
             db.Roles.Add(new Role { Id = RoleId, Name = $"M{TenantId:N}"[..8] });
             db.UserRoles.Add(new UserRole { TenantId = TenantId, UserId = ManagerUserId, RoleId = RoleId });
             db.RolePermissions.Add(new RolePermission { RoleId = RoleId, PermissionId = PermissionId });
-            db.LeaveTypes.Add(new LeaveType { Id = LeaveTypeId, TenantId = TenantId, Code = $"CL{TenantId:N}"[..8], Name = "Casual Leave", DefaultUnit = LeaveUnit.Day, IsActive = true });
-            db.LeavePeriods.Add(new LeavePeriod { Id = LeavePeriodId, TenantId = TenantId, Code = $"FY{TenantId:N}"[..8], Name = "2026", StartDate = new(2026, 1, 1), EndDate = new(2026, 12, 31), IsActive = true });
+            db.LeaveTypes.Add(new LeaveType { Id = LeaveTypeId, TenantId = TenantId, Code = LeaveTypeCode, Name = "Casual Leave", DefaultUnit = LeaveUnit.Day, IsActive = true });
+            db.LeavePeriods.Add(new LeavePeriod { Id = LeavePeriodId, TenantId = TenantId, Code = LeavePeriodCode, Name = "2026", StartDate = new(2026, 1, 1), EndDate = new(2026, 12, 31), IsActive = true });
             db.LeavePolicies.Add(new LeavePolicy { Id = PolicyId, TenantId = TenantId, Code = $"LP{TenantId:N}"[..8], Name = "Standard Leave Policy", IsActive = true });
             db.LeavePolicyVersions.Add(new LeavePolicyVersion { Id = PolicyVersionId, TenantId = TenantId, LeavePolicyId = PolicyId, VersionNumber = 1, EffectiveFrom = new(2026, 1, 1), EffectiveTo = new(2026, 12, 31), Status = LeavePolicyVersionStatus.Published, Priority = 1 });
             db.LeavePolicyRules.Add(new LeavePolicyRule { Id = PolicyRuleId, TenantId = TenantId, LeavePolicyVersionId = PolicyVersionId, LeaveTypeId = LeaveTypeId, IsActive = true });
@@ -514,6 +542,8 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
         {
             await using var db = CreateContext(new TestTenantContext());
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveReminderDeliveries` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveBalanceImportRows` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveBalanceImportBatches` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveRequestEvents` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveRequestDays` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveBalanceTransactions` WHERE `TenantId` = {TenantId}");

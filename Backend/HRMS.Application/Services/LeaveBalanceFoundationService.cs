@@ -93,7 +93,9 @@ public sealed class LeaveBalanceTransactionPoster : ILeaveBalanceTransactionPost
             return await ExistingResultAsync(existing, cancellationToken);
         }
 
-        await using var transaction = await _db.BeginTransactionAsync(cancellationToken);
+        var transaction = _db.CurrentTransaction;
+        var ownsTransaction = transaction is null;
+        transaction ??= await _db.BeginTransactionAsync(cancellationToken);
         try
         {
             var balance = await _db.EmployeeLeaveBalances.SingleOrDefaultAsync(x =>
@@ -123,17 +125,17 @@ public sealed class LeaveBalanceTransactionPoster : ILeaveBalanceTransactionPost
             };
             _db.LeaveBalanceTransactions.Add(ledger);
             await _db.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+            if (ownsTransaction) await transaction.CommitAsync(cancellationToken);
             return Result<LeaveBalanceCreditResult>.Success(ToResult(ledger, balance));
         }
         catch (DbUpdateConcurrencyException)
         {
-            await transaction.RollbackAsync(cancellationToken);
+            if (ownsTransaction) await transaction.RollbackAsync(cancellationToken);
             return Result<LeaveBalanceCreditResult>.Conflict("The balance changed concurrently. Retry with the same idempotency key.");
         }
         catch (DbUpdateException)
         {
-            await transaction.RollbackAsync(cancellationToken);
+            if (ownsTransaction) await transaction.RollbackAsync(cancellationToken);
             return Result<LeaveBalanceCreditResult>.Conflict("The balance transaction could not be posted because the state changed concurrently or violated an integrity constraint.");
         }
     }
@@ -149,8 +151,10 @@ public sealed class LeaveBalanceTransactionPoster : ILeaveBalanceTransactionPost
 
     private static (string Field, string Message)? ValidateSource(LeaveBalanceCreditCommand command)
     {
-        if ((command.TransactionType is LeaveBalanceTransactionType.Opening or LeaveBalanceTransactionType.Accrual) && command.SourceType != LeaveBalanceSourceType.Policy)
-            return ("sourceType", "Opening and Accrual require the Policy source.");
+        if ((command.TransactionType is LeaveBalanceTransactionType.Opening or LeaveBalanceTransactionType.Accrual) && command.SourceType is not (LeaveBalanceSourceType.Policy or LeaveBalanceSourceType.BalanceImport))
+            return ("sourceType", "Opening and Accrual require the Policy or BalanceImport source.");
+        if (command.TransactionType == LeaveBalanceTransactionType.Opening && command.SourceType == LeaveBalanceSourceType.BalanceImport && string.IsNullOrWhiteSpace(command.SourceReference))
+            return ("sourceReference", "An imported opening balance requires a batch source reference.");
         if (command.TransactionType == LeaveBalanceTransactionType.ExternalGrant && command.SourceType != LeaveBalanceSourceType.External)
             return ("sourceType", "ExternalGrant requires the External source.");
         if (command.TransactionType == LeaveBalanceTransactionType.ExternalGrant && string.IsNullOrWhiteSpace(command.SourceReference))

@@ -59,6 +59,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Apply Leave (Preview)', to: '/leave-management/apply', available: true },
   { label: 'My Leave Requests', to: '/leave-management/my-requests', available: true },
   { label: 'Team Leave Calendar', to: '/leave-management/team-calendar', available: true },
+  { label: 'Leave Balance Import', to: '/leave-management/balances/import', permission: Permissions.leave.balanceImport, available: true },
   { label: 'Leave Approvals', to: '/leave-management/approvals', permission: Permissions.leave.approve, available: true },
 ]
 
