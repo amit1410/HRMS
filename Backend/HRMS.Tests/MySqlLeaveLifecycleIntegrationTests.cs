@@ -20,6 +20,84 @@ namespace HRMS.Tests;
 public sealed class MySqlLeaveLifecycleIntegrationTests
 {
     [Fact]
+    public async Task MySql_leave_approval_reminder_is_durable_and_duplicate_suppressed()
+    {
+        var connection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connection))
+            throw SkipException.ForSkip("MySQL Leave reminder test not executed: HRMS_MYSQL_TEST_CONNECTION is absent.");
+
+        var fixture = new Fixture(connection);
+        try
+        {
+            await fixture.SeedAsync();
+            await using var context = fixture.CreateContext();
+            var validation = new LeaveRequestValidationService(
+                context,
+                new EmployeeIdentityResolver(context, fixture.EmployeeTenant),
+                new EffectiveEmploymentResolver(context, fixture.EmployeeTenant),
+                new LeavePeriodResolver(context, fixture.EmployeeTenant),
+                new LeavePolicyResolver(context, new EffectiveEmploymentResolver(context, fixture.EmployeeTenant), fixture.EmployeeTenant));
+            var submitted = await new LeaveRequestSubmissionService(
+                context,
+                new EmployeeIdentityResolver(context, fixture.EmployeeTenant),
+                validation,
+                new MySqlLeaveRequestSubmissionLock(context),
+                TimeProvider.System,
+                balanceAccountingService: new LeaveBalanceAccountingService(context, fixture.EmployeeTenant, TimeProvider.System),
+                notificationService: fixture.CreateNotificationService(context))
+                .SubmitAsync(new(fixture.LeaveTypeId, fixture.RequestDate, fixture.RequestDate, "mysql-reminder"));
+            Assert.True(submitted.Succeeded);
+
+            var request = await context.LeaveRequests.SingleAsync(x => x.Id == submitted.Value!.RequestId);
+            var recentProcessor = new LeaveApprovalReminderProcessor(
+                context,
+                new EmployeeManagerResolver(context, fixture.EmployeeTenant),
+                fixture.CreateNotificationService(context),
+                new LeaveReminderOptions { InitialDelayHours = 24, RepeatIntervalHours = 24 },
+                TimeProvider.System,
+                NullLogger<LeaveApprovalReminderProcessor>.Instance);
+            var recent = await recentProcessor.ProcessAsync();
+            Assert.Equal(0, recent.Candidates);
+
+            request.SubmittedAtUtc = DateTime.UtcNow.AddHours(-48);
+            await context.SaveChangesAsync();
+            fixture.Email.Messages.Clear();
+
+            var options = new LeaveReminderOptions { InitialDelayHours = 24, RepeatIntervalHours = 24, BatchSize = 10, ClaimLeaseMinutes = 5 };
+            var processor = new LeaveApprovalReminderProcessor(
+                context,
+                new EmployeeManagerResolver(context, fixture.EmployeeTenant),
+                fixture.CreateNotificationService(context),
+                options,
+                TimeProvider.System,
+                NullLogger<LeaveApprovalReminderProcessor>.Instance);
+
+            var first = await processor.ProcessAsync();
+            var second = await processor.ProcessAsync();
+
+            Assert.Equal(1, first.Sent);
+            Assert.Equal(0, second.Sent);
+            Assert.Single(fixture.Email.Messages, message => message.Subject == "Leave approval reminder" && message.RecipientEmail == fixture.ManagerEmail);
+            Assert.Equal(1, await context.LeaveReminderDeliveries.CountAsync(x => x.LeaveRequestId == submitted.Value.RequestId && x.Status == "Sent"));
+
+            var approval = new LeaveRequestApprovalService(
+                context,
+                new EmployeeIdentityResolver(context, fixture.ManagerTenant),
+                new EmployeeManagerResolver(context, fixture.ManagerTenant),
+                new MySqlLeaveRequestSubmissionLock(context),
+                TimeProvider.System,
+                balanceAccountingService: new LeaveBalanceAccountingService(context, fixture.EmployeeTenant, TimeProvider.System));
+            Assert.True((await approval.ApproveAsync(submitted.Value.RequestId)).Succeeded);
+            var completed = await processor.ProcessAsync();
+            Assert.Equal(0, completed.Candidates);
+        }
+        finally
+        {
+            await fixture.CleanupAsync();
+        }
+    }
+
+    [Fact]
     public async Task MySql_leave_state_remains_committed_when_email_delivery_fails()
     {
         var connection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
@@ -435,6 +513,7 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
         public async Task CleanupAsync()
         {
             await using var db = CreateContext(new TestTenantContext());
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveReminderDeliveries` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveRequestEvents` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveRequestDays` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveBalanceTransactions` WHERE `TenantId` = {TenantId}");

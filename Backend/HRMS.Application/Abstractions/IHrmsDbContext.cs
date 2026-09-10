@@ -90,6 +90,7 @@ public interface IHrmsDbContext
     DbSet<LeaveRequest> LeaveRequests { get; }
     DbSet<LeaveRequestDay> LeaveRequestDays { get; }
     DbSet<LeaveRequestEvent> LeaveRequestEvents { get; }
+    DbSet<LeaveReminderDelivery> LeaveReminderDeliveries { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

@@ -17,3 +17,9 @@ public interface ITenantContext
     /// <summary>True when a tenant has been resolved for the current request.</summary>
     bool HasTenant { get; }
 }
+
+/// <summary>Allows a non-HTTP unit of work to select one tenant for its scoped DbContext.</summary>
+public interface ITenantExecutionContext : ITenantContext
+{
+    void Use(Guid tenantId);
+}

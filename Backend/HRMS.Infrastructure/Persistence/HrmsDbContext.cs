@@ -104,6 +104,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<LeaveRequest> LeaveRequests => Set<LeaveRequest>();
     public DbSet<LeaveRequestDay> LeaveRequestDays => Set<LeaveRequestDay>();
     public DbSet<LeaveRequestEvent> LeaveRequestEvents => Set<LeaveRequestEvent>();
+    public DbSet<LeaveReminderDelivery> LeaveReminderDeliveries => Set<LeaveReminderDelivery>();
 
     /// <summary>
     /// Applies the UTC treatment to every DateTime property in the model, so a timestamp means the same
@@ -314,6 +315,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<LeaveRequest>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveRequestDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveRequestEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeaveReminderDelivery>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
 
         // Organizational hierarchy master query filters
         modelBuilder.Entity<HoldingCompany>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

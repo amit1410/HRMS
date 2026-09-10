@@ -1,4 +1,5 @@
 using HRMS.Application.Abstractions;
+using HRMS.Application.Services;
 using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Persistence.Catalog;
@@ -12,6 +13,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using MySql.EntityFrameworkCore.Extensions;
+using HRMS.Infrastructure.Reminders;
 
 namespace HRMS.Infrastructure;
 
@@ -45,6 +47,15 @@ public static class DependencyInjection
         }
 
         services.AddSingleton(Options.Create(sharding));
+
+        var reminderOptions = configuration.GetSection(LeaveReminderOptions.SectionName).Get<LeaveReminderOptions>()
+            ?? new LeaveReminderOptions();
+        if (reminderOptions.Validate() is { } reminderProblem)
+            throw new InvalidOperationException(reminderProblem);
+        services.AddSingleton(reminderOptions);
+        services.AddSingleton(Options.Create(reminderOptions));
+        services.AddScoped<ILeaveApprovalReminderProcessor, LeaveApprovalReminderProcessor>();
+        services.AddHostedService<LeaveApprovalReminderWorker>();
 
         services.AddMemoryCache();
         services.AddScoped<IShardContext, ShardContext>();

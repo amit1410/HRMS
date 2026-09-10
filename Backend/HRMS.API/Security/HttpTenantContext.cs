@@ -10,20 +10,23 @@ namespace HRMS.API.Security;
 /// or headers supplied by the client. Returns nulls when there is no authenticated user (e.g. the
 /// login endpoint), which the DbContext treats as "no tenant resolved".
 /// </summary>
-public class HttpTenantContext : ITenantContext
+public class HttpTenantContext : ITenantExecutionContext
 {
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private Guid? _executionTenantId;
 
     public HttpTenantContext(IHttpContextAccessor httpContextAccessor)
     {
         _httpContextAccessor = httpContextAccessor;
     }
 
-    public Guid? TenantId => ReadGuidClaim(HrmsClaimTypes.TenantId);
+    public Guid? TenantId => _executionTenantId ?? ReadGuidClaim(HrmsClaimTypes.TenantId);
 
     public Guid? UserId => ReadGuidClaim(HrmsClaimTypes.UserId);
 
     public bool HasTenant => TenantId.HasValue;
+
+    public void Use(Guid tenantId) => _executionTenantId = tenantId;
 
     private Guid? ReadGuidClaim(string claimType)
     {

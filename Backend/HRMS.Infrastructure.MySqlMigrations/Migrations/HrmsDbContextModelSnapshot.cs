@@ -2807,6 +2807,78 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("LeavePolicyVersions", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveReminderDelivery", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ClaimedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("DueAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<DateTime?>("LeaseExpiresAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("LeaveRequestId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("NextAttemptAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("NotificationType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<string>("OccurrenceKey")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("varchar(120)");
+
+                    b.Property<Guid>("RecipientEmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("SentAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "OccurrenceKey")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "RecipientEmployeeId");
+
+                    b.HasIndex("TenantId", "LeaveRequestId", "Status");
+
+                    b.ToTable("LeaveReminderDeliveries", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveRequest", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5050,6 +5122,35 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsRequired();
 
                     b.Navigation("LeavePolicy");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveReminderDelivery", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveRequest", "LeaveRequest")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeaveRequestId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "RecipientEmployee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "RecipientEmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LeaveRequest");
+
+                    b.Navigation("RecipientEmployee");
+
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveRequest", b =>

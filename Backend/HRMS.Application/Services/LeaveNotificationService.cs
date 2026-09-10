@@ -60,6 +60,37 @@ public sealed class LeaveNotificationService : ILeaveNotificationService
         catch (Exception exception) { _logger.LogWarning(exception, "Leave notification delivery failed for request {LeaveRequestId} and event {EventType}.", requestId, eventType); }
     }
 
+    public async Task<LeaveNotificationDeliveryResult> NotifyApprovalReminderAsync(Guid requestId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var request = await _db.LeaveRequests.AsNoTracking()
+                .Where(x => x.Id == requestId && x.Status == LeaveRequestStatus.PendingApproval)
+                .Select(x => new { x.TenantId, x.EmployeeId, x.StartDate, x.EndDate, x.ChargeableQuantity, x.Status, EmployeeName = x.Employee!.FirstName + " " + x.Employee.LastName, x.LeaveType!.Name })
+                .SingleOrDefaultAsync(cancellationToken);
+            if (request is null) return LeaveNotificationDeliveryResult.Skipped;
+
+            var manager = await _managerResolver.ResolveAsync(request.EmployeeId, request.StartDate, cancellationToken);
+            if (!manager.Succeeded || manager.Value?.ManagerId is not Guid managerId) return LeaveNotificationDeliveryResult.Skipped;
+            var managerEmail = await ResolveLinkedEmailAsync(request.TenantId, managerId, cancellationToken);
+            if (string.IsNullOrWhiteSpace(managerEmail)) return LeaveNotificationDeliveryResult.Skipped;
+
+            var body = $"Hello,\n\n{request.EmployeeName}'s {request.Name} request from {request.StartDate:yyyy-MM-dd} to {request.EndDate:yyyy-MM-dd} ({request.ChargeableQuantity} day(s)) is still Pending Approval.\n\nPlease review it in HRMS.";
+            await _email.SendLeaveNotificationAsync(new(managerEmail, "Leave approval reminder", body), cancellationToken);
+            return LeaveNotificationDeliveryResult.Sent;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("Leave approval reminder delivery timed out for request {LeaveRequestId}.", requestId);
+            return LeaveNotificationDeliveryResult.Failed;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "Leave approval reminder delivery failed for request {LeaveRequestId}.", requestId);
+            return LeaveNotificationDeliveryResult.Failed;
+        }
+    }
+
     private static void AddRecipient(List<(string Email, string Link)> recipients, string? email, string link)
     { if (!string.IsNullOrWhiteSpace(email)) recipients.Add((email, link)); }
 

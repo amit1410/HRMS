@@ -37,7 +37,9 @@ try
 
     // Tenant identity is resolved per-request from JWT claims (server-side, never from client input).
     builder.Services.AddHttpContextAccessor();
-    builder.Services.AddScoped<ITenantContext, HttpTenantContext>();
+    builder.Services.AddScoped<HttpTenantContext>();
+    builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<HttpTenantContext>());
+    builder.Services.AddScoped<ITenantExecutionContext>(sp => sp.GetRequiredService<HttpTenantContext>());
     builder.Services.AddScoped<IPlatformContext, HttpPlatformContext>();
 
     // JWT bearer authentication plus one authorization policy per permission.
