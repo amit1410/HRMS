@@ -18,6 +18,11 @@ public static class LeaveRequestValidationErrorCodes
     public const string MaximumConsecutiveLeaveExceeded = "MaximumConsecutiveLeaveExceeded";
     public const string RequestCountLimitExceeded = "RequestCountLimitExceeded";
     public const string RequestQuantityLimitExceeded = "RequestQuantityLimitExceeded";
+    public const string AdvanceNoticeNotMet = "AdvanceNoticeNotMet";
+    public const string BackdatedRequestNotAllowed = "BackdatedRequestNotAllowed";
+    public const string BackdateLimitExceeded = "BackdateLimitExceeded";
+    public const string MinimumServiceNotMet = "MinimumServiceNotMet";
+    public const string InactiveEmployment = "InactiveEmployment";
 }
 
 /// <summary>
@@ -34,6 +39,7 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
     private readonly ILeavePeriodResolver _periodResolver;
     private readonly ILeavePolicyResolver _policyResolver;
     private readonly IWorkingDayCalendarResolver? _workingDayCalendarResolver;
+    private readonly TimeProvider _timeProvider;
 
     public LeaveRequestValidationService(
         IHrmsDbContext db,
@@ -41,7 +47,8 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
         IEffectiveEmploymentResolver employmentResolver,
         ILeavePeriodResolver periodResolver,
         ILeavePolicyResolver policyResolver,
-        IWorkingDayCalendarResolver? workingDayCalendarResolver = null)
+        IWorkingDayCalendarResolver? workingDayCalendarResolver = null,
+        TimeProvider? timeProvider = null)
     {
         _db = db;
         _identityResolver = identityResolver;
@@ -49,6 +56,7 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
         _periodResolver = periodResolver;
         _policyResolver = policyResolver;
         _workingDayCalendarResolver = workingDayCalendarResolver;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<Result<LeaveRequestValidationResult>> ValidateAsync(
@@ -97,10 +105,22 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
         if (rule is null)
             return Result<LeaveRequestValidationResult>.NotFound("The resolved Leave Policy rule was not found.");
 
+        var employmentFailure = ValidateEmploymentContext(startContext.Value!, input.StartDate);
+        if (employmentFailure is not null)
+            return employmentFailure;
+
         var supportedPolicy = ValidateSupportedPolicy(rule);
         if (supportedPolicy is not null)
             return LeaveRequestValidationFailures.Unsupported(supportedPolicy);
         var context = startContext.Value!;
+
+        var eligibilityFailure = ValidateEligibility(rule.EligibilityRule, context.DateOfJoining, input.StartDate);
+        if (eligibilityFailure is not null)
+            return eligibilityFailure;
+
+        var requestTimingFailure = ValidateRequestTiming(rule.RequestRule, input.StartDate);
+        if (requestTimingFailure is not null)
+            return requestTimingFailure;
 
         var clubbingExists = await _db.LeavePolicyClubbingRules.AsNoTracking().AnyAsync(x =>
             x.TenantId == subject.TenantId &&
@@ -218,8 +238,73 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
             versionId,
             ruleId,
             employment.Employment.Gender,
+            employment.Employment.DateOfJoining,
+            employment.Employment.DateOfLeaving,
+            employment.Employment.EmploymentStatus,
             policy.Priority ?? 0,
             policy.Specificity ?? 0));
+    }
+
+    private static Result<LeaveRequestValidationResult>? ValidateEmploymentContext(ValidationContext context, DateOnly requestStart)
+    {
+        if (context.EmploymentStatus != EmployeeStatus.Active ||
+            requestStart < context.DateOfJoining ||
+            (context.DateOfLeaving is DateOnly leaving && requestStart > leaving))
+            return Result<LeaveRequestValidationResult>.Forbidden(
+                $"{LeaveRequestValidationErrorCodes.InactiveEmployment}: The employee is not actively employed on the requested date.");
+        return null;
+    }
+
+    private static Result<LeaveRequestValidationResult>? ValidateEligibility(
+        LeavePolicyEligibilityRule? rule,
+        DateOnly dateOfJoining,
+        DateOnly requestStart)
+    {
+        if (rule?.EligibilityMode != EligibilityMode.MinimumService)
+            return null;
+        if (rule.MinimumServiceValue is not int value || rule.MinimumServiceUnit is null)
+            return LeaveRequestValidationFailures.Unsupported("Minimum-service eligibility is incomplete.");
+        var eligibleFrom = rule.MinimumServiceUnit == EligibilityServiceUnit.Months
+            ? dateOfJoining.AddMonths(value)
+            : dateOfJoining.AddDays(value);
+        return requestStart < eligibleFrom
+            ? Result<LeaveRequestValidationResult>.Invalid(
+                "eligibility",
+                $"{LeaveRequestValidationErrorCodes.MinimumServiceNotMet}: The employee has not completed the minimum service period.")
+            : null;
+    }
+
+    private Result<LeaveRequestValidationResult>? ValidateRequestTiming(
+        LeavePolicyRequestRule? rule,
+        DateOnly requestStart)
+    {
+        if (rule is null)
+            return null;
+        var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        if (requestStart < businessDate)
+        {
+            if (rule.BackdatedRequestMode == BackdatedRequestMode.NotAllowed)
+                return Result<LeaveRequestValidationResult>.Invalid(
+                    "startDate",
+                    $"{LeaveRequestValidationErrorCodes.BackdatedRequestNotAllowed}: Backdated Leave requests are not allowed by policy.");
+            if (rule.BackdatedRequestMode == BackdatedRequestMode.AllowedUpToDays)
+            {
+                if (rule.MaximumBackdatedDays is not int maximumBackdatedDays)
+                    return LeaveRequestValidationFailures.Unsupported("A bounded backdating rule has no configured limit.");
+                if (businessDate.DayNumber - requestStart.DayNumber > maximumBackdatedDays)
+                    return Result<LeaveRequestValidationResult>.Invalid(
+                        "startDate",
+                        $"{LeaveRequestValidationErrorCodes.BackdateLimitExceeded}: The request exceeds the configured backdate limit.");
+            }
+            return null;
+        }
+
+        if (rule.MinimumAdvanceNoticeDays > 0 &&
+            requestStart.DayNumber - businessDate.DayNumber < rule.MinimumAdvanceNoticeDays)
+            return Result<LeaveRequestValidationResult>.Invalid(
+                "startDate",
+                $"{LeaveRequestValidationErrorCodes.AdvanceNoticeNotMet}: The request does not meet the configured advance notice requirement.");
+        return null;
     }
 
     private async Task<ContextCheck> ValidateSingleContextAsync(
@@ -263,16 +348,16 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
     {
         var eligibility = rule.EligibilityRule;
         if (eligibility is not null &&
-            (eligibility.EligibilityMode != EligibilityMode.Immediate ||
+            (eligibility.EligibilityMode is not (EligibilityMode.Immediate or EligibilityMode.MinimumService) ||
              eligibility.ProbationMode != ProbationMode.Allowed ||
              eligibility.NoticePeriodMode != NoticePeriodMode.Allowed))
             return "The resolved Eligibility configuration requires an unsupported employment rule.";
 
         var request = rule.RequestRule;
-        if (request is not null && (request.MinimumAdvanceNoticeDays != 0 ||
-            request.BackdatedRequestMode != BackdatedRequestMode.NotAllowed ||
-            request.MaximumBackdatedDays is not null))
-            return "The resolved Request Rule contains a time-dependent or historical-limit rule unsupported by the MVP.";
+        if (request is not null && !Enum.IsDefined(request.BackdatedRequestMode))
+            return "The resolved Request Rule contains an invalid backdating mode.";
+        if (request is not null && request.PartialDayMode != PartialDayMode.FullDayOnly)
+            return "The resolved Request Rule requires half-day or partial-day runtime support.";
 
         var calendar = rule.CalendarRule;
         if (calendar is not null && (calendar.SandwichMode != SandwichMode.Disabled ||
@@ -424,6 +509,9 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
         Guid PolicyVersionId,
         Guid PolicyRuleId,
         Gender Gender,
+        DateOnly DateOfJoining,
+        DateOnly? DateOfLeaving,
+        EmployeeStatus EmploymentStatus,
         int PolicyPriority,
         int PolicySpecificity);
 

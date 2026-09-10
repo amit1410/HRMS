@@ -104,6 +104,48 @@ public sealed class LeaveRequestRequestLimitTests
     }
 
     [Fact]
+    public async Task Advance_notice_is_enforced_using_the_injected_business_clock()
+    {
+        using var fixture = await LimitFixture.CreateAsync(minimumAdvanceNoticeDays: 3, now: new(2027, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
+        var tooSoon = await fixture.ValidateAsync(1, "notice-too-soon", new(2027, 1, 3), new(2027, 1, 3));
+        var satisfied = await fixture.ValidateAsync(1, "notice-satisfied", new(2027, 1, 4), new(2027, 1, 4));
+
+        Assert.Contains("AdvanceNoticeNotMet", tooSoon.Message);
+        Assert.Equal(ResultStatus.ValidationFailed, tooSoon.Status);
+        Assert.Equal(ResultStatus.Success, satisfied.Status);
+    }
+
+    [Fact]
+    public async Task Backdated_requests_follow_the_configured_mode_and_limit()
+    {
+        using var fixture = await LimitFixture.CreateAsync(
+            backdatedMode: BackdatedRequestMode.AllowedUpToDays,
+            maximumBackdatedDays: 3,
+            now: new(2027, 1, 10, 0, 0, 0, TimeSpan.Zero));
+
+        var tooOld = await fixture.ValidateAsync(1, "backdate-too-old", new(2027, 1, 6), new(2027, 1, 6));
+        var allowed = await fixture.ValidateAsync(1, "backdate-allowed", new(2027, 1, 7), new(2027, 1, 7));
+
+        Assert.Equal(ResultStatus.ValidationFailed, tooOld.Status);
+        Assert.Contains("BackdateLimitExceeded", tooOld.Message);
+        Assert.Equal(ResultStatus.Success, allowed.Status);
+    }
+
+    [Fact]
+    public async Task Minimum_service_eligibility_is_evaluated_from_effective_joining_date()
+    {
+        using var fixture = await LimitFixture.CreateAsync(minimumServiceDays: 420);
+
+        var beforeEligibility = await fixture.ValidateAsync(1, "service-too-soon", new(2027, 2, 15), new(2027, 2, 15));
+        var eligible = await fixture.ValidateAsync(1, "service-complete", new(2027, 3, 10), new(2027, 3, 10));
+
+        Assert.Equal(ResultStatus.ValidationFailed, beforeEligibility.Status);
+        Assert.Contains("MinimumServiceNotMet", beforeEligibility.Message);
+        Assert.Equal(ResultStatus.Success, eligible.Status);
+    }
+
+    [Fact]
     public async Task Same_idempotency_key_is_excluded_from_period_history_for_replay()
     {
         using var fixture = await LimitFixture.CreateAsync(maximumRequests: 1, period: RequestLimitPeriod.LeavePeriod);
@@ -142,7 +184,12 @@ public sealed class LeaveRequestRequestLimitTests
             decimal? maximumConsecutive = null,
             int? maximumRequests = null,
             decimal? maximumQuantity = null,
-            RequestLimitPeriod? period = null)
+            RequestLimitPeriod? period = null,
+            int minimumAdvanceNoticeDays = 0,
+            BackdatedRequestMode backdatedMode = BackdatedRequestMode.NotAllowed,
+            int? maximumBackdatedDays = null,
+            int? minimumServiceDays = null,
+            DateTimeOffset? now = null)
         {
             var database = new SqliteInMemoryDatabase();
             var tenantContext = new TestTenantContext();
@@ -162,7 +209,9 @@ public sealed class LeaveRequestRequestLimitTests
             seed.LeavePolicyVersions.Add(new LeavePolicyVersion { Id = fixture._policyVersionId, TenantId = fixture.TenantId, LeavePolicyId = fixture._policyId, VersionNumber = 1, EffectiveFrom = new(2026, 1, 1), Status = LeavePolicyVersionStatus.Published, Priority = 1 });
             seed.LeavePolicyRules.Add(new LeavePolicyRule { Id = fixture._policyRuleId, TenantId = fixture.TenantId, LeavePolicyVersionId = fixture._policyVersionId, LeaveTypeId = fixture.LeaveTypeId, IsActive = true });
             seed.LeavePolicyEntitlementRules.Add(new LeavePolicyEntitlementRule { Id = Guid.NewGuid(), TenantId = fixture.TenantId, LeavePolicyRuleId = fixture._policyRuleId, EntitlementMode = EntitlementMode.Unlimited });
-            seed.LeavePolicyRequestRules.Add(new LeavePolicyRequestRule { Id = Guid.NewGuid(), TenantId = fixture.TenantId, LeavePolicyRuleId = fixture._policyRuleId, MinimumRequestQuantity = minimum, MaximumRequestQuantity = maximum, MaximumConsecutiveQuantity = maximumConsecutive, MaximumRequestsPerPeriod = maximumRequests, MaximumQuantityPerPeriod = maximumQuantity, RequestLimitPeriod = period });
+            if (minimumServiceDays is int serviceDays)
+                seed.LeavePolicyEligibilityRules.Add(new LeavePolicyEligibilityRule { Id = Guid.NewGuid(), TenantId = fixture.TenantId, LeavePolicyRuleId = fixture._policyRuleId, EligibilityMode = EligibilityMode.MinimumService, MinimumServiceValue = serviceDays, MinimumServiceUnit = EligibilityServiceUnit.Days });
+            seed.LeavePolicyRequestRules.Add(new LeavePolicyRequestRule { Id = Guid.NewGuid(), TenantId = fixture.TenantId, LeavePolicyRuleId = fixture._policyRuleId, MinimumRequestQuantity = minimum, MaximumRequestQuantity = maximum, MaximumConsecutiveQuantity = maximumConsecutive, MinimumAdvanceNoticeDays = minimumAdvanceNoticeDays, BackdatedRequestMode = backdatedMode, MaximumBackdatedDays = maximumBackdatedDays, MaximumRequestsPerPeriod = maximumRequests, MaximumQuantityPerPeriod = maximumQuantity, RequestLimitPeriod = period });
             await seed.SaveChangesAsync();
 
             fixture._service = new LeaveRequestValidationService(
@@ -170,7 +219,8 @@ public sealed class LeaveRequestRequestLimitTests
                 new FixedIdentity(fixture.TenantId, fixture.UserId, fixture.EmployeeId),
                 new FixedEmployment(fixture.TenantId, fixture.EmployeeId, fixture._employmentId),
                 new FixedPeriod(fixture.TenantId, fixture.LeavePeriodId),
-                new FixedPolicy(fixture.TenantId, fixture.EmployeeId, fixture.LeaveTypeId, fixture._policyId, fixture._policyVersionId, fixture._policyRuleId));
+                new FixedPolicy(fixture.TenantId, fixture.EmployeeId, fixture.LeaveTypeId, fixture._policyId, fixture._policyVersionId, fixture._policyRuleId),
+                timeProvider: new FrozenTimeProvider(now ?? DateTimeOffset.UtcNow));
             return fixture;
         }
 
@@ -203,5 +253,10 @@ public sealed class LeaveRequestRequestLimitTests
         { public Task<LeavePeriodResolutionResult> ResolveAsync(Guid tenantId, DateOnly date, CancellationToken ct = default) => Task.FromResult(new LeavePeriodResolutionResult(LeavePeriodResolutionStatus.Resolved, tenantId, date, new(periodId, "2027", "2027", new(2027, 1, 1), new(2027, 12, 31), true, DateTime.UtcNow, null, "token"), "resolved")); }
         private sealed class FixedPolicy(Guid tenantId, Guid employeeId, Guid leaveTypeId, Guid policyId, Guid versionId, Guid ruleId) : ILeavePolicyResolver
         { public Task<LeavePolicyResolutionResult> ResolveAsync(Guid tenantId, Guid employeeId, Guid leaveTypeId, DateOnly date, CancellationToken ct = default) => Task.FromResult(new LeavePolicyResolutionResult(LeavePolicyResolutionStatus.Resolved, tenantId, employeeId, leaveTypeId, date, policyId, versionId, ruleId, 1, 0, "resolved")); }
+
+        private sealed class FrozenTimeProvider(DateTimeOffset now) : TimeProvider
+        {
+            public override DateTimeOffset GetUtcNow() => now;
+        }
     }
 }
