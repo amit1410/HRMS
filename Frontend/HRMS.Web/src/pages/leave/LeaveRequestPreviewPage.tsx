@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useRef, useState, type FormEvent } from 'react'
 import { ApiError } from '../../api/errors.ts'
 import { listLeaveTypes, type LeaveType } from '../../api/leaveConfiguration.ts'
 import { previewLeaveRequest, submitLeaveRequest, type LeaveRequestPreview, type LeaveRequestSubmission } from '../../api/leaveRequests.ts'
@@ -7,6 +7,7 @@ import { Notice } from '../../components/Notice.tsx'
 import { PageHeader } from '../../components/PageHeader.tsx'
 import { Spinner } from '../../components/Spinner.tsx'
 import { useApiQuery } from '../../hooks/useApiQuery.ts'
+import { useAuth } from '../../auth/useAuth.ts'
 
 const emptyDraft = { leaveTypeId: '', startDate: '', endDate: '' }
 
@@ -16,6 +17,7 @@ function newIdempotencyKey(): string {
 }
 
 export function LeaveRequestPreviewPage() {
+  const { status, user } = useAuth()
   const [draft, setDraft] = useState(emptyDraft)
   const [idempotencyKey, setIdempotencyKey] = useState(newIdempotencyKey)
   const [preview, setPreview] = useState<LeaveRequestPreview | null>(null)
@@ -26,11 +28,15 @@ export function LeaveRequestPreviewPage() {
   const [localError, setLocalError] = useState<string | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const previewBusyRef = useRef(false)
+  const submitBusyRef = useRef(false)
+  const requestSequenceRef = useRef(0)
   const types = useApiQuery(signal => listLeaveTypes({ page: 1, pageSize: 100, isActive: true }, signal), [])
   const selectedType = useMemo(() => types.data?.items.find(item => item.id === draft.leaveTypeId), [draft.leaveTypeId, types.data])
   const previewIsCurrent = preview !== null && previewDraft !== null && previewDraft.leaveTypeId === draft.leaveTypeId && previewDraft.startDate === draft.startDate && previewDraft.endDate === draft.endDate
 
   function changeDraft(field: keyof typeof draft, value: string) {
+    requestSequenceRef.current += 1
     setDraft(current => ({ ...current, [field]: value }))
     setPreview(null)
     setPreviewDraft(null)
@@ -50,25 +56,34 @@ export function LeaveRequestPreviewPage() {
 
   async function previewRequest(event: FormEvent) {
     event.preventDefault()
+    if (previewBusyRef.current || submitting || submission) return
     const message = validateDraft()
     if (message) { setLocalError(message); setPreview(null); return }
+    previewBusyRef.current = true
+    const requestSequence = requestSequenceRef.current
     setPreviewing(true)
     setError(null)
     setSubmitError(null)
     setLocalError(null)
     try {
       const result = await previewLeaveRequest({ ...draft, idempotencyKey })
-      setPreview(result)
-      setPreviewDraft({ ...draft })
+      if (requestSequence === requestSequenceRef.current) {
+        setPreview(result)
+        setPreviewDraft({ ...draft })
+      }
     } catch (caught) {
       setPreview(null)
       setPreviewDraft(null)
       setError(caught instanceof ApiError ? caught : new ApiError('Unable to preview this Leave request.'))
-    } finally { setPreviewing(false) }
+    } finally {
+      previewBusyRef.current = false
+      if (requestSequence === requestSequenceRef.current) setPreviewing(false)
+    }
   }
 
   async function submitRequest() {
-    if (!preview || !previewIsCurrent || submission) return
+    if (!preview || !previewIsCurrent || submission || submitBusyRef.current) return
+    submitBusyRef.current = true
     setSubmitting(true)
     setSubmitError(null)
     try {
@@ -80,8 +95,12 @@ export function LeaveRequestPreviewPage() {
         setPreview(null)
         setPreviewDraft(null)
       }
-    } finally { setSubmitting(false) }
+    } finally { submitBusyRef.current = false; setSubmitting(false) }
   }
+
+  if (status === 'restoring') return <div className="leave-admin-page"><p className="state-block"><Spinner label="Loading employee context" /></p></div>
+  if (status !== 'authenticated') return <div className="leave-admin-page"><PageHeader title="Apply Leave" /><Notice tone="error">Sign in to apply for Leave.</Notice></div>
+  if (!user?.employeeIdentity || user.employeeIdentity.status !== 'Linked' || !user.employeeIdentity.employee) return <div className="leave-admin-page"><PageHeader title="Apply Leave" /><Notice tone="error">Your account is not linked to an active employee. Contact HR before applying for Leave.</Notice></div>
 
   function reset() {
     setDraft(emptyDraft)

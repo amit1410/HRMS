@@ -18,11 +18,27 @@ describe('LeaveRequestPreviewPage', () => {
   let stub: StubAdapter
   beforeEach(() => { stub = installStubAdapter(); stub.on('get', '/api/leave-types', () => ({ data: ok(paged([activeType, inactiveType])) })) })
   afterEach(() => stub.restore())
-  function renderPage() { return renderAsUser(<LeaveRequestPreviewPage />, { user: makeUser() }) }
+  const linkedUser = makeUser({ employeeIdentity: { status: 'Linked', revision: '1', linkId: 'link-1', employee: { id: 'employee-1', displayName: 'Nadia Farrell', employeeCode: 'EMP-001' }, employmentEligibility: 'ActiveEmployment', businessDate: '2026-10-01' } })
+  function renderPage(options: Parameters<typeof renderAsUser>[1] = {}) { return renderAsUser(<LeaveRequestPreviewPage />, { user: linkedUser, ...options }) }
   async function fillForm() { await userEvent.selectOptions(await screen.findByLabelText(/^Leave Type/), 'type-1'); await userEvent.type(screen.getByLabelText(/Start Date/), '2026-10-05'); await userEvent.type(screen.getByLabelText(/End Date/), '2026-10-06') }
 
   it('loads only active types, validates dates, and sends the server-authoritative preview contract', async () => {
     stub.on('post', '/api/leave-requests/preview', () => ({ data: ok(preview) })); renderPage(); expect(await screen.findByRole('option', { name: /CL — Casual Leave/ })).toBeInTheDocument(); expect(screen.queryByRole('option', { name: /OLD — Old Leave/ })).not.toBeInTheDocument(); await userEvent.selectOptions(screen.getByLabelText(/^Leave Type/), 'type-1'); await userEvent.type(screen.getByLabelText(/Start Date/), '2026-10-07'); await userEvent.type(screen.getByLabelText(/End Date/), '2026-10-06'); await userEvent.click(screen.getByRole('button', { name: 'Preview Leave' })); expect(screen.getByText('Start Date must be on or before End Date.')).toBeInTheDocument(); expect(stub.callsTo('post', '/api/leave-requests/preview')).toHaveLength(0); await userEvent.clear(screen.getByLabelText(/Start Date/)); await userEvent.type(screen.getByLabelText(/Start Date/), '2026-10-05'); await userEvent.click(screen.getByRole('button', { name: 'Preview Leave' })); await waitFor(() => expect(stub.callsTo('post', '/api/leave-requests/preview')).toHaveLength(1)); const calls = stub.callsTo('post', '/api/leave-requests/preview'); expect(calls).toHaveLength(1); const call = calls[0]; if (!call) throw new Error('Expected a preview call.'); const body = bodyOf(call); expect(body).toMatchObject({ leaveTypeId: 'type-1', startDate: '2026-10-05', endDate: '2026-10-06' }); expect(body).toHaveProperty('idempotencyKey'); expect(body).not.toHaveProperty('tenantId'); expect(body).not.toHaveProperty('employeeId'); expect(body).not.toHaveProperty('requestedQuantity'); expect(body).not.toHaveProperty('chargeableQuantity')
+  })
+
+  it('blocks the form when the authenticated account has no linked employee', async () => {
+    renderPage({ user: makeUser({ employeeIdentity: null }) })
+    expect(await screen.findByText('Your account is not linked to an active employee. Contact HR before applying for Leave.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Preview Leave' })).not.toBeInTheDocument()
+  })
+
+  it('does not let a late preview response restore a result for changed dates', async () => {
+    stub.on('post', '/api/leave-requests/preview', () => ({ data: ok(preview), delay: true }))
+    renderPage()
+    await fillForm()
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Leave' }))
+    fireEvent.change(screen.getByLabelText(/End Date/), { target: { value: '2026-10-07' } })
+    await waitFor(() => expect(screen.queryByText('Preview result')).not.toBeInTheDocument())
   })
 
   it('renders authoritative quantities, days, nullable values, and entitlement messaging', async () => {
