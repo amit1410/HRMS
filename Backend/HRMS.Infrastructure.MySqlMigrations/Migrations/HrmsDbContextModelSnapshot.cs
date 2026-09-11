@@ -1729,9 +1729,18 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("char(36)");
 
+                    b.Property<int>("ChangeType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("ChangedAtUtc")
+                        .HasColumnType("datetime(6)");
+
                     b.Property<string>("ChangedBy")
                         .HasMaxLength(256)
                         .HasColumnType("varchar(256)");
+
+                    b.Property<Guid?>("ChangedByUserId")
+                        .HasColumnType("char(36)");
 
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
@@ -1745,14 +1754,29 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<int>("NewDayType")
                         .HasColumnType("int");
 
+                    b.Property<bool>("NewIsCalendarOverride")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<Guid?>("NewShiftId")
                         .HasColumnType("char(36)");
+
+                    b.Property<int>("NewSource")
+                        .HasColumnType("int");
+
+                    b.Property<int>("OriginalCalendarDayType")
+                        .HasColumnType("int");
 
                     b.Property<int>("PreviousDayType")
                         .HasColumnType("int");
 
+                    b.Property<bool>("PreviousIsCalendarOverride")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<Guid?>("PreviousShiftId")
                         .HasColumnType("char(36)");
+
+                    b.Property<int>("PreviousSource")
+                        .HasColumnType("int");
 
                     b.Property<string>("Reason")
                         .HasMaxLength(1000)
@@ -1811,6 +1835,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<int>("OriginalCalendarDayType")
+                        .HasColumnType("int");
 
                     b.Property<Guid?>("OriginalShiftId")
                         .HasColumnType("char(36)");
@@ -4267,6 +4294,15 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("char(36)");
 
+                    b.Property<bool>("AllowEarlyMarkIn")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("AllowPresentOnSinglePunch")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("AllowedAttendanceSources")
+                        .HasColumnType("int");
+
                     b.Property<int>("BreakDurationMinutes")
                         .HasColumnType("int");
 
@@ -4296,7 +4332,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime?>("EffectiveTo")
                         .HasColumnType("date");
 
-                    b.Property<TimeOnly>("EndTime")
+                    b.Property<TimeSpan>("EndTime")
                         .HasColumnType("time");
 
                     b.Property<int>("FullDayWorkMinutes")
@@ -4314,10 +4350,28 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("tinyint(1)");
 
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsMarkOutMandatory")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<bool>("IsNightShift")
                         .HasColumnType("tinyint(1)");
 
                     b.Property<int>("LateThresholdMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<TimeSpan?>("MandatoryEndTime")
+                        .HasColumnType("time");
+
+                    b.Property<TimeSpan?>("MandatoryStartTime")
+                        .HasColumnType("time");
+
+                    b.Property<int>("MaximumEarlyMarkInMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MaximumPostShiftMinutes")
                         .HasColumnType("int");
 
                     b.Property<int>("MinimumWorkMinutes")
@@ -4330,6 +4384,18 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime(6)");
 
+                    b.Property<int>("PlannedDurationMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int>("PostShiftMarkOutMode")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("PrimaryAttendanceSource")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("RequireExpectedWorkMinutes")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<string>("ShiftCode")
                         .IsRequired()
                         .HasMaxLength(40)
@@ -4340,11 +4406,29 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasMaxLength(150)
                         .HasColumnType("varchar(150)");
 
-                    b.Property<TimeOnly>("StartTime")
+                    b.Property<int>("ShiftType")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("ShowEarlyOutIndicator")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("ShowLateInIndicator")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<TimeSpan>("StartTime")
+                        .HasColumnType("time");
+
+                    b.Property<TimeSpan?>("StretchedEndTime")
+                        .HasColumnType("time");
+
+                    b.Property<TimeSpan?>("StretchedStartTime")
                         .HasColumnType("time");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("char(36)");
+
+                    b.Property<bool>("UseDefaultAttendanceMethodology")
+                        .HasColumnType("tinyint(1)");
 
                     b.HasKey("Id");
 
@@ -4352,6 +4436,8 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsUnique();
 
                     b.HasIndex("TenantId", "EffectiveFrom", "EffectiveTo");
+
+                    b.HasIndex("TenantId", "IsDefault", "EffectiveFrom");
 
                     b.ToTable("Shifts", (string)null);
                 });
@@ -4383,6 +4469,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime?>("EffectiveTo")
                         .HasColumnType("date");
 
+                    b.Property<Guid?>("EmployeeId")
+                        .HasColumnType("char(36)");
+
                     b.Property<Guid?>("EmployeeTypeId")
                         .HasColumnType("char(36)");
 
@@ -4409,6 +4498,11 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.Property<int>("Priority")
                         .HasColumnType("int");
+
+                    b.Property<string>("RuleName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
 
                     b.Property<Guid?>("SectionId")
                         .HasColumnType("char(36)");
@@ -4442,9 +4536,60 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.HasIndex("TenantId", "ShiftPatternId");
 
+                    b.HasIndex("TenantId", "EmployeeId", "EffectiveFrom");
+
                     b.HasIndex("TenantId", "Priority", "EffectiveFrom");
 
                     b.ToTable("ShiftApplicabilityRules", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ShiftBreak", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<TimeSpan>("EndTime")
+                        .HasColumnType("time");
+
+                    b.Property<bool>("IsPaid")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("ShiftId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<TimeSpan>("StartTime")
+                        .HasColumnType("time");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ShiftId", "Sequence")
+                        .IsUnique();
+
+                    b.ToTable("ShiftBreaks", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.ShiftPattern", b =>
@@ -6760,6 +6905,12 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("HRMS.Domain.Entities.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("HRMS.Domain.Entities.Shift", null)
                         .WithMany()
                         .HasForeignKey("TenantId", "ShiftId")
@@ -6771,6 +6922,18 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasForeignKey("TenantId", "ShiftPatternId")
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ShiftBreak", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Shift", "Shift")
+                        .WithMany("Breaks")
+                        .HasForeignKey("TenantId", "ShiftId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Shift");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.ShiftPattern", b =>
@@ -7115,6 +7278,11 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
             modelBuilder.Entity("HRMS.Domain.Entities.RosterUploadBatch", b =>
                 {
                     b.Navigation("Rows");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Shift", b =>
+                {
+                    b.Navigation("Breaks");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.ShiftPattern", b =>

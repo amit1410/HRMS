@@ -624,6 +624,28 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Tenants` WHERE `Id` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Tenants` WHERE `Id` = {OtherTenantId}");
         }
+
+        public async Task CleanupAttendanceAsync()
+        {
+            await using var db = CreateContext(new TestTenantContext());
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeRosterChangeHistories` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeRosterDays` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `RosterUploadRows` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `RosterUploadBatches` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `RosterUploadRows` WHERE `TenantId` = {OtherTenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `RosterUploadBatches` WHERE `TenantId` = {OtherTenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `ShiftApplicabilityRules` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `ShiftPatternDays` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `ShiftPatterns` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `ShiftBreaks` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Shifts` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `WeeklyOffDays` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `WeeklyOffConfigurations` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Holidays` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE `EmployeeEmploymentHistory` SET `DepartmentId` = NULL, `WorkLocationId` = NULL WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `WorkLocations` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Departments` WHERE `TenantId` = {TenantId}");
+        }
     }
 
     internal sealed class RecordingLeaveEmailSender : IEmailSender

@@ -64,7 +64,11 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Team Leave Calendar', to: '/leave-management/team-calendar', available: true },
   { label: 'Leave Balance Import', to: '/leave-management/balances/import', permission: Permissions.leave.balanceImport, available: true },
   { label: 'Leave Approvals', to: '/leave-management/approvals', permission: Permissions.leave.approve, available: true },
-  { label: 'Attendance Foundation', to: '/attendance', permission: Permissions.attendance.view, available: true },
+    { label: 'Shifts', to: '/attendance/shifts', permission: Permissions.attendance.view, available: true },
+    { label: 'Shift Patterns', to: '/attendance/shift-patterns', permission: Permissions.attendance.view, available: true },
+    { label: 'Shift Applicability', to: '/attendance/applicability', permission: Permissions.attendance.view, available: true },
+    { label: 'Roster', to: '/attendance/roster', permission: Permissions.attendance.view, available: true },
+    { label: 'Roster Upload', to: '/attendance/roster-upload', permission: Permissions.attendance.view, available: true },
 ]
 
 export function visibleNavItems(can: (permission: string) => boolean, user?: AuthenticatedUser | null): NavItem[] {

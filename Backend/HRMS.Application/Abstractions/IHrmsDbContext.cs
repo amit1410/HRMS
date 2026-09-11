@@ -101,6 +101,7 @@ public interface IHrmsDbContext
     DbSet<LeaveBalanceImportBatch> LeaveBalanceImportBatches { get; }
     DbSet<LeaveBalanceImportRow> LeaveBalanceImportRows { get; }
     DbSet<Shift> Shifts { get; }
+    DbSet<ShiftBreak> ShiftBreaks { get; }
     DbSet<ShiftPattern> ShiftPatterns { get; }
     DbSet<ShiftPatternDay> ShiftPatternDays { get; }
     DbSet<ShiftApplicabilityRule> ShiftApplicabilityRules { get; }

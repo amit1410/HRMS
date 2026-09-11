@@ -4,6 +4,7 @@ using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HRMS.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(HrmsDbContext))]
-    partial class HrmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260911142138_EnhanceAttendanceShiftConfiguration")]
+    partial class EnhanceAttendanceShiftConfiguration
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1735,18 +1738,9 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<int>("ChangeType")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("ChangedAtUtc")
-                        .HasColumnType("datetime2");
-
                     b.Property<string>("ChangedBy")
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
-
-                    b.Property<Guid?>("ChangedByUserId")
-                        .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime2");
@@ -1760,23 +1754,14 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<int>("NewDayType")
                         .HasColumnType("int");
 
-                    b.Property<bool>("NewIsCalendarOverride")
-                        .HasColumnType("bit");
-
                     b.Property<Guid?>("NewShiftId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<int>("NewSource")
                         .HasColumnType("int");
 
-                    b.Property<int>("OriginalCalendarDayType")
-                        .HasColumnType("int");
-
                     b.Property<int>("PreviousDayType")
                         .HasColumnType("int");
-
-                    b.Property<bool>("PreviousIsCalendarOverride")
-                        .HasColumnType("bit");
 
                     b.Property<Guid?>("PreviousShiftId")
                         .HasColumnType("uniqueidentifier");
@@ -4339,7 +4324,7 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateOnly?>("EffectiveTo")
                         .HasColumnType("date");
 
-                    b.Property<TimeSpan>("EndTime")
+                    b.Property<TimeOnly>("EndTime")
                         .HasColumnType("time");
 
                     b.Property<int>("FullDayWorkMinutes")
@@ -4369,10 +4354,10 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<int>("LateThresholdMinutes")
                         .HasColumnType("int");
 
-                    b.Property<TimeSpan?>("MandatoryEndTime")
+                    b.Property<TimeOnly?>("MandatoryEndTime")
                         .HasColumnType("time");
 
-                    b.Property<TimeSpan?>("MandatoryStartTime")
+                    b.Property<TimeOnly?>("MandatoryStartTime")
                         .HasColumnType("time");
 
                     b.Property<int>("MaximumEarlyMarkInMinutes")
@@ -4422,13 +4407,13 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<bool>("ShowLateInIndicator")
                         .HasColumnType("bit");
 
-                    b.Property<TimeSpan>("StartTime")
+                    b.Property<TimeOnly>("StartTime")
                         .HasColumnType("time");
 
-                    b.Property<TimeSpan?>("StretchedEndTime")
+                    b.Property<TimeOnly?>("StretchedEndTime")
                         .HasColumnType("time");
 
-                    b.Property<TimeSpan?>("StretchedStartTime")
+                    b.Property<TimeOnly?>("StretchedStartTime")
                         .HasColumnType("time");
 
                     b.Property<Guid>("TenantId")
@@ -4506,11 +4491,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<int>("Priority")
                         .HasColumnType("int");
 
-                    b.Property<string>("RuleName")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
                     b.Property<Guid?>("SectionId")
                         .HasColumnType("uniqueidentifier");
 
@@ -4563,7 +4543,7 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
-                    b.Property<TimeSpan>("EndTime")
+                    b.Property<TimeOnly>("EndTime")
                         .HasColumnType("time");
 
                     b.Property<bool>("IsPaid")
@@ -4583,7 +4563,7 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("ShiftId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<TimeSpan>("StartTime")
+                    b.Property<TimeOnly>("StartTime")
                         .HasColumnType("time");
 
                     b.Property<Guid>("TenantId")

@@ -115,6 +115,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<LeaveBalanceImportBatch> LeaveBalanceImportBatches => Set<LeaveBalanceImportBatch>();
     public DbSet<LeaveBalanceImportRow> LeaveBalanceImportRows => Set<LeaveBalanceImportRow>();
     public DbSet<Shift> Shifts => Set<Shift>();
+    public DbSet<ShiftBreak> ShiftBreaks => Set<ShiftBreak>();
     public DbSet<ShiftPattern> ShiftPatterns => Set<ShiftPattern>();
     public DbSet<ShiftPatternDay> ShiftPatternDays => Set<ShiftPatternDay>();
     public DbSet<ShiftApplicabilityRule> ShiftApplicabilityRules => Set<ShiftApplicabilityRule>();
@@ -340,6 +341,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<WeeklyOffConfiguration>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<WeeklyOffDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<Shift>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ShiftBreak>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<ShiftPattern>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<ShiftPatternDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<ShiftApplicabilityRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

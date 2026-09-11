@@ -81,6 +81,10 @@ export function listGrades(query?: MasterLookupQuery, signal?: AbortSignal) {
   return listMasterData('grades', query, signal)
 }
 
+export function listDesignations(query?: MasterLookupQuery, signal?: AbortSignal) {
+  return listMasterData('designations', query, signal)
+}
+
 export function listEmployeeTypes(query?: MasterLookupQuery, signal?: AbortSignal) {
   return listMasterData('employee-types', query, signal)
 }

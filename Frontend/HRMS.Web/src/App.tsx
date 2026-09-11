@@ -38,6 +38,7 @@ import { LeaveBalanceImportPage } from './pages/leave/LeaveBalanceImportPage.tsx
 import { LeaveDashboardPage } from './pages/leave/LeaveDashboardPage.tsx'
 import { LeaveReportsPage } from './pages/leave/LeaveReportsPage.tsx'
 import { AttendanceFoundationPage } from './pages/attendance/AttendanceFoundationPage.tsx'
+import { ShiftPatternsPage } from './pages/attendance/ShiftPatternsPage.tsx'
 import { PlatformTenantsPage } from './pages/platform/PlatformTenantsPage.tsx'
 import { PlatformLoginPage } from './pages/platform/PlatformLoginPage.tsx'
 import { PlatformAuthProvider, usePlatformAuth } from './auth/PlatformAuthProvider.tsx'
@@ -137,7 +138,12 @@ function TenantApplication() {
                   <Route path="leave-management/balances/import" element={<RequirePermission permission={Permissions.leave.balanceImport}><LeaveBalanceImportPage /></RequirePermission>} />
                   <Route path="leave-management/approvals" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalsPage /></RequirePermission>} />
                   <Route path="leave-management/approvals/:requestId" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalDetailPage /></RequirePermission>} />
-                  <Route path="attendance" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
+                    <Route path="attendance" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
+                    <Route path="attendance/shifts" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
+                    <Route path="attendance/applicability" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
+                    <Route path="attendance/roster" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
+                    <Route path="attendance/roster-upload" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
+                  <Route path="attendance/shift-patterns" element={<RequirePermission permission={Permissions.attendance.view}><ShiftPatternsPage /></RequirePermission>} />
               <Route path="employees">
                 <Route
                   index
