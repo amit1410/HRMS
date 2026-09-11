@@ -16,10 +16,10 @@ describe('LeavePolicyConfigurationSections', () => {
   let stub: StubAdapter
   beforeEach(() => { stub = installStubAdapter() })
   afterEach(() => stub.restore())
-  function renderSections(permissions: string[] = [Permissions.leave.policyManage], groups: unknown[] = []) {
+  function renderSections(permissions: string[] = [Permissions.leave.policyManage], groups: unknown[] = [], selected = [inactiveType]) {
     stub.on('get', '/api/leave-types', () => ({ data: ok(paged([activeType, inactiveType])) }))
     stub.on('get', '/api/leave-policies/policy-1/versions/version-1/applicability', () => ({ data: ok(groups) }))
-    return renderAsUser(<LeavePolicyConfigurationSections policyId={policyId} version={version} selectedLeaveTypes={[inactiveType]} canManage={permissions.includes(Permissions.leave.policyManage)} onNotice={() => undefined} />, { user: makeUser({ permissions }) })
+    return renderAsUser(<LeavePolicyConfigurationSections policyId={policyId} version={version} selectedLeaveTypes={selected} canManage={permissions.includes(Permissions.leave.policyManage)} onNotice={() => undefined} />, { user: makeUser({ permissions }) })
   }
 
   it('loads active options and preserves a selected inactive historical Leave Type', async () => {
@@ -38,6 +38,38 @@ describe('LeavePolicyConfigurationSections', () => {
     await userEvent.click(screen.getByRole('checkbox', { name: /CL — Casual Leave/ }))
     await userEvent.click(screen.getByRole('button', { name: 'Save Leave Types' }))
     await waitFor(() => expect(stub.callsTo('put', '/api/leave-policies/policy-1/versions/version-1/leave-types')[0]?.body).toEqual({ leaveTypeIds: ['type-inactive', 'type-active'], concurrencyToken: 'version-token' }))
+  })
+
+  it('finds active Leave Types by code or name with case-insensitive search', async () => {
+    renderSections([Permissions.leave.policyManage], [], [])
+    expect(await screen.findByText(/CL.*Casual Leave/)).toBeInTheDocument()
+    const search = screen.getByRole('searchbox', { name: 'Search Leave Types' })
+    await userEvent.type(search, 'casu')
+    expect(screen.getByText(/CL.*Casual Leave/)).toBeInTheDocument()
+    await userEvent.clear(search)
+    await userEvent.type(search, 'CASUAL')
+    expect(screen.getByText(/CL.*Casual Leave/)).toBeInTheDocument()
+  })
+
+  it('hides unselected inactive Leave Types and allows selecting active Leave Types', async () => {
+    renderSections([Permissions.leave.policyManage], [], [])
+    expect(await screen.findByText(/CL.*Casual Leave/)).toBeInTheDocument()
+    expect(screen.queryByText(/OLD.*Old Leave/)).not.toBeInTheDocument()
+    const activeCheckbox = screen.getByRole('checkbox', { name: /CL.*Casual Leave/ })
+    expect(activeCheckbox).not.toBeChecked()
+    await userEvent.click(activeCheckbox)
+    expect(activeCheckbox).toBeChecked()
+  })
+
+  it('keeps selected IDs and shows the version conflict when saving with a stale token', async () => {
+    stub.on('put', '/api/leave-policies/policy-1/versions/version-1/leave-types', () => ({ status: 409, data: fail('Configuration changed by another user. Reload before saving.') }))
+    renderSections()
+    await screen.findByText(/CL.*Casual Leave/)
+    await userEvent.click(screen.getByRole('checkbox', { name: /CL.*Casual Leave/ }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save Leave Types' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/changed by another user/)
+    expect(screen.getByRole('checkbox', { name: /OLD.*Old Leave/ })).toBeChecked()
+    expect(stub.callsTo('put', '/api/leave-policies/policy-1/versions/version-1/leave-types')[0]?.body).toEqual({ leaveTypeIds: ['type-inactive', 'type-active'], concurrencyToken: 'version-token' })
   })
 
   it('renders zero groups as intentional tenant-wide applicability', async () => {

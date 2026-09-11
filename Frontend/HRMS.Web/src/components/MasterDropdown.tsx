@@ -60,7 +60,7 @@ export function MasterDropdown({
   const listRef = useRef<HTMLDivElement>(null)
 
   const { data: items, isLoading } = useApiQuery(
-    (signal) => fetcher({ parentId, isActive: includeInactive ? false : true }, signal),
+    (signal) => fetcher({ parentId, isActive: includeInactive ? undefined : true }, signal),
     [fetcher, parentId, includeInactive],
   )
 

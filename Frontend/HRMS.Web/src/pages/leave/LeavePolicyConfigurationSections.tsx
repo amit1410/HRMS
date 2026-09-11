@@ -80,7 +80,7 @@ interface Props { policyId: string; version: LeavePolicyVersion; selectedLeaveTy
 
 export function LeavePolicyConfigurationSections({ policyId, version, selectedLeaveTypes, canManage, onNotice, onChanged }: Props) {
   const editable = canManage && version.status === 'Draft'
-  const leaveTypesQuery = useApiQuery(signal => listLeaveTypes({ pageSize: 100, isActive: false }, signal), [])
+  const leaveTypesQuery = useApiQuery(signal => listLeaveTypes({ pageSize: 100 }, signal), [])
   const [leaveTypeIds, setLeaveTypeIds] = useState(() => selectedLeaveTypes.map(item => item.id))
   const [leaveTypeSearch, setLeaveTypeSearch] = useState('')
   const [savingTypes, setSavingTypes] = useState(false)
