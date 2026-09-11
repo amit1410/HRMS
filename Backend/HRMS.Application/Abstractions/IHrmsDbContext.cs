@@ -100,6 +100,14 @@ public interface IHrmsDbContext
     DbSet<WeeklyOffDay> WeeklyOffDays { get; }
     DbSet<LeaveBalanceImportBatch> LeaveBalanceImportBatches { get; }
     DbSet<LeaveBalanceImportRow> LeaveBalanceImportRows { get; }
+    DbSet<Shift> Shifts { get; }
+    DbSet<ShiftPattern> ShiftPatterns { get; }
+    DbSet<ShiftPatternDay> ShiftPatternDays { get; }
+    DbSet<ShiftApplicabilityRule> ShiftApplicabilityRules { get; }
+    DbSet<EmployeeRosterDay> EmployeeRosterDays { get; }
+    DbSet<EmployeeRosterChangeHistory> EmployeeRosterChangeHistories { get; }
+    DbSet<RosterUploadBatch> RosterUploadBatches { get; }
+    DbSet<RosterUploadRow> RosterUploadRows { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

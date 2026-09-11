@@ -114,6 +114,14 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<WeeklyOffDay> WeeklyOffDays => Set<WeeklyOffDay>();
     public DbSet<LeaveBalanceImportBatch> LeaveBalanceImportBatches => Set<LeaveBalanceImportBatch>();
     public DbSet<LeaveBalanceImportRow> LeaveBalanceImportRows => Set<LeaveBalanceImportRow>();
+    public DbSet<Shift> Shifts => Set<Shift>();
+    public DbSet<ShiftPattern> ShiftPatterns => Set<ShiftPattern>();
+    public DbSet<ShiftPatternDay> ShiftPatternDays => Set<ShiftPatternDay>();
+    public DbSet<ShiftApplicabilityRule> ShiftApplicabilityRules => Set<ShiftApplicabilityRule>();
+    public DbSet<EmployeeRosterDay> EmployeeRosterDays => Set<EmployeeRosterDay>();
+    public DbSet<EmployeeRosterChangeHistory> EmployeeRosterChangeHistories => Set<EmployeeRosterChangeHistory>();
+    public DbSet<RosterUploadBatch> RosterUploadBatches => Set<RosterUploadBatch>();
+    public DbSet<RosterUploadRow> RosterUploadRows => Set<RosterUploadRow>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
@@ -331,6 +339,14 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<Holiday>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<WeeklyOffConfiguration>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<WeeklyOffDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<Shift>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ShiftPattern>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ShiftPatternDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ShiftApplicabilityRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeRosterDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeRosterChangeHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<RosterUploadBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<RosterUploadRow>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
 
         // Organizational hierarchy master query filters
         modelBuilder.Entity<HoldingCompany>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -392,6 +408,11 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         {
             if (entry.State is EntityState.Modified or EntityState.Deleted)
                 throw new InvalidOperationException("Leave request events are immutable.");
+        }
+        foreach (var entry in ChangeTracker.Entries<EmployeeRosterChangeHistory>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new InvalidOperationException("Roster change history is immutable.");
         }
         var utcNow = DateTime.UtcNow;
 

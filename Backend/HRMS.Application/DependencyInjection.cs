@@ -81,6 +81,7 @@ public static class DependencyInjection
         services.AddScoped<IMasterLookupService, MasterLookupService>();
         services.AddScoped<IMasterManagementService, MasterManagementService>();
         services.AddScoped<IMasterImportService, MasterImportService>();
+        services.AddScoped<IAttendanceFoundationService, AttendanceFoundationService>();
 
         return services;
     }

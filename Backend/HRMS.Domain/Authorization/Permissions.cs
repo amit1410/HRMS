@@ -89,6 +89,14 @@ public static class Permissions
         public const string BalanceImport = "LeaveBalance.Import";
         public const string BalanceViewImportHistory = "LeaveBalance.ViewImportHistory";
     }
+    public static class Attendance
+    {
+        public const string View = "Attendance.View";
+        public const string ShiftManage = "Attendance.ShiftManage";
+        public const string PatternManage = "Attendance.PatternManage";
+        public const string RosterManage = "Attendance.RosterManage";
+        public const string RosterUpload = "Attendance.RosterUpload";
+    }
 
     /// <summary>Every permission the system knows about. Used by the seeder and SuperAdmin/TenantAdmin grants.</summary>
     public static readonly IReadOnlyList<string> All = new[]
@@ -104,5 +112,6 @@ public static class Permissions
         AccountEmployeeLink.View, AccountEmployeeLink.ViewHistory, AccountEmployeeLink.Manage,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory
+        , Attendance.View, Attendance.ShiftManage, Attendance.PatternManage, Attendance.RosterManage, Attendance.RosterUpload
     };
 }

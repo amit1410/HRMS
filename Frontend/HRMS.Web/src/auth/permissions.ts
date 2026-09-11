@@ -74,6 +74,13 @@ export const Permissions = {
     balanceImport: 'LeaveBalance.Import',
     balanceViewImportHistory: 'LeaveBalance.ViewImportHistory',
   },
+  attendance: {
+    view: 'Attendance.View',
+    shiftManage: 'Attendance.ShiftManage',
+    patternManage: 'Attendance.PatternManage',
+    rosterManage: 'Attendance.RosterManage',
+    rosterUpload: 'Attendance.RosterUpload',
+  },
 } as const
 
 /** Every permission the system knows about — the counterpart of `Permissions.All` in C#. */

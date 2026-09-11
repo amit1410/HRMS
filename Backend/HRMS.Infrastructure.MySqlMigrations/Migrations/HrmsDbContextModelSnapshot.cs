@@ -1723,6 +1723,126 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("EmployeePreviousEmployments", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeRosterChangeHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("ChangedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("NewDayType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("NewShiftId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("PreviousDayType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("PreviousShiftId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<DateTime>("RosterDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("Source")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("UploadBatchId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "EmployeeId", "RosterDate");
+
+                    b.ToTable("EmployeeRosterChangeHistories", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeRosterDay", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("AssignmentSource")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Comment")
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DayType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("EmployeeEmploymentHistoryId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<bool>("IsCalendarOverride")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsOverride")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("OriginalShiftId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("RosterDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid?>("ShiftId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ShiftPatternId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "RosterDate");
+
+                    b.HasIndex("TenantId", "ShiftId");
+
+                    b.HasIndex("TenantId", "ShiftPatternId");
+
+                    b.HasIndex("TenantId", "EmployeeId", "RosterDate")
+                        .IsUnique();
+
+                    b.ToTable("EmployeeRosterDays", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeSupervisor", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3993,6 +4113,104 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("RolePermissions", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.RosterUploadBatch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("CommittedRows")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(260)
+                        .HasColumnType("varchar(260)");
+
+                    b.Property<int>("InvalidRows")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("TotalRows")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ValidRows")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "CreatedDate");
+
+                    b.ToTable("RosterUploadBatches", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.RosterUploadRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DayType")
+                        .HasColumnType("int");
+
+                    b.Property<string>("EmployeeCode")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<bool>("IsValid")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("RosterDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("RosterUploadBatchId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("RowNumber")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ShiftCode")
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "RosterUploadBatchId", "RowNumber")
+                        .IsUnique();
+
+                    b.ToTable("RosterUploadRows", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Section", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4041,6 +4259,276 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsUnique();
 
                     b.ToTable("Sections", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Shift", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("BreakDurationMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int>("CaptureMode")
+                        .HasColumnType("int");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<bool>("CrossesMidnight")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<int>("EarlyOutThresholdMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<TimeOnly>("EndTime")
+                        .HasColumnType("time");
+
+                    b.Property<int>("FullDayWorkMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int>("GraceInMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int>("GraceOutMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("HalfDayWorkMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsNightShift")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("LateThresholdMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MinimumWorkMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ModifiedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("ShiftCode")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)");
+
+                    b.Property<string>("ShiftName")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<TimeOnly>("StartTime")
+                        .HasColumnType("time");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ShiftCode")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "EffectiveFrom", "EffectiveTo");
+
+                    b.ToTable("Shifts", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ShiftApplicabilityRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("CostCenterId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("CountryLocationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("DepartmentId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("DesignationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<Guid?>("EmployeeTypeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("FunctionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int?>("Gender")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("GradeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("HoldingCompanyId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("LobId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("OrganisationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("SectionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ShiftId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ShiftPatternId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SubDepartmentId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SubFunctionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SubSectionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("WorkLocationId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ShiftId");
+
+                    b.HasIndex("TenantId", "ShiftPatternId");
+
+                    b.HasIndex("TenantId", "Priority", "EffectiveFrom");
+
+                    b.ToTable("ShiftApplicabilityRules", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ShiftPattern", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("CycleLengthDays")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("ShiftPatterns", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ShiftPatternDay", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DayType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("SequenceDay")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("ShiftId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ShiftPatternId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ShiftId");
+
+                    b.HasIndex("TenantId", "ShiftPatternId", "SequenceDay")
+                        .IsUnique();
+
+                    b.ToTable("ShiftPatternDays", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.State", b =>
@@ -5292,6 +5780,37 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeRosterChangeHistory", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeRosterDay", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Shift", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ShiftId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.ShiftPattern", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ShiftPatternId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeSupervisor", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -6179,6 +6698,33 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Role");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.RosterUploadBatch", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.RosterUploadRow", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.RosterUploadBatch", "Batch")
+                        .WithMany("Rows")
+                        .HasForeignKey("TenantId", "RosterUploadBatchId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Batch");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Section", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.SubDepartment", "SubDepartment")
@@ -6195,6 +6741,65 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("SubDepartment");
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Shift", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ShiftApplicabilityRule", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Shift", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ShiftId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.ShiftPattern", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ShiftPatternId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ShiftPattern", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ShiftPatternDay", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Shift", "Shift")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ShiftId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.ShiftPattern", "ShiftPattern")
+                        .WithMany("Days")
+                        .HasForeignKey("TenantId", "ShiftPatternId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Shift");
+
+                    b.Navigation("ShiftPattern");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.State", b =>
@@ -6505,6 +7110,16 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("RolePermissions");
 
                     b.Navigation("UserRoles");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.RosterUploadBatch", b =>
+                {
+                    b.Navigation("Rows");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ShiftPattern", b =>
+                {
+                    b.Navigation("Days");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.State", b =>
