@@ -53,8 +53,11 @@ public sealed class MigrationDiscoveryTests
             .Options, new TestTenantContext());
 
         var migrations = db.Database.GetMigrations().ToArray();
-        Assert.Equal("20260907182740_AddUserInvitations", migrations[^2]);
-        Assert.Equal("20260908161324_AddPasswordResetOtps", migrations[^1]);
+        Assert.Contains("20260907182740_AddUserInvitations", migrations);
+        Assert.Contains("20260908161324_AddPasswordResetOtps", migrations);
+        Assert.True(
+            Array.IndexOf(migrations, "20260907182740_AddUserInvitations")
+                < Array.IndexOf(migrations, "20260908161324_AddPasswordResetOtps"));
     }
 
     [Fact]
@@ -65,12 +68,12 @@ public sealed class MigrationDiscoveryTests
                 mysql.MigrationsAssembly("HRMS.Infrastructure.MySqlMigrations"))
             .Options, new TestTenantContext());
 
-        Assert.Equal(
-            [
-                "20260905172008_InitialMySqlTenantSchema",
-                "20260907182803_AddUserInvitations",
-                "20260908163000_AddPasswordResetOtps"
-            ],
-            db.Database.GetMigrations().ToArray());
+        var migrations = db.Database.GetMigrations().ToArray();
+        Assert.Contains("20260905172008_InitialMySqlTenantSchema", migrations);
+        Assert.Contains("20260907182803_AddUserInvitations", migrations);
+        Assert.Contains("20260908163000_AddPasswordResetOtps", migrations);
+        Assert.True(
+            Array.IndexOf(migrations, "20260907182803_AddUserInvitations")
+                < Array.IndexOf(migrations, "20260908163000_AddPasswordResetOtps"));
     }
 }

@@ -102,12 +102,11 @@ public class AuthEndpointsTests : IClassFixture<HrmsApiFactory>
     }
 
     /// <summary>
-    /// The validation filter still reports the fields the request does have. It must not report one it does
-    /// not: a leftover rule on the removed organization code would 400 every sign-in with a message naming a
-    /// field no form can fill in, which is why the absence is asserted rather than assumed.
+    /// The default tenant mode accepts either an email address or employee code, so a non-email identifier is
+    /// valid input shape. Only the missing password is a validation error here.
     /// </summary>
     [Fact]
-    public async Task Login_with_a_malformed_email_and_no_password_returns_400_with_field_errors()
+    public async Task Login_with_a_non_email_identifier_and_no_password_returns_400_with_field_errors()
     {
         using var client = _factory.CreateClientFor(HrmsApiFactory.Demo01Host);
 
@@ -123,8 +122,9 @@ public class AuthEndpointsTests : IClassFixture<HrmsApiFactory>
         Assert.False(body.Success);
         Assert.NotNull(body.Errors);
         var fields = body.Errors!.Select(e => e.Field).ToList();
-        Assert.Contains("email", fields);
         Assert.Contains("password", fields);
+        Assert.DoesNotContain("email", fields);
+        Assert.DoesNotContain("identifier", fields);
         Assert.DoesNotContain("tenantCode", fields);
     }
 

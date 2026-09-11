@@ -36,6 +36,7 @@ public sealed class MySqlLeaveHttpIntegrationTests
         var options = new MySqlConnectionStringBuilder(normalized);
 
         Assert.Equal(MySqlSslMode.Disabled, options.SslMode);
+        Assert.True(options.AllowPublicKeyRetrieval);
         Assert.DoesNotContain(options.Keys.Cast<string>(),
             key => IsTlsOption(key) && !key.Equals("SslMode", StringComparison.OrdinalIgnoreCase));
     }

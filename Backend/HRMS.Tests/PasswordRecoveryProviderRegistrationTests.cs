@@ -75,6 +75,7 @@ public sealed class PasswordRecoveryProviderRegistrationTests
     {
         var configuration = Configuration(new Dictionary<string, string?>
         {
+            ["PasswordRecoveryProviders:EmailProvider"] = "Fake",
             ["Sms:Provider"] = "Fake",
             ["PasswordRecoveryProviders:SmsProvider"] = "Msg91"
         });

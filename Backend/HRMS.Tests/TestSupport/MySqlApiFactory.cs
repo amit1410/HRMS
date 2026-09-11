@@ -66,6 +66,7 @@ public sealed class MySqlApiFactory : HrmsApiFactory
     {
         var builder = new MySqlConnectionStringBuilder(connection);
         builder.SslMode = MySqlSslMode.Disabled;
+        builder.AllowPublicKeyRetrieval = true;
         foreach (var key in new[]
                  {
                      "CertificateFile", "CertificatePassword", "SslCa", "SslCert", "SslKey",

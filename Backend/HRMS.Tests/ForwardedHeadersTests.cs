@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Tenants;
 using HRMS.Tests.TestSupport;
@@ -167,7 +169,11 @@ public class ForwardedHeadersTests
         var response = await client.GetAsync(BrandingRoute);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        var body = await response.Content.ReadFromJsonAsync<ApiResponse<TenantBrandingDto>>();
+        var body = await response.Content.ReadFromJsonAsync<ApiResponse<TenantBrandingDto>>(new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new JsonStringEnumConverter() }
+        });
         Assert.NotNull(body?.Data);
         return body.Data;
     }

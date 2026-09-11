@@ -39,13 +39,13 @@ public sealed class ProviderCombinationRoutingTests : IAsyncLifetime
         }
     }
 
-    [Fact]
+    [SqlServerRequiredFact]
     public Task SqlServer_catalog_routes_to_SqlServer_tenant() =>
         AssertCombinationAsync(
             CatalogProvider.SqlServer,
             DatabaseProviderType.SqlServer);
 
-    [Fact]
+    [SqlServerRequiredFact]
     public Task SqlServer_catalog_routes_to_MySql_tenant() =>
         AssertCombinationAsync(
             CatalogProvider.SqlServer,
@@ -186,5 +186,17 @@ public sealed class ProviderCombinationRoutingTests : IAsyncLifetime
     {
         SqlServer,
         MySql
+    }
+}
+
+/// <summary>Marks provider-matrix tests that require the optional SQL Server acceptance instance.</summary>
+public sealed class SqlServerRequiredFactAttribute : FactAttribute
+{
+    public SqlServerRequiredFactAttribute()
+    {
+        if (!SqlServerAcceptanceRun.IsConfigured)
+        {
+            Skip = $"Provider matrix SQL Server catalog tests not executed: {SqlServerAcceptanceRun.ServerEnvironmentVariable} is absent.";
+        }
     }
 }
