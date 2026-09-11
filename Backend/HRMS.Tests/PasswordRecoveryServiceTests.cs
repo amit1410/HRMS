@@ -76,6 +76,19 @@ public sealed class PasswordRecoveryServiceTests
         Assert.Equal(ResultStatus.Unauthorized, result.Status);
     }
 
+    [Fact]
+    public async Task SMTP_delivery_failure_returns_generic_service_unavailable_result()
+    {
+        using var harness = await ArrangeAsync();
+        var service = CreateService(harness, new FailingEmailSender(), new RecordingSmsSender());
+        var identified = await service.IdentifyAsync(new ForgotPasswordRequest("employee@example.test"));
+
+        var result = await service.SendOtpAsync(new SendRecoveryOtpRequest(identified.Value!.ChallengeId, PasswordRecoveryChannel.Email));
+
+        Assert.Equal(ResultStatus.ServiceUnavailable, result.Status);
+        Assert.Equal("If the account is eligible and the selected method is available, a verification code has been sent.", result.Message);
+    }
+
     private static async Task<OrganizationTestHarness> ArrangeAsync()
     {
         var harness = await OrganizationTestHarness.CreateAsync();
@@ -136,6 +149,16 @@ public sealed class PasswordRecoveryServiceTests
             Destination = message.Destination;
             return Task.FromResult<string?>(message.Otp);
         }
+    }
+
+    private sealed class FailingEmailSender : IEmailSender
+    {
+        public Task SendLeaveNotificationAsync(LeaveNotificationEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task SendWelcomeInviteAsync(WelcomeEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<string?> SendPasswordResetOtpAsync(OtpDeliveryMessage message, CancellationToken cancellationToken = default) =>
+            Task.FromException<string?>(new EmailDeliveryException(EmailDeliveryFailureKind.Timeout, "SMTP delivery timed out.", "smtp.example.test", 587, new TimeoutException()));
     }
 
     private sealed class RecordingSmsSender : ISmsOtpSender

@@ -69,7 +69,7 @@ Email__Provider=Smtp
 Email__FromEmail=noreply@anevratechnology.com
 Email__FromName=Anevra HRMS
 Email__Smtp__Host=smtp.hostinger.com
-Email__Smtp__Port=465
+Email__Smtp__Port=587
 Email__Smtp__Username=noreply@anevratechnology.com
 Email__Smtp__Password=<smtp-password>
 Email__Smtp__EnableSsl=true
@@ -83,6 +83,8 @@ Database__CatalogProvider=MySql
 ConnectionStrings__Catalog=<mysql-catalog-connection-string>
 Sharding__MySqlConnectionStringTemplate=<mysql-tenant-template-with-{shardKey}>
 ```
+
+This SMTP adapter uses `System.Net.Mail.SmtpClient` with `EnableSsl=true`; configure port 587 with STARTTLS as the preferred production setting. Port 465 is implicit TLS and is not the preferred pairing for this implementation.
 
 For SQL Server, use `Database__Provider=SqlServer`, provide `ConnectionStrings__Catalog`, and provide `Sharding__SqlServerConnectionStringTemplate` or legacy `Sharding__ConnectionStringTemplate`; `ConnectionStrings__SqlServer` is the shared-tenant fallback. Inactive-provider credentials are not required.
 

@@ -11,7 +11,8 @@ public enum ResultStatus
     Unauthorized = 2,
     Forbidden = 3,
     NotFound = 4,
-    Conflict = 5
+    Conflict = 5,
+    ServiceUnavailable = 6
 }
 
 /// <summary>
@@ -47,6 +48,8 @@ public sealed class Result<T>
     public static Result<T> Forbidden(string message) => Failure(ResultStatus.Forbidden, message);
 
     public static Result<T> NotFound(string message) => Failure(ResultStatus.NotFound, message);
+
+    public static Result<T> Unavailable(string message) => Failure(ResultStatus.ServiceUnavailable, message);
 
     /// <summary>A uniqueness or dependency conflict — the request is well formed but the state forbids it.</summary>
     public static Result<T> Conflict(string message, IReadOnlyList<ValidationError>? errors = null) =>

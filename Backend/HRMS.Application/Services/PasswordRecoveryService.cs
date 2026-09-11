@@ -7,6 +7,7 @@ using HRMS.Application.DTOs.Tenants;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace HRMS.Application.Services;
 
@@ -18,7 +19,8 @@ public sealed class PasswordRecoveryService(
     IEmailSender emailSender,
     ISmsOtpSender smsSender,
     TimeProvider clock,
-    IShardContext shardContext) : IPasswordRecoveryService
+    IShardContext shardContext,
+    ILogger<PasswordRecoveryService>? logger = null) : IPasswordRecoveryService
 {
     private const string Generic = "If the account is eligible for password recovery, you can continue with the available verification method.";
     private const string SendGeneric = "If the account is eligible and the selected method is available, a verification code has been sent.";
@@ -88,7 +90,18 @@ public sealed class PasswordRecoveryService(
         if (existing is null) db.PasswordResetOtps.Add(row);
         var tenantName = (await db.Tenants.AsNoTracking().FirstOrDefaultAsync(x => x.Id == userRecord.TenantId, ct))?.TenantName ?? "HRMS";
         var message = new OtpDeliveryMessage(destination, otp, tenantName, userRecord.FirstName, row.ExpiresAtUtc, channel.Value);
-        string? developmentOtp = channel == PasswordRecoveryChannel.Email ? await emailSender.SendPasswordResetOtpAsync(message, ct) : await smsSender.SendAsync(message, ct);
+        string? developmentOtp;
+        try
+        {
+            developmentOtp = channel == PasswordRecoveryChannel.Email
+                ? await emailSender.SendPasswordResetOtpAsync(message, ct)
+                : await smsSender.SendAsync(message, ct);
+        }
+        catch (EmailDeliveryException exception) when (!ct.IsCancellationRequested)
+        {
+            logger?.LogError(exception, "Password recovery email delivery failed. Kind {FailureKind}, Host {Host}, Port {Port}.", exception.Kind, exception.Host, exception.Port);
+            return Result<RecoverySendOtpDto>.Unavailable(SendGeneric);
+        }
         await db.PasswordResetOtps.IgnoreQueryFilters().Where(x => x.TenantId == row.TenantId && x.ChallengeIdHash == row.ChallengeIdHash && x.Id != row.Id && x.RevokedAtUtc == null).ExecuteUpdateAsync(s => s.SetProperty(x => x.RevokedAtUtc, now), ct);
         await db.SaveChangesAsync(ct);
         return Result<RecoverySendOtpDto>.Success(new(challengeId, channel.Value, string.Empty, developmentOtp, SendGeneric), SendGeneric);

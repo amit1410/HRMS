@@ -160,7 +160,7 @@ public sealed class PasswordRecoveryProviderRegistrationTests
             [prefix + "Email__SmtpPort"] = "587",
             [prefix + "Email__SmtpUsername"] = "amit@anevratechnologies.com",
             [prefix + "Email__SmtpPassword"] = "mailbox-password",
-            [prefix + "Email__FromEmail"] = "no-reply@anevratechnologies.com",
+            [prefix + "Email__FromEmail"] = "amit@anevratechnologies.com",
             [prefix + "Email__FromName"] = "Anevra Technologies",
             [prefix + "Email__EnableSsl"] = "true",
             [prefix + "PasswordRecoveryProviders__EmailProvider"] = "Smtp",
@@ -173,7 +173,7 @@ public sealed class PasswordRecoveryProviderRegistrationTests
             var options = PasswordRecoveryProviderOptions.Load(configuration, isDevelopment: false);
             options.Validate(configuration);
 
-            Assert.Equal("no-reply@anevratechnologies.com", configuration["Email:FromEmail"]);
+            Assert.Equal("amit@anevratechnologies.com", configuration["Email:FromEmail"]);
             Assert.Equal("Anevra Technologies", configuration["Email:FromName"]);
             Assert.Equal("Smtp", options.EmailProvider);
         }
