@@ -68,7 +68,9 @@ export const NAV_ITEMS: readonly NavItem[] = [
     { label: 'Shift Patterns', to: '/attendance/shift-patterns', permission: Permissions.attendance.view, available: true },
     { label: 'Shift Applicability', to: '/attendance/applicability', permission: Permissions.attendance.view, available: true },
     { label: 'Roster', to: '/attendance/roster', permission: Permissions.attendance.view, available: true },
-    { label: 'Roster Upload', to: '/attendance/roster-upload', permission: Permissions.attendance.view, available: true },
+  { label: 'Roster Upload', to: '/attendance/roster-upload', permission: Permissions.attendance.view, available: true },
+  { label: 'My Attendance', to: '/attendance/my-attendance', available: true, requiresEmployeeIdentity: true },
+  { label: 'Team Attendance', to: '/attendance/team', permission: Permissions.attendance.view, available: true },
 ]
 
 export function visibleNavItems(can: (permission: string) => boolean, user?: AuthenticatedUser | null): NavItem[] {

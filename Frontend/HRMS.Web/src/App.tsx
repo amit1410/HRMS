@@ -39,6 +39,8 @@ import { LeaveDashboardPage } from './pages/leave/LeaveDashboardPage.tsx'
 import { LeaveReportsPage } from './pages/leave/LeaveReportsPage.tsx'
 import { AttendanceFoundationPage } from './pages/attendance/AttendanceFoundationPage.tsx'
 import { ShiftPatternsPage } from './pages/attendance/ShiftPatternsPage.tsx'
+import { MyAttendancePage } from './pages/attendance/MyAttendancePage.tsx'
+import { ManagerAttendancePage } from './pages/attendance/ManagerAttendancePage.tsx'
 import { PlatformTenantsPage } from './pages/platform/PlatformTenantsPage.tsx'
 import { PlatformLoginPage } from './pages/platform/PlatformLoginPage.tsx'
 import { PlatformAuthProvider, usePlatformAuth } from './auth/PlatformAuthProvider.tsx'
@@ -142,8 +144,10 @@ function TenantApplication() {
                     <Route path="attendance/shifts" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
                     <Route path="attendance/applicability" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
                     <Route path="attendance/roster" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
-                    <Route path="attendance/roster-upload" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
+                  <Route path="attendance/roster-upload" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
                   <Route path="attendance/shift-patterns" element={<RequirePermission permission={Permissions.attendance.view}><ShiftPatternsPage /></RequirePermission>} />
+                  <Route path="attendance/my-attendance" element={<MyAttendancePage />} />
+                  <Route path="attendance/team" element={<RequirePermission permission={Permissions.attendance.view}><ManagerAttendancePage /></RequirePermission>} />
               <Route path="employees">
                 <Route
                   index

@@ -86,6 +86,7 @@ public static class DependencyInjection
         services.AddScoped<IAttendanceBusinessTimeZoneProvider, AttendanceBusinessTimeZoneProvider>();
         services.AddScoped<IAttendancePunchIngestionService, AttendancePunchIngestionService>();
         services.AddScoped<IAttendanceDayProcessor, AttendanceDayProcessor>();
+        services.AddScoped<IAttendanceReadService, AttendanceReadService>();
 
         return services;
     }
