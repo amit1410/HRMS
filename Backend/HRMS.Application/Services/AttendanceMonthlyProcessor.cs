@@ -100,6 +100,67 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
         }
     }
 
+    public async Task<Result<AttendancePeriodClosePreviewDto>> GetClosePreviewAsync(Guid periodId, CancellationToken ct = default)
+    {
+        if (!TryTenant(out var tenantId, out _)) return Result<AttendancePeriodClosePreviewDto>.Unauthorized("No authenticated tenant.");
+        var period = await db.AttendancePeriods.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == periodId, ct);
+        if (period is null) return Result<AttendancePeriodClosePreviewDto>.NotFound("Attendance period was not found.");
+        return Result<AttendancePeriodClosePreviewDto>.Success(await BuildClosePreviewAsync(period, ct));
+    }
+
+    public async Task<Result<AttendancePeriodDto>> CloseAsync(Guid periodId, AttendancePeriodCommandRequest? request = null, CancellationToken ct = default)
+    {
+        if (!TryTenant(out var tenantId, out var userId)) return Result<AttendancePeriodDto>.Unauthorized("No authenticated tenant.");
+        var period = await db.AttendancePeriods.SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == periodId, ct);
+        if (period is null) return Result<AttendancePeriodDto>.NotFound("Attendance period was not found.");
+        if (period.Status == AttendancePeriodStatus.Closed) return Result<AttendancePeriodDto>.Conflict("The Attendance period is already closed.");
+        await using var transaction = await db.BeginTransactionAsync(ct);
+        var preview = await BuildClosePreviewAsync(period, ct);
+        if (!preview.CanClose) return Result<AttendancePeriodDto>.Conflict(string.Join(" ", preview.Blockers));
+        period.Status = AttendancePeriodStatus.Closed;
+        period.ConcurrencyVersion++;
+        db.AttendancePeriodEvents.Add(Event(period, AttendancePeriodEventType.Closed, userId, string.IsNullOrWhiteSpace(request?.Comment) ? "Attendance period closed." : request.Comment.Trim()));
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+            return Result<AttendancePeriodDto>.Success(Map(period));
+        }
+        catch (DbUpdateConcurrencyException) { return Result<AttendancePeriodDto>.Conflict("The Attendance period was changed by another operation."); }
+        catch { await transaction.RollbackAsync(ct); return Result<AttendancePeriodDto>.Failure(ResultStatus.ServiceUnavailable, "The Attendance period could not be closed."); }
+    }
+
+    public async Task<Result<AttendancePeriodDto>> ReopenAsync(Guid periodId, AttendancePeriodReopenRequest request, CancellationToken ct = default)
+    {
+        if (!TryTenant(out var tenantId, out var userId)) return Result<AttendancePeriodDto>.Unauthorized("No authenticated tenant.");
+        if (string.IsNullOrWhiteSpace(request.Reason)) return Result<AttendancePeriodDto>.Invalid("reason", "A reopen reason is required.");
+        if (request.Reason.Trim().Length > 2000) return Result<AttendancePeriodDto>.Invalid("reason", "The reopen reason is too long.");
+        var period = await db.AttendancePeriods.SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == periodId, ct);
+        if (period is null) return Result<AttendancePeriodDto>.NotFound("Attendance period was not found.");
+        if (period.Status != AttendancePeriodStatus.Closed) return Result<AttendancePeriodDto>.Conflict("Only a closed Attendance period can be reopened.");
+        await using var transaction = await db.BeginTransactionAsync(ct);
+        period.Status = AttendancePeriodStatus.Open;
+        period.DataVersion++;
+        period.ConcurrencyVersion++;
+        db.AttendancePeriodEvents.Add(Event(period, AttendancePeriodEventType.Reopened, userId, request.Reason.Trim()));
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+            return Result<AttendancePeriodDto>.Success(Map(period));
+        }
+        catch (DbUpdateConcurrencyException) { return Result<AttendancePeriodDto>.Conflict("The Attendance period was changed by another operation."); }
+        catch { await transaction.RollbackAsync(ct); return Result<AttendancePeriodDto>.Failure(ResultStatus.ServiceUnavailable, "The Attendance period could not be reopened."); }
+    }
+
+    public async Task<Result<IReadOnlyList<AttendancePeriodEventDto>>> GetEventsAsync(Guid periodId, CancellationToken ct = default)
+    {
+        if (!TryTenant(out var tenantId, out _)) return Result<IReadOnlyList<AttendancePeriodEventDto>>.Unauthorized("No authenticated tenant.");
+        if (!await db.AttendancePeriods.AnyAsync(x => x.TenantId == tenantId && x.Id == periodId, ct)) return Result<IReadOnlyList<AttendancePeriodEventDto>>.NotFound("Attendance period was not found.");
+        var events = await db.AttendancePeriodEvents.AsNoTracking().Where(x => x.TenantId == tenantId && x.AttendancePeriodId == periodId).OrderBy(x => x.OccurredAtUtc).ThenBy(x => x.Id).Select(x => new AttendancePeriodEventDto(x.Id, x.AttendancePeriodId, x.EventType, x.ActorUserId, x.OccurredAtUtc, x.DataVersion, x.Details)).ToListAsync(ct);
+        return Result<IReadOnlyList<AttendancePeriodEventDto>>.Success(events);
+    }
+
     public async Task<Result<AttendancePeriodOverviewDto>> GetOverviewAsync(Guid periodId, CancellationToken ct = default)
     {
         if (!TryTenant(out var tenantId, out _)) return Result<AttendancePeriodOverviewDto>.Unauthorized("No authenticated tenant.");
@@ -149,6 +210,23 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
             var ods = await db.AttendanceOnDutyRequests.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employee.Id && x.StartDate <= period.EndDate && x.EndDate >= period.StartDate && x.Status == AttendanceRequestStatus.Pending).ToListAsync(ct); result.AddRange(ods.Select(x => Exception(period.Id, employee.Id, x.StartDate < period.StartDate ? period.StartDate : x.StartDate, AttendanceExceptionType.PendingOnDuty, true, x.Id, "Pending On Duty blocks monthly processing.")));
         }
         return result;
+    }
+
+    private async Task<AttendancePeriodClosePreviewDto> BuildClosePreviewAsync(AttendancePeriod period, CancellationToken ct)
+    {
+        var summaries = await db.EmployeeAttendanceMonthlySummaries.AsNoTracking().Where(x => x.TenantId == period.TenantId && x.AttendancePeriodId == period.Id).ToListAsync(ct);
+        var employees = await db.Employees.AsNoTracking().Where(x => x.TenantId == period.TenantId && x.DateOfJoining <= period.EndDate && (x.DateOfLeaving == null || x.DateOfLeaving >= period.StartDate)).Select(x => x.Id).ToListAsync(ct);
+        var exceptions = await DeriveExceptions(period, ct);
+        var pendingReg = exceptions.Count(x => x.ExceptionType == AttendanceExceptionType.PendingRegularization);
+        var pendingOd = exceptions.Count(x => x.ExceptionType == AttendanceExceptionType.PendingOnDuty);
+        var notProcessed = exceptions.Count(x => x.ExceptionType == AttendanceExceptionType.NotProcessed);
+        var incomplete = exceptions.Count(x => x.ExceptionType == AttendanceExceptionType.Incomplete);
+        var blockers = new List<string>();
+        if (period.Status != AttendancePeriodStatus.ReadyToClose) blockers.Add("The Attendance period must be processed and ReadyToClose.");
+        var current = summaries.Count == employees.Count && summaries.All(x => x.SourceDataVersion == period.DataVersion);
+        if (!current) blockers.Add("Monthly summaries are missing or stale.");
+        if (exceptions.Any(x => x.IsBlocking)) blockers.Add("Blocking Attendance exceptions remain.");
+        return new(period.Id, period.Status, blockers.Count == 0, period.DataVersion, current, summaries.Count, exceptions.Count(x => x.IsBlocking), pendingReg, pendingOd, notProcessed, incomplete, blockers);
     }
 
     private static void AddDay(EmployeeAttendanceMonthlySummary s, EmployeeAttendanceDay? day, Guid tenantId, Guid periodId, Guid employeeId, DateOnly date, List<AttendanceExceptionDto> exceptions)

@@ -23,6 +23,18 @@ public sealed class AttendanceMonthlyController(IAttendanceMonthlyProcessor proc
     [HttpPost("periods/{periodId:guid}/process"), HasPermission(Permissions.Attendance.MonthlyProcess)]
     public async Task<ActionResult<ApiResponse<AttendancePeriodOverviewDto>>> Process(Guid periodId, CancellationToken ct) => (await processor.ProcessAsync(periodId, ct)).ToActionResult();
 
+    [HttpGet("periods/{periodId:guid}/close-preview"), HasPermission(Permissions.Attendance.MonthlyViewAll)]
+    public async Task<ActionResult<ApiResponse<AttendancePeriodClosePreviewDto>>> ClosePreview(Guid periodId, CancellationToken ct) => (await processor.GetClosePreviewAsync(periodId, ct)).ToActionResult();
+
+    [HttpPost("periods/{periodId:guid}/close"), HasPermission(Permissions.Attendance.MonthlyClose)]
+    public async Task<ActionResult<ApiResponse<AttendancePeriodDto>>> Close(Guid periodId, AttendancePeriodCommandRequest? request, CancellationToken ct) => (await processor.CloseAsync(periodId, request, ct)).ToActionResult();
+
+    [HttpPost("periods/{periodId:guid}/reopen"), HasPermission(Permissions.Attendance.MonthlyReopen)]
+    public async Task<ActionResult<ApiResponse<AttendancePeriodDto>>> Reopen(Guid periodId, AttendancePeriodReopenRequest request, CancellationToken ct) => (await processor.ReopenAsync(periodId, request, ct)).ToActionResult();
+
+    [HttpGet("periods/{periodId:guid}/events"), HasPermission(Permissions.Attendance.MonthlyViewAll)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<AttendancePeriodEventDto>>>> Events(Guid periodId, CancellationToken ct) => (await processor.GetEventsAsync(periodId, ct)).ToActionResult();
+
     [HttpGet("periods/{periodId:guid}/summary"), HasPermission(Permissions.Attendance.MonthlyViewAll)]
     public async Task<ActionResult<ApiResponse<AttendancePeriodOverviewDto>>> Summary(Guid periodId, CancellationToken ct) => (await processor.GetOverviewAsync(periodId, ct)).ToActionResult();
 

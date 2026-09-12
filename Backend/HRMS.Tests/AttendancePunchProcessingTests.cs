@@ -56,6 +56,76 @@ public sealed class AttendancePunchProcessingTests
         Assert.Equal(1, await f.Context.AttendancePunches.CountAsync());
     }
 
+    [Fact]
+    public async Task Late_punch_for_closed_period_is_retained_without_reprocessing_effective_attendance()
+    {
+        using var f = await CreateFixtureAsync();
+        var date = new DateOnly(2026, 11, 10);
+        f.Context.Users.Add(new User { Id = f.TenantContext.UserId!.Value, TenantId = f.TenantId, Email = "monthly-processor@example.test", FirstName = "Monthly", LastName = "Processor" });
+        for (var day = new DateOnly(2026, 11, 1); day <= new DateOnly(2026, 11, 30); day = day.AddDays(1))
+            f.Context.EmployeeAttendanceDays.Add(new EmployeeAttendanceDay { Id = Guid.NewGuid(), TenantId = f.TenantId, EmployeeId = f.EmployeeId, BusinessDate = day, Status = EmployeeAttendanceDayStatus.Present, ExpectedWorkMinutes = 480, WorkedMinutes = 480, ProcessedAtUtc = DateTime.UtcNow });
+        await f.Context.SaveChangesAsync();
+        var monthly = new AttendanceMonthlyProcessor(f.Context, f.TenantContext);
+        var created = await monthly.CreatePeriodAsync(new(2026, 11));
+        Assert.True(created.Succeeded, created.Message);
+        var period = created.Value!;
+        var processed = await monthly.ProcessAsync(period.Id);
+        Assert.True(processed.Succeeded, processed.Message);
+        Assert.True((await monthly.CloseAsync(period.Id)).Succeeded);
+        var beforeDay = await f.Context.EmployeeAttendanceDays.AsNoTracking().SingleAsync(x => x.EmployeeId == f.EmployeeId && x.BusinessDate == date);
+        var beforeSummary = await f.Context.EmployeeAttendanceMonthlySummaries.AsNoTracking().SingleAsync(x => x.AttendancePeriodId == period.Id);
+        var beforePunches = await f.Context.AttendancePunches.CountAsync();
+
+        var late = await Ingestion(f).IngestAsync(new(f.EmployeeId, new DateTime(2026, 11, 10, 19, 0, 0, DateTimeKind.Utc), PunchDirection.Out, PunchSource.Biometric, "late-closed-period"));
+        Assert.True(late.Succeeded, late.Message);
+        var afterDay = await f.Context.EmployeeAttendanceDays.AsNoTracking().SingleAsync(x => x.EmployeeId == f.EmployeeId && x.BusinessDate == date);
+        var afterSummary = await f.Context.EmployeeAttendanceMonthlySummaries.AsNoTracking().SingleAsync(x => x.AttendancePeriodId == period.Id);
+        Assert.Equal(beforePunches + 1, await f.Context.AttendancePunches.CountAsync());
+        Assert.Equal(beforeDay.Status, afterDay.Status); Assert.Equal(beforeDay.WorkedMinutes, afterDay.WorkedMinutes); Assert.Equal(beforeDay.PunchCount, afterDay.PunchCount);
+        Assert.Equal(beforeSummary.ActualWorkMinutes, afterSummary.ActualWorkMinutes); Assert.Equal(beforeSummary.SourceDataVersion, afterSummary.SourceDataVersion);
+        Assert.Equal(AttendancePeriodStatus.Closed, await f.Context.AttendancePeriods.Where(x => x.Id == period.Id).Select(x => x.Status).SingleAsync());
+    }
+
+    [Fact]
+    public async Task Concurrent_close_and_attendance_day_reprocess_never_close_stale_effective_data()
+    {
+        using var f = await CreateFixtureAsync();
+        f.Context.Users.Add(new User { Id = f.TenantContext.UserId!.Value, TenantId = f.TenantId, Email = "day-race@example.test", FirstName = "Day", LastName = "Race" });
+        for (var day = new DateOnly(2026, 10, 1); day <= new DateOnly(2026, 10, 31); day = day.AddDays(1))
+            f.Context.EmployeeAttendanceDays.Add(new EmployeeAttendanceDay { Id = Guid.NewGuid(), TenantId = f.TenantId, EmployeeId = f.EmployeeId, BusinessDate = day, Status = EmployeeAttendanceDayStatus.Present, ExpectedWorkMinutes = 480, WorkedMinutes = 480, ProcessedAtUtc = DateTime.UtcNow });
+        await f.Context.SaveChangesAsync();
+        var monthly = new AttendanceMonthlyProcessor(f.Context, f.TenantContext);
+        var period = (await monthly.CreatePeriodAsync(new(2026, 10))).Value!;
+        Assert.True((await monthly.ProcessAsync(period.Id)).Succeeded);
+        var before = await f.Context.EmployeeAttendanceDays.AsNoTracking().SingleAsync(x => x.BusinessDate == new DateOnly(2026, 10, 10));
+
+        await using var closeDb = f.CreateContext(f.TenantId, out var closeTenant);
+        await using var dayDb = f.CreateContext(f.TenantId, out var dayTenant);
+        var dayEmployment = new EffectiveEmploymentResolver(dayDb, dayTenant);
+        var dayCalendar = new WorkingDayCalendarResolver(dayDb, dayTenant, dayEmployment);
+        var dayRoster = new AttendanceFoundationService(dayDb, dayTenant, dayEmployment, dayCalendar, periodLock: new AttendancePeriodLockService(dayDb, dayTenant));
+        var closeTask = new AttendanceMonthlyProcessor(closeDb, closeTenant).CloseAsync(period.Id);
+        var reprocessTask = new AttendanceDayProcessor(dayDb, dayTenant, dayRoster, new FixedClock(new DateTimeOffset(2026, 10, 10, 20, 0, 0, TimeSpan.Zero)), new AttendancePeriodLockService(dayDb, dayTenant)).ProcessAsync(f.EmployeeId, new DateOnly(2026, 10, 10));
+        await Task.WhenAll(closeTask, reprocessTask);
+
+        await using var verify = f.CreateContext(f.TenantId, out _);
+        var persistedPeriod = await verify.AttendancePeriods.AsNoTracking().SingleAsync(x => x.Id == period.Id);
+        var persistedDay = await verify.EmployeeAttendanceDays.AsNoTracking().SingleAsync(x => x.BusinessDate == before.BusinessDate);
+        var summaryVersion = await verify.EmployeeAttendanceMonthlySummaries.Where(x => x.AttendancePeriodId == period.Id).Select(x => x.SourceDataVersion).SingleAsync();
+        if (persistedPeriod.Status == AttendancePeriodStatus.Closed)
+        {
+            Assert.Equal(before.Status, persistedDay.Status);
+            Assert.Equal(before.WorkedMinutes, persistedDay.WorkedMinutes);
+            Assert.Equal(summaryVersion, persistedPeriod.DataVersion);
+        }
+        else
+        {
+            Assert.NotEqual(AttendancePeriodStatus.Closed, persistedPeriod.Status);
+            Assert.NotEqual(before.Status, persistedDay.Status);
+            Assert.NotEqual(summaryVersion, persistedPeriod.DataVersion);
+        }
+    }
+
     [Theory]
     [InlineData(PunchSource.Biometric, AttendanceSource.Biometric, true)]
     [InlineData(PunchSource.Portal, AttendanceSource.Portal, true)]

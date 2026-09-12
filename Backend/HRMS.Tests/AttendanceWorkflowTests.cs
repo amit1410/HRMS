@@ -60,6 +60,72 @@ public sealed class AttendanceWorkflowTests
     }
 
     [Fact]
+    public async Task Concurrent_close_and_regularization_approval_never_apply_after_close()
+    {
+        using var f = await FixtureAsync();
+        f.Context.Users.Add(new User { Id = f.Inner.TenantContext.UserId!.Value, TenantId = f.TenantId, Email = "period-close@example.test", FirstName = "Period", LastName = "Closer" });
+        await f.Context.SaveChangesAsync();
+        var date = new DateOnly(2026, 9, 10);
+        await SeedIncompleteDayAsync(f, date);
+        var request = (await Service(f).SubmitRegularizationAsync(new(date, AttendanceRegularizationType.MissingOutPunch, null, date.ToDateTime(new(18, 0), DateTimeKind.Utc), "race"))).Value!;
+        var monthly = new AttendanceMonthlyProcessor(f.Context, f.Inner.TenantContext);
+        var period = (await monthly.CreatePeriodAsync(new(2026, 9))).Value!;
+        Assert.True((await monthly.ProcessAsync(period.Id)).Succeeded);
+
+        await using var closeDb = f.CreateContext(f.TenantId, out var closeTenant);
+        await using var approvalDb = f.CreateContext(f.TenantId, out var approvalTenant);
+        var closeTask = new AttendanceMonthlyProcessor(closeDb, closeTenant).CloseAsync(period.Id);
+        var approvalIdentity = new MutableIdentity(f.TenantId, f.Identity.UserId, f.ManagerId);
+        var approvalCalendar = new WorkingDayCalendarResolver(approvalDb, approvalTenant, new EffectiveEmploymentResolver(approvalDb, approvalTenant));
+        var approvalProcessor = new AttendanceDayProcessor(approvalDb, approvalTenant, new AttendanceFoundationService(approvalDb, approvalTenant, new EffectiveEmploymentResolver(approvalDb, approvalTenant), approvalCalendar), new FixedClock(new DateTimeOffset(2026, 9, 10, 20, 0, 0, TimeSpan.Zero)), new AttendancePeriodLockService(approvalDb, approvalTenant));
+        var approvalService = new AttendanceWorkflowService(approvalDb, approvalIdentity, f.Managers, approvalProcessor, new FixedClock(new DateTimeOffset(2026, 9, 10, 20, 0, 0, TimeSpan.Zero)), new AttendancePeriodLockService(approvalDb, approvalTenant));
+        var approvalTask = approvalService.ApproveRegularizationAsync(request.Id);
+        await Task.WhenAll(closeTask, approvalTask);
+        var closeResult = await closeTask;
+        var approvalResult = await approvalTask;
+
+        await using var verify = f.CreateContext(f.TenantId, out _);
+        var persistedPeriod = await verify.AttendancePeriods.AsNoTracking().SingleAsync(x => x.Id == period.Id);
+        var persistedRequest = await verify.AttendanceRegularizationRequests.AsNoTracking().SingleAsync(x => x.Id == request.Id);
+        Assert.False(persistedPeriod.Status == AttendancePeriodStatus.Closed && persistedRequest.Status == AttendanceRequestStatus.Approved);
+        Assert.NotEqual(AttendancePeriodStatus.Closed, persistedPeriod.Status);
+        Assert.True(closeResult.Status == ResultStatus.Conflict || closeResult.Status == ResultStatus.ServiceUnavailable);
+        Assert.True(approvalResult.Succeeded);
+    }
+
+    [Fact]
+    public async Task Concurrent_close_and_on_duty_approval_never_apply_after_close()
+    {
+        using var f = await FixtureAsync();
+        f.Context.Users.Add(new User { Id = f.Inner.TenantContext.UserId!.Value, TenantId = f.TenantId, Email = "period-close-od@example.test", FirstName = "Period", LastName = "Closer" });
+        await f.Context.SaveChangesAsync();
+        var submitted = (await Service(f).SubmitOnDutyAsync(new(new(2026, 9, 10), new(2026, 9, 10), "race"))).Value!;
+        var monthly = new AttendanceMonthlyProcessor(f.Context, f.Inner.TenantContext);
+        var period = (await monthly.CreatePeriodAsync(new(2026, 9))).Value!;
+        Assert.True((await monthly.ProcessAsync(period.Id)).Succeeded);
+
+        await using var closeDb = f.CreateContext(f.TenantId, out var closeTenant);
+        await using var approvalDb = f.CreateContext(f.TenantId, out var approvalTenant);
+        var closeTask = new AttendanceMonthlyProcessor(closeDb, closeTenant).CloseAsync(period.Id);
+        var approvalIdentity = new MutableIdentity(f.TenantId, f.Identity.UserId, f.ManagerId);
+        var approvalCalendar = new WorkingDayCalendarResolver(approvalDb, approvalTenant, new EffectiveEmploymentResolver(approvalDb, approvalTenant));
+        var approvalProcessor = new AttendanceDayProcessor(approvalDb, approvalTenant, new AttendanceFoundationService(approvalDb, approvalTenant, new EffectiveEmploymentResolver(approvalDb, approvalTenant), approvalCalendar), new FixedClock(new DateTimeOffset(2026, 9, 10, 20, 0, 0, TimeSpan.Zero)), new AttendancePeriodLockService(approvalDb, approvalTenant));
+        var approvalService = new AttendanceWorkflowService(approvalDb, approvalIdentity, f.Managers, approvalProcessor, new FixedClock(new DateTimeOffset(2026, 9, 10, 20, 0, 0, TimeSpan.Zero)), new AttendancePeriodLockService(approvalDb, approvalTenant));
+        var approvalTask = approvalService.ApproveOnDutyAsync(submitted.Id);
+        await Task.WhenAll(closeTask, approvalTask);
+        var closeResult = await closeTask;
+        var approvalResult = await approvalTask;
+
+        await using var verify = f.CreateContext(f.TenantId, out _);
+        var persistedPeriod = await verify.AttendancePeriods.AsNoTracking().SingleAsync(x => x.Id == period.Id);
+        var persistedRequest = await verify.AttendanceOnDutyRequests.AsNoTracking().SingleAsync(x => x.Id == submitted.Id);
+        Assert.False(persistedPeriod.Status == AttendancePeriodStatus.Closed && persistedRequest.Status == AttendanceRequestStatus.Approved);
+        Assert.NotEqual(AttendancePeriodStatus.Closed, persistedPeriod.Status);
+        Assert.True(closeResult.Status == ResultStatus.Conflict || closeResult.Status == ResultStatus.ServiceUnavailable);
+        Assert.True(approvalResult.Succeeded);
+    }
+
+    [Fact]
     public async Task Workflow_statuses_are_configured_as_optimistic_concurrency_tokens()
     {
         using var f = await FixtureAsync();

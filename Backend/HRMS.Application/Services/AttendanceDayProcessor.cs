@@ -10,13 +10,15 @@ public sealed class AttendanceDayProcessor(
     IHrmsDbContext db,
     ITenantContext tenant,
     IAttendanceFoundationService roster,
-    TimeProvider? timeProvider = null) : IAttendanceDayProcessor
+    TimeProvider? timeProvider = null,
+    IAttendancePeriodLockService? periodLock = null) : IAttendanceDayProcessor
 {
     private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
 
     public async Task<Result<EmployeeAttendanceDayDto>> ProcessAsync(Guid employeeId, DateOnly businessDate, CancellationToken cancellationToken = default)
     {
         if (tenant.TenantId is not Guid tenantId || tenantId == Guid.Empty) return Result<EmployeeAttendanceDayDto>.Unauthorized("No authenticated tenant.");
+        if (periodLock is not null && !(await periodLock.EnsureDateIsOpenAsync(businessDate, cancellationToken)).Succeeded) return Result<EmployeeAttendanceDayDto>.Conflict("The Attendance period is closed and must be reopened before this change.");
         if (!await db.Employees.AnyAsync(x => x.TenantId == tenantId && x.Id == employeeId, cancellationToken)) return Result<EmployeeAttendanceDayDto>.NotFound("Employee was not found in this tenant.");
         var resolution = await roster.ResolveAsync(employeeId, businessDate, cancellationToken);
         if (!resolution.Succeeded) return Result<EmployeeAttendanceDayDto>.Failure(resolution.Status, resolution.Message, resolution.Errors);
@@ -59,6 +61,12 @@ public sealed class AttendanceDayProcessor(
         }
         if (onDuty)
         { day.Status = EmployeeAttendanceDayStatus.OnDuty; day.ProcessingOutcome = "Approved On Duty applies; raw punches remain visible."; }
+        var period = await db.AttendancePeriods.SingleOrDefaultAsync(x => x.TenantId == tenantId && x.StartDate <= businessDate && x.EndDate >= businessDate && x.Status != AttendancePeriodStatus.Closed, cancellationToken);
+        if (period is not null)
+        {
+            period.DataVersion++;
+            period.ConcurrencyVersion++;
+        }
         try
         {
             await db.SaveChangesAsync(cancellationToken);

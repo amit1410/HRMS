@@ -88,6 +88,42 @@ public sealed class AttendanceMonthlyHttpTests : IClassFixture<HrmsApiFactory>
         Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
     }
 
+    [Fact]
+    public async Task Authorized_monthly_user_can_preview_close_reopen_and_read_period_events()
+    {
+        var permissions = new[] { Permissions.Attendance.MonthlyProcess, Permissions.Attendance.MonthlyViewAll, Permissions.Attendance.MonthlyClose, Permissions.Attendance.MonthlyReopen };
+        var scenario = await new AttendanceHttpEmployeeScenarioBuilder(factory).CreateAsync("CLOSE", permissions);
+        var create = await scenario.EmployeeClient.PostAsJsonAsync("/api/attendance/periods", new { year = 2026, month = 12 });
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        var period = (await create.Content.ReadFromJsonAsync<ApiResponse<AttendancePeriodDto>>(jsonOptions))!.Data!;
+        Assert.Equal(HttpStatusCode.OK, (await scenario.EmployeeClient.PostAsync($"/api/attendance/periods/{period.Id}/process", null)).StatusCode);
+        var previewResponse = await scenario.EmployeeClient.GetAsync($"/api/attendance/periods/{period.Id}/close-preview");
+        Assert.Equal(HttpStatusCode.OK, previewResponse.StatusCode);
+        var preview = (await previewResponse.Content.ReadFromJsonAsync<ApiResponse<AttendancePeriodClosePreviewDto>>(jsonOptions))!.Data!;
+        Assert.True(preview.CanClose); Assert.True(preview.SummariesCurrent);
+        var close = await scenario.EmployeeClient.PostAsJsonAsync($"/api/attendance/periods/{period.Id}/close", new { comment = "Monthly close" });
+        Assert.Equal(HttpStatusCode.OK, close.StatusCode);
+        var reopen = await scenario.EmployeeClient.PostAsJsonAsync($"/api/attendance/periods/{period.Id}/reopen", new { reason = "Correction review" });
+        Assert.Equal(HttpStatusCode.OK, reopen.StatusCode);
+        var events = await scenario.EmployeeClient.GetAsync($"/api/attendance/periods/{period.Id}/events");
+        Assert.Equal(HttpStatusCode.OK, events.StatusCode);
+        var history = (await events.Content.ReadFromJsonAsync<ApiResponse<IReadOnlyList<AttendancePeriodEventDto>>>(jsonOptions))!.Data!;
+        Assert.Contains(history, x => x.EventType == AttendancePeriodEventType.Closed);
+        Assert.Contains(history, x => x.EventType == AttendancePeriodEventType.Reopened);
+    }
+
+    [Fact]
+    public async Task Monthly_close_requires_its_dedicated_permission()
+    {
+        var permissions = new[] { Permissions.Attendance.MonthlyProcess, Permissions.Attendance.MonthlyViewAll };
+        var scenario = await new AttendanceHttpEmployeeScenarioBuilder(factory).CreateAsync("CLOSE", permissions);
+        var create = await scenario.EmployeeClient.PostAsJsonAsync("/api/attendance/periods", new { year = 2026, month = 11 });
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        var period = (await create.Content.ReadFromJsonAsync<ApiResponse<AttendancePeriodDto>>(jsonOptions))!.Data!;
+        Assert.Equal(HttpStatusCode.OK, (await scenario.EmployeeClient.PostAsync($"/api/attendance/periods/{period.Id}/process", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await scenario.EmployeeClient.PostAsync($"/api/attendance/periods/{period.Id}/close", null)).StatusCode);
+    }
+
     private static readonly JsonSerializerOptions jsonOptions = CreateJsonOptions();
 
     private static JsonSerializerOptions CreateJsonOptions()

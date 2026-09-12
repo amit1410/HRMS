@@ -268,6 +268,120 @@ public sealed class AttendanceMonthlyProcessorTests
         Assert.Equal(1, await retryDb.EmployeeAttendanceMonthlySummaries.CountAsync(x => x.AttendancePeriodId == period.Id));
     }
 
+    [Fact]
+    public async Task Ready_period_can_close_reopen_and_reclose_with_append_only_events()
+    {
+        using var database = new SqliteInMemoryDatabase();
+        var tenantId = Guid.NewGuid(); await SeedTenant(database, tenantId);
+        var scope = new TestTenantContext(tenantId);
+        await using var context = database.CreateContext(scope);
+        var processor = new AttendanceMonthlyProcessor(context, scope);
+        var period = (await processor.CreatePeriodAsync(new(2026, 12))).Value!;
+        Assert.True((await processor.ProcessAsync(period.Id)).Succeeded);
+        var preview = await processor.GetClosePreviewAsync(period.Id);
+        Assert.True(preview.Succeeded); Assert.True(preview.Value!.CanClose); Assert.True(preview.Value.SummariesCurrent);
+
+        var closed = await processor.CloseAsync(period.Id);
+        Assert.True(closed.Succeeded, closed.Message); Assert.Equal(AttendancePeriodStatus.Closed, closed.Value!.Status);
+        var repeatedClose = await processor.CloseAsync(period.Id);
+        Assert.Equal(HRMS.Application.Common.ResultStatus.Conflict, repeatedClose.Status);
+
+        var reopened = await processor.ReopenAsync(period.Id, new("Correction required for audit."));
+        Assert.True(reopened.Succeeded, reopened.Message); Assert.Equal(AttendancePeriodStatus.Open, reopened.Value!.Status); Assert.Equal(2, reopened.Value.DataVersion);
+        Assert.True((await processor.ProcessAsync(period.Id)).Succeeded);
+        Assert.True((await processor.CloseAsync(period.Id)).Succeeded);
+
+        var events = await context.AttendancePeriodEvents.AsNoTracking().Where(x => x.AttendancePeriodId == period.Id).OrderBy(x => x.OccurredAtUtc).ToListAsync();
+        Assert.Equal(new[] { AttendancePeriodEventType.Created, AttendancePeriodEventType.ProcessingStarted, AttendancePeriodEventType.ProcessingCompleted, AttendancePeriodEventType.Closed, AttendancePeriodEventType.Reopened, AttendancePeriodEventType.ProcessingStarted, AttendancePeriodEventType.ProcessingCompleted, AttendancePeriodEventType.Closed }, events.Select(x => x.EventType));
+    }
+
+    [Fact]
+    public async Task Close_revalidates_stale_summary_and_blocking_exception()
+    {
+        using var database = new SqliteInMemoryDatabase();
+        var tenantId = Guid.NewGuid(); var employeeId = Guid.NewGuid(); var userId = Guid.NewGuid(); await SeedTenant(database, tenantId);
+        await using (var seed = database.CreateContext(new TestTenantContext(tenantId)))
+        {
+            seed.Users.Add(new User { Id = userId, TenantId = tenantId, Email = "close@test.local", FirstName = "Close", LastName = "Tester" });
+            seed.Employees.Add(Employee(tenantId, employeeId, new(2026, 1, 1), null));
+            seed.EmployeeEmploymentHistory.Add(History(tenantId, employeeId, new(2026, 1, 1), null));
+            await seed.SaveChangesAsync();
+        }
+        var scope = new TestTenantContext(tenantId, userId);
+        await using var context = database.CreateContext(scope);
+        var processor = new AttendanceMonthlyProcessor(context, scope);
+        var period = (await processor.CreatePeriodAsync(new(2026, 12))).Value!;
+        Assert.True((await processor.ProcessAsync(period.Id)).Succeeded);
+        var stale = await context.AttendancePeriods.SingleAsync(x => x.Id == period.Id); stale.DataVersion++; await context.SaveChangesAsync();
+        var staleClose = await processor.CloseAsync(period.Id);
+        Assert.Equal(HRMS.Application.Common.ResultStatus.Conflict, staleClose.Status); Assert.Equal(AttendancePeriodStatus.ReadyToClose, (await context.AttendancePeriods.AsNoTracking().SingleAsync(x => x.Id == period.Id)).Status);
+
+        stale.DataVersion--; await context.SaveChangesAsync();
+        var blocked = await processor.GetClosePreviewAsync(period.Id);
+        Assert.False(blocked.Value!.CanClose); Assert.Contains(blocked.Value.Blockers, x => x.Contains("Blocking", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(HRMS.Application.Common.ResultStatus.Conflict, (await processor.CloseAsync(period.Id)).Status);
+        Assert.DoesNotContain(await context.AttendancePeriodEvents.AsNoTracking().Where(x => x.AttendancePeriodId == period.Id).ToListAsync(), x => x.EventType == AttendancePeriodEventType.Closed);
+    }
+
+    [Fact]
+    public async Task Concurrent_close_and_reopen_commands_have_one_winner_and_one_audit_event_each()
+    {
+        using var database = new SqliteInMemoryDatabase();
+        var tenantId = Guid.NewGuid(); await SeedTenant(database, tenantId);
+        await using var setup = database.CreateContext(new TestTenantContext(tenantId));
+        var setupProcessor = new AttendanceMonthlyProcessor(setup, new TestTenantContext(tenantId));
+        var period = (await setupProcessor.CreatePeriodAsync(new(2026, 10))).Value!;
+        Assert.True((await setupProcessor.ProcessAsync(period.Id)).Succeeded);
+
+        await using var closeA = database.CreateContext(new TestTenantContext(tenantId));
+        await using var closeB = database.CreateContext(new TestTenantContext(tenantId));
+        var closes = await Task.WhenAll(new AttendanceMonthlyProcessor(closeA, new TestTenantContext(tenantId)).CloseAsync(period.Id), new AttendanceMonthlyProcessor(closeB, new TestTenantContext(tenantId)).CloseAsync(period.Id));
+        Assert.Single(closes, x => x.Succeeded); Assert.Single(closes, x => !x.Succeeded);
+
+        await using var reopenA = database.CreateContext(new TestTenantContext(tenantId));
+        await using var reopenB = database.CreateContext(new TestTenantContext(tenantId));
+        var reopens = await Task.WhenAll(new AttendanceMonthlyProcessor(reopenA, new TestTenantContext(tenantId)).ReopenAsync(period.Id, new("Concurrent reopen A")), new AttendanceMonthlyProcessor(reopenB, new TestTenantContext(tenantId)).ReopenAsync(period.Id, new("Concurrent reopen B")));
+        Assert.Single(reopens, x => x.Succeeded); Assert.Single(reopens, x => !x.Succeeded);
+        await using var verify = database.CreateContext(new TestTenantContext(tenantId));
+        Assert.Equal(AttendancePeriodStatus.Open, await verify.AttendancePeriods.Where(x => x.Id == period.Id).Select(x => x.Status).SingleAsync());
+        Assert.Equal(1, await verify.AttendancePeriodEvents.CountAsync(x => x.AttendancePeriodId == period.Id && x.EventType == AttendancePeriodEventType.Closed));
+        Assert.Equal(1, await verify.AttendancePeriodEvents.CountAsync(x => x.AttendancePeriodId == period.Id && x.EventType == AttendancePeriodEventType.Reopened));
+    }
+
+    [Fact]
+    public async Task Concurrent_process_and_close_leave_a_consistent_period_state()
+    {
+        using var database = new SqliteInMemoryDatabase();
+        var tenantId = Guid.NewGuid(); await SeedTenant(database, tenantId);
+        await using var setup = database.CreateContext(new TestTenantContext(tenantId));
+        var setupProcessor = new AttendanceMonthlyProcessor(setup, new TestTenantContext(tenantId));
+        var period = (await setupProcessor.CreatePeriodAsync(new(2026, 10))).Value!;
+        Assert.True((await setupProcessor.ProcessAsync(period.Id)).Succeeded);
+
+        await using var processDb = database.CreateContext(new TestTenantContext(tenantId));
+        await using var closeDb = database.CreateContext(new TestTenantContext(tenantId));
+        var processTask = new AttendanceMonthlyProcessor(processDb, new TestTenantContext(tenantId)).ProcessAsync(period.Id);
+        var closeTask = new AttendanceMonthlyProcessor(closeDb, new TestTenantContext(tenantId)).CloseAsync(period.Id);
+        await Task.WhenAll(processTask, closeTask);
+        var processResult = await processTask;
+        var closeResult = await closeTask;
+
+        await using var verify = database.CreateContext(new TestTenantContext(tenantId));
+        var persisted = await verify.AttendancePeriods.AsNoTracking().SingleAsync(x => x.Id == period.Id);
+        Assert.NotEqual(AttendancePeriodStatus.Processing, persisted.Status);
+        Assert.NotEqual(AttendancePeriodStatus.Open, persisted.Status);
+        var closedEvents = await verify.AttendancePeriodEvents.CountAsync(x => x.AttendancePeriodId == period.Id && x.EventType == AttendancePeriodEventType.Closed);
+        Assert.InRange(closedEvents, 0, 1);
+        if (persisted.Status == AttendancePeriodStatus.Closed)
+        {
+            Assert.Equal(1, closedEvents);
+            var summaryVersions = await verify.EmployeeAttendanceMonthlySummaries.Where(x => x.AttendancePeriodId == period.Id).Select(x => x.SourceDataVersion).ToListAsync();
+            Assert.All(summaryVersions, version => Assert.Equal(persisted.DataVersion, version));
+        }
+        Assert.True(processResult.Succeeded || processResult.Status == HRMS.Application.Common.ResultStatus.Conflict || processResult.Status == HRMS.Application.Common.ResultStatus.ServiceUnavailable);
+        Assert.True(closeResult.Succeeded || closeResult.Status == HRMS.Application.Common.ResultStatus.Conflict || closeResult.Status == HRMS.Application.Common.ResultStatus.ServiceUnavailable);
+    }
+
     private sealed class FailSummaryInsertInterceptor : SaveChangesInterceptor
     {
         private int saveCount;

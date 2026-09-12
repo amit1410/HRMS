@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
 
-public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContext tenant, IEffectiveEmploymentResolver employmentResolver, IWorkingDayCalendarResolver? calendarResolver = null, TimeProvider? timeProvider = null) : IAttendanceFoundationService
+public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContext tenant, IEffectiveEmploymentResolver employmentResolver, IWorkingDayCalendarResolver? calendarResolver = null, TimeProvider? timeProvider = null, IAttendancePeriodLockService? periodLock = null) : IAttendanceFoundationService
 {
     private const int MaxUploadRows = 100_000;
     private bool TryTenant(out Guid id) { id = tenant.TenantId ?? Guid.Empty; return id != Guid.Empty; }
@@ -26,6 +26,7 @@ public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContex
         if (!TryTenant(out var tid)) return Result<ShiftDto>.Unauthorized("No authenticated tenant.");
         var error = ValidateShift(r); if (error is not null) return Result<ShiftDto>.Invalid(error.Value.field, error.Value.message);
         var sourceError = ValidateCaptureSources(r); if (sourceError is not null) return Result<ShiftDto>.Invalid(sourceError.Value.field, sourceError.Value.message);
+        if (periodLock is not null && !(await periodLock.EnsureRangeIsOpenAsync(r.EffectiveFrom, r.EffectiveTo ?? DateOnly.MaxValue, ct)).Succeeded) return Result<ShiftDto>.Conflict("The effective Shift interval intersects a closed Attendance period.");
         if (r.Breaks.GroupBy(x => x.Sequence).Any(g => g.Count() > 1) || r.Breaks.Any(x => string.IsNullOrWhiteSpace(x.Name) || x.EndTime <= x.StartTime)) return Result<ShiftDto>.Invalid("breaks", "Breaks require unique sequence values and an end time after the start time.");
         if (await db.Shifts.AnyAsync(x => x.TenantId == tid && x.ShiftCode == r.ShiftCode.Trim() && x.Id != id, ct)) return Result<ShiftDto>.Conflict("Shift code already exists in this tenant.");
         if (r.IsDefault && await db.Shifts.AnyAsync(x => x.TenantId == tid && x.IsDefault && x.Id != id && x.EffectiveFrom <= (r.EffectiveTo ?? DateOnly.MaxValue) && (x.EffectiveTo == null || x.EffectiveTo >= r.EffectiveFrom), ct)) return Result<ShiftDto>.Conflict("Another default Shift overlaps this effective interval.");
@@ -58,6 +59,7 @@ public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContex
         if (r.RuleName.Length > 200) return Result<ShiftApplicabilityRequest>.Invalid("ruleName", "Rule name cannot exceed 200 characters.");
         if ((r.ShiftId is null) == (r.ShiftPatternId is null)) return Result<ShiftApplicabilityRequest>.Invalid("shiftId", "Specify exactly one Shift or Shift Pattern.");
         if (r.EffectiveTo < r.EffectiveFrom) return Result<ShiftApplicabilityRequest>.Invalid("effectiveTo", "EffectiveTo cannot be before EffectiveFrom.");
+        if (periodLock is not null && !(await periodLock.EnsureRangeIsOpenAsync(r.EffectiveFrom, r.EffectiveTo ?? DateOnly.MaxValue, ct)).Succeeded) return Result<ShiftApplicabilityRequest>.Conflict("The effective applicability interval intersects a closed Attendance period.");
         if (r.ShiftId is Guid sid && !await db.Shifts.AnyAsync(x => x.TenantId == tid && x.Id == sid && x.IsActive, ct)) return Result<ShiftApplicabilityRequest>.Invalid("shiftId", "Shift was not found in this tenant.");
         if (r.ShiftPatternId is Guid pid && !await db.ShiftPatterns.AnyAsync(x => x.TenantId == tid && x.Id == pid && x.IsActive, ct)) return Result<ShiftApplicabilityRequest>.Invalid("shiftPatternId", "Shift Pattern was not found in this tenant.");
         if (r.EmployeeId is Guid employeeId && !await db.Employees.AnyAsync(x => x.TenantId == tid && x.Id == employeeId, ct)) return Result<ShiftApplicabilityRequest>.Invalid("employeeId", "Employee was not found in this tenant.");
@@ -88,6 +90,7 @@ public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContex
         if (r.RuleName.Length > 200) return Result<ShiftApplicabilityDto>.Invalid("ruleName", "Rule name cannot exceed 200 characters.");
         if ((r.ShiftId is null) == (r.ShiftPatternId is null)) return Result<ShiftApplicabilityDto>.Invalid("target", "Specify exactly one Shift or Shift Pattern.");
         if (r.EffectiveTo < r.EffectiveFrom) return Result<ShiftApplicabilityDto>.Invalid("effectiveTo", "EffectiveTo cannot be before EffectiveFrom.");
+        if (periodLock is not null && !(await periodLock.EnsureRangeIsOpenAsync(r.EffectiveFrom, r.EffectiveTo ?? DateOnly.MaxValue, ct)).Succeeded) return Result<ShiftApplicabilityDto>.Conflict("The effective applicability interval intersects a closed Attendance period.");
         var item = await db.ShiftApplicabilityRules.SingleOrDefaultAsync(x => x.TenantId == tid && x.Id == id, ct);
         if (item is null) return Result<ShiftApplicabilityDto>.NotFound("Applicability rule was not found.");
         item.RuleName = r.RuleName; item.ShiftId = r.ShiftId; item.ShiftPatternId = r.ShiftPatternId; item.EmployeeId = r.EmployeeId; item.Priority = r.Priority; item.EffectiveFrom = r.EffectiveFrom; item.EffectiveTo = r.EffectiveTo;
@@ -116,6 +119,7 @@ public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContex
     {
         if (!TryTenant(out var tid)) return Result<IReadOnlyList<RosterDayDto>>.Unauthorized("No authenticated tenant.");
         if (r.FromDate > r.ToDate || r.EmployeeIds.Count == 0) return Result<IReadOnlyList<RosterDayDto>>.Invalid("dateRange", "A valid employee list and date range are required.");
+        if (periodLock is not null && !(await periodLock.EnsureRangeIsOpenAsync(r.FromDate, r.ToDate, ct)).Succeeded) return Result<IReadOnlyList<RosterDayDto>>.Conflict("The Attendance period is closed and must be reopened before this change.");
         var days = r.ToDate.DayNumber - r.FromDate.DayNumber + 1;
         if ((long)days * r.EmployeeIds.Count > MaxUploadRows) return Result<IReadOnlyList<RosterDayDto>>.Invalid("dateRange", $"The request exceeds the safe limit of {MaxUploadRows:N0} roster rows.");
         if (r.DayType == RosterDayType.Shift && r.ShiftId is null) return Result<IReadOnlyList<RosterDayDto>>.Invalid("shiftId", "Shift is required for a working roster day.");
@@ -143,6 +147,7 @@ public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContex
     public async Task<Result<bool>> RemoveRosterAsync(Guid employeeId, DateOnly date, CancellationToken ct = default)
     {
         if (!TryTenant(out var tid)) return Result<bool>.Unauthorized("No authenticated tenant.");
+        if (periodLock is not null && !(await periodLock.EnsureDateIsOpenAsync(date, ct)).Succeeded) return Result<bool>.Conflict("The Attendance period is closed and must be reopened before this change.");
         var item = await db.EmployeeRosterDays.FirstOrDefaultAsync(x => x.TenantId == tid && x.EmployeeId == employeeId && x.RosterDate == date, ct);
         if (item is null) return Result<bool>.NotFound("Roster assignment was not found.");
         db.EmployeeRosterChangeHistories.Add(NewHistory(tid, employeeId, date, item, null, RosterDayType.NonWorking, RosterAssignmentSource.Auto, false, item.OriginalCalendarDayType, item.Comment, null, RosterChangeType.Removed));

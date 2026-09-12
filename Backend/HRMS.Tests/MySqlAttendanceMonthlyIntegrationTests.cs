@@ -84,4 +84,35 @@ public sealed class MySqlAttendanceMonthlyIntegrationTests
             await fixture.CleanupAsync();
         }
     }
+
+    [Fact]
+    public async Task MySql_ready_period_can_close_reopen_and_reclose()
+    {
+        var connection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connection)) throw SkipException.ForSkip("Phase 5C MySQL test not executed: HRMS_MYSQL_TEST_CONNECTION is absent.");
+        var fixture = new MySqlLeaveLifecycleIntegrationTests.Fixture(connection);
+        try
+        {
+            await fixture.SeedAsync();
+            await using var db = fixture.CreateContext(fixture.EmployeeTenant);
+            var processor = new AttendanceMonthlyProcessor(db, fixture.EmployeeTenant);
+            var period = (await processor.CreatePeriodAsync(new(2019, 12))).Value!;
+            Assert.True((await processor.ProcessAsync(period.Id)).Succeeded);
+            Assert.True((await processor.GetClosePreviewAsync(period.Id)).Value!.CanClose);
+            Assert.True((await processor.CloseAsync(period.Id)).Succeeded);
+            var reopened = await processor.ReopenAsync(period.Id, new("MySQL close/reopen verification."));
+            Assert.True(reopened.Succeeded, reopened.Message);
+            Assert.Equal(2, reopened.Value!.DataVersion);
+            Assert.True((await processor.ProcessAsync(period.Id)).Succeeded);
+            Assert.True((await processor.CloseAsync(period.Id)).Succeeded);
+            Assert.Contains(await db.AttendancePeriodEvents.AsNoTracking().Where(x => x.AttendancePeriodId == period.Id).Select(x => x.EventType).ToListAsync(), x => x == AttendancePeriodEventType.Reopened);
+        }
+        finally
+        {
+            await using var cleanup = fixture.CreateContext(new TestTenantContext(fixture.TenantId));
+            await cleanup.AttendancePeriodEvents.ExecuteDeleteAsync();
+            await cleanup.AttendancePeriods.ExecuteDeleteAsync();
+            await fixture.CleanupAsync();
+        }
+    }
 }

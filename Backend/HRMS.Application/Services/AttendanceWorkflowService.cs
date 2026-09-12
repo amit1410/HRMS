@@ -11,13 +11,15 @@ public sealed class AttendanceWorkflowService(
     IEmployeeIdentityResolver identity,
     IEmployeeManagerResolver managers,
     IAttendanceDayProcessor processor,
-    TimeProvider? timeProvider = null) : IAttendanceWorkflowService
+    TimeProvider? timeProvider = null,
+    IAttendancePeriodLockService? periodLock = null) : IAttendanceWorkflowService
 {
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
 
     public async Task<Result<RegularizationDto>> SubmitRegularizationAsync(RegularizationRequestInput input, CancellationToken ct = default)
     {
         var subject = await Subject(ct); if (!subject.Succeeded) return Fail<RegularizationDto>(subject);
+        if (periodLock is not null && !(await periodLock.EnsureDateIsOpenAsync(input.BusinessDate, ct)).Succeeded) return Result<RegularizationDto>.Conflict("The Attendance period is closed and must be reopened before this change.");
         if (input.BusinessDate > DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime)) return Result<RegularizationDto>.Invalid("businessDate", "A future attendance date cannot be regularized.");
         if (string.IsNullOrWhiteSpace(input.Reason)) return Result<RegularizationDto>.Invalid("reason", "A reason is required.");
         if (input.ProposedInAtUtc is null && input.ProposedOutAtUtc is null) return Result<RegularizationDto>.Invalid("punches", "At least one corrected punch is required.");
@@ -38,6 +40,7 @@ public sealed class AttendanceWorkflowService(
     public async Task<Result<OnDutyDto>> SubmitOnDutyAsync(OnDutyRequestInput input, CancellationToken ct = default)
     {
         var subject = await Subject(ct); if (!subject.Succeeded) return Fail<OnDutyDto>(subject); if (input.StartDate > input.EndDate) return Result<OnDutyDto>.Invalid("dateRange", "StartDate cannot be after EndDate."); if (string.IsNullOrWhiteSpace(input.Reason)) return Result<OnDutyDto>.Invalid("reason", "A reason is required.");
+        if (periodLock is not null && !(await periodLock.EnsureRangeIsOpenAsync(input.StartDate, input.EndDate, ct)).Succeeded) return Result<OnDutyDto>.Conflict("The Attendance period is closed and must be reopened before this change.");
         if (await db.AttendanceOnDutyRequests.AnyAsync(x => x.EmployeeId == subject.Value!.EmployeeId && x.Status == AttendanceRequestStatus.Pending && x.StartDate <= input.EndDate && input.StartDate <= x.EndDate, ct)) return Result<OnDutyDto>.Conflict("An overlapping pending On Duty request already exists.");
         var now = clock.GetUtcNow().UtcDateTime; var item = new AttendanceOnDutyRequest { Id = Guid.NewGuid(), TenantId = subject.Value.TenantId, EmployeeId = subject.Value.EmployeeId, StartDate = input.StartDate, EndDate = input.EndDate, Reason = input.Reason.Trim(), Purpose = input.Purpose?.Trim(), Location = input.Location?.Trim(), SubmittedByUserId = subject.Value.UserId, SubmittedAtUtc = now };
         db.AttendanceOnDutyRequests.Add(item); db.AttendanceOnDutyEvents.Add(OnDutyEvent(item.TenantId, item.Id, AttendanceRequestEventType.Submitted, subject.Value.UserId, now, null)); await db.SaveChangesAsync(ct); return Result<OnDutyDto>.Success(Map(item));
@@ -55,6 +58,7 @@ public sealed class AttendanceWorkflowService(
         var x = await db.AttendanceRegularizationRequests.Include(x => x.Events).SingleOrDefaultAsync(x => x.Id == id, ct); if (x is null) return Result<RegularizationDto>.NotFound("Regularization request was not found.");
         if (target == AttendanceRequestStatus.Cancelled) { if (x.EmployeeId != s.Value!.EmployeeId) return Result<RegularizationDto>.NotFound("Regularization request was not found."); } else { if (x.EmployeeId == s.Value!.EmployeeId) return Result<RegularizationDto>.Forbidden("An employee cannot approve or reject their own request."); var m = await managers.ResolveAsync(x.EmployeeId, x.BusinessDate, ct); if (m.Value?.ManagerId != s.Value!.EmployeeId) return Result<RegularizationDto>.Forbidden("The employee is not an effective report for this date."); }
         if (x.Status != AttendanceRequestStatus.Pending) return Result<RegularizationDto>.Conflict("The request has already been processed.");
+        if (periodLock is not null && !(await periodLock.EnsureDateIsOpenAsync(x.BusinessDate, ct)).Succeeded) return Result<RegularizationDto>.Conflict("The Attendance period is closed and must be reopened before this change.");
         await using var transaction = await db.BeginTransactionAsync(ct);
         var now = clock.GetUtcNow().UtcDateTime;
         var reviewerId = target == AttendanceRequestStatus.Cancelled ? (Guid?)null : s.Value!.UserId;
@@ -94,6 +98,7 @@ public sealed class AttendanceWorkflowService(
         var s = await Subject(ct); if (!s.Succeeded) return Fail<OnDutyDto>(s);
         var x = await db.AttendanceOnDutyRequests.Include(x => x.Events).SingleOrDefaultAsync(x => x.Id == id, ct); if (x is null) return Result<OnDutyDto>.NotFound("On Duty request was not found."); if (target != AttendanceRequestStatus.Cancelled && x.EmployeeId == s.Value!.EmployeeId) return Result<OnDutyDto>.Forbidden("An employee cannot approve or reject their own request."); if (target == AttendanceRequestStatus.Cancelled ? x.EmployeeId != s.Value!.EmployeeId : (await managers.ResolveAsync(x.EmployeeId, x.StartDate, ct)).Value?.ManagerId != s.Value!.EmployeeId) return Result<OnDutyDto>.Forbidden("You are not authorized for this On Duty request."); if (x.Status != AttendanceRequestStatus.Pending) return Result<OnDutyDto>.Conflict("The request has already been processed.");
         if (target == AttendanceRequestStatus.Approved && await db.LeaveRequestDays.AnyAsync(d => d.TenantId == x.TenantId && d.Date >= x.StartDate && d.Date <= x.EndDate && d.LeaveRequest != null && d.LeaveRequest.EmployeeId == x.EmployeeId && d.LeaveRequest.Status == LeaveRequestStatus.Approved, ct)) return Result<OnDutyDto>.Conflict("Approved Leave overlaps this On Duty request.");
+        if (periodLock is not null && !(await periodLock.EnsureRangeIsOpenAsync(x.StartDate, x.EndDate, ct)).Succeeded) return Result<OnDutyDto>.Conflict("The Attendance period is closed and must be reopened before this change.");
         await using var transaction = await db.BeginTransactionAsync(ct);
         var now = clock.GetUtcNow().UtcDateTime;
         var reviewerId = target == AttendanceRequestStatus.Cancelled ? (Guid?)null : s.Value!.UserId;
