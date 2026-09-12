@@ -628,6 +628,10 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
         public async Task CleanupAttendanceAsync()
         {
             await using var db = CreateContext(new TestTenantContext());
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeAttendanceDays` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `AttendancePunches` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeAttendanceDays` WHERE `TenantId` = {OtherTenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `AttendancePunches` WHERE `TenantId` = {OtherTenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeRosterChangeHistories` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `EmployeeRosterDays` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `RosterUploadRows` WHERE `TenantId` = {TenantId}");

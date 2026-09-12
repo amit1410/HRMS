@@ -1,3 +1,4 @@
+using HRMS.Application.Abstractions;
 using HRMS.Application.DTOs.Attendance;
 using HRMS.Application.Services;
 using HRMS.Domain.Entities;
@@ -150,6 +151,8 @@ internal sealed class AttendanceTestFixture : IDisposable
     private readonly TestTenantContext _tenant;
     public HRMS.Infrastructure.Persistence.HrmsDbContext Context { get; }
     public AttendanceFoundationService Service { get; }
+    public ITenantContext TenantContext => _tenant;
+    public Shift? Shift { get; set; }
     public AttendanceFoundationService CalendarService => new(Context, _tenant, new EffectiveEmploymentResolver(Context, _tenant), new WorkingDayCalendarResolver(Context, _tenant, new EffectiveEmploymentResolver(Context, _tenant)));
     public Guid TenantId { get; private set; }
     public Guid EmployeeId { get; } = Guid.NewGuid();

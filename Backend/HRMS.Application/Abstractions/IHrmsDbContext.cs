@@ -109,6 +109,8 @@ public interface IHrmsDbContext
     DbSet<EmployeeRosterChangeHistory> EmployeeRosterChangeHistories { get; }
     DbSet<RosterUploadBatch> RosterUploadBatches { get; }
     DbSet<RosterUploadRow> RosterUploadRows { get; }
+    DbSet<AttendancePunch> AttendancePunches { get; }
+    DbSet<EmployeeAttendanceDay> EmployeeAttendanceDays { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

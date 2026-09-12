@@ -82,6 +82,10 @@ public static class DependencyInjection
         services.AddScoped<IMasterManagementService, MasterManagementService>();
         services.AddScoped<IMasterImportService, MasterImportService>();
         services.AddScoped<IAttendanceFoundationService, AttendanceFoundationService>();
+        services.AddScoped<IAttendanceBusinessDateResolver, AttendanceBusinessDateResolver>();
+        services.AddScoped<IAttendanceBusinessTimeZoneProvider, AttendanceBusinessTimeZoneProvider>();
+        services.AddScoped<IAttendancePunchIngestionService, AttendancePunchIngestionService>();
+        services.AddScoped<IAttendanceDayProcessor, AttendanceDayProcessor>();
 
         return services;
     }

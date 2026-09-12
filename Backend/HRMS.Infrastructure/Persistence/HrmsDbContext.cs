@@ -123,6 +123,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<EmployeeRosterChangeHistory> EmployeeRosterChangeHistories => Set<EmployeeRosterChangeHistory>();
     public DbSet<RosterUploadBatch> RosterUploadBatches => Set<RosterUploadBatch>();
     public DbSet<RosterUploadRow> RosterUploadRows => Set<RosterUploadRow>();
+    public DbSet<AttendancePunch> AttendancePunches => Set<AttendancePunch>();
+    public DbSet<EmployeeAttendanceDay> EmployeeAttendanceDays => Set<EmployeeAttendanceDay>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>

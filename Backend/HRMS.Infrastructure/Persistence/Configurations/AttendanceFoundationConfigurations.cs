@@ -78,3 +78,28 @@ public sealed class RosterUploadRowConfiguration : IEntityTypeConfiguration<Rost
 {
     public void Configure(EntityTypeBuilder<RosterUploadRow> b) { b.ToTable("RosterUploadRows"); b.HasKey(x => x.Id); AttendanceConfigurationHelpers.Tenant(b); b.Property(x => x.EmployeeCode).HasMaxLength(100).IsRequired(); b.Property(x => x.ShiftCode).HasMaxLength(40); b.Property(x => x.DayType).HasConversion<int>(); b.Property(x => x.ErrorMessage).HasMaxLength(1000); b.HasIndex(x => new { x.TenantId, x.RosterUploadBatchId, x.RowNumber }).IsUnique(); b.HasOne<Tenant>().WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict); }
 }
+
+public sealed class AttendancePunchConfiguration : IEntityTypeConfiguration<AttendancePunch>
+{
+    public void Configure(EntityTypeBuilder<AttendancePunch> b)
+    {
+        b.ToTable("AttendancePunches"); b.HasKey(x => x.Id); AttendanceConfigurationHelpers.Tenant(b);
+        b.Property(x => x.Direction).HasConversion<int>(); b.Property(x => x.Source).HasConversion<int>();
+        b.Property(x => x.ExternalPunchId).HasMaxLength(200); b.Property(x => x.DeviceId).HasMaxLength(200); b.Property(x => x.RawReference).HasMaxLength(1000);
+        b.HasIndex(x => new { x.TenantId, x.EmployeeId, x.BusinessDate }); b.HasIndex(x => new { x.TenantId, x.EmployeeId, x.PunchAtUtc });
+        b.HasIndex(x => new { x.TenantId, x.Source, x.ExternalPunchId }).IsUnique().HasFilter("ExternalPunchId IS NOT NULL");
+        b.HasOne<Employee>().WithMany().HasForeignKey(x => new { x.TenantId, x.EmployeeId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class EmployeeAttendanceDayConfiguration : IEntityTypeConfiguration<EmployeeAttendanceDay>
+{
+    public void Configure(EntityTypeBuilder<EmployeeAttendanceDay> b)
+    {
+        b.ToTable("EmployeeAttendanceDays"); b.HasKey(x => x.Id); AttendanceConfigurationHelpers.Tenant(b);
+        b.Property(x => x.ShiftCode).HasMaxLength(40); b.Property(x => x.RosterAssignmentSource).HasConversion<int>(); b.Property(x => x.RosterDayType).HasConversion<int>(); b.Property(x => x.Status).HasConversion<int>(); b.Property(x => x.ProcessingOutcome).HasMaxLength(1000);
+        b.HasIndex(x => new { x.TenantId, x.EmployeeId, x.BusinessDate }).IsUnique(); b.HasIndex(x => new { x.TenantId, x.BusinessDate });
+        b.HasOne<Employee>().WithMany().HasForeignKey(x => new { x.TenantId, x.EmployeeId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Shift>().WithMany().HasForeignKey(x => new { x.TenantId, x.ShiftId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+    }
+}

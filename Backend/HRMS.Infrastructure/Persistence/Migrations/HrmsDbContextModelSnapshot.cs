@@ -124,6 +124,66 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendancePunch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateOnly>("BusinessDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime>("CapturedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("DeviceId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int>("Direction")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ExternalPunchId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("PunchAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("RawReference")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<int>("Source")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "EmployeeId", "BusinessDate");
+
+                    b.HasIndex("TenantId", "EmployeeId", "PunchAtUtc");
+
+                    b.HasIndex("TenantId", "Source", "ExternalPunchId")
+                        .IsUnique()
+                        .HasFilter("ExternalPunchId IS NOT NULL");
+
+                    b.ToTable("AttendancePunches", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Bank", b =>
                 {
                     b.Property<Guid>("Id")
@@ -698,6 +758,118 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("EmployeeAddresses", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeAttendanceDay", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("BreakMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("BusinessDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("ExpectedWorkMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("FirstPunchAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("HasInvalidPunchSequence")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("HasMissingInPunch")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("HasMissingOutPunch")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsEarlyOut")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsGraceApplied")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsLateIn")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsSinglePunch")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LastPunchAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("LeaveConflict")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("ProcessedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ProcessingOutcome")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<int>("PunchCount")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("RequiresMarkOutApproval")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("RosterAssignmentSource")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RosterDayType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ScheduledEndUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ScheduledStartUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("SessionCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ShiftCode")
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
+                    b.Property<Guid?>("ShiftId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("WorkedMinutes")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "BusinessDate");
+
+                    b.HasIndex("TenantId", "ShiftId");
+
+                    b.HasIndex("TenantId", "EmployeeId", "BusinessDate")
+                        .IsUnique();
+
+                    b.ToTable("EmployeeAttendanceDays", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeAuditLog", b =>
@@ -5284,6 +5456,16 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendancePunch", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Bank", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -5447,6 +5629,22 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Employee");
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeAttendanceDay", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Shift", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ShiftId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeAuditLog", b =>

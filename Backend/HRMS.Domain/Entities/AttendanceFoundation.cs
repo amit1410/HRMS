@@ -191,3 +191,51 @@ public sealed class RosterUploadRow : BaseEntity, ITenantEntity
     public bool WillOverrideCalendar { get; set; }
     public RosterUploadBatch? Batch { get; set; }
 }
+
+/// <summary>Immutable source record. Corrections are represented by later workflows, never by changing this row.</summary>
+public sealed class AttendancePunch : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid EmployeeId { get; set; }
+    public DateTime PunchAtUtc { get; set; }
+    public DateOnly BusinessDate { get; set; }
+    public PunchDirection Direction { get; set; }
+    public PunchSource Source { get; set; }
+    public string? ExternalPunchId { get; set; }
+    public string? DeviceId { get; set; }
+    public DateTime CapturedAtUtc { get; set; }
+    public string? RawReference { get; set; }
+}
+
+/// <summary>Processed, idempotent daily attendance snapshot for one employee and business date.</summary>
+public sealed class EmployeeAttendanceDay : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid EmployeeId { get; set; }
+    public DateOnly BusinessDate { get; set; }
+    public Guid? ShiftId { get; set; }
+    public string? ShiftCode { get; set; }
+    public DateTime? ScheduledStartUtc { get; set; }
+    public DateTime? ScheduledEndUtc { get; set; }
+    public int? ExpectedWorkMinutes { get; set; }
+    public RosterAssignmentSource RosterAssignmentSource { get; set; }
+    public RosterDayType RosterDayType { get; set; }
+    public EmployeeAttendanceDayStatus Status { get; set; }
+    public DateTime? FirstPunchAtUtc { get; set; }
+    public DateTime? LastPunchAtUtc { get; set; }
+    public int PunchCount { get; set; }
+    public int SessionCount { get; set; }
+    public int? WorkedMinutes { get; set; }
+    public int? BreakMinutes { get; set; }
+    public bool IsLateIn { get; set; }
+    public bool IsEarlyOut { get; set; }
+    public bool IsGraceApplied { get; set; }
+    public bool IsSinglePunch { get; set; }
+    public bool HasMissingInPunch { get; set; }
+    public bool HasMissingOutPunch { get; set; }
+    public bool LeaveConflict { get; set; }
+    public bool RequiresMarkOutApproval { get; set; }
+    public bool HasInvalidPunchSequence { get; set; }
+    public DateTime ProcessedAtUtc { get; set; }
+    public string? ProcessingOutcome { get; set; }
+}
