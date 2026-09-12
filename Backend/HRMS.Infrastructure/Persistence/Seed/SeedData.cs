@@ -159,6 +159,11 @@ public static class SeedData
         [DomainPermissions.Attendance.RegularizationApprove] = 49,
         [DomainPermissions.Attendance.OnDutyRequest] = 50,
         [DomainPermissions.Attendance.OnDutyApprove] = 51,
+        [DomainPermissions.Attendance.MonthlyViewSelf] = 52,
+        [DomainPermissions.Attendance.MonthlyViewTeam] = 53,
+        [DomainPermissions.Attendance.MonthlyViewAll] = 54,
+        [DomainPermissions.Attendance.MonthlyProcess] = 55,
+        [DomainPermissions.Attendance.ExceptionView] = 56,
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>
@@ -230,7 +235,8 @@ public static class SeedData
             DomainPermissions.User.View, DomainPermissions.User.Create, DomainPermissions.User.Edit
             , DomainPermissions.Attendance.View, DomainPermissions.Attendance.ShiftManage,
             DomainPermissions.Attendance.PatternManage, DomainPermissions.Attendance.RosterManage,
-            DomainPermissions.Attendance.RosterUpload
+            DomainPermissions.Attendance.RosterUpload, DomainPermissions.Attendance.MonthlyViewAll,
+            DomainPermissions.Attendance.MonthlyProcess, DomainPermissions.Attendance.ExceptionView
         },
         [RoleNames.HRManager] = new[]
         {
@@ -244,9 +250,9 @@ public static class SeedData
         [RoleNames.Manager] = new[]
         {
             DomainPermissions.Employee.View, DomainPermissions.Department.View, DomainPermissions.Designation.View,
-            DomainPermissions.Geography.View
+            DomainPermissions.Geography.View, DomainPermissions.Attendance.MonthlyViewTeam
         },
-        [RoleNames.Employee] = new[] { DomainPermissions.Geography.View },
+        [RoleNames.Employee] = new[] { DomainPermissions.Geography.View, DomainPermissions.Attendance.MonthlyViewSelf },
         [RoleNames.AccountLinkAdministrator] = new[] { DomainPermissions.AccountEmployeeLink.View, DomainPermissions.AccountEmployeeLink.Manage },
         [RoleNames.AccountLinkAuditor] = new[] { DomainPermissions.AccountEmployeeLink.View, DomainPermissions.AccountEmployeeLink.ViewHistory }
     };

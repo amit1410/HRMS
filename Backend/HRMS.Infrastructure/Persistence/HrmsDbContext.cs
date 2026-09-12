@@ -130,6 +130,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<AttendanceAdjustment> AttendanceAdjustments => Set<AttendanceAdjustment>();
     public DbSet<AttendanceOnDutyRequest> AttendanceOnDutyRequests => Set<AttendanceOnDutyRequest>();
     public DbSet<AttendanceOnDutyEvent> AttendanceOnDutyEvents => Set<AttendanceOnDutyEvent>();
+    public DbSet<AttendancePeriod> AttendancePeriods => Set<AttendancePeriod>();
+    public DbSet<AttendancePeriodEvent> AttendancePeriodEvents => Set<AttendancePeriodEvent>();
+    public DbSet<EmployeeAttendanceMonthlySummary> EmployeeAttendanceMonthlySummaries => Set<EmployeeAttendanceMonthlySummary>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
@@ -363,6 +366,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<AttendanceAdjustment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AttendanceOnDutyRequest>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AttendanceOnDutyEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<AttendancePeriod>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<AttendancePeriodEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeAttendanceMonthlySummary>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
 
         // Organizational hierarchy master query filters
         modelBuilder.Entity<HoldingCompany>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -429,6 +435,11 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         {
             if (entry.State is EntityState.Modified or EntityState.Deleted)
                 throw new InvalidOperationException("Roster change history is immutable.");
+        }
+        foreach (var entry in ChangeTracker.Entries<AttendancePeriodEvent>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new InvalidOperationException("Attendance period events are immutable.");
         }
         var utcNow = DateTime.UtcNow;
 

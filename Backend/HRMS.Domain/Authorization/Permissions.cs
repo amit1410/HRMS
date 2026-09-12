@@ -100,6 +100,11 @@ public static class Permissions
         public const string RegularizationApprove = "Attendance.Regularization.Approve";
         public const string OnDutyRequest = "Attendance.OnDuty.Request";
         public const string OnDutyApprove = "Attendance.OnDuty.Approve";
+        public const string MonthlyViewSelf = "Attendance.Monthly.ViewSelf";
+        public const string MonthlyViewTeam = "Attendance.Monthly.ViewTeam";
+        public const string MonthlyViewAll = "Attendance.Monthly.ViewAll";
+        public const string MonthlyProcess = "Attendance.Monthly.Process";
+        public const string ExceptionView = "Attendance.Exception.View";
     }
 
     /// <summary>Every permission the system knows about. Used by the seeder and SuperAdmin/TenantAdmin grants.</summary>
@@ -117,6 +122,7 @@ public static class Permissions
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory
         , Attendance.View, Attendance.ShiftManage, Attendance.PatternManage, Attendance.RosterManage, Attendance.RosterUpload,
-        Attendance.RegularizationRequest, Attendance.RegularizationApprove, Attendance.OnDutyRequest, Attendance.OnDutyApprove
+        Attendance.RegularizationRequest, Attendance.RegularizationApprove, Attendance.OnDutyRequest, Attendance.OnDutyApprove,
+        Attendance.MonthlyViewSelf, Attendance.MonthlyViewTeam, Attendance.MonthlyViewAll, Attendance.MonthlyProcess, Attendance.ExceptionView
     };
 }

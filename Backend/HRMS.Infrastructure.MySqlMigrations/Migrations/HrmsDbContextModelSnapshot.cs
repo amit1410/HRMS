@@ -219,6 +219,12 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("char(36)");
 
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
@@ -276,6 +282,121 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.HasIndex("TenantId", "EmployeeId", "StartDate", "EndDate", "Status");
 
                     b.ToTable("AttendanceOnDutyRequests", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendancePeriod", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DataVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid?>("LastProcessedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Month")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ProcessedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ProcessingRunId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("StartDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Year")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "CreatedByUserId");
+
+                    b.HasIndex("TenantId", "LastProcessedByUserId");
+
+                    b.HasIndex("TenantId", "Status");
+
+                    b.HasIndex("TenantId", "Year", "Month")
+                        .IsUnique();
+
+                    b.ToTable("AttendancePeriods", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendancePeriodEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("AttendancePeriodId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DataVersion")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Details")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<int>("EventType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ProcessingRunId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ActorUserId");
+
+                    b.HasIndex("TenantId", "AttendancePeriodId", "OccurredAtUtc", "Id");
+
+                    b.ToTable("AttendancePeriodEvents", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.AttendancePunch", b =>
@@ -388,6 +509,12 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.Property<DateTime>("BusinessDate")
                         .HasColumnType("date");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
 
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
@@ -1128,6 +1255,123 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsUnique();
 
                     b.ToTable("EmployeeAttendanceDays", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeAttendanceMonthlySummary", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("AbsentDays")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ActualWorkMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ApprovedOnDutyDays")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("AttendancePeriodId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("CalendarDays")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("EarlyOutCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("EmployeeCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("EmployeeName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("varchar(300)");
+
+                    b.Property<int>("EmploymentDays")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ExceptionCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ExpectedWorkMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int>("GraceAppliedCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("HolidayDays")
+                        .HasColumnType("int");
+
+                    b.Property<int>("IncompleteDays")
+                        .HasColumnType("int");
+
+                    b.Property<int>("LateInCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("LeaveConflictCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MissingInCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MissingOutCount")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("NotProcessedDays")
+                        .HasColumnType("int");
+
+                    b.Property<int>("OnDutyDays")
+                        .HasColumnType("int");
+
+                    b.Property<int>("OnLeaveDays")
+                        .HasColumnType("int");
+
+                    b.Property<int>("PresentDays")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("ProcessedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("RegularizedDays")
+                        .HasColumnType("int");
+
+                    b.Property<int>("SourceDataVersion")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("WeeklyOffDays")
+                        .HasColumnType("int");
+
+                    b.Property<int>("WorkingDays")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.HasIndex("TenantId", "AttendancePeriodId", "EmployeeId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "AttendancePeriodId", "ExceptionCount")
+                        .HasDatabaseName("IX_EmployeeAttendanceMonthlySummaries_TenantId_AttendancePerio~1");
+
+                    b.ToTable("EmployeeAttendanceMonthlySummaries", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeAuditLog", b =>
@@ -5773,6 +6017,45 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendancePeriod", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CreatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LastProcessedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendancePeriodEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ActorUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.AttendancePeriod", "Period")
+                        .WithMany("Events")
+                        .HasForeignKey("TenantId", "AttendancePeriodId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Period");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.AttendancePunch", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Employee", null)
@@ -5998,6 +6281,23 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasForeignKey("TenantId", "ShiftId")
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeAttendanceMonthlySummary", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.AttendancePeriod", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "AttendancePeriodId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeAuditLog", b =>
@@ -7696,6 +7996,11 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.AttendanceOnDutyRequest", b =>
+                {
+                    b.Navigation("Events");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendancePeriod", b =>
                 {
                     b.Navigation("Events");
                 });

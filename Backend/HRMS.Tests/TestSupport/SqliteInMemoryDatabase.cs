@@ -5,6 +5,7 @@ using HRMS.Infrastructure.Persistence.Seed;
 using HRMS.Infrastructure.Security;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace HRMS.Tests.TestSupport;
 
@@ -43,9 +44,14 @@ public sealed class SqliteInMemoryDatabase : IDisposable
 
     /// <summary>Creates a context bound to the shared tenant database with the supplied tenant scope.</summary>
     public HrmsDbContext CreateContext(ITenantContext tenantContext)
+        => CreateContext(tenantContext, Array.Empty<IInterceptor>());
+
+    /// <summary>Creates a context with test-only EF interceptors for failure/concurrency tests.</summary>
+    public HrmsDbContext CreateContext(ITenantContext tenantContext, params IInterceptor[] interceptors)
     {
         var options = new DbContextOptionsBuilder<HrmsDbContext>()
             .UseSqlite(_connection)
+            .AddInterceptors(interceptors)
             .Options;
         return new HrmsDbContext(options, tenantContext);
     }

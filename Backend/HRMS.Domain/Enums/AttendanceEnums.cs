@@ -18,3 +18,6 @@ public enum RosterChangeType { Created, Updated, Removed }
 public enum AttendanceRegularizationType { MissingInPunch, MissingOutPunch, MissingBothPunches, CorrectInTime, CorrectOutTime, CorrectInOutTime }
 public enum AttendanceRequestStatus { Pending, Approved, Rejected, Cancelled }
 public enum AttendanceRequestEventType { Submitted, Approved, Rejected, Cancelled }
+public enum AttendancePeriodStatus { Open, Processing, ReadyToClose, Closed }
+public enum AttendancePeriodEventType { Created, ProcessingStarted, ProcessingCompleted, ProcessingFailed }
+public enum AttendanceExceptionType { MissingInPunch, MissingOutPunch, Incomplete, NotProcessed, LeaveConflict, PendingRegularization, PendingOnDuty, ProcessingError }

@@ -116,6 +116,9 @@ public interface IHrmsDbContext
     DbSet<AttendanceAdjustment> AttendanceAdjustments { get; }
     DbSet<AttendanceOnDutyRequest> AttendanceOnDutyRequests { get; }
     DbSet<AttendanceOnDutyEvent> AttendanceOnDutyEvents { get; }
+    DbSet<AttendancePeriod> AttendancePeriods { get; }
+    DbSet<AttendancePeriodEvent> AttendancePeriodEvents { get; }
+    DbSet<EmployeeAttendanceMonthlySummary> EmployeeAttendanceMonthlySummaries { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

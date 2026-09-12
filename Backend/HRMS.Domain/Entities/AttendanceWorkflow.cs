@@ -74,3 +74,66 @@ public sealed class AttendanceOnDutyEvent : BaseEntity, ITenantEntity
     public string? Comments { get; set; }
     public AttendanceOnDutyRequest? Request { get; set; }
 }
+
+public sealed class AttendancePeriod : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public int Year { get; set; }
+    public int Month { get; set; }
+    public DateOnly StartDate { get; set; }
+    public DateOnly EndDate { get; set; }
+    public AttendancePeriodStatus Status { get; set; } = AttendancePeriodStatus.Open;
+    public int DataVersion { get; set; } = 1;
+    public int ConcurrencyVersion { get; set; } = 1;
+    public Guid? CreatedByUserId { get; set; }
+    public DateTime? ProcessedAtUtc { get; set; }
+    public Guid? LastProcessedByUserId { get; set; }
+    public Guid? ProcessingRunId { get; set; }
+    public ICollection<AttendancePeriodEvent> Events { get; set; } = new List<AttendancePeriodEvent>();
+}
+
+public sealed class AttendancePeriodEvent : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid AttendancePeriodId { get; set; }
+    public AttendancePeriodEventType EventType { get; set; }
+    public Guid? ActorUserId { get; set; }
+    public DateTime OccurredAtUtc { get; set; }
+    public Guid? ProcessingRunId { get; set; }
+    public int DataVersion { get; set; }
+    public string? Details { get; set; }
+    public AttendancePeriod? Period { get; set; }
+}
+
+public sealed class EmployeeAttendanceMonthlySummary : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid AttendancePeriodId { get; set; }
+    public Guid EmployeeId { get; set; }
+    public string? EmployeeCode { get; set; }
+    public string EmployeeName { get; set; } = string.Empty;
+    public int CalendarDays { get; set; }
+    public int EmploymentDays { get; set; }
+    public int WorkingDays { get; set; }
+    public int PresentDays { get; set; }
+    public int AbsentDays { get; set; }
+    public int OnLeaveDays { get; set; }
+    public int OnDutyDays { get; set; }
+    public int HolidayDays { get; set; }
+    public int WeeklyOffDays { get; set; }
+    public int IncompleteDays { get; set; }
+    public int NotProcessedDays { get; set; }
+    public int LateInCount { get; set; }
+    public int EarlyOutCount { get; set; }
+    public int GraceAppliedCount { get; set; }
+    public int MissingInCount { get; set; }
+    public int MissingOutCount { get; set; }
+    public int RegularizedDays { get; set; }
+    public int ApprovedOnDutyDays { get; set; }
+    public int LeaveConflictCount { get; set; }
+    public int ExceptionCount { get; set; }
+    public int ExpectedWorkMinutes { get; set; }
+    public int ActualWorkMinutes { get; set; }
+    public int SourceDataVersion { get; set; }
+    public DateTime ProcessedAtUtc { get; set; }
+}
