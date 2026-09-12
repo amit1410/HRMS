@@ -496,9 +496,13 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
         }
 
         public HrmsDbContext CreateContext(TestTenantContext? tenant = null) =>
+            CreateContextWithInterceptors(tenant);
+
+        public HrmsDbContext CreateContextWithInterceptors(TestTenantContext? tenant = null, params Microsoft.EntityFrameworkCore.Diagnostics.IInterceptor[] interceptors) =>
             new(new DbContextOptionsBuilder<HrmsDbContext>()
                 .UseMySQL(_connection, mysql => mysql.MigrationsAssembly("HRMS.Infrastructure.MySqlMigrations"))
                 .AddInterceptors(new MySqlConcurrencyTokenInterceptor(new MySqlConcurrencyTokenGenerator()))
+                .AddInterceptors(interceptors)
                 .Options, tenant ?? EmployeeTenant);
 
         public ILeaveNotificationService CreateNotificationService(HrmsDbContext context) =>

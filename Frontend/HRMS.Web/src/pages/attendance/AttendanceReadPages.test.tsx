@@ -61,6 +61,40 @@ describe('Attendance read views', () => {
     expect(screen.getByRole('button', { name: 'Current month' })).toBeInTheDocument()
   })
 
+  it('renders approved Regularization effective times without rewriting raw punches', async () => {
+    const stub = installStubAdapter(); restore = stub.restore
+    const adjusted = day({ firstPunchAtUtc: '2026-09-12T04:00:00Z', lastPunchAtUtc: '2026-09-12T13:00:00Z', processingMessage: 'Approved Regularization adjustment applies.' })
+    stub.on('get', '/api/attendance/me/calendar', () => ({ data: ok([adjusted]) }))
+    stub.on('get', '/api/attendance/me/days/2026-09-12', () => ({ data: ok({ day: adjusted, punches: [{ id: 'raw-1', employeeId: 'e1', punchAtUtc: '2026-09-12T03:30:00Z', businessDate: '2026-09-12', direction: 'In', source: 'Device', capturedAtUtc: '2026-09-12T03:30:00Z' }], sessions: [] }) }))
+    renderAsUser(<MyAttendancePage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Details' }))
+    expect(await screen.findByText('Approved Regularization adjustment applies.')).toBeInTheDocument()
+    expect(screen.getAllByText(/09:30/).length).toBeGreaterThan(0)
+    expect(screen.getByText('Effective In / Out')).toBeInTheDocument()
+  })
+
+  it('renders approved On Duty from the calendar read model and does not infer it for pending rows', async () => {
+    const stub = installStubAdapter(); restore = stub.restore
+    const approved = day({ attendanceStatus: 'OnDuty', processingMessage: 'Approved On Duty applies; raw punches remain visible.' })
+    stub.on('get', '/api/attendance/me/calendar', () => ({ data: ok([approved, day({ date: '2026-09-13', attendanceStatus: 'Incomplete' })]) }))
+    stub.on('get', '/api/attendance/me/days/2026-09-12', () => ({ data: ok({ day: approved, punches: [], sessions: [] }) }))
+    renderAsUser(<MyAttendancePage />)
+    expect(await screen.findByText('On Duty')).toBeInTheDocument()
+    expect(screen.getAllByText('Incomplete').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getAllByRole('button', { name: 'Details' })[0]!)
+    expect(await screen.findByText('Approved On Duty applies; raw punches remain visible.')).toBeInTheDocument()
+  })
+
+  it('shows a clear day-detail error without inventing attendance state', async () => {
+    const stub = installStubAdapter(); restore = stub.restore
+    stub.on('get', '/api/attendance/me/calendar', () => ({ data: ok([day()]) }))
+    stub.on('get', '/api/attendance/me/days/2026-09-12', () => ({ status: 503, data: fail('Detail unavailable') }))
+    renderAsUser(<MyAttendancePage />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Details' }))
+    expect(await screen.findByText('Detail unavailable')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
   it('renders manager team rows, summary, filters, and pagination', async () => {
     const stub = installStubAdapter(); restore = stub.restore
     stub.on('get', '/api/attendance/manager/team', call => ({ data: ok({ rows: { items: [{ employeeId: 'e1', employeeCode: 'E001', employeeName: 'A Employee', day: day() }], page: Number(call.params.page ?? 1), pageSize: 20, totalCount: 40, totalPages: 2, hasPreviousPage: Number(call.params.page ?? 1) > 1, hasNextPage: Number(call.params.page ?? 1) < 2 }, summary: { present: 1, absent: 0, onLeave: 0, holiday: 0, weeklyOff: 0, incomplete: 0, notProcessed: 0, late: 0, earlyOut: 1, leaveConflict: 1 } }) }))

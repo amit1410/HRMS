@@ -153,8 +153,12 @@ public static class SeedData
             [DomainPermissions.Attendance.View] = 43,
             [DomainPermissions.Attendance.ShiftManage] = 44,
             [DomainPermissions.Attendance.PatternManage] = 45,
-            [DomainPermissions.Attendance.RosterManage] = 46,
-            [DomainPermissions.Attendance.RosterUpload] = 47,
+        [DomainPermissions.Attendance.RosterManage] = 46,
+        [DomainPermissions.Attendance.RosterUpload] = 47,
+        [DomainPermissions.Attendance.RegularizationRequest] = 48,
+        [DomainPermissions.Attendance.RegularizationApprove] = 49,
+        [DomainPermissions.Attendance.OnDutyRequest] = 50,
+        [DomainPermissions.Attendance.OnDutyApprove] = 51,
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>

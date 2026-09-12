@@ -70,6 +70,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     { label: 'Roster', to: '/attendance/roster', permission: Permissions.attendance.view, available: true },
   { label: 'Roster Upload', to: '/attendance/roster-upload', permission: Permissions.attendance.view, available: true },
   { label: 'My Attendance', to: '/attendance/my-attendance', available: true, requiresEmployeeIdentity: true },
+  { label: 'Attendance Requests', to: '/attendance/requests', available: true, requiresEmployeeIdentity: true },
   { label: 'Team Attendance', to: '/attendance/team', permission: Permissions.attendance.view, available: true },
 ]
 

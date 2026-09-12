@@ -23,6 +23,8 @@ public sealed class AttendanceDayProcessor(
         var value = resolution.Value!;
         var shift = value.ShiftId is Guid shiftId ? await db.Shifts.AsNoTracking().Include(x => x.Breaks).SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == shiftId, cancellationToken) : null;
         var punches = await db.AttendancePunches.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employeeId && x.BusinessDate == businessDate).OrderBy(x => x.PunchAtUtc).ThenBy(x => x.Id).ToListAsync(cancellationToken);
+        var adjustment = await db.AttendanceAdjustments.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.EmployeeId == employeeId && x.BusinessDate == businessDate, cancellationToken);
+        var onDuty = await db.AttendanceOnDutyRequests.AsNoTracking().AnyAsync(x => x.TenantId == tenantId && x.EmployeeId == employeeId && x.Status == AttendanceRequestStatus.Approved && x.StartDate <= businessDate && businessDate <= x.EndDate, cancellationToken);
         var leave = await db.LeaveRequestDays.AsNoTracking().AnyAsync(x => x.TenantId == tenantId && x.Date == businessDate && x.LeaveRequest != null && x.LeaveRequest.EmployeeId == employeeId && x.LeaveRequest.Status == LeaveRequestStatus.Approved, cancellationToken);
         var now = _clock.GetUtcNow().UtcDateTime;
         var existing = await db.EmployeeAttendanceDays.SingleOrDefaultAsync(x => x.TenantId == tenantId && x.EmployeeId == employeeId && x.BusinessDate == businessDate, cancellationToken);
@@ -30,7 +32,7 @@ public sealed class AttendanceDayProcessor(
         if (existing is null) db.EmployeeAttendanceDays.Add(day);
 
         day.ShiftId = shift?.Id; day.ShiftCode = shift?.ShiftCode; day.ExpectedWorkMinutes = shift?.FullDayWorkMinutes > 0 ? shift.FullDayWorkMinutes : shift?.PlannedDurationMinutes; day.RosterAssignmentSource = value.Source; day.RosterDayType = value.PatternDayType == ShiftPatternDayType.WeeklyOff ? RosterDayType.WeeklyOff : shift is null && value.Message.Contains("Holiday", StringComparison.OrdinalIgnoreCase) ? RosterDayType.Holiday : shift is null && value.Message.Contains("WeeklyOff", StringComparison.OrdinalIgnoreCase) ? RosterDayType.WeeklyOff : RosterDayType.Shift; day.PunchCount = punches.Count; day.ProcessedAtUtc = now; day.LeaveConflict = leave && punches.Count > 0;
-        day.ProcessingOutcome = null; day.FirstPunchAtUtc = punches.FirstOrDefault()?.PunchAtUtc; day.LastPunchAtUtc = punches.LastOrDefault()?.PunchAtUtc; day.SessionCount = 0; day.WorkedMinutes = null; day.BreakMinutes = null; day.IsLateIn = false; day.IsEarlyOut = false; day.IsGraceApplied = false; day.IsSinglePunch = punches.Count == 1; day.HasMissingInPunch = false; day.HasMissingOutPunch = false; day.HasInvalidPunchSequence = false; day.RequiresMarkOutApproval = false;
+        day.ProcessingOutcome = null; day.FirstPunchAtUtc = adjustment?.EffectiveInAtUtc ?? punches.FirstOrDefault()?.PunchAtUtc; day.LastPunchAtUtc = adjustment?.EffectiveOutAtUtc ?? punches.LastOrDefault()?.PunchAtUtc; day.SessionCount = 0; day.WorkedMinutes = null; day.BreakMinutes = null; day.IsLateIn = false; day.IsEarlyOut = false; day.IsGraceApplied = false; day.IsSinglePunch = punches.Count == 1 && adjustment is null; day.HasMissingInPunch = false; day.HasMissingOutPunch = false; day.HasInvalidPunchSequence = false; day.RequiresMarkOutApproval = false;
 
         if (day.RosterDayType == RosterDayType.Holiday || day.RosterDayType == RosterDayType.WeeklyOff)
         { day.Status = day.RosterDayType == RosterDayType.Holiday ? EmployeeAttendanceDayStatus.Holiday : EmployeeAttendanceDayStatus.WeeklyOff; day.ProcessingOutcome = "Non-working calendar day; raw punches preserved."; }
@@ -38,7 +40,9 @@ public sealed class AttendanceDayProcessor(
         { day.Status = EmployeeAttendanceDayStatus.NotProcessed; day.ProcessingOutcome = "NoEffectiveShift: attendance was not finalized."; }
         else
         {
-            var sessions = Pair(punches, day);
+            var sessions = adjustment is not null && day.FirstPunchAtUtc is DateTime adjustedIn && day.LastPunchAtUtc is DateTime adjustedOut && adjustedOut >= adjustedIn
+                ? [new AttendancePunchSession(adjustedIn, adjustedOut)]
+                : Pair(punches, day);
             day.SessionCount = sessions.Count;
             day.BreakMinutes = shift.Breaks.Where(x => !x.IsPaid).Sum(BreakMinutes);
             day.WorkedMinutes = sessions.Count == 0 ? null : Math.Max(0, sessions.Sum(x => x.WorkedMinutes) - day.BreakMinutes.Value);
@@ -48,11 +52,13 @@ public sealed class AttendanceDayProcessor(
             if (day.LastPunchAtUtc is DateTime last)
             { day.IsEarlyOut = last < end.AddMinutes(-shift.GraceOutMinutes); day.RequiresMarkOutApproval = last > end && shift.PostShiftMarkOutMode == PostShiftMarkOutMode.RequiresApprovalBeyondLimit && last > end.AddMinutes(shift.MaximumPostShiftMinutes); }
             var beforeEnd = now < end.AddMinutes(Math.Max(shift.GraceOutMinutes, shift.MaximumPostShiftMinutes));
-            if (punches.Count == 0) { day.Status = leave ? EmployeeAttendanceDayStatus.OnLeave : beforeEnd ? EmployeeAttendanceDayStatus.NotProcessed : EmployeeAttendanceDayStatus.Absent; day.ProcessingOutcome = leave ? "Approved Leave applies; no punch was required." : beforeEnd ? "Shift has not reached its finalization point." : "No qualifying punch was recorded."; }
+            if (punches.Count == 0 && adjustment is null) { day.Status = leave ? EmployeeAttendanceDayStatus.OnLeave : beforeEnd ? EmployeeAttendanceDayStatus.NotProcessed : EmployeeAttendanceDayStatus.Absent; day.ProcessingOutcome = leave ? "Approved Leave applies; no punch was required." : beforeEnd ? "Shift has not reached its finalization point." : "No qualifying punch was recorded."; }
             else if (day.IsSinglePunch && !shift.AllowPresentOnSinglePunch) { day.Status = EmployeeAttendanceDayStatus.Incomplete; day.HasMissingInPunch |= punches[0].Direction == PunchDirection.Out; day.HasMissingOutPunch |= punches[0].Direction == PunchDirection.In; day.ProcessingOutcome = "A complete In/Out pair is required by the effective Shift."; }
             else if (day.HasInvalidPunchSequence || (shift.IsMarkOutMandatory && day.HasMissingOutPunch)) { day.Status = EmployeeAttendanceDayStatus.Incomplete; day.ProcessingOutcome = "Punch sequence is incomplete or invalid."; }
             else { day.Status = EmployeeAttendanceDayStatus.Present; day.ProcessingOutcome = day.LeaveConflict ? "Attendance present with approved Leave conflict." : "Attendance processed."; }
         }
+        if (onDuty)
+        { day.Status = EmployeeAttendanceDayStatus.OnDuty; day.ProcessingOutcome = "Approved On Duty applies; raw punches remain visible."; }
         try
         {
             await db.SaveChangesAsync(cancellationToken);

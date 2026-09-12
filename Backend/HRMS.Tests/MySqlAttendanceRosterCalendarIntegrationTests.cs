@@ -9,6 +9,7 @@ using Xunit.Sdk;
 
 namespace HRMS.Tests;
 
+[Collection("Attendance MySQL")]
 public sealed class MySqlAttendanceRosterCalendarIntegrationTests
 {
     [Fact]

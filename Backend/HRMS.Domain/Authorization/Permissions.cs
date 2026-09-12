@@ -96,6 +96,10 @@ public static class Permissions
         public const string PatternManage = "Attendance.PatternManage";
         public const string RosterManage = "Attendance.RosterManage";
         public const string RosterUpload = "Attendance.RosterUpload";
+        public const string RegularizationRequest = "Attendance.Regularization.Request";
+        public const string RegularizationApprove = "Attendance.Regularization.Approve";
+        public const string OnDutyRequest = "Attendance.OnDuty.Request";
+        public const string OnDutyApprove = "Attendance.OnDuty.Approve";
     }
 
     /// <summary>Every permission the system knows about. Used by the seeder and SuperAdmin/TenantAdmin grants.</summary>
@@ -112,6 +116,7 @@ public static class Permissions
         AccountEmployeeLink.View, AccountEmployeeLink.ViewHistory, AccountEmployeeLink.Manage,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory
-        , Attendance.View, Attendance.ShiftManage, Attendance.PatternManage, Attendance.RosterManage, Attendance.RosterUpload
+        , Attendance.View, Attendance.ShiftManage, Attendance.PatternManage, Attendance.RosterManage, Attendance.RosterUpload,
+        Attendance.RegularizationRequest, Attendance.RegularizationApprove, Attendance.OnDutyRequest, Attendance.OnDutyApprove
     };
 }

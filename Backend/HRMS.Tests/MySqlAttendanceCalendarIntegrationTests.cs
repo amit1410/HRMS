@@ -8,6 +8,7 @@ using Xunit.Sdk;
 
 namespace HRMS.Tests;
 
+[Collection("Attendance MySQL")]
 public sealed class MySqlAttendanceCalendarIntegrationTests
 {
     [Fact]
@@ -98,7 +99,7 @@ public sealed class MySqlAttendanceCalendarIntegrationTests
                 Day(f, new(2026, 10, 13), EmployeeAttendanceDayStatus.Incomplete, invalid: true, shiftId: shift.Id),
                 Day(f, new(2026, 10, 14), EmployeeAttendanceDayStatus.NotProcessed, shiftId: shift.Id)); await db.SaveChangesAsync();
             var service = ReadService(db, f, manager: true);
-            foreach (var status in Enum.GetValues<EmployeeAttendanceDayStatus>().Where(x => x != EmployeeAttendanceDayStatus.Holiday && x != EmployeeAttendanceDayStatus.WeeklyOff))
+            foreach (var status in Enum.GetValues<EmployeeAttendanceDayStatus>().Where(x => x != EmployeeAttendanceDayStatus.Holiday && x != EmployeeAttendanceDayStatus.WeeklyOff && x != EmployeeAttendanceDayStatus.OnDuty))
             {
                 var filtered = await service.GetManagerTeamAsync(new() { FromDate = new(2026, 10, 10), ToDate = new(2026, 10, 14), Status = status, PageSize = 10 });
                 Assert.True(filtered.Succeeded, filtered.Message); Assert.Single(filtered.Value!.Rows.Items); Assert.Equal(status, filtered.Value.Rows.Items[0].Day.AttendanceStatus);

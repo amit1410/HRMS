@@ -1,5 +1,9 @@
 using System.Net;
+using HRMS.Application.Abstractions;
 using HRMS.Application.Security;
+using HRMS.Domain.Entities;
+using HRMS.Domain.Enums;
+using HRMS.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -22,6 +26,61 @@ namespace HRMS.Tests.TestSupport;
 /// </summary>
 public class HrmsApiFactory : WebApplicationFactory<global::Program>
 {
+    protected virtual DatabaseProviderType TestTenantProvider => DatabaseProviderType.SqlServer;
+
+    /// <summary>
+    /// Creates a test-only tenant through the same catalog and shard provisioning services used by the API.
+    /// The returned host is therefore routable by the real host-based tenant middleware.
+    /// </summary>
+    public async Task<ShardDescriptor> CreateTestTenantAsync(string? prefix = null)
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantCode = $"{(prefix ?? "AT").ToUpperInvariant()}_{suffix[..12]}";
+        var host = $"{tenantCode.ToLowerInvariant()}.localhost";
+        var tenant = new Tenant
+        {
+            Id = Guid.NewGuid(),
+            TenantCode = tenantCode,
+            TenantName = $"Attendance Test {suffix[..8]}",
+            Host = host,
+            ShardKey = $"attendance_test_{suffix}",
+            // The local API factory overrides the actual EF provider through test configuration; the
+            // catalog enum has only production provider values, so retain the normal SQL Server metadata.
+            DatabaseProvider = TestTenantProvider,
+            Status = TenantStatus.Active
+        };
+
+        await using var scope = Services.CreateAsyncScope();
+        var catalog = scope.ServiceProvider.GetRequiredService<IHrmsCatalogDbContext>();
+        catalog.Tenants.Add(tenant);
+        await catalog.SaveChangesAsync();
+
+        var shard = new ShardDescriptor(
+            tenant.Id, tenant.TenantCode, tenant.Host, tenant.ShardKey, tenant.Status, tenant.DatabaseProvider);
+        await ProvisionTestTenantAsync(scope.ServiceProvider, shard);
+        return shard;
+    }
+
+    protected virtual Task ProvisionTestTenantAsync(IServiceProvider services, ShardDescriptor shard) =>
+        services.GetRequiredService<ITenantProvisioningService>().ProvisionAsync(shard);
+
+    /// <summary>Runs test setup in a fresh, tenant-selected host scope without changing the HTTP action path.</summary>
+    public async Task ExecuteInTenantScopeAsync(string host, Func<IServiceProvider, Task> action)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        ArgumentNullException.ThrowIfNull(action);
+
+        await using var scope = Services.CreateAsyncScope();
+        var shard = await scope.ServiceProvider.GetRequiredService<ITenantShardResolver>()
+            .ResolveByHostAsync(new Uri(host).Host);
+        if (shard is null)
+            throw new InvalidOperationException($"The test host '{host}' is not registered.");
+
+        scope.ServiceProvider.GetRequiredService<IShardContext>().Use(shard);
+        scope.ServiceProvider.GetRequiredService<ITenantExecutionContext>().Use(shard.TenantId);
+        await action(scope.ServiceProvider);
+    }
+
     /// <summary>Held while a host is under construction; see <see cref="CreateHost"/> for why.</summary>
     private static readonly Lock HostBuildGate = new();
 

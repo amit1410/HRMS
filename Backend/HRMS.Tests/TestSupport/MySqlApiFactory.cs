@@ -2,6 +2,9 @@ using Microsoft.Extensions.Configuration;
 using MySql.Data.MySqlClient;
 using System.Data.Common;
 using HRMS.Infrastructure.Persistence;
+using HRMS.Application.Abstractions;
+using HRMS.Domain.Entities;
+using HRMS.Infrastructure.Sharding;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -15,6 +18,9 @@ namespace HRMS.Tests.TestSupport;
 /// </summary>
 public sealed class MySqlApiFactory : HrmsApiFactory
 {
+    protected override HRMS.Domain.Enums.DatabaseProviderType TestTenantProvider =>
+        HRMS.Domain.Enums.DatabaseProviderType.MySql;
+
     private readonly string _tenantConnection;
     private readonly string _catalogConnection;
 
@@ -25,6 +31,32 @@ public sealed class MySqlApiFactory : HrmsApiFactory
     }
 
     protected override bool RequireInitialization => false;
+
+    /// <summary>
+    /// HTTP authorization tests use the already migrated MySQL test database. Physical database creation is
+    /// exercised separately by the existing MySQL provisioning tests; this test-only host only registers a
+    /// unique catalog tenant and verifies the normal runtime routing path.
+    /// </summary>
+    protected override async Task ProvisionTestTenantAsync(IServiceProvider services, ShardDescriptor shard)
+    {
+        var tenantContext = services.GetRequiredService<IShardContext>();
+        tenantContext.Use(shard);
+        var db = services.GetRequiredService<HrmsDbContext>();
+        if (!await db.Tenants.AnyAsync(x => x.Id == shard.TenantId))
+        {
+            db.Tenants.Add(new Tenant
+            {
+                Id = shard.TenantId,
+                TenantCode = shard.TenantCode,
+                TenantName = $"Attendance Test {shard.TenantCode}",
+                Host = shard.Host,
+                ShardKey = shard.ShardKey,
+                DatabaseProvider = shard.DatabaseProvider,
+                Status = shard.Status
+            });
+            await db.SaveChangesAsync();
+        }
+    }
 
     protected override void ConfigureTestServices(IServiceCollection services)
     {

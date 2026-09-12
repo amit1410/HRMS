@@ -80,6 +80,10 @@ export const Permissions = {
     patternManage: 'Attendance.PatternManage',
     rosterManage: 'Attendance.RosterManage',
     rosterUpload: 'Attendance.RosterUpload',
+    regularizationRequest: 'Attendance.Regularization.Request',
+    regularizationApprove: 'Attendance.Regularization.Approve',
+    onDutyRequest: 'Attendance.OnDuty.Request',
+    onDutyApprove: 'Attendance.OnDuty.Approve',
   },
 } as const
 

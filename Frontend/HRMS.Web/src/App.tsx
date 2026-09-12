@@ -41,6 +41,7 @@ import { AttendanceFoundationPage } from './pages/attendance/AttendanceFoundatio
 import { ShiftPatternsPage } from './pages/attendance/ShiftPatternsPage.tsx'
 import { MyAttendancePage } from './pages/attendance/MyAttendancePage.tsx'
 import { ManagerAttendancePage } from './pages/attendance/ManagerAttendancePage.tsx'
+import { AttendanceRequestsPage } from './pages/attendance/AttendanceRequestsPage.tsx'
 import { PlatformTenantsPage } from './pages/platform/PlatformTenantsPage.tsx'
 import { PlatformLoginPage } from './pages/platform/PlatformLoginPage.tsx'
 import { PlatformAuthProvider, usePlatformAuth } from './auth/PlatformAuthProvider.tsx'
@@ -148,6 +149,7 @@ function TenantApplication() {
                   <Route path="attendance/shift-patterns" element={<RequirePermission permission={Permissions.attendance.view}><ShiftPatternsPage /></RequirePermission>} />
                   <Route path="attendance/my-attendance" element={<MyAttendancePage />} />
                   <Route path="attendance/team" element={<RequirePermission permission={Permissions.attendance.view}><ManagerAttendancePage /></RequirePermission>} />
+                  <Route path="attendance/requests" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceRequestsPage /></RequirePermission>} />
               <Route path="employees">
                 <Route
                   index
