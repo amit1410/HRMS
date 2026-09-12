@@ -167,6 +167,8 @@ public static class SeedData
         [DomainPermissions.Attendance.MonthlyClose] = 57,
         [DomainPermissions.Attendance.MonthlyReopen] = 58,
         [DomainPermissions.Attendance.AdminCorrectionManage] = 59,
+        [DomainPermissions.Attendance.ReportView] = 60,
+        [DomainPermissions.Attendance.ReportExport] = 61,
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>
@@ -241,6 +243,7 @@ public static class SeedData
             DomainPermissions.Attendance.RosterUpload, DomainPermissions.Attendance.MonthlyViewAll,
             DomainPermissions.Attendance.MonthlyProcess, DomainPermissions.Attendance.MonthlyClose,
             DomainPermissions.Attendance.MonthlyReopen, DomainPermissions.Attendance.ExceptionView
+            , DomainPermissions.Attendance.ReportView, DomainPermissions.Attendance.ReportExport
         },
         [RoleNames.HRManager] = new[]
         {
@@ -249,7 +252,9 @@ public static class SeedData
             DomainPermissions.EmployeeSensitive.View, DomainPermissions.EmployeeSensitive.Edit,
             DomainPermissions.Geography.View,
             DomainPermissions.EmploymentHistory.View, DomainPermissions.EmploymentHistory.Change,
-            DomainPermissions.Department.View, DomainPermissions.Designation.View
+            DomainPermissions.Department.View, DomainPermissions.Designation.View,
+            DomainPermissions.Attendance.ExceptionView, DomainPermissions.Attendance.ReportView,
+            DomainPermissions.Attendance.ReportExport
         },
         [RoleNames.Manager] = new[]
         {
