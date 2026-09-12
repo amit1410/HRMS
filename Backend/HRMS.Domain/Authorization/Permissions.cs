@@ -107,6 +107,7 @@ public static class Permissions
         public const string MonthlyClose = "Attendance.Monthly.Close";
         public const string MonthlyReopen = "Attendance.Monthly.Reopen";
         public const string ExceptionView = "Attendance.Exception.View";
+        public const string AdminCorrectionManage = "Attendance.AdminCorrection.Manage";
     }
 
     /// <summary>Every permission the system knows about. Used by the seeder and SuperAdmin/TenantAdmin grants.</summary>
@@ -125,6 +126,6 @@ public static class Permissions
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory
         , Attendance.View, Attendance.ShiftManage, Attendance.PatternManage, Attendance.RosterManage, Attendance.RosterUpload,
         Attendance.RegularizationRequest, Attendance.RegularizationApprove, Attendance.OnDutyRequest, Attendance.OnDutyApprove,
-        Attendance.MonthlyViewSelf, Attendance.MonthlyViewTeam, Attendance.MonthlyViewAll, Attendance.MonthlyProcess, Attendance.MonthlyClose, Attendance.MonthlyReopen, Attendance.ExceptionView
+        Attendance.MonthlyViewSelf, Attendance.MonthlyViewTeam, Attendance.MonthlyViewAll, Attendance.MonthlyProcess, Attendance.MonthlyClose, Attendance.MonthlyReopen, Attendance.ExceptionView, Attendance.AdminCorrectionManage
     };
 }

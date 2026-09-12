@@ -166,6 +166,7 @@ public static class SeedData
         [DomainPermissions.Attendance.ExceptionView] = 56,
         [DomainPermissions.Attendance.MonthlyClose] = 57,
         [DomainPermissions.Attendance.MonthlyReopen] = 58,
+        [DomainPermissions.Attendance.AdminCorrectionManage] = 59,
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>

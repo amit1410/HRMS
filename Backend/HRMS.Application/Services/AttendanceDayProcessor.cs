@@ -26,6 +26,7 @@ public sealed class AttendanceDayProcessor(
         var shift = value.ShiftId is Guid shiftId ? await db.Shifts.AsNoTracking().Include(x => x.Breaks).SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == shiftId, cancellationToken) : null;
         var punches = await db.AttendancePunches.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employeeId && x.BusinessDate == businessDate).OrderBy(x => x.PunchAtUtc).ThenBy(x => x.Id).ToListAsync(cancellationToken);
         var adjustment = await db.AttendanceAdjustments.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.EmployeeId == employeeId && x.BusinessDate == businessDate, cancellationToken);
+        var adminCorrection = await db.AttendanceAdminCorrections.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employeeId && x.BusinessDate == businessDate).OrderByDescending(x => x.CorrectionVersion).ThenByDescending(x => x.Id).FirstOrDefaultAsync(cancellationToken);
         var onDuty = await db.AttendanceOnDutyRequests.AsNoTracking().AnyAsync(x => x.TenantId == tenantId && x.EmployeeId == employeeId && x.Status == AttendanceRequestStatus.Approved && x.StartDate <= businessDate && businessDate <= x.EndDate, cancellationToken);
         var leave = await db.LeaveRequestDays.AsNoTracking().AnyAsync(x => x.TenantId == tenantId && x.Date == businessDate && x.LeaveRequest != null && x.LeaveRequest.EmployeeId == employeeId && x.LeaveRequest.Status == LeaveRequestStatus.Approved, cancellationToken);
         var now = _clock.GetUtcNow().UtcDateTime;
@@ -34,7 +35,9 @@ public sealed class AttendanceDayProcessor(
         if (existing is null) db.EmployeeAttendanceDays.Add(day);
 
         day.ShiftId = shift?.Id; day.ShiftCode = shift?.ShiftCode; day.ExpectedWorkMinutes = shift?.FullDayWorkMinutes > 0 ? shift.FullDayWorkMinutes : shift?.PlannedDurationMinutes; day.RosterAssignmentSource = value.Source; day.RosterDayType = value.PatternDayType == ShiftPatternDayType.WeeklyOff ? RosterDayType.WeeklyOff : shift is null && value.Message.Contains("Holiday", StringComparison.OrdinalIgnoreCase) ? RosterDayType.Holiday : shift is null && value.Message.Contains("WeeklyOff", StringComparison.OrdinalIgnoreCase) ? RosterDayType.WeeklyOff : RosterDayType.Shift; day.PunchCount = punches.Count; day.ProcessedAtUtc = now; day.LeaveConflict = leave && punches.Count > 0;
-        day.ProcessingOutcome = null; day.FirstPunchAtUtc = adjustment?.EffectiveInAtUtc ?? punches.FirstOrDefault()?.PunchAtUtc; day.LastPunchAtUtc = adjustment?.EffectiveOutAtUtc ?? punches.LastOrDefault()?.PunchAtUtc; day.SessionCount = 0; day.WorkedMinutes = null; day.BreakMinutes = null; day.IsLateIn = false; day.IsEarlyOut = false; day.IsGraceApplied = false; day.IsSinglePunch = punches.Count == 1 && adjustment is null; day.HasMissingInPunch = false; day.HasMissingOutPunch = false; day.HasInvalidPunchSequence = false; day.RequiresMarkOutApproval = false;
+        var effectiveIn = adminCorrection?.CorrectedInAtUtc ?? adjustment?.EffectiveInAtUtc ?? punches.FirstOrDefault()?.PunchAtUtc;
+        var effectiveOut = adminCorrection?.CorrectedOutAtUtc ?? adjustment?.EffectiveOutAtUtc ?? punches.LastOrDefault()?.PunchAtUtc;
+        day.ProcessingOutcome = null; day.FirstPunchAtUtc = effectiveIn; day.LastPunchAtUtc = effectiveOut; day.SessionCount = 0; day.WorkedMinutes = null; day.BreakMinutes = null; day.IsLateIn = false; day.IsEarlyOut = false; day.IsGraceApplied = false; day.IsSinglePunch = punches.Count == 1 && adjustment is null && adminCorrection is null; day.HasMissingInPunch = false; day.HasMissingOutPunch = false; day.HasInvalidPunchSequence = false; day.RequiresMarkOutApproval = false;
 
         if (day.RosterDayType == RosterDayType.Holiday || day.RosterDayType == RosterDayType.WeeklyOff)
         { day.Status = day.RosterDayType == RosterDayType.Holiday ? EmployeeAttendanceDayStatus.Holiday : EmployeeAttendanceDayStatus.WeeklyOff; day.ProcessingOutcome = "Non-working calendar day; raw punches preserved."; }
@@ -42,7 +45,7 @@ public sealed class AttendanceDayProcessor(
         { day.Status = EmployeeAttendanceDayStatus.NotProcessed; day.ProcessingOutcome = "NoEffectiveShift: attendance was not finalized."; }
         else
         {
-            var sessions = adjustment is not null && day.FirstPunchAtUtc is DateTime adjustedIn && day.LastPunchAtUtc is DateTime adjustedOut && adjustedOut >= adjustedIn
+            var sessions = (adjustment is not null || adminCorrection is not null) && day.FirstPunchAtUtc is DateTime adjustedIn && day.LastPunchAtUtc is DateTime adjustedOut && adjustedOut >= adjustedIn
                 ? [new AttendancePunchSession(adjustedIn, adjustedOut)]
                 : Pair(punches, day);
             day.SessionCount = sessions.Count;

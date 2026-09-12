@@ -114,6 +114,7 @@ public interface IHrmsDbContext
     DbSet<AttendanceRegularizationRequest> AttendanceRegularizationRequests { get; }
     DbSet<AttendanceRegularizationEvent> AttendanceRegularizationEvents { get; }
     DbSet<AttendanceAdjustment> AttendanceAdjustments { get; }
+    DbSet<AttendanceAdminCorrection> AttendanceAdminCorrections { get; }
     DbSet<AttendanceOnDutyRequest> AttendanceOnDutyRequests { get; }
     DbSet<AttendanceOnDutyEvent> AttendanceOnDutyEvents { get; }
     DbSet<AttendancePeriod> AttendancePeriods { get; }

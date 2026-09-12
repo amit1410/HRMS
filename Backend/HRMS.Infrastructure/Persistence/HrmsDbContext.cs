@@ -128,6 +128,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<AttendanceRegularizationRequest> AttendanceRegularizationRequests => Set<AttendanceRegularizationRequest>();
     public DbSet<AttendanceRegularizationEvent> AttendanceRegularizationEvents => Set<AttendanceRegularizationEvent>();
     public DbSet<AttendanceAdjustment> AttendanceAdjustments => Set<AttendanceAdjustment>();
+    public DbSet<AttendanceAdminCorrection> AttendanceAdminCorrections => Set<AttendanceAdminCorrection>();
     public DbSet<AttendanceOnDutyRequest> AttendanceOnDutyRequests => Set<AttendanceOnDutyRequest>();
     public DbSet<AttendanceOnDutyEvent> AttendanceOnDutyEvents => Set<AttendanceOnDutyEvent>();
     public DbSet<AttendancePeriod> AttendancePeriods => Set<AttendancePeriod>();
@@ -364,6 +365,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<AttendanceRegularizationRequest>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AttendanceRegularizationEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AttendanceAdjustment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<AttendanceAdminCorrection>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AttendanceOnDutyRequest>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AttendanceOnDutyEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AttendancePeriod>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -440,6 +442,11 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         {
             if (entry.State is EntityState.Modified or EntityState.Deleted)
                 throw new InvalidOperationException("Attendance period events are immutable.");
+        }
+        foreach (var entry in ChangeTracker.Entries<AttendanceAdminCorrection>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new InvalidOperationException("Attendance admin corrections are immutable.");
         }
         var utcNow = DateTime.UtcNow;
 

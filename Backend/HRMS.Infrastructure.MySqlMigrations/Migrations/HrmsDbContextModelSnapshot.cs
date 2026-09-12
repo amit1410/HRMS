@@ -171,6 +171,59 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("AttendanceAdjustments", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendanceAdminCorrection", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("BusinessDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("CorrectedInAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("CorrectedOutAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("CorrectionVersion")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "CreatedByUserId");
+
+                    b.HasIndex("TenantId", "EmployeeId", "BusinessDate", "CorrectionVersion")
+                        .IsUnique();
+
+                    b.ToTable("AttendanceAdminCorrections", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.AttendanceOnDutyEvent", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5969,6 +6022,23 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.HasOne("HRMS.Domain.Entities.AttendanceRegularizationRequest", null)
                         .WithMany()
                         .HasForeignKey("TenantId", "AttendanceRegularizationRequestId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendanceAdminCorrection", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CreatedByUserId")
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
