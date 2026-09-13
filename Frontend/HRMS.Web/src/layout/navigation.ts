@@ -72,6 +72,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'My Attendance', to: '/attendance/my-attendance', available: true, requiresEmployeeIdentity: true },
   { label: 'Attendance Requests', to: '/attendance/requests', available: true, requiresEmployeeIdentity: true },
   { label: 'Team Attendance', to: '/attendance/team', permission: Permissions.attendance.view, available: true },
+  { label: 'Attendance Reports', to: '/attendance/reports', permission: Permissions.attendance.reportView, available: true },
 ]
 
 export function visibleNavItems(can: (permission: string) => boolean, user?: AuthenticatedUser | null): NavItem[] {

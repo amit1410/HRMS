@@ -84,6 +84,16 @@ export const Permissions = {
     regularizationApprove: 'Attendance.Regularization.Approve',
     onDutyRequest: 'Attendance.OnDuty.Request',
     onDutyApprove: 'Attendance.OnDuty.Approve',
+    monthlyViewSelf: 'Attendance.Monthly.ViewSelf',
+    monthlyViewTeam: 'Attendance.Monthly.ViewTeam',
+    monthlyViewAll: 'Attendance.Monthly.ViewAll',
+    monthlyProcess: 'Attendance.Monthly.Process',
+    monthlyClose: 'Attendance.Monthly.Close',
+    monthlyReopen: 'Attendance.Monthly.Reopen',
+    exceptionView: 'Attendance.Exception.View',
+    adminCorrectionManage: 'Attendance.AdminCorrection.Manage',
+    reportView: 'Attendance.Report.View',
+    reportExport: 'Attendance.Report.Export',
   },
 } as const
 
