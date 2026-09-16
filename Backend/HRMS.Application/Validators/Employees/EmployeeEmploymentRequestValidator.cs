@@ -1,5 +1,6 @@
 using FluentValidation;
 using HRMS.Application.DTOs.Employees;
+using HRMS.Domain.Enums;
 
 namespace HRMS.Application.Validators.Employees;
 
@@ -49,5 +50,17 @@ public class EmployeeEmploymentRequestValidator : AbstractValidator<EmployeeEmpl
             .Must(unit => unit is not null && NoticeUnits.Contains(unit, StringComparer.OrdinalIgnoreCase))
                 .WithMessage("Notice period unit must be Days or Months.")
             .When(x => x.NoticePeriod.HasValue || !string.IsNullOrWhiteSpace(x.NoticePeriodUnit));
+
+        RuleFor(x => x.NoticeStatus)
+            .IsInEnum().WithMessage("Notice status is invalid.");
+
+        RuleFor(x => x.NoticeStartDate)
+            .NotNull().WithMessage("Notice start date is required while the employee is serving notice.")
+            .When(x => x.NoticeStatus == NoticePeriodStatus.Active);
+
+        RuleFor(x => x.NoticeEndDate)
+            .GreaterThanOrEqualTo(x => x.NoticeStartDate)
+            .WithMessage("Notice end date cannot be before the notice start date.")
+            .When(x => x.NoticeEndDate.HasValue && x.NoticeStartDate.HasValue);
     }
 }

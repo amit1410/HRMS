@@ -79,7 +79,8 @@ public sealed class OrganizationTestHarness : IDisposable
             new EmployeeCodeRuleMatcher(),
             new EmployeeCodeRenderer(),
             new EmployeeCodeSequenceService(context, TenantContext),
-            Clock);
+            Clock,
+            new ManagerRoleProvisioningService(context, NullLogger<ManagerRoleProvisioningService>.Instance, Clock));
     }
 
     public IEmployeeCodeConfigurationService CodeConfiguration() =>

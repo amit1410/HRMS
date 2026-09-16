@@ -490,6 +490,7 @@ public sealed class MySqlTenantRuntimeIntegrationTests
         public Guid LeaveTypeId { get; } = Guid.NewGuid();
         public Guid LeavePeriodId { get; } = Guid.NewGuid();
         public Guid PolicyId { get; } = Guid.NewGuid();
+        public Guid MultiPolicyId { get; } = Guid.NewGuid();
         public Guid PolicyVersionId { get; } = Guid.NewGuid();
         public Guid RuleId { get; } = Guid.NewGuid();
         public Guid SecondLeaveTypeId { get; } = Guid.NewGuid();
@@ -564,6 +565,10 @@ public sealed class MySqlTenantRuntimeIntegrationTests
             {
                 Id = PolicyId, TenantId = TenantId, Code = $"P{TenantId:N}"[..8], Name = "MySQL test policy", IsActive = true
             });
+            context.LeavePolicies.Add(new LeavePolicy
+            {
+                Id = MultiPolicyId, TenantId = TenantId, Code = $"Q{TenantId:N}"[..8], Name = "MySQL second test policy", IsActive = true
+            });
             context.LeavePolicyVersions.Add(new LeavePolicyVersion
             {
                 Id = PolicyVersionId, TenantId = TenantId, LeavePolicyId = PolicyId, VersionNumber = 1,
@@ -579,7 +584,7 @@ public sealed class MySqlTenantRuntimeIntegrationTests
             });
             context.LeavePolicyVersions.Add(new LeavePolicyVersion
             {
-                Id = MultiPolicyVersionId, TenantId = TenantId, LeavePolicyId = PolicyId, VersionNumber = 2,
+                Id = MultiPolicyVersionId, TenantId = TenantId, LeavePolicyId = MultiPolicyId, VersionNumber = 1,
                 EffectiveFrom = new DateOnly(2026, 1, 1), EffectiveTo = new DateOnly(2026, 12, 31), Status = LeavePolicyVersionStatus.Published, Priority = 2
             });
             context.LeavePolicyRules.Add(new LeavePolicyRule

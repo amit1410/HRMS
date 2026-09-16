@@ -6,12 +6,12 @@ import { Card } from '../../components/Card.tsx'
 import { Notice } from '../../components/Notice.tsx'
 import { Spinner } from '../../components/Spinner.tsx'
 
-interface Props { policyId: string; version: LeavePolicyVersion; leaveTypes: LeaveTypeSelection[]; canManage: boolean; onNotice: (message: string) => void; onChanged?: () => void }
+interface Props { policyId: string; version: LeavePolicyVersion; leaveTypes: LeaveTypeSelection[]; canManage: boolean; onNotice: (message: string) => void; onChanged?: () => void; onSaved?: () => Promise<void> | void }
 interface FormState { entitlementMode: EntitlementMode; entitlementSource: EntitlementSource; entitlementQuantity: string; accrualFrequency: AccrualFrequency; accrualTiming: AccrualTiming; proratePartialPeriod: boolean; maximumAccumulation: string; carryForwardEnabled: boolean; maximumCarryForwardQuantity: string; carryForwardExpiryDays: string }
 const defaultForm: FormState = { entitlementMode: 'Allocated', entitlementSource: 'PolicyAccrual', entitlementQuantity: '', accrualFrequency: 'None', accrualTiming: 'StartOfPeriod', proratePartialPeriod: false, maximumAccumulation: '', carryForwardEnabled: false, maximumCarryForwardQuantity: '', carryForwardExpiryDays: '' }
 function formFromRule(rule: LeavePolicyEntitlementRule | null): FormState { return rule ? { entitlementMode: rule.entitlementMode, entitlementSource: rule.entitlementSource, entitlementQuantity: rule.entitlementQuantity?.toString() ?? '', accrualFrequency: rule.accrualFrequency, accrualTiming: rule.accrualTiming ?? 'StartOfPeriod', proratePartialPeriod: rule.proratePartialPeriod ?? false, maximumAccumulation: rule.maximumAccumulation?.toString() ?? '', carryForwardEnabled: rule.carryForwardEnabled ?? false, maximumCarryForwardQuantity: rule.maximumCarryForwardQuantity?.toString() ?? '', carryForwardExpiryDays: rule.carryForwardExpiryDays?.toString() ?? '' } : { ...defaultForm } }
 
-export function LeavePolicyEntitlementSection({ policyId, version, leaveTypes, canManage, onNotice, onChanged }: Props) {
+export function LeavePolicyEntitlementSection({ policyId, version, leaveTypes, canManage, onNotice, onChanged, onSaved }: Props) {
   const [selectedTypeId, setSelectedTypeId] = useState(leaveTypes[0]?.id ?? '')
   const [, setRule] = useState<LeavePolicyEntitlementRule | null>(null)
   const [form, setForm] = useState<FormState>({ ...defaultForm })
@@ -39,7 +39,7 @@ export function LeavePolicyEntitlementSection({ policyId, version, leaveTypes, c
     setSaving(true); setError(null)
     try {
       const saved = await saveLeaveTypeEntitlement(policyId, version.id, selectedTypeId, { entitlementMode: form.entitlementMode, entitlementSource: form.entitlementSource, entitlementQuantity: form.entitlementMode === 'Allocated' && form.entitlementQuantity !== '' ? Number(form.entitlementQuantity) : null, accrualFrequency: form.accrualFrequency, accrualTiming: form.accrualFrequency === 'None' ? null : form.accrualTiming, proratePartialPeriod: form.proratePartialPeriod, maximumAccumulation: form.maximumAccumulation === '' ? null : Number(form.maximumAccumulation), carryForwardEnabled: form.carryForwardEnabled, maximumCarryForwardQuantity: form.maximumCarryForwardQuantity === '' ? null : Number(form.maximumCarryForwardQuantity), carryForwardExpiryDays: form.carryForwardExpiryDays === '' ? null : Number(form.carryForwardExpiryDays), concurrencyToken: version.concurrencyToken })
-      setRule(saved); setForm(formFromRule(saved)); onChanged?.(); onNotice('Entitlement saved.')
+      setRule(saved); setForm(formFromRule(saved)); await onSaved?.(); onChanged?.(); onNotice('Entitlement saved.')
     } catch (caught) { setError(caught instanceof ApiError ? caught : new ApiError('Unable to save Entitlement.')) } finally { setSaving(false) }
   }
   const selectedType = leaveTypes.find(item => item.id === selectedTypeId)

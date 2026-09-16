@@ -2077,12 +2077,21 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime(6)");
 
+                    b.Property<DateTime?>("NoticeEndDate")
+                        .HasColumnType("date");
+
                     b.Property<int?>("NoticePeriod")
                         .HasColumnType("int");
 
                     b.Property<string>("NoticePeriodUnit")
                         .HasMaxLength(20)
                         .HasColumnType("varchar(20)");
+
+                    b.Property<DateTime?>("NoticeStartDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("NoticeStatus")
+                        .HasColumnType("int");
 
                     b.Property<int?>("ProbationPeriod")
                         .HasColumnType("int");
@@ -2188,6 +2197,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid?>("HoldingCompanyId")
                         .HasColumnType("char(36)");
 
+                    b.Property<bool>("IsSuperseded")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<Guid?>("LobId")
                         .HasColumnType("char(36)");
 
@@ -2211,6 +2223,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid?>("PositionChangeReasonId")
                         .HasColumnType("char(36)");
 
+                    b.Property<int>("RevisionNumber")
+                        .HasColumnType("int");
+
                     b.Property<Guid?>("SectionId")
                         .HasColumnType("char(36)");
 
@@ -2222,6 +2237,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.Property<Guid?>("SubSectionId")
                         .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("SupersededAtUtc")
+                        .HasColumnType("datetime(6)");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("char(36)");
@@ -2268,6 +2286,10 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.HasIndex("TenantId", "EmployeeId", "EffectiveFrom");
 
                     b.HasIndex("TenantId", "EmployeeId", "EffectiveTo");
+
+                    b.HasIndex("TenantId", "EmployeeId", "EffectiveFrom", "RevisionNumber")
+                        .HasDatabaseName("IX_EmpHist_EffectiveRevision")
+                        .IsUnique();
 
                     b.ToTable("EmployeeEmploymentHistory", (string)null);
                 });
@@ -5764,6 +5786,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
             modelBuilder.Entity("HRMS.Domain.Entities.UserRole", b =>
                 {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("char(36)");
+
                     b.Property<Guid>("UserId")
                         .HasColumnType("char(36)");
 
@@ -5773,13 +5798,54 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("char(36)");
 
-                    b.HasKey("UserId", "RoleId");
+                    b.Property<DateOnly>("EffectiveFrom").HasColumnType("date");
+                    b.Property<DateOnly?>("EffectiveTo").HasColumnType("date");
+                    b.Property<int>("AssignmentSource").HasColumnType("int");
+                    b.Property<Guid?>("AssignedByUserId").HasColumnType("char(36)");
+                    b.Property<string>("AssignmentReason").HasMaxLength(500).HasColumnType("varchar(500)");
+                    b.Property<DateTime>("CreatedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<DateTime?>("UpdatedAtUtc").HasColumnType("datetime(6)");
+
+                    b.HasKey("Id");
 
                     b.HasIndex("RoleId");
 
                     b.HasIndex("TenantId");
 
+                    b.HasIndex("TenantId", "UserId", "RoleId", "EffectiveFrom");
+
                     b.ToTable("UserRoles", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.UserRoleAssignmentEvent", b =>
+                {
+                    b.Property<Guid>("Id").HasColumnType("char(36)");
+                    b.Property<Guid>("TenantId").HasColumnType("char(36)");
+                    b.Property<Guid>("AssignmentId").HasColumnType("char(36)");
+                    b.Property<Guid>("UserId").HasColumnType("char(36)");
+                    b.Property<int>("RoleId").HasColumnType("int");
+                    b.Property<int>("EventType").HasColumnType("int");
+                    b.Property<DateOnly>("EffectiveFrom").HasColumnType("date");
+                    b.Property<DateOnly?>("EffectiveTo").HasColumnType("date");
+                    b.Property<int>("AssignmentSource").HasColumnType("int");
+                    b.Property<string>("Reason").HasMaxLength(500).HasColumnType("varchar(500)");
+                    b.Property<Guid?>("PerformedByUserId").HasColumnType("char(36)");
+                    b.Property<DateTime>("OccurredAtUtc").HasColumnType("datetime(6)");
+                    b.HasKey("Id");
+                    b.HasIndex("TenantId", "AssignmentId", "OccurredAtUtc", "Id").HasDatabaseName("IX_URAEvent_Tenant_Assignment_Occurred_Id");
+                    b.ToTable("UserRoleAssignmentEvents", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.UserRoleAssignmentScope", b =>
+                {
+                    b.Property<Guid>("Id").HasColumnType("char(36)");
+                    b.Property<Guid>("TenantId").HasColumnType("char(36)");
+                    b.Property<Guid>("UserRoleAssignmentId").HasColumnType("char(36)");
+                    b.Property<int>("ScopeType").HasColumnType("int");
+                    b.Property<Guid>("ScopeEntityId").HasColumnType("char(36)");
+                    b.HasKey("Id");
+                    b.HasIndex("TenantId", "UserRoleAssignmentId", "ScopeType", "ScopeEntityId").HasDatabaseName("UX_URAScope_Assignment_Type_Entity").IsUnique();
+                    b.ToTable("UserRoleAssignmentScopes", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.WeeklyOffConfiguration", b =>
@@ -8006,6 +8072,26 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Role");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.UserRoleAssignmentEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.UserRole", "Assignment")
+                        .WithMany("Events")
+                        .HasForeignKey("AssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                    b.Navigation("Assignment");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.UserRoleAssignmentScope", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.UserRole", "Assignment")
+                        .WithMany("Scopes")
+                        .HasForeignKey("UserRoleAssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                    b.Navigation("Assignment");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.WeeklyOffConfiguration", b =>

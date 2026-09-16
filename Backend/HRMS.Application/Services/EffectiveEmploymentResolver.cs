@@ -1,5 +1,6 @@
 using HRMS.Application.Abstractions;
 using HRMS.Domain.Entities;
+using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
@@ -27,12 +28,13 @@ public sealed class EffectiveEmploymentResolver : IEffectiveEmploymentResolver
             return Failure(EffectiveEmploymentResolutionStatus.InvalidTenant, tenantId, employeeId, effectiveDate, "The requested tenant is not the authenticated tenant.");
 
         var employee = await _db.Employees.AsNoTracking()
+            .Include(x => x.Employment)
             .SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == employeeId, cancellationToken);
         if (employee is null)
             return Failure(EffectiveEmploymentResolutionStatus.InvalidTenant, tenantId, employeeId, effectiveDate, "Employee was not found in the tenant.");
 
         var records = await _db.EmployeeEmploymentHistory.AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.EmployeeId == employeeId &&
+            .Where(x => x.TenantId == tenantId && x.EmployeeId == employeeId && !x.IsSuperseded &&
                         x.EffectiveFrom <= effectiveDate &&
                         (x.EffectiveTo == null || effectiveDate <= x.EffectiveTo))
             .ToListAsync(cancellationToken);
@@ -73,7 +75,10 @@ public sealed class EffectiveEmploymentResolver : IEffectiveEmploymentResolver
             employee.DateOfJoining,
             employee.GroupDateOfJoining,
             employee.DateOfLeaving,
-            employee.Gender);
+            employee.Gender,
+            employee.Employment?.NoticeStartDate,
+            employee.Employment?.NoticeEndDate,
+            employee.Employment?.NoticeStatus ?? NoticePeriodStatus.NotServing);
 
     private static EffectiveEmploymentResolutionResult Failure(
         EffectiveEmploymentResolutionStatus status,

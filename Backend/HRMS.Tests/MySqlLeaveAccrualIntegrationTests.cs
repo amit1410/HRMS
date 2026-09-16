@@ -274,7 +274,7 @@ public sealed class MySqlLeaveAccrualIntegrationTests
             Assert.Equal(1, result.Processed);
             var occurrence = await process.LeaveAccrualOccurrences.SingleAsync(x => x.TenantId == fixture.TenantId);
             Assert.Equal(16m / 31m * 1.5m, occurrence.CalculatedQuantity, 3);
-            Assert.Equal(occurrence.CreditedQuantity, await process.LeaveBalanceTransactions.Where(x => x.TransactionType == LeaveBalanceTransactionType.Accrual).Select(x => x.Quantity).SingleAsync());
+            Assert.Equal(occurrence.CreditedQuantity, await process.LeaveBalanceTransactions.Where(x => x.TenantId == fixture.TenantId && x.TransactionType == LeaveBalanceTransactionType.Accrual).Select(x => x.Quantity).SingleAsync());
             Assert.Equal(occurrence.CreditedQuantity, await process.LeaveEntitlementGrants.Where(x => x.TenantId == fixture.TenantId).Select(x => x.GrantedQuantity).SingleAsync());
         }
         finally { await fixture.CleanupAsync(); }
@@ -500,8 +500,8 @@ public sealed class MySqlLeaveAccrualIntegrationTests
             var occurrence = await process.LeaveAccrualOccurrences.SingleAsync(x => x.TenantId == fixture.TenantId);
             Assert.Equal(expected, occurrence.CalculatedQuantity, 3);
             Assert.Equal(expected, occurrence.CreditedQuantity, 3);
-            Assert.Equal(expected, await process.LeaveBalanceTransactions.Where(x => x.TransactionType == LeaveBalanceTransactionType.Accrual).Select(x => x.Quantity).SingleAsync(), 3);
-            Assert.Equal(expected, await process.LeaveEntitlementGrants.Where(x => x.SourceType == LeaveBalanceSourceType.Policy).Select(x => x.GrantedQuantity).SingleAsync(), 3);
+            Assert.Equal(expected, await process.LeaveBalanceTransactions.Where(x => x.TenantId == fixture.TenantId && x.TransactionType == LeaveBalanceTransactionType.Accrual).Select(x => x.Quantity).SingleAsync(), 3);
+            Assert.Equal(expected, await process.LeaveEntitlementGrants.Where(x => x.TenantId == fixture.TenantId && x.SourceType == LeaveBalanceSourceType.Policy).Select(x => x.GrantedQuantity).SingleAsync(), 3);
         }
         finally { await fixture.CleanupAsync(); }
     }
@@ -536,8 +536,8 @@ public sealed class MySqlLeaveAccrualIntegrationTests
             await using var process = fixture.CreateContext(fixture.EmployeeTenant);
             var result = await CreateProcessor(process, fixture).ProcessAsync(new DateOnly(2027, 3, 31));
             Assert.Equal(1, result.Processed);
-            Assert.Equal(18m, await process.LeaveAccrualOccurrences.Select(x => x.CreditedQuantity).SingleAsync());
-            Assert.Equal(18m, await process.LeaveBalanceTransactions.Where(x => x.TransactionType == LeaveBalanceTransactionType.Accrual).Select(x => x.Quantity).SingleAsync());
+            Assert.Equal(18m, await process.LeaveAccrualOccurrences.Where(x => x.TenantId == fixture.TenantId).Select(x => x.CreditedQuantity).SingleAsync());
+            Assert.Equal(18m, await process.LeaveBalanceTransactions.Where(x => x.TenantId == fixture.TenantId && x.TransactionType == LeaveBalanceTransactionType.Accrual).Select(x => x.Quantity).SingleAsync());
         }
         finally { await fixture.CleanupAsync(); }
     }
@@ -566,7 +566,7 @@ public sealed class MySqlLeaveAccrualIntegrationTests
             await using var process = fixture.CreateContext(fixture.EmployeeTenant);
             Assert.Equal(0, (await CreateProcessor(process, fixture).ProcessAsync(new(2026, 10, 15))).Processed);
             Assert.Equal(1, (await CreateProcessor(process, fixture).ProcessAsync(new(2026, 10, 31))).Processed);
-            Assert.Equal(1.5m, await process.LeaveAccrualOccurrences.Select(x => x.CreditedQuantity).SingleAsync());
+            Assert.Equal(1.5m, await process.LeaveAccrualOccurrences.Where(x => x.TenantId == fixture.TenantId).Select(x => x.CreditedQuantity).SingleAsync());
         }
         finally { await fixture.CleanupAsync(); }
     }
@@ -801,11 +801,11 @@ public sealed class MySqlLeaveAccrualIntegrationTests
             { Assert.Equal(1, (await CreateProcessor(aprilContext, fixture).ProcessAsync(new(2028, 3, 31))).Processed); }
             await using (var verification = fixture.CreateContext(fixture.EmployeeTenant))
             {
-                var occurrences = await verification.LeaveAccrualOccurrences.OrderBy(x => x.OccurrenceDate).ToListAsync();
+                var occurrences = await verification.LeaveAccrualOccurrences.Where(x => x.TenantId == fixture.TenantId).OrderBy(x => x.OccurrenceDate).ToListAsync();
                 Assert.Equal(2, occurrences.Count);
                 Assert.Equal(fixture.LeavePeriodId, occurrences[0].LeavePeriodId); Assert.Equal(fixture.PolicyVersionId, occurrences[0].LeavePolicyVersionId); Assert.Equal(1m, occurrences[0].CreditedQuantity);
                 Assert.Equal(destinationId, occurrences[1].LeavePeriodId); Assert.Equal(version2Id, occurrences[1].LeavePolicyVersionId); Assert.Equal(2m, occurrences[1].CreditedQuantity);
-                Assert.Equal(2, await verification.LeaveBalanceTransactions.CountAsync(x => x.TransactionType == LeaveBalanceTransactionType.Accrual));
+                Assert.Equal(2, await verification.LeaveBalanceTransactions.CountAsync(x => x.TenantId == fixture.TenantId && x.TransactionType == LeaveBalanceTransactionType.Accrual));
             }
             await using (var replayContext = fixture.CreateContext(fixture.EmployeeTenant))
             { Assert.Equal(0, (await CreateProcessor(replayContext, fixture).ProcessAsync(new(2028, 3, 31))).Processed); }

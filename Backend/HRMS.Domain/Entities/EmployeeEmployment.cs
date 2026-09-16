@@ -1,4 +1,5 @@
 using HRMS.Domain.Common;
+using HRMS.Domain.Enums;
 
 namespace HRMS.Domain.Entities;
 
@@ -42,6 +43,10 @@ public class EmployeeEmployment : BaseEntity, ITenantEntity
 
     /// <summary>Unit for <see cref="NoticePeriod"/>: "Days" or "Months".</summary>
     public string? NoticePeriodUnit { get; set; }
+
+    public DateOnly? NoticeStartDate { get; set; }
+    public DateOnly? NoticeEndDate { get; set; }
+    public NoticePeriodStatus NoticeStatus { get; set; } = NoticePeriodStatus.NotServing;
 
     // Navigation
     public Tenant? Tenant { get; set; }

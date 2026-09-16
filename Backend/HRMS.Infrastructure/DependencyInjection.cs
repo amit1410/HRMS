@@ -66,7 +66,12 @@ public static class DependencyInjection
         services.AddMemoryCache();
         services.AddScoped<IShardContext, ShardContext>();
         services.AddScoped<ITenantShardResolver, TenantShardResolver>();
-        services.AddSingleton<IShardConnectionStringFactory, ShardConnectionStringFactory>();
+        services.AddSingleton<IShardConnectionStringFactory>(serviceProvider =>
+            new ShardConnectionStringFactory(
+                configuration,
+                serviceProvider.GetRequiredService<IOptions<ShardingOptions>>(),
+                serviceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<ShardConnectionStringFactory>>(),
+                hostEnvironment?.IsDevelopment() ?? false));
 
         // The catalog: one shared database, one connection string, no per-request variation. It is resolved
         // before any tenant is known, so it must never depend on anything request-scoped — which is why it
@@ -76,7 +81,7 @@ public static class DependencyInjection
             // Resolve inside the options factory. WebApplicationFactory and other hosts can layer their
             // test/runtime configuration after service registration but before the context is requested.
             var catalogProvider = ConfiguredProvider.ResolveCatalogProvider(configuration);
-            UseCatalogProvider(options, CatalogConnectionString(configuration, catalogProvider), catalogProvider);
+            UseCatalogProvider(options, CatalogConnectionString(configuration, catalogProvider), catalogProvider, hostEnvironment?.IsDevelopment() ?? false);
         });
 
         // The tenant database, chosen per scope.
@@ -105,7 +110,7 @@ public static class DependencyInjection
             var shard = serviceProvider.GetRequiredService<IShardContext>().Current;
             var connectionString = serviceProvider.GetRequiredService<IShardConnectionStringFactory>().For(shard);
 
-            UseProvider(options, configuration, connectionString, tenantProvider: shard?.DatabaseProvider);
+            UseProvider(options, configuration, connectionString, tenantProvider: shard?.DatabaseProvider, isDevelopment: hostEnvironment?.IsDevelopment() ?? false);
             if (shard?.DatabaseProvider == DatabaseProviderType.MySql)
                 options.AddInterceptors(serviceProvider.GetRequiredService<MySqlConcurrencyTokenInterceptor>());
         });
@@ -151,7 +156,9 @@ public static class DependencyInjection
                 ? new DevelopmentEmailSender(
                     serviceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DevelopmentEmailSender>>(),
                     hostEnvironment?.IsDevelopment() ?? true)
-                : new SmtpEmailSender(configuration));
+                : new SmtpEmailSender(
+                    configuration,
+                    serviceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SmtpEmailSender>>()));
         services.AddHttpClient<Msg91SmsOtpSender>(client =>
         {
             client.BaseAddress = new Uri(configuration["Msg91:BaseUrl"] ?? "https://control.msg91.com/api/v5/");
@@ -195,7 +202,8 @@ public static class DependencyInjection
         IConfiguration configuration,
         string connectionString,
         string? historyTable = null,
-        DatabaseProviderType? tenantProvider = null)
+        DatabaseProviderType? tenantProvider = null,
+        bool isDevelopment = true)
     {
         if (ConfiguredProvider.IsSqlite(configuration))
         {
@@ -216,7 +224,7 @@ public static class DependencyInjection
         if (tenantProvider is DatabaseProviderType.MySql)
         {
             options.UseMySQL(
-                connectionString,
+                MySqlConnectionStringNormalizer.ForRuntime(connectionString, isDevelopment),
                 mysql => mysql.MigrationsAssembly(DatabaseProviderNames.MySqlMigrationsAssembly));
             return;
         }
@@ -235,7 +243,8 @@ public static class DependencyInjection
     private static void UseCatalogProvider(
         DbContextOptionsBuilder options,
         string connectionString,
-        ConfiguredProvider.CatalogProviderKind provider)
+        ConfiguredProvider.CatalogProviderKind provider,
+        bool isDevelopment = true)
     {
         switch (provider)
         {
@@ -245,7 +254,7 @@ public static class DependencyInjection
 
             case ConfiguredProvider.CatalogProviderKind.MySql:
                 options.UseMySQL(
-                    connectionString,
+                    MySqlConnectionStringNormalizer.ForRuntime(connectionString, isDevelopment),
                     mysql => mysql.MigrationsAssembly(DatabaseProviderNames.MySqlCatalogMigrationsAssembly));
                 return;
 

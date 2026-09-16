@@ -1,3 +1,5 @@
+using HRMS.Domain.Enums;
+
 namespace HRMS.Application.DTOs.Employees;
 
 /// <summary>
@@ -15,4 +17,7 @@ public class EmployeeEmploymentRequest
     public Guid? ReferredByEmployeeId { get; set; }
     public int? NoticePeriod { get; set; }
     public string? NoticePeriodUnit { get; set; }
+    public DateOnly? NoticeStartDate { get; set; }
+    public DateOnly? NoticeEndDate { get; set; }
+    public NoticePeriodStatus NoticeStatus { get; set; } = NoticePeriodStatus.NotServing;
 }

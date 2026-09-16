@@ -59,7 +59,7 @@ export function MasterDropdown({
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const { data: items, isLoading } = useApiQuery(
+  const { data: items, error: queryError, isLoading, refetch } = useApiQuery(
     (signal) => fetcher({ parentId, isActive: includeInactive ? undefined : true }, signal),
     [fetcher, parentId, includeInactive],
   )
@@ -70,6 +70,7 @@ export function MasterDropdown({
   }))
 
   const selectedLabel = options.find((o) => o.value === value)?.label ?? valueLabel ?? ''
+  const displayError = error ?? queryError?.message
 
   const filtered = query.trim() === ''
     ? options
@@ -161,7 +162,7 @@ export function MasterDropdown({
           type="text"
           className={error ? 'input has-error' : 'input'}
           value={displayValue}
-          placeholder={isLoading ? 'Loading...' : (placeholder ?? 'Search...')}
+          placeholder={isLoading ? 'Loading...' : (displayError ? 'Unable to load options' : (placeholder ?? 'Search...'))}
           onChange={handleInputChange}
           onFocus={() => setOpen(true)}
           onBlur={() => setTimeout(() => setOpen(false), 150)}
@@ -210,9 +211,9 @@ export function MasterDropdown({
           </div>
         )}
       </div>
-      {error !== undefined && (
+      {displayError && (
         <p className="field-error" id={errorId}>
-          {error}
+          {displayError} <button type="button" className="button button-link" onClick={refetch}>Retry</button>
         </p>
       )}
       {hint !== undefined && (

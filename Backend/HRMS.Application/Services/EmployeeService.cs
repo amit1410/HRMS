@@ -73,7 +73,7 @@ public class EmployeeService : IEmployeeService
         var employees = ApplyEffectiveSort(ApplyEffectiveFilters(_db.Employees.AsNoTracking(), query, businessDate), query, businessDate);
 
         var currentHistory = _db.EmployeeEmploymentHistory
-            .Where(h => h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
+            .Where(h => !h.IsSuperseded && h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
 
         var page = await employees
             .Select(e => new
@@ -609,7 +609,7 @@ public class EmployeeService : IEmployeeService
         IQueryable<Employee> employees, EmployeeQuery query, DateOnly businessDate)
     {
         var currentHistory = _db.EmployeeEmploymentHistory
-            .Where(h => h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
+            .Where(h => !h.IsSuperseded && h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
 
         if (query.DepartmentId is Guid departmentId)
         {
@@ -819,7 +819,7 @@ public class EmployeeService : IEmployeeService
     {
         var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
         var current = await _db.EmployeeEmploymentHistory.AsNoTracking()
-            .Where(h => h.EmployeeId == employee.Id && h.EffectiveFrom <= businessDate &&
+            .Where(h => h.EmployeeId == employee.Id && !h.IsSuperseded && h.EffectiveFrom <= businessDate &&
                         (h.EffectiveTo == null || h.EffectiveTo >= businessDate))
             .OrderByDescending(h => h.EffectiveFrom)
             .ThenByDescending(h => h.CreatedDate)

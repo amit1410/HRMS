@@ -8,9 +8,12 @@ public sealed class MySqlCatalogDbContextFactory : IDesignTimeDbContextFactory<H
 {
     public HrmsCatalogDbContext CreateDbContext(string[] args)
     {
+        var connection = Environment.GetEnvironmentVariable("ConnectionStrings__MySqlCatalog");
+        if (string.IsNullOrWhiteSpace(connection))
+            throw new InvalidOperationException("ConnectionStrings__MySqlCatalog is required for MySQL catalog EF design-time tooling.");
         var options = new DbContextOptionsBuilder<HrmsCatalogDbContext>()
             .UseMySQL(
-                "Server=localhost;Database=HRMS_Catalog_MigrationDesign;",
+                connection,
                 mysql => mysql.MigrationsAssembly(typeof(MySqlCatalogDbContextFactory).Assembly.FullName))
             .Options;
 

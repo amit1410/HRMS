@@ -7,6 +7,7 @@ using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.RegularExpressions;
 
 namespace HRMS.Application.Services;
@@ -29,6 +30,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
     private readonly EmployeeCodeRenderer? _codeRenderer;
     private readonly IEmployeeCodeSequenceService? _codeSequence;
     private readonly TimeProvider _timeProvider;
+    private readonly IManagerRoleProvisioningService _managerRoleProvisioning;
 
     public EmployeeEmploymentService(
         IHrmsDbContext db,
@@ -37,7 +39,8 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         EmployeeCodeRuleMatcher? codeRuleMatcher = null,
         EmployeeCodeRenderer? codeRenderer = null,
         IEmployeeCodeSequenceService? codeSequence = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IManagerRoleProvisioningService? managerRoleProvisioning = null)
     {
         _db = db;
         _tenantContext = tenantContext;
@@ -46,6 +49,8 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         _codeRenderer = codeRenderer;
         _codeSequence = codeSequence;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _managerRoleProvisioning = managerRoleProvisioning ??
+            new ManagerRoleProvisioningService(db, NullLogger<ManagerRoleProvisioningService>.Instance, _timeProvider);
     }
 
     // ── Joining Information (EmployeeEmployment — 1:1 with Employee) ──────────
@@ -82,6 +87,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             emp.ProbationPeriod, emp.ProbationPeriodUnit,
             emp.ReferredByEmployeeId, referredByName,
             emp.NoticePeriod, emp.NoticePeriodUnit,
+            emp.NoticeStartDate, emp.NoticeEndDate, emp.NoticeStatus,
             emp.CreatedDate, emp.ModifiedDate);
 
         return Result<EmployeeEmploymentDto>.Success(dto);
@@ -149,6 +155,9 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         existing.ReferredByEmployeeId = request.ReferredByEmployeeId;
         existing.NoticePeriod = request.NoticePeriod;
         existing.NoticePeriodUnit = NormalizePeriodUnit(request.NoticePeriodUnit);
+        existing.NoticeStartDate = request.NoticeStartDate;
+        existing.NoticeEndDate = request.NoticeEndDate;
+        existing.NoticeStatus = request.NoticeStatus;
         existing.ModifiedDate = DateTime.UtcNow;
 
         // Keep Employee.DateOfJoining and Employee.JobStatus in sync
@@ -170,6 +179,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             existing.ProbationPeriod, existing.ProbationPeriodUnit,
             existing.ReferredByEmployeeId, referredByName,
             existing.NoticePeriod, existing.NoticePeriodUnit,
+            existing.NoticeStartDate, existing.NoticeEndDate, existing.NoticeStatus,
             existing.CreatedDate, existing.ModifiedDate);
 
         _logger.LogInformation("Upserted employment record for employee {EmployeeId} in tenant {TenantId}.", employeeId, tenantId);
@@ -188,8 +198,9 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             return Result<IReadOnlyList<EmployeeEmploymentHistoryDto>>.NotFound(NotFoundMessage);
 
         var history = await IncludeWithMasters(
-                _db.EmployeeEmploymentHistory.AsNoTracking().Where(e => e.EmployeeId == employeeId))
+            _db.EmployeeEmploymentHistory.AsNoTracking().Where(e => e.EmployeeId == employeeId))
             .OrderByDescending(e => e.EffectiveFrom)
+            .ThenByDescending(e => e.RevisionNumber)
             .ThenByDescending(e => e.CreatedDate)
             .ToListAsync(cancellationToken);
 
@@ -211,8 +222,10 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
 
         var currentRecords = await IncludeWithMasters(
                 _db.EmployeeEmploymentHistory.AsNoTracking().Where(e => e.EmployeeId == employeeId &&
+                    !e.IsSuperseded &&
                     e.EffectiveFrom <= asOfDate && (e.EffectiveTo == null || e.EffectiveTo >= asOfDate)))
             .OrderByDescending(e => e.EffectiveFrom)
+            .ThenByDescending(e => e.RevisionNumber)
             .Take(2)
             .ToListAsync(cancellationToken);
 
@@ -244,9 +257,39 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         if (employee is null)
             return Result<EmployeeEmploymentHistoryDto>.NotFound(NotFoundMessage);
 
+        // A position change is a snapshot.  Optional fields that are not part of the
+        // change must carry forward from the effective prior snapshot.  In particular,
+        // the Employment form sends null for managerId when the manager control was not
+        // touched; treating that as an unassignment would silently sever the hierarchy.
+        // ManagerChange is the explicit exception: null means the user cleared the
+        // manager, while a value replaces it.
+        var existingRecords = await _db.EmployeeEmploymentHistory
+            .Where(e => e.TenantId == tenantId && e.EmployeeId == employeeId && !e.IsSuperseded)
+            .OrderBy(e => e.EffectiveFrom)
+            .ThenBy(e => e.RevisionNumber)
+            .ToListAsync(cancellationToken);
+
+        if (request.ChangeReason != EmploymentChangeReason.ManagerChange && request.ManagerId is null)
+        {
+            request.ManagerId = existingRecords
+                .Where(e => e.EffectiveFrom <= request.EffectiveFrom &&
+                            (e.EffectiveTo is null || e.EffectiveTo >= request.EffectiveFrom))
+                .OrderByDescending(e => e.EffectiveFrom)
+                .ThenByDescending(e => e.RevisionNumber)
+                .Select(e => e.ManagerId)
+                .FirstOrDefault();
+        }
+
         var commandValidation = ValidateEmploymentChangeCommand(request);
         if (commandValidation is not null)
             return commandValidation;
+
+        var validationDate = BusinessDateToday();
+        if (request.EffectiveFrom < validationDate)
+        {
+            return Result<EmployeeEmploymentHistoryDto>.Invalid(
+                "effectiveFrom", "Employment changes may not be effective-dated in the past.");
+        }
 
         var referenceValidation = await ValidateEmploymentReferencesAsync(
             employeeId, tenantId, request, cancellationToken);
@@ -387,54 +430,51 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
 
         // ── Overlap detection ───────────────────────────────────────────────────
 
-        var existingRecords = await _db.EmployeeEmploymentHistory
-            .Where(e => e.EmployeeId == employeeId)
-            .ToListAsync(cancellationToken);
-
         if (existingRecords.Count == 0 && request.ChangeReason != EmploymentChangeReason.NewJoining)
         {
             return Result<EmployeeEmploymentHistoryDto>.Invalid(
                 "changeReason", "The first employment record must use the New Hire/Initial Position reason.");
         }
 
+        var sameDayRecords = existingRecords.Where(e => e.EffectiveFrom == request.EffectiveFrom).ToList();
+        if (sameDayRecords.Count > 0 && request.ChangeReason != EmploymentChangeReason.Correction)
+        {
+            return Result<EmployeeEmploymentHistoryDto>.Invalid(
+                "effectiveFrom", "An employment record already exists for the effective date.");
+        }
+
         // A new transaction must not fall inside the period of a record that is already closed. A later date
         // than the current open record is legitimate (it closes the open record and opens a new one — handled
         // below), so the open record itself is deliberately not treated as an overlap here.
-        foreach (var record in existingRecords.Where(r => r.EffectiveTo is not null))
-        {
-            bool overlaps = request.EffectiveFrom >= record.EffectiveFrom && request.EffectiveFrom <= record.EffectiveTo;
-
-            if (overlaps)
-            {
-                return Result<EmployeeEmploymentHistoryDto>.Invalid(
-                    "effectiveFrom",
-                    $"The effective date overlaps with an existing position record effective from {record.EffectiveFrom:yyyy-MM-dd}.");
-            }
-        }
+        // Effective ranges are reconciled below around the requested date.
 
         // ── Close the current open record ──────────────────────────────────────
 
-        var openRecords = existingRecords.Where(e => e.EffectiveTo is null).ToList();
-        if (openRecords.Count > 1)
+        await using var transaction = await _db.BeginTransactionAsync(cancellationToken);
+        var now = DateTime.UtcNow;
+        var previousRecord = existingRecords
+            .Where(e => e.EffectiveFrom < request.EffectiveFrom)
+            .OrderByDescending(e => e.EffectiveFrom)
+            .ThenByDescending(e => e.RevisionNumber)
+            .FirstOrDefault();
+        var nextRecord = existingRecords
+            .Where(e => e.EffectiveFrom > request.EffectiveFrom)
+            .OrderBy(e => e.EffectiveFrom)
+            .ThenBy(e => e.RevisionNumber)
+            .FirstOrDefault();
+
+        foreach (var revision in sameDayRecords)
         {
-            return Result<EmployeeEmploymentHistoryDto>.Conflict(
-                "Employment history contains multiple current records and must be repaired before another change can be recorded.");
+            revision.IsSuperseded = true;
+            revision.SupersededAtUtc = now;
+            revision.ModifiedDate = now;
         }
 
-        await using var transaction = await _db.BeginTransactionAsync(cancellationToken);
-        var currentRecord = openRecords.SingleOrDefault();
-
-        if (currentRecord is not null)
+        if (sameDayRecords.Count == 0 && previousRecord is not null &&
+            (previousRecord.EffectiveTo is null || previousRecord.EffectiveTo >= request.EffectiveFrom))
         {
-            if (request.EffectiveFrom <= currentRecord.EffectiveFrom)
-            {
-                return Result<EmployeeEmploymentHistoryDto>.Invalid(
-                    "effectiveFrom",
-                    $"The effective date must be after the current record's effective date ({currentRecord.EffectiveFrom:yyyy-MM-dd}).");
-            }
-
-            currentRecord.EffectiveTo = request.EffectiveFrom.AddDays(-1);
-            currentRecord.ModifiedDate = DateTime.UtcNow;
+            previousRecord.EffectiveTo = request.EffectiveFrom.AddDays(-1);
+            previousRecord.ModifiedDate = now;
         }
 
         // ── Create the new position record ─────────────────────────────────────
@@ -454,7 +494,9 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             TenantId = tenantId,
             EmployeeId = employeeId,
             EffectiveFrom = request.EffectiveFrom,
-            EffectiveTo = null,
+            EffectiveTo = nextRecord?.EffectiveFrom.AddDays(-1),
+            RevisionNumber = sameDayRecords.Count == 0 ? 1 : sameDayRecords.Max(e => e.RevisionNumber) + 1,
+            IsSuperseded = false,
 
             // Organizational FK references
             HoldingCompanyId = request.HoldingCompanyId,
@@ -497,16 +539,26 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             DesignationName = references.Designation?.Name,
             ManagerCode = references.Manager?.EmployeeCode,
             ManagerName = references.Manager is null ? null : EmployeeFullName(references.Manager),
-            CreatedBy = Normalize(changedBy)
+            CreatedBy = Normalize(changedBy),
+            CreatedDate = now,
+            ModifiedDate = now
         };
 
         _db.EmployeeEmploymentHistory.Add(newRecord);
+
+        // Provision capability for a linked manager account in the same DbContext transaction.
+        // The account link remains the only employee-to-user mapping; no email or code lookup is used.
+        if (request.ManagerId is Guid managerId)
+            await _managerRoleProvisioning.EnsureForManagerEmployeeAsync(tenantId, managerId, cancellationToken);
 
         // ── Sync denormalized fields on Employee ───────────────────────────────
 
         // Scheduled changes remain history-only until their effective date. Updating these summary fields
         // early would make employee lists and dashboards report tomorrow's state as today's state.
-        if (request.EffectiveFrom <= BusinessDateToday())
+        var businessDate = BusinessDateToday();
+        var isEffectiveToday = newRecord.EffectiveFrom <= businessDate &&
+            (newRecord.EffectiveTo is null || newRecord.EffectiveTo >= businessDate);
+        if (isEffectiveToday)
         {
             employee.DepartmentId = request.DepartmentId;
             employee.DesignationId = request.DesignationId;
@@ -517,7 +569,18 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             employee.CostCenterCode = references.CostCenter?.Code;
             employee.Status = request.EmploymentStatus;
             employee.DateOfLeaving = request.EmploymentStatus == EmployeeStatus.Active ? null : request.EffectiveFrom;
-            employee.ModifiedDate = DateTime.UtcNow;
+            employee.ModifiedDate = now;
+
+            // EmployeeEmploymentHistory is authoritative for direct-manager resolution, while
+            // EmployeeSupervisor retains compatibility/display fields used by older consumers.
+            // Keep those fields aligned in the same transaction so a current employment change
+            // cannot leave the resolver observing two different L1 managers.
+            await SynchronizeCurrentSupervisorAsync(
+                employeeId,
+                tenantId,
+                request.ManagerId,
+                references.Manager,
+                cancellationToken);
         }
 
         await _db.SaveChangesAsync(cancellationToken);
@@ -708,6 +771,15 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         if (noticeUnit is not null && noticeUnit is not ("Days" or "Months"))
             return Result<EmployeeEmploymentDto>.Invalid("noticePeriodUnit", "Notice period unit must be Days or Months.");
 
+        if (!Enum.IsDefined(request.NoticeStatus))
+            return Result<EmployeeEmploymentDto>.Invalid("noticeStatus", "Notice status is invalid.");
+
+        if (request.NoticeStatus == NoticePeriodStatus.Active && request.NoticeStartDate is null)
+            return Result<EmployeeEmploymentDto>.Invalid("noticeStartDate", "Notice start date is required while the employee is serving notice.");
+
+        if (request.NoticeStartDate is DateOnly noticeStart && request.NoticeEndDate is DateOnly noticeEnd && noticeEnd < noticeStart)
+            return Result<EmployeeEmploymentDto>.Invalid("noticeEndDate", "Notice end date cannot be before the notice start date.");
+
         return null;
     }
 
@@ -716,9 +788,6 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
     {
         if (request.EffectiveFrom == default)
             return Result<EmployeeEmploymentHistoryDto>.Invalid("effectiveFrom", "Effective date is required.");
-
-        if (request.EffectiveFrom < BusinessDateToday())
-            return Result<EmployeeEmploymentHistoryDto>.Invalid("effectiveFrom", "Effective date must be today or in the future.");
 
         var employeeCode = Normalize(request.EmployeeCode);
         if (employeeCode?.Length > 100)
@@ -929,7 +998,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
                 return (Result<EmployeeEmploymentHistoryDto>.Invalid("managerId", "Manager employee does not exist, is inactive, or belongs to another tenant."), references);
 
             var managerHistory = await _db.EmployeeEmploymentHistory.AsNoTracking()
-                .Where(h => h.TenantId == tenantId && h.EmployeeId == managerId &&
+                .Where(h => h.TenantId == tenantId && h.EmployeeId == managerId && !h.IsSuperseded &&
                             h.EffectiveFrom <= request.EffectiveFrom &&
                             (h.EffectiveTo == null || h.EffectiveTo >= request.EffectiveFrom))
                 .ToListAsync(cancellationToken);
@@ -955,7 +1024,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         // A future change can make an otherwise valid graph circular later. Check the proposed date and
         // every known effective-date boundary after it, not just the first date in the command.
         var dates = await _db.EmployeeEmploymentHistory.AsNoTracking()
-            .Where(h => h.TenantId == tenantId && h.EffectiveFrom >= asOfDate)
+            .Where(h => h.TenantId == tenantId && !h.IsSuperseded && h.EffectiveFrom >= asOfDate)
             .Select(h => h.EffectiveFrom)
             .Distinct()
             .ToListAsync(cancellationToken);
@@ -986,7 +1055,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
                 return true;
 
             var managerIds = await _db.EmployeeEmploymentHistory.AsNoTracking()
-                .Where(h => h.EmployeeId == currentId.Value && h.TenantId == tenantId &&
+                .Where(h => h.EmployeeId == currentId.Value && h.TenantId == tenantId && !h.IsSuperseded &&
                             h.EffectiveFrom <= asOfDate &&
                             (h.EffectiveTo == null || h.EffectiveTo >= asOfDate))
                 .Select(h => h.ManagerId)
@@ -1032,6 +1101,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
 
     private static EmployeeEmploymentHistoryDto MapToDto(EmployeeEmploymentHistory e) =>
         new(e.Id, e.EmployeeId, e.EffectiveFrom, e.EffectiveTo,
+            e.RevisionNumber, e.IsSuperseded, e.SupersededAtUtc,
 
             // Organizational FK references + display names from navigation properties
             e.HoldingCompanyId, e.HoldingCompany?.Code, e.HoldingCompany?.Name,
@@ -1089,6 +1159,29 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
     private static string EmployeeFullName(Employee employee) =>
         string.Join(" ", new[] { employee.FirstName, employee.MiddleName, employee.LastName }
             .Where(part => !string.IsNullOrWhiteSpace(part)));
+
+    private async Task SynchronizeCurrentSupervisorAsync(
+        Guid employeeId,
+        Guid tenantId,
+        Guid? managerId,
+        Employee? manager,
+        CancellationToken cancellationToken)
+    {
+        var supervisor = await _db.EmployeeSupervisors.FirstOrDefaultAsync(
+            s => s.TenantId == tenantId && s.EmployeeId == employeeId,
+            cancellationToken);
+
+        // Do not create a supervisor row as a side effect of an employment change. The
+        // employment history remains the source of truth, and Supervisor Details can create
+        // its compatibility row through its existing upsert flow when needed.
+        if (supervisor is null)
+            return;
+
+        supervisor.L1ManagerId = managerId;
+        supervisor.L1ManagerCode = manager?.EmployeeCode;
+        supervisor.L1ManagerName = manager is null ? null : EmployeeFullName(manager);
+        supervisor.ModifiedDate = DateTime.UtcNow;
+    }
 
     private sealed class EmploymentReferences
     {

@@ -18,6 +18,7 @@ public class EmployeeEmploymentConfiguration : IEntityTypeConfiguration<Employee
         builder.Property(e => e.JobStatus).HasMaxLength(100);
         builder.Property(e => e.ProbationPeriodUnit).HasMaxLength(20);
         builder.Property(e => e.NoticePeriodUnit).HasMaxLength(20);
+        builder.Property(e => e.NoticeStatus).HasConversion<int>().IsRequired();
 
         // 1:1 with Employee — unique index on TenantId + EmployeeId
         builder.HasIndex(e => new { e.TenantId, e.EmployeeId }).IsUnique();

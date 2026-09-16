@@ -19,6 +19,8 @@ public class EmployeeEmploymentHistoryConfiguration : IEntityTypeConfiguration<E
         builder.Property(e => e.TenantId).IsRequired();
         builder.Property(e => e.EmployeeId).IsRequired();
         builder.Property(e => e.EffectiveFrom).IsRequired();
+        builder.Property(e => e.RevisionNumber).IsRequired();
+        builder.Property(e => e.IsSuperseded).IsRequired();
 
         // Snapshot string fields
         builder.Property(e => e.BusinessRole).HasMaxLength(200);
@@ -39,6 +41,9 @@ public class EmployeeEmploymentHistoryConfiguration : IEntityTypeConfiguration<E
         // Primary query patterns
         builder.HasIndex(e => new { e.TenantId, e.EmployeeId, e.EffectiveFrom });
         builder.HasIndex(e => new { e.TenantId, e.EmployeeId, e.EffectiveTo });
+        builder.HasIndex(e => new { e.TenantId, e.EmployeeId, e.EffectiveFrom, e.RevisionNumber })
+            .HasDatabaseName("IX_EmpHist_EffectiveRevision")
+            .IsUnique();
 
         // Tenant
         builder.HasOne(e => e.Tenant)

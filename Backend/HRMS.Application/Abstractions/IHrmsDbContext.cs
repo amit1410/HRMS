@@ -1,6 +1,7 @@
 using HRMS.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using System.Data;
 
 namespace HRMS.Application.Abstractions;
 
@@ -25,6 +26,8 @@ public interface IHrmsDbContext
     DbSet<Role> Roles { get; }
     DbSet<Permission> Permissions { get; }
     DbSet<UserRole> UserRoles { get; }
+    DbSet<UserRoleAssignmentEvent> UserRoleAssignmentEvents { get; }
+    DbSet<UserRoleAssignmentScope> UserRoleAssignmentScopes { get; }
     DbSet<RolePermission> RolePermissions { get; }
     DbSet<RefreshToken> RefreshTokens { get; }
     DbSet<UserInvitation> UserInvitations { get; }
@@ -123,6 +126,7 @@ public interface IHrmsDbContext
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);
+    Task<IDbContextTransaction> BeginTransactionAsync(IsolationLevel isolationLevel, CancellationToken cancellationToken = default);
     IDbContextTransaction? CurrentTransaction { get; }
     void ClearChangeTracker();
 }

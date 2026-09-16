@@ -116,8 +116,8 @@ public sealed class AttendanceReportService(IHrmsDbContext db, ITenantContext te
         var days = db.EmployeeAttendanceDays.AsNoTracking().Where(d => d.TenantId == tenantId && d.BusinessDate >= fromDate && d.BusinessDate <= toDate);
         if (query.EmployeeId is Guid employeeId) days = days.Where(d => d.EmployeeId == employeeId);
         if (query.Status is EmployeeAttendanceDayStatus status) days = days.Where(d => d.Status == status);
-        if (query.DepartmentId is Guid departmentId) days = days.Where(d => db.EmployeeEmploymentHistory.Any(h => h.TenantId == tenantId && h.EmployeeId == d.EmployeeId && h.EffectiveFrom <= d.BusinessDate && (h.EffectiveTo == null || h.EffectiveTo >= d.BusinessDate) && h.DepartmentId == departmentId));
-        if (query.WorkLocationId is Guid locationId) days = days.Where(d => db.EmployeeEmploymentHistory.Any(h => h.TenantId == tenantId && h.EmployeeId == d.EmployeeId && h.EffectiveFrom <= d.BusinessDate && (h.EffectiveTo == null || h.EffectiveTo >= d.BusinessDate) && h.WorkLocationId == locationId));
+        if (query.DepartmentId is Guid departmentId) days = days.Where(d => db.EmployeeEmploymentHistory.Any(h => h.TenantId == tenantId && h.EmployeeId == d.EmployeeId && !h.IsSuperseded && h.EffectiveFrom <= d.BusinessDate && (h.EffectiveTo == null || h.EffectiveTo >= d.BusinessDate) && h.DepartmentId == departmentId));
+        if (query.WorkLocationId is Guid locationId) days = days.Where(d => db.EmployeeEmploymentHistory.Any(h => h.TenantId == tenantId && h.EmployeeId == d.EmployeeId && !h.IsSuperseded && h.EffectiveFrom <= d.BusinessDate && (h.EffectiveTo == null || h.EffectiveTo >= d.BusinessDate) && h.WorkLocationId == locationId));
         return from d in days join e in db.Employees.AsNoTracking() on new { d.TenantId, d.EmployeeId } equals new { e.TenantId, EmployeeId = e.Id } orderby d.BusinessDate descending, e.EmployeeCode, d.EmployeeId select new DailySourceRow(d.EmployeeId, e.EmployeeCode, (e.FirstName + " " + e.LastName).Trim(), d.BusinessDate, d.Status, d.FirstPunchAtUtc, d.LastPunchAtUtc, d.WorkedMinutes, d.ExpectedWorkMinutes, d.IsLateIn, d.IsEarlyOut, d.ShiftCode);
     }
 
@@ -128,7 +128,7 @@ public sealed class AttendanceReportService(IHrmsDbContext db, ITenantContext te
         var histories = new List<EmploymentProjection>();
         foreach (var batch in employeeIds.Chunk(500))
         {
-            var batchHistories = await db.EmployeeEmploymentHistory.AsNoTracking().Where(x => batch.Contains(x.EmployeeId)).Select(x => new EmploymentProjection(x.EmployeeId, x.EffectiveFrom, x.EffectiveTo, x.DepartmentName, x.WorkLocation == null ? null : x.WorkLocation.Name)).ToListAsync(ct);
+            var batchHistories = await db.EmployeeEmploymentHistory.AsNoTracking().Where(x => batch.Contains(x.EmployeeId) && !x.IsSuperseded).Select(x => new EmploymentProjection(x.EmployeeId, x.EffectiveFrom, x.EffectiveTo, x.DepartmentName, x.WorkLocation == null ? null : x.WorkLocation.Name)).ToListAsync(ct);
             histories.AddRange(batchHistories);
         }
         return rows.Select(x => { var h = histories.Where(h => h.EmployeeId == x.EmployeeId && h.EffectiveFrom <= x.BusinessDate && (h.EffectiveTo == null || h.EffectiveTo >= x.BusinessDate)).OrderByDescending(h => h.EffectiveFrom).FirstOrDefault(); return new AttendanceDailyReportRow(x.EmployeeId, x.EmployeeCode, x.EmployeeName, x.BusinessDate, x.Status, x.InTime, x.OutTime, x.WorkedMinutes, x.ExpectedWorkMinutes, x.IsLateIn, x.IsEarlyOut, x.ShiftCode, h?.DepartmentName, h?.WorkLocation); }).ToList();

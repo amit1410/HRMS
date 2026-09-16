@@ -46,7 +46,7 @@ public sealed class LeaveReportService : ILeaveReportService
             .Select(x => new BalanceRow(x.EmployeeId, x.Employee!.EmployeeCode ?? string.Empty, x.Employee.FirstName, x.Employee.MiddleName, x.Employee.LastName, x.LeaveType!.Name, x.LeaveTypeId, EntitlementMode.Allocated, x.GrantedQuantity, x.ReservedQuantity, x.ConsumedQuantity, x.GrantedQuantity - x.ReservedQuantity - x.ConsumedQuantity, x.LeavePeriodId))
             .ToListAsync(cancellationToken);
         var today = Today();
-        var histories = await _db.EmployeeEmploymentHistory.AsNoTracking().Where(x => x.TenantId == tenantId && x.EffectiveFrom <= today && (x.EffectiveTo == null || x.EffectiveTo >= today)).Select(x => new HistoryRow(x.EmployeeId, x.DepartmentId, x.Department != null ? x.Department.Name : x.DepartmentName, x.WorkLocationId, x.WorkLocation!.Name)).ToListAsync(cancellationToken);
+        var histories = await _db.EmployeeEmploymentHistory.AsNoTracking().Where(x => x.TenantId == tenantId && !x.IsSuperseded && x.EffectiveFrom <= today && (x.EffectiveTo == null || x.EffectiveTo >= today)).Select(x => new HistoryRow(x.EmployeeId, x.DepartmentId, x.Department != null ? x.Department.Name : x.DepartmentName, x.WorkLocationId, x.WorkLocation!.Name)).ToListAsync(cancellationToken);
         var historyByEmployee = histories.GroupBy(x => x.EmployeeId).ToDictionary(x => x.Key, x => x.First());
         var unlimitedIds = await (from rule in _db.LeavePolicyRules.AsNoTracking()
                                   join version in _db.LeavePolicyVersions.AsNoTracking() on rule.LeavePolicyVersionId equals version.Id

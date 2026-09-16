@@ -43,7 +43,7 @@ The request path is:
 
 `HrmsCatalogDbContext` is registered once with the `Catalog` connection string. `HrmsDbContext` is registered scoped and reads the resolved `ShardDescriptor` while its options are built. With a template, `{shardKey}` is substituted; without a template all tenants use the configured shared SQL Server database and rely on tenant filters. `TenantId` for application data comes from the server-resolved tenant/authentication context; it is not selected by client input.
 
-Both contexts currently use SQL Server unless `Database:Provider=Sqlite`, in which case the application selects SQLite and uses the SQLite connection settings. The design-time factories `HrmsDbContextFactory` and `HrmsCatalogDbContextFactory` explicitly use SQL Server and the current migrations assembly.
+Runtime contexts select their configured provider (including SQLite development fallback). Design-time factories now select `Database:Provider`/`Database:CatalogProvider` explicitly; MySQL uses the dedicated MySQL migration assemblies and requires `ConnectionStrings:MySql`/`ConnectionStrings:MySqlCatalog`.
 
 There is no `DatabaseProvider`, provider enum, provider name, or provider-specific connection-string reference in `Tenant`. Its routing fields are `TenantCode`, `Host`, `ShardKey`, `TenantName`, contact fields, and `Status`. `ShardKey` is a safe database-name key, not a secret or connection string.
 
@@ -65,7 +65,7 @@ Use Option C, staged independence. In the first implementation slice keep the ca
 
 ### Provider registration
 
-`DependencyInjection.UseProvider` calls `UseSqlServer` for every non-SQLite configuration and sets the migrations assembly. There is no `UseMySql` path. `ConfiguredProvider` is therefore a global provider switch, not a per-tenant provider factory. Both design-time factories hard-code SQL Server intentionally.
+`DependencyInjection.UseProvider` selects SQL Server or MySQL per resolved tenant (with SQLite development fallback) and sets the matching migration assembly. Design-time factories use the same allow-listed provider names, with explicit design-time connection strings and no silent MySQL-to-SQL-Server fallback.
 
 ### Raw SQL and provider APIs
 
@@ -155,15 +155,15 @@ Authentication/account linking uses ordinary EF entities, composite tenant-aware
 
 ## 7. Migrations and model configuration
 
-The current migration chain is one SQL Server-oriented folder under `Backend/HRMS.Infrastructure/Persistence/Migrations`, with separate catalog and tenant history tables but the same assembly. Existing migrations cannot run unchanged on MySQL. Examples include `uniqueidentifier`, `nvarchar`, `datetime2`, `bit`, SQL Server `rowversion`, filtered-index syntax, the computed clubbing expression, `CONVERT(date, GETUTCDATE())`, and `migrationBuilder.Sql` batches using `NEWID`, `GETUTCDATE`, `UPDATE ... FROM`, and SQL Server join syntax.
+The provider-specific migration chains are separate: SQL Server migrations live under `Backend/HRMS.Infrastructure/Persistence/Migrations`; MySQL tenant migrations live in `HRMS.Infrastructure.MySqlMigrations`, with a separate MySQL catalog assembly. Existing SQL Server migrations are not rewritten for MySQL. Provider-specific migration files are maintained where DDL differs (for example the roster-history metadata migration).
 
 Recommended architecture:
 
 - retain shared entity/configuration intent;
-- split provider-specific migrations into separate assemblies (preferred for tooling and accidental cross-application prevention), such as `HRMS.Infrastructure.Migrations.SqlServer` and `HRMS.Infrastructure.Migrations.MySql`;
+- keep the existing provider-specific migration assemblies (`HRMS.Infrastructure` for SQL Server and `HRMS.Infrastructure.MySqlMigrations`/`HRMS.Infrastructure.MySqlCatalogMigrations` for MySQL);
 - keep separate catalog and tenant migration histories in each provider assembly;
 - select provider, context, and migration assembly together from a trusted provider descriptor;
-- keep design-time factories provider-explicit and never infer a provider from an arbitrary connection string.
+- keep design-time factories provider-explicit and never infer a provider from an arbitrary connection string; set `Database__Provider` and the matching explicit connection-string variable.
 
 Same-assembly provider folders are possible, but separate assemblies give safer tooling boundaries and make it harder to apply a SQL Server migration chain to MySQL. Shared configurations should express portable constraints/indexes; provider overrides should handle rowversion, generated columns, filters, native types, collations, and defaults. Avoid duplicating whole entity configurations.
 

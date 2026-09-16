@@ -190,6 +190,167 @@ public class EmployeeEmploymentHardeningTests
     }
 
     [Fact]
+    public async Task Manager_change_is_persisted_and_normal_changes_inherit_the_manager()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Manager002);
+        await SeedActiveEmploymentAsync(harness, Manager003);
+
+        var initialRequest = Request();
+        initialRequest.ManagerId = Manager002;
+        var initial = await harness.Employment().CreateChangeAsync(Employee004, initialRequest, "EMP-001");
+        Assert.True(initial.Succeeded, initial.Message);
+
+        var managerChange = Request();
+        managerChange.ChangeReason = EmploymentChangeReason.ManagerChange;
+        managerChange.EffectiveFrom = Today.AddDays(1);
+        managerChange.ManagerId = Manager003;
+        var changed = await harness.Employment().CreateChangeAsync(Employee004, managerChange, "EMP-001");
+
+        Assert.True(changed.Succeeded, changed.Message);
+        Assert.Equal(Manager003, changed.Value!.ManagerId);
+        Assert.Equal("EMP-003", changed.Value.ManagerEmployeeCode);
+        Assert.Equal("Priya Raman", changed.Value.ManagerFullName);
+
+        var normalChange = Request();
+        normalChange.ChangeReason = EmploymentChangeReason.Promotion;
+        normalChange.EffectiveFrom = Today.AddDays(2);
+        normalChange.ManagerId = null;
+        var promoted = await harness.Employment().CreateChangeAsync(Employee004, normalChange, "EMP-001");
+
+        Assert.True(promoted.Succeeded, promoted.Message);
+        Assert.Equal(Manager003, promoted.Value!.ManagerId);
+
+        var history = await harness.Employment().GetHistoryAsync(Employee004);
+        Assert.True(history.Succeeded, history.Message);
+        Assert.Equal(Manager003, history.Value!.Single(h => h.EffectiveFrom == Today.AddDays(1)).ManagerId);
+        Assert.Equal(Manager002, history.Value!.Single(h => h.EffectiveFrom == Today).ManagerId);
+    }
+
+    [Fact]
+    public async Task Current_employment_change_synchronizes_existing_supervisor_l1_compatibility_fields()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Manager002);
+        await SeedActiveEmploymentAsync(harness, Manager003);
+
+        using (var context = harness.CreateContext())
+        {
+            context.EmployeeSupervisors.Add(new EmployeeSupervisor
+            {
+                Id = Guid.NewGuid(),
+                TenantId = Tenant,
+                EmployeeId = Employee004,
+                L1ManagerId = Manager003,
+                L1ManagerCode = "EMP-003",
+                L1ManagerName = "Stale Manager"
+            });
+            await context.SaveChangesAsync();
+        }
+
+        var request = Request();
+        request.ManagerId = Manager002;
+        var saved = await harness.Employment().CreateChangeAsync(Employee004, request, "EMP-001");
+
+        Assert.True(saved.Succeeded, saved.Message);
+
+        using (var context = harness.CreateContext())
+        {
+            var supervisor = await context.EmployeeSupervisors.SingleAsync(s => s.EmployeeId == Employee004);
+            Assert.Equal(Manager002, supervisor.L1ManagerId);
+            Assert.Equal("EMP-002", supervisor.L1ManagerCode);
+            Assert.NotEqual("Stale Manager", supervisor.L1ManagerName);
+
+            var history = await context.EmployeeEmploymentHistory
+                .SingleAsync(h => h.EmployeeId == Employee004 && h.EffectiveTo == null);
+            Assert.Equal(Manager002, history.ManagerId);
+            Assert.Equal(Manager002, (await context.Employees.SingleAsync(e => e.Id == Employee004)).ReportingManagerId);
+        }
+
+        var resolved = await harness.Managers().ResolveAsync(Employee004, Today);
+        Assert.True(resolved.Succeeded, resolved.Message);
+        Assert.Equal(EmployeeManagerResolutionStatus.Resolved, resolved.Value!.Status);
+        Assert.Equal(Manager002, resolved.Value.ManagerId);
+
+        var read = await harness.Supervisors().GetAsync(Employee004);
+        Assert.True(read.Succeeded, read.Message);
+        Assert.Equal(Manager002, read.Value!.L1ManagerId);
+        Assert.Equal("EMP-002", read.Value.L1ManagerCode);
+        Assert.Equal("Resolved", read.Value.L1ResolutionStatus);
+    }
+
+    [Fact]
+    public async Task Backdated_employment_change_is_rejected()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await AddEmploymentRecordAsync(harness, Employee004, Today.AddDays(-30), null, null);
+
+        var request = Request();
+        request.EffectiveFrom = Today.AddDays(-10);
+        request.ChangeReason = EmploymentChangeReason.Correction;
+        var result = await harness.Employment().CreateChangeAsync(Employee004, request, "EMP-001");
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("past", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Same_day_corrections_create_revisions_and_latest_revision_resolves()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var initial = Request();
+        initial.ChangeReason = EmploymentChangeReason.NewJoining;
+        Assert.True((await harness.Employment().CreateChangeAsync(Employee004, initial, "EMP-001")).Succeeded);
+
+        for (var i = 0; i < 2; i++)
+        {
+            var correction = Request();
+            correction.ChangeReason = EmploymentChangeReason.Correction;
+            correction.ChangeReasonDescription = $"Correction {i + 1}";
+            var result = await harness.Employment().CreateChangeAsync(Employee004, correction, "EMP-001");
+            Assert.True(result.Succeeded, result.Message);
+        }
+
+        using var context = harness.CreateContext();
+        var revisions = await context.EmployeeEmploymentHistory
+            .Where(h => h.EmployeeId == Employee004 && h.EffectiveFrom == Today)
+            .OrderBy(h => h.RevisionNumber)
+            .ToListAsync();
+        Assert.Equal(3, revisions.Count);
+        Assert.Equal(new[] { 1, 2, 3 }, revisions.Select(r => r.RevisionNumber));
+        Assert.Equal(new[] { true, true, false }, revisions.Select(r => r.IsSuperseded));
+
+        var current = await harness.Employment().GetCurrentAsync(Employee004);
+        Assert.True(current.Succeeded, current.Message);
+        Assert.Equal(3, current.Value!.RevisionNumber);
+        Assert.False(current.Value.IsSuperseded);
+    }
+
+    [Fact]
+    public async Task Inserting_between_two_records_reconciles_both_boundaries()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await AddEmploymentRecordAsync(harness, Employee004, Today.AddDays(-30), Today.AddDays(9), null);
+        await AddEmploymentRecordAsync(harness, Employee004, Today.AddDays(10), null, null);
+
+        var request = Request();
+        request.EffectiveFrom = Today;
+        request.ChangeReason = EmploymentChangeReason.Correction;
+        var result = await harness.Employment().CreateChangeAsync(Employee004, request, "EMP-001");
+
+        Assert.True(result.Succeeded, result.Message);
+        using var context = harness.CreateContext();
+        var active = await context.EmployeeEmploymentHistory
+            .Where(h => h.EmployeeId == Employee004 && !h.IsSuperseded)
+            .OrderBy(h => h.EffectiveFrom)
+            .ToListAsync();
+        Assert.Equal(3, active.Count);
+        Assert.Equal(Today.AddDays(-1), active[0].EffectiveTo);
+        Assert.Equal(Today.AddDays(9), active[1].EffectiveTo);
+        Assert.Equal(Today.AddDays(10), active[2].EffectiveFrom);
+    }
+
+    [Fact]
     public async Task Resolver_uses_the_manager_effective_before_on_and_after_a_scheduled_change()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();

@@ -3,6 +3,8 @@ using HRMS.API.Controllers;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Leave;
+using HRMS.API.Security;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,14 +16,14 @@ public sealed class LeaveRequestWithdrawalApiTests
     private static readonly Guid RequestId = new("70000000-0000-0000-0000-000000000001");
 
     [Fact]
-    public void Withdraw_requires_authentication_and_has_no_permission_requirement()
+    public void Withdraw_requires_authentication_and_own_request_permission()
     {
         var controller = typeof(LeaveRequestsController);
         var withdraw = controller.GetMethod(nameof(LeaveRequestsController.Withdraw))!;
 
         Assert.NotNull(controller.GetCustomAttribute<AuthorizeAttribute>());
         Assert.Equal("api/leave-requests", controller.GetCustomAttribute<RouteAttribute>()!.Template);
-        Assert.Null(withdraw.GetCustomAttribute<HRMS.API.Security.HasPermissionAttribute>());
+        Assert.Equal(Permissions.Leave.RequestWithdrawOwn, withdraw.GetCustomAttribute<HasPermissionAttribute>()!.Permission);
     }
 
     [Fact]

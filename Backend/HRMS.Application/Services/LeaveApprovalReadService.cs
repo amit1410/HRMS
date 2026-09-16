@@ -142,12 +142,15 @@ public sealed class LeaveApprovalReadService : ILeaveApprovalReadService
         if (!active)
             return Result<RuntimeEmployeeIdentity>.Forbidden("The authenticated account is not active.");
 
+        var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
         var hasPermission = await (
             from userRole in _db.UserRoles
             join rolePermission in _db.RolePermissions on userRole.RoleId equals rolePermission.RoleId
             join permission in _db.Permissions on rolePermission.PermissionId equals permission.Id
             where userRole.TenantId == identity.Value.TenantId &&
                   userRole.UserId == identity.Value.UserId &&
+                  userRole.EffectiveFrom <= businessDate &&
+                  (userRole.EffectiveTo == null || userRole.EffectiveTo >= businessDate) &&
                   permission.Name == Permissions.Leave.Approve
             select permission.Id).AnyAsync(cancellationToken);
         return hasPermission

@@ -146,6 +146,107 @@ public sealed class LeaveRequestRequestLimitTests
     }
 
     [Fact]
+    public async Task Probation_not_allowed_returns_business_ineligibility()
+    {
+        using var fixture = await LimitFixture.CreateAsync(probationMode: ProbationMode.NotAllowed, jobStatus: "Probation");
+
+        var result = await fixture.ValidateAsync(1);
+
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Contains("ProbationNotAllowed", result.Message);
+    }
+
+    [Theory]
+    [InlineData("2027-03-09", ResultStatus.ValidationFailed)]
+    [InlineData("2027-03-10", ResultStatus.Success)]
+    public async Task Confirmation_date_is_compared_inclusively_for_after_confirmation(
+        string requestDate,
+        ResultStatus expected)
+    {
+        using var fixture = await LimitFixture.CreateAsync(
+            probationMode: ProbationMode.AfterConfirmation,
+            confirmationDate: new(2027, 3, 10));
+
+        var result = await fixture.ValidateAsync(1, $"confirmation-{requestDate}", DateOnly.Parse(requestDate), DateOnly.Parse(requestDate));
+
+        Assert.Equal(expected, result.Status);
+        if (expected != ResultStatus.Success)
+            Assert.Contains("ConfirmationNotMet", result.Message);
+    }
+
+    [Fact]
+    public async Task Notice_period_not_allowed_rejects_start_inside_active_notice_window()
+    {
+        using var fixture = await LimitFixture.CreateAsync(
+            noticePeriodMode: NoticePeriodMode.NotAllowed,
+            noticeStatus: NoticePeriodStatus.Active,
+            noticeStartDate: new(2027, 1, 10),
+            noticeEndDate: new(2027, 1, 20));
+
+        var result = await fixture.ValidateAsync(1);
+
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Contains("NoticePeriodNotAllowed", result.Message);
+    }
+
+    [Theory]
+    [InlineData("2027-01-09", ResultStatus.Success)]
+    [InlineData("2027-01-10", ResultStatus.ValidationFailed)]
+    [InlineData("2027-01-20", ResultStatus.ValidationFailed)]
+    [InlineData("2027-01-21", ResultStatus.Success)]
+    public async Task Notice_period_not_allowed_uses_inclusive_start_and_end_boundaries(string date, ResultStatus expected)
+    {
+        using var fixture = await LimitFixture.CreateAsync(
+            noticePeriodMode: NoticePeriodMode.NotAllowed,
+            noticeStatus: NoticePeriodStatus.Active,
+            noticeStartDate: new(2027, 1, 10),
+            noticeEndDate: new(2027, 1, 20));
+
+        var result = await fixture.ValidateAsync(1, $"notice-{date}", DateOnly.Parse(date), DateOnly.Parse(date));
+
+        Assert.Equal(expected, result.Status);
+    }
+
+    [Fact]
+    public async Task Allowed_and_allowed_with_approval_remain_eligible_during_notice()
+    {
+        using var allowed = await LimitFixture.CreateAsync(
+            noticePeriodMode: NoticePeriodMode.Allowed,
+            noticeStatus: NoticePeriodStatus.Active,
+            noticeStartDate: new(2027, 1, 10),
+            noticeEndDate: new(2027, 1, 20));
+        using var approval = await LimitFixture.CreateAsync(
+            noticePeriodMode: NoticePeriodMode.AllowedWithApproval,
+            noticeStatus: NoticePeriodStatus.Active,
+            noticeStartDate: new(2027, 1, 10),
+            noticeEndDate: new(2027, 1, 20));
+
+        Assert.Equal(ResultStatus.Success, (await allowed.ValidateAsync(1)).Status);
+        Assert.Equal(ResultStatus.Success, (await approval.ValidateAsync(1)).Status);
+    }
+
+    [Fact]
+    public async Task Full_day_only_request_rule_passes_preview_validation()
+    {
+        using var fixture = await LimitFixture.CreateAsync(partialDayMode: PartialDayMode.FullDayOnly);
+
+        var result = await fixture.ValidateAsync(1);
+
+        Assert.Equal(ResultStatus.Success, result.Status);
+    }
+
+    [Fact]
+    public async Task Legacy_half_day_request_rule_remains_unsupported_at_runtime()
+    {
+        using var fixture = await LimitFixture.CreateAsync(partialDayMode: PartialDayMode.HalfDayAllowed);
+
+        var result = await fixture.ValidateAsync(1);
+
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Contains("half-day or partial-day runtime support", result.Message);
+    }
+
+    [Fact]
     public async Task Same_idempotency_key_is_excluded_from_period_history_for_replay()
     {
         using var fixture = await LimitFixture.CreateAsync(maximumRequests: 1, period: RequestLimitPeriod.LeavePeriod);
@@ -189,6 +290,14 @@ public sealed class LeaveRequestRequestLimitTests
             BackdatedRequestMode backdatedMode = BackdatedRequestMode.NotAllowed,
             int? maximumBackdatedDays = null,
             int? minimumServiceDays = null,
+            ProbationMode probationMode = ProbationMode.Allowed,
+            NoticePeriodMode noticePeriodMode = NoticePeriodMode.Allowed,
+            string? jobStatus = null,
+            DateOnly? confirmationDate = null,
+            NoticePeriodStatus noticeStatus = NoticePeriodStatus.NotServing,
+            DateOnly? noticeStartDate = null,
+            DateOnly? noticeEndDate = null,
+            PartialDayMode partialDayMode = PartialDayMode.FullDayOnly,
             DateTimeOffset? now = null)
         {
             var database = new SqliteInMemoryDatabase();
@@ -200,7 +309,7 @@ public sealed class LeaveRequestRequestLimitTests
             seed.Tenants.Add(new Tenant { Id = fixture.TenantId, TenantCode = "LIMIT" + fixture.TenantId.ToString("N")[..4], Host = "limit.local", ShardKey = fixture.TenantId.ToString("N"), TenantName = "Limits" });
             seed.LeaveTypes.Add(new LeaveType { Id = fixture.LeaveTypeId, TenantId = fixture.TenantId, Code = "ANNUAL", Name = "Annual", DefaultUnit = LeaveUnit.Day, IsActive = true });
             seed.LeaveTypes.Add(new LeaveType { Id = fixture.OtherLeaveTypeId, TenantId = fixture.TenantId, Code = "OTHER", Name = "Other", DefaultUnit = LeaveUnit.Day, IsActive = true });
-            seed.Employees.Add(new Employee { Id = fixture.EmployeeId, TenantId = fixture.TenantId, FirstName = "Limit", LastName = "Employee", Email = fixture.EmployeeId + "@test.local", DateOfJoining = new(2026, 1, 1), Gender = Gender.Unspecified });
+            seed.Employees.Add(new Employee { Id = fixture.EmployeeId, TenantId = fixture.TenantId, FirstName = "Limit", LastName = "Employee", Email = fixture.EmployeeId + "@test.local", DateOfJoining = new(2026, 1, 1), Gender = Gender.Unspecified, JobStatus = jobStatus });
             seed.Employees.Add(new Employee { Id = fixture.OtherEmployeeId, TenantId = fixture.TenantId, FirstName = "Other", LastName = "Employee", Email = fixture.OtherEmployeeId + "@test.local", DateOfJoining = new(2026, 1, 1), Gender = Gender.Unspecified });
             seed.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory { Id = fixture._employmentId, TenantId = fixture.TenantId, EmployeeId = fixture.EmployeeId, EffectiveFrom = new(2026, 1, 1) });
             seed.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory { Id = fixture._otherEmploymentId, TenantId = fixture.TenantId, EmployeeId = fixture.OtherEmployeeId, EffectiveFrom = new(2026, 1, 1) });
@@ -209,15 +318,17 @@ public sealed class LeaveRequestRequestLimitTests
             seed.LeavePolicyVersions.Add(new LeavePolicyVersion { Id = fixture._policyVersionId, TenantId = fixture.TenantId, LeavePolicyId = fixture._policyId, VersionNumber = 1, EffectiveFrom = new(2026, 1, 1), Status = LeavePolicyVersionStatus.Published, Priority = 1 });
             seed.LeavePolicyRules.Add(new LeavePolicyRule { Id = fixture._policyRuleId, TenantId = fixture.TenantId, LeavePolicyVersionId = fixture._policyVersionId, LeaveTypeId = fixture.LeaveTypeId, IsActive = true });
             seed.LeavePolicyEntitlementRules.Add(new LeavePolicyEntitlementRule { Id = Guid.NewGuid(), TenantId = fixture.TenantId, LeavePolicyRuleId = fixture._policyRuleId, EntitlementMode = EntitlementMode.Unlimited });
-            if (minimumServiceDays is int serviceDays)
-                seed.LeavePolicyEligibilityRules.Add(new LeavePolicyEligibilityRule { Id = Guid.NewGuid(), TenantId = fixture.TenantId, LeavePolicyRuleId = fixture._policyRuleId, EligibilityMode = EligibilityMode.MinimumService, MinimumServiceValue = serviceDays, MinimumServiceUnit = EligibilityServiceUnit.Days });
-            seed.LeavePolicyRequestRules.Add(new LeavePolicyRequestRule { Id = Guid.NewGuid(), TenantId = fixture.TenantId, LeavePolicyRuleId = fixture._policyRuleId, MinimumRequestQuantity = minimum, MaximumRequestQuantity = maximum, MaximumConsecutiveQuantity = maximumConsecutive, MinimumAdvanceNoticeDays = minimumAdvanceNoticeDays, BackdatedRequestMode = backdatedMode, MaximumBackdatedDays = maximumBackdatedDays, MaximumRequestsPerPeriod = maximumRequests, MaximumQuantityPerPeriod = maximumQuantity, RequestLimitPeriod = period });
+            if (minimumServiceDays is int serviceDays || probationMode != ProbationMode.Allowed || noticePeriodMode != NoticePeriodMode.Allowed)
+                seed.LeavePolicyEligibilityRules.Add(new LeavePolicyEligibilityRule { Id = Guid.NewGuid(), TenantId = fixture.TenantId, LeavePolicyRuleId = fixture._policyRuleId, EligibilityMode = minimumServiceDays is not null ? EligibilityMode.MinimumService : EligibilityMode.Immediate, MinimumServiceValue = minimumServiceDays, MinimumServiceUnit = minimumServiceDays is null ? null : EligibilityServiceUnit.Days, ProbationMode = probationMode, NoticePeriodMode = noticePeriodMode });
+            if (jobStatus is not null || confirmationDate is not null || noticeStatus != NoticePeriodStatus.NotServing)
+                seed.EmployeeEmployments.Add(new EmployeeEmployment { Id = Guid.NewGuid(), TenantId = fixture.TenantId, EmployeeId = fixture.EmployeeId, FirstHiredDate = new(2026, 1, 1), DateOfJoining = new(2026, 1, 1), JobStatus = jobStatus, ConfirmationDate = confirmationDate, NoticeStatus = noticeStatus, NoticeStartDate = noticeStartDate, NoticeEndDate = noticeEndDate });
+            seed.LeavePolicyRequestRules.Add(new LeavePolicyRequestRule { Id = Guid.NewGuid(), TenantId = fixture.TenantId, LeavePolicyRuleId = fixture._policyRuleId, MinimumRequestQuantity = minimum, MaximumRequestQuantity = maximum, MaximumConsecutiveQuantity = maximumConsecutive, MinimumAdvanceNoticeDays = minimumAdvanceNoticeDays, BackdatedRequestMode = backdatedMode, MaximumBackdatedDays = maximumBackdatedDays, MaximumRequestsPerPeriod = maximumRequests, MaximumQuantityPerPeriod = maximumQuantity, RequestLimitPeriod = period, PartialDayMode = partialDayMode });
             await seed.SaveChangesAsync();
 
             fixture._service = new LeaveRequestValidationService(
                 seed,
                 new FixedIdentity(fixture.TenantId, fixture.UserId, fixture.EmployeeId),
-                new FixedEmployment(fixture.TenantId, fixture.EmployeeId, fixture._employmentId),
+                new FixedEmployment(fixture.TenantId, fixture.EmployeeId, fixture._employmentId, noticeStartDate, noticeEndDate, noticeStatus),
                 new FixedPeriod(fixture.TenantId, fixture.LeavePeriodId),
                 new FixedPolicy(fixture.TenantId, fixture.EmployeeId, fixture.LeaveTypeId, fixture._policyId, fixture._policyVersionId, fixture._policyRuleId),
                 timeProvider: new FrozenTimeProvider(now ?? DateTimeOffset.UtcNow));
@@ -247,8 +358,8 @@ public sealed class LeaveRequestRequestLimitTests
 
         private sealed class FixedIdentity(Guid tenantId, Guid userId, Guid employeeId) : IEmployeeIdentityResolver
         { public Task<Result<RuntimeEmployeeIdentity>> ResolveCurrentAsync(CancellationToken ct = default) => Task.FromResult(Result<RuntimeEmployeeIdentity>.Success(new(tenantId, userId, employeeId))); }
-        private sealed class FixedEmployment(Guid tenantId, Guid employeeId, Guid historyId) : IEffectiveEmploymentResolver
-        { public Task<EffectiveEmploymentResolutionResult> ResolveAsync(Guid tenantId, Guid employeeId, DateOnly date, CancellationToken ct = default) => Task.FromResult(new EffectiveEmploymentResolutionResult(EffectiveEmploymentResolutionStatus.Resolved, tenantId, employeeId, date, new EffectiveEmploymentSnapshot(HistoryId: historyId, TenantId: tenantId, EmployeeId: employeeId, EffectiveFrom: new(2026, 1, 1), EffectiveTo: null, HoldingCompanyId: null, LobId: null, OrganisationId: null, DepartmentId: null, SubDepartmentId: null, SectionId: null, SubSectionId: null, FunctionId: null, SubFunctionId: null, GradeId: null, DesignationId: null, EmployeeTypeId: null, CountryLocationId: null, WorkLocationId: null, CostCenterId: null, ManagerId: null, EmploymentType: EmploymentType.FullTime, EmploymentStatus: EmployeeStatus.Active, DateOfJoining: new(2026, 1, 1), GroupDateOfJoining: null, DateOfLeaving: null, Gender: Gender.Unspecified), "resolved")); }
+        private sealed class FixedEmployment(Guid tenantId, Guid employeeId, Guid historyId, DateOnly? noticeStartDate, DateOnly? noticeEndDate, NoticePeriodStatus noticeStatus) : IEffectiveEmploymentResolver
+        { public Task<EffectiveEmploymentResolutionResult> ResolveAsync(Guid tenantId, Guid employeeId, DateOnly date, CancellationToken ct = default) => Task.FromResult(new EffectiveEmploymentResolutionResult(EffectiveEmploymentResolutionStatus.Resolved, tenantId, employeeId, date, new EffectiveEmploymentSnapshot(HistoryId: historyId, TenantId: tenantId, EmployeeId: employeeId, EffectiveFrom: new(2026, 1, 1), EffectiveTo: null, HoldingCompanyId: null, LobId: null, OrganisationId: null, DepartmentId: null, SubDepartmentId: null, SectionId: null, SubSectionId: null, FunctionId: null, SubFunctionId: null, GradeId: null, DesignationId: null, EmployeeTypeId: null, CountryLocationId: null, WorkLocationId: null, CostCenterId: null, ManagerId: null, EmploymentType: EmploymentType.FullTime, EmploymentStatus: EmployeeStatus.Active, DateOfJoining: new(2026, 1, 1), GroupDateOfJoining: null, DateOfLeaving: null, Gender: Gender.Unspecified, NoticeStartDate: noticeStartDate, NoticeEndDate: noticeEndDate, NoticeStatus: noticeStatus), "resolved")); }
         private sealed class FixedPeriod(Guid tenantId, Guid periodId) : ILeavePeriodResolver
         { public Task<LeavePeriodResolutionResult> ResolveAsync(Guid tenantId, DateOnly date, CancellationToken ct = default) => Task.FromResult(new LeavePeriodResolutionResult(LeavePeriodResolutionStatus.Resolved, tenantId, date, new(periodId, "2027", "2027", new(2027, 1, 1), new(2027, 12, 31), true, DateTime.UtcNow, null, "token"), "resolved")); }
         private sealed class FixedPolicy(Guid tenantId, Guid employeeId, Guid leaveTypeId, Guid policyId, Guid versionId, Guid ruleId) : ILeavePolicyResolver

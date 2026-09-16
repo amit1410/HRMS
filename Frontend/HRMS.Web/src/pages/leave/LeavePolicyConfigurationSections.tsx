@@ -23,34 +23,22 @@ type GroupKey = keyof Group
 type Lookup = { id: string; code: string; name: string; isActive: boolean }
 type Fetcher = (query?: { parentId?: string; isActive?: boolean }, signal?: AbortSignal) => Promise<Lookup[]>
 
-const fetchCache = new Map<string, Promise<Lookup[]>>()
-function cached(key: string, fetcher: Fetcher): Fetcher {
-  return (query, signal) => {
-    const cacheKey = `${key}:${query?.parentId ?? ''}:${query?.isActive ?? ''}`
-    const existing = fetchCache.get(cacheKey)
-    if (existing) return existing
-    const result = fetcher(query, signal)
-    fetchCache.set(cacheKey, result)
-    return result
-  }
-}
-
 const lookupFetchers: Record<string, Fetcher> = {
-  holdingCompanyId: cached('holding', (query, signal) => listHoldingCompanies(query, signal)),
-  lobId: cached('lob', (query, signal) => listLinesOfBusiness(query, signal)),
-  organisationId: cached('organisation', (query, signal) => listOrganisations(query, signal)),
-  departmentId: cached('department', (query, signal) => listDepartments(query, signal)),
-  subDepartmentId: cached('subDepartment', (query, signal) => listSubDepartments(query, signal)),
-  sectionId: cached('section', (query, signal) => listSections(query, signal)),
-  subSectionId: cached('subSection', (query, signal) => listSubSections(query, signal)),
-  functionId: cached('function', (query, signal) => listFunctions(query, signal)),
-  subFunctionId: cached('subFunction', (query, signal) => listSubFunctions(query, signal)),
-  gradeId: cached('grade', (query, signal) => listGrades(query, signal)),
-  designationId: cached('designation', (query, signal) => listDesignations({ pageSize: 100, isActive: query?.isActive, search: undefined }, signal).then(page => page.items)),
-  employeeTypeId: cached('employeeType', (query, signal) => listEmployeeTypes(query, signal)),
-  countryLocationId: cached('country', (query, signal) => listCountries({ pageSize: 100, isActive: query?.isActive }, signal).then(page => page.items)),
-  workLocationId: cached('workLocation', (query, signal) => listWorkLocations(query, signal)),
-  costCenterId: cached('costCenter', (query, signal) => listCostCenters(query, signal)),
+  holdingCompanyId: listHoldingCompanies,
+  lobId: listLinesOfBusiness,
+  organisationId: listOrganisations,
+  departmentId: listDepartments,
+  subDepartmentId: listSubDepartments,
+  sectionId: listSections,
+  subSectionId: listSubSections,
+  functionId: listFunctions,
+  subFunctionId: listSubFunctions,
+  gradeId: listGrades,
+  designationId: (query, signal) => listDesignations({ pageSize: 100, isActive: query?.isActive, search: undefined }, signal).then(page => page.items),
+  employeeTypeId: listEmployeeTypes,
+  countryLocationId: (query, signal) => listCountries({ pageSize: 100, isActive: query?.isActive }, signal).then(page => page.items),
+  workLocationId: listWorkLocations,
+  costCenterId: listCostCenters,
 }
 
 const dimensions: Array<{ key: GroupKey; label: string; parent?: GroupKey }> = [
@@ -76,9 +64,9 @@ function toGroup(group: LeaveApplicabilityGroup): Group { const next = blankGrou
 function payload(groups: Group[]): LeaveApplicabilityGroupRequest[] { return groups.filter(group => dimensions.some(dimension => group[dimension.key])).map(group => ({ ...group })) }
 function groupSignature(group: Group): string { return JSON.stringify(payload([group])[0] ?? {}) }
 
-interface Props { policyId: string; version: LeavePolicyVersion; selectedLeaveTypes: LeaveTypeSelection[]; canManage: boolean; onNotice: (message: string) => void; onChanged?: () => void }
+interface Props { policyId: string; version: LeavePolicyVersion; selectedLeaveTypes: LeaveTypeSelection[]; canManage: boolean; onNotice: (message: string) => void; onChanged?: () => void; onSaved?: () => Promise<void> | void }
 
-export function LeavePolicyConfigurationSections({ policyId, version, selectedLeaveTypes, canManage, onNotice, onChanged }: Props) {
+export function LeavePolicyConfigurationSections({ policyId, version, selectedLeaveTypes, canManage, onNotice, onChanged, onSaved }: Props) {
   const editable = canManage && version.status === 'Draft'
   const leaveTypesQuery = useApiQuery(signal => listLeaveTypes({ pageSize: 100 }, signal), [])
   const [leaveTypeIds, setLeaveTypeIds] = useState(() => selectedLeaveTypes.map(item => item.id))
@@ -106,7 +94,7 @@ export function LeavePolicyConfigurationSections({ policyId, version, selectedLe
 
   async function saveTypes() {
     setSavingTypes(true); setTypeError(null)
-    try { await setVersionLeaveTypes(policyId, version.id, { leaveTypeIds, concurrencyToken: version.concurrencyToken }); onChanged?.(); onNotice('Leave Types saved.') } catch (error) { setTypeError(error instanceof ApiError ? error : new ApiError('Unable to save Leave Types.')) } finally { setSavingTypes(false) }
+    try { const saved = await setVersionLeaveTypes(policyId, version.id, { leaveTypeIds, concurrencyToken: version.concurrencyToken }); setLeaveTypeIds(saved.map(item => item.id)); await onSaved?.(); onChanged?.(); onNotice('Leave Types saved successfully.') } catch (error) { setTypeError(error instanceof ApiError ? error : new ApiError('Unable to save Leave Types.')) } finally { setSavingTypes(false) }
   }
   function updateGroup(index: number, key: GroupKey, value: string) {
     onChanged?.()
@@ -133,7 +121,7 @@ export function LeavePolicyConfigurationSections({ policyId, version, selectedLe
     const intended = payload(groups)
     if (new Set(intended.map(group => groupSignature(group as Group))).size !== intended.length) { setGroupError(new ApiError('Duplicate applicability groups are not allowed.')); return }
     setSavingGroups(true); setGroupError(null)
-    try { await setApplicability(policyId, version.id, { groups: intended, concurrencyToken: version.concurrencyToken }); onChanged?.(); onNotice('Applicability saved.') } catch (error) { setGroupError(error instanceof ApiError ? error : new ApiError('Unable to save applicability.')) } finally { setSavingGroups(false) }
+    try { await setApplicability(policyId, version.id, { groups: intended, concurrencyToken: version.concurrencyToken }); await onSaved?.(); onChanged?.(); onNotice('Applicability saved.') } catch (error) { setGroupError(error instanceof ApiError ? error : new ApiError('Unable to save applicability.')) } finally { setSavingGroups(false) }
   }
 
   return <>

@@ -1,6 +1,7 @@
 using HRMS.Application.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using MySql.EntityFrameworkCore.Extensions;
 
 namespace HRMS.Infrastructure.Persistence;
 
@@ -14,13 +15,16 @@ public class HrmsDbContextFactory : IDesignTimeDbContextFactory<HrmsDbContext>
 {
     public HrmsDbContext CreateDbContext(string[] args)
     {
-        var options = new DbContextOptionsBuilder<HrmsDbContext>()
-            .UseSqlServer(
-                "Server=localhost;Database=HRMS;Trusted_Connection=True;TrustServerCertificate=True;",
-                sql => sql.MigrationsAssembly(typeof(HrmsDbContext).Assembly.FullName))
-            .Options;
+        var configuration = DesignTimeDatabaseConfiguration.Load();
+        var provider = DesignTimeDatabaseConfiguration.ResolveProvider(configuration);
+        var connection = DesignTimeDatabaseConfiguration.ResolveConnection(configuration, provider, false);
+        var optionsBuilder = new DbContextOptionsBuilder<HrmsDbContext>();
+        if (provider == DesignTimeDatabaseConfiguration.MySql)
+            optionsBuilder.UseMySQL(connection, mysql => mysql.MigrationsAssembly(DatabaseProviderNames.MySqlMigrationsAssembly));
+        else
+            optionsBuilder.UseSqlServer(connection, sql => sql.MigrationsAssembly(typeof(HrmsDbContext).Assembly.FullName));
 
-        return new HrmsDbContext(options, new DesignTimeTenantContext());
+        return new HrmsDbContext(optionsBuilder.Options, new DesignTimeTenantContext());
     }
 
     /// <summary>No tenant is resolved at design time; migrations only need the model shape.</summary>

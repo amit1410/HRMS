@@ -2167,6 +2167,15 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateOnly?>("EffectiveTo")
                         .HasColumnType("date");
 
+                    b.Property<bool>("IsSuperseded")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("RevisionNumber")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("SupersededAtUtc")
+                        .HasColumnType("datetime2");
+
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("uniqueidentifier");
 
@@ -2272,6 +2281,10 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.HasIndex("TenantId", "EmployeeId", "EffectiveFrom");
 
                     b.HasIndex("TenantId", "EmployeeId", "EffectiveTo");
+
+                    b.HasIndex("TenantId", "EmployeeId", "EffectiveFrom", "RevisionNumber")
+                        .HasDatabaseName("IX_EmpHist_EffectiveRevision")
+                        .IsUnique();
 
                     b.ToTable("EmployeeEmploymentHistory", (string)null);
                 });
@@ -5770,6 +5783,9 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("HRMS.Domain.Entities.UserRole", b =>
                 {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid>("UserId")
                         .HasColumnType("uniqueidentifier");
 
@@ -5779,13 +5795,68 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.HasKey("UserId", "RoleId");
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<int>("AssignmentSource")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("AssignedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AssignmentReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
 
                     b.HasIndex("RoleId");
 
                     b.HasIndex("TenantId");
 
+                    b.HasIndex("TenantId", "UserId", "RoleId", "EffectiveFrom");
+
                     b.ToTable("UserRoles", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.UserRoleAssignmentEvent", b =>
+                {
+                    b.Property<Guid>("Id").HasColumnType("uniqueidentifier");
+                    b.Property<Guid>("TenantId").HasColumnType("uniqueidentifier");
+                    b.Property<Guid>("AssignmentId").HasColumnType("uniqueidentifier");
+                    b.Property<Guid>("UserId").HasColumnType("uniqueidentifier");
+                    b.Property<int>("RoleId").HasColumnType("int");
+                    b.Property<int>("EventType").HasColumnType("int");
+                    b.Property<DateOnly>("EffectiveFrom").HasColumnType("date");
+                    b.Property<DateOnly?>("EffectiveTo").HasColumnType("date");
+                    b.Property<int>("AssignmentSource").HasColumnType("int");
+                    b.Property<string>("Reason").HasMaxLength(500).HasColumnType("nvarchar(500)");
+                    b.Property<Guid?>("PerformedByUserId").HasColumnType("uniqueidentifier");
+                    b.Property<DateTime>("OccurredAtUtc").HasColumnType("datetime2");
+                    b.HasKey("Id");
+                    b.HasIndex("TenantId", "AssignmentId", "OccurredAtUtc", "Id").HasDatabaseName("IX_URAEvent_Tenant_Assignment_Occurred_Id");
+                    b.ToTable("UserRoleAssignmentEvents", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.UserRoleAssignmentScope", b =>
+                {
+                    b.Property<Guid>("Id").HasColumnType("uniqueidentifier");
+                    b.Property<Guid>("TenantId").HasColumnType("uniqueidentifier");
+                    b.Property<Guid>("UserRoleAssignmentId").HasColumnType("uniqueidentifier");
+                    b.Property<int>("ScopeType").HasColumnType("int");
+                    b.Property<Guid>("ScopeEntityId").HasColumnType("uniqueidentifier");
+                    b.HasKey("Id");
+                    b.HasIndex("TenantId", "UserRoleAssignmentId", "ScopeType", "ScopeEntityId").HasDatabaseName("UX_URAScope_Assignment_Type_Entity").IsUnique();
+                    b.ToTable("UserRoleAssignmentScopes", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.WeeklyOffConfiguration", b =>
@@ -8009,6 +8080,26 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Role");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.UserRoleAssignmentEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.UserRole", "Assignment")
+                        .WithMany("Events")
+                        .HasForeignKey("AssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                    b.Navigation("Assignment");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.UserRoleAssignmentScope", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.UserRole", "Assignment")
+                        .WithMany("Scopes")
+                        .HasForeignKey("UserRoleAssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                    b.Navigation("Assignment");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.WeeklyOffConfiguration", b =>

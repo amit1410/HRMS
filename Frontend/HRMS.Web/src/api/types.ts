@@ -942,6 +942,9 @@ export interface EmployeeEmployment {
   referredByEmployeeName?: string | null
   noticePeriod?: number | null
   noticePeriodUnit?: string | null
+  noticeStartDate?: string | null
+  noticeEndDate?: string | null
+  noticeStatus: 'NotServing' | 'Active' | 'Completed' | 'Cancelled'
   createdDate: string
   modifiedDate?: string | null
 }
@@ -957,6 +960,9 @@ export interface EmployeeEmploymentRequest {
   referredByEmployeeId?: string | null
   noticePeriod?: number | null
   noticePeriodUnit?: string | null
+  noticeStartDate?: string | null
+  noticeEndDate?: string | null
+  noticeStatus?: 'NotServing' | 'Active' | 'Completed' | 'Cancelled'
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -968,6 +974,9 @@ export interface EmployeeEmploymentHistory {
   employeeId: string
   effectiveFrom: string
   effectiveTo?: string | null
+  revisionNumber?: number
+  isSuperseded?: boolean
+  supersededAtUtc?: string | null
   // FK references to master data (nullable = optional)
   holdingCompanyId?: string | null
   lobId?: string | null
@@ -1002,8 +1011,8 @@ export interface EmployeeEmploymentHistory {
   countryLocationName?: string | null
   workLocationName?: string | null
   costCenterName?: string | null
-  managerName?: string | null
-  managerCode?: string | null
+  managerEmployeeCode?: string | null
+  managerFullName?: string | null
   positionChangeReasonName?: string | null
   // Additional info
   businessRole?: string | null

@@ -6,6 +6,7 @@ using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence;
+using HRMS.Infrastructure.Persistence.Seed;
 using HRMS.Infrastructure.Security;
 using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
@@ -335,7 +336,8 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                 var pendingManagerCalendar = await new LeaveCalendarService(
                     context,
                     new EmployeeIdentityResolver(context, fixture.ManagerTenant),
-                    new EmployeeManagerResolver(context, fixture.ManagerTenant))
+                    new EmployeeManagerResolver(context, fixture.ManagerTenant),
+                    new FixedClock(new DateTimeOffset(2026, 9, 15, 0, 0, 0, TimeSpan.Zero)))
                     .GetAsync(new DateOnly(2026, 9, 30), new DateOnly(2026, 10, 2));
                 Assert.True(pendingManagerCalendar.Succeeded);
                 Assert.Contains(pendingManagerCalendar.Value!, item => item.RequestId == submitted.Value.RequestId &&
@@ -344,7 +346,8 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                 var pendingEmployeeCalendar = await new LeaveCalendarService(
                     context,
                     new EmployeeIdentityResolver(context, fixture.EmployeeTenant),
-                    new EmployeeManagerResolver(context, fixture.EmployeeTenant))
+                    new EmployeeManagerResolver(context, fixture.EmployeeTenant),
+                    new FixedClock(new DateTimeOffset(2026, 9, 15, 0, 0, 0, TimeSpan.Zero)))
                     .GetAsync(new DateOnly(2026, 9, 30), new DateOnly(2026, 10, 2));
                 Assert.True(pendingEmployeeCalendar.Succeeded);
                 Assert.DoesNotContain(pendingEmployeeCalendar.Value!, item => item.RequestId == submitted.Value.RequestId);
@@ -379,7 +382,8 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                 var managerCalendar = await new LeaveCalendarService(
                     context,
                     new EmployeeIdentityResolver(context, fixture.ManagerTenant),
-                    new EmployeeManagerResolver(context, fixture.ManagerTenant))
+                    new EmployeeManagerResolver(context, fixture.ManagerTenant),
+                    new FixedClock(new DateTimeOffset(2026, 9, 15, 0, 0, 0, TimeSpan.Zero)))
                     .GetAsync(new DateOnly(2026, 9, 30), new DateOnly(2026, 10, 2));
                 Assert.True(managerCalendar.Succeeded);
                 Assert.Contains(managerCalendar.Value!, item => item.RequestId == submitted.Value.RequestId &&
@@ -392,7 +396,8 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                 var employeeCalendar = await new LeaveCalendarService(
                     context,
                     new EmployeeIdentityResolver(context, fixture.EmployeeTenant),
-                    new EmployeeManagerResolver(context, fixture.EmployeeTenant))
+                    new EmployeeManagerResolver(context, fixture.EmployeeTenant),
+                    new FixedClock(new DateTimeOffset(2026, 9, 15, 0, 0, 0, TimeSpan.Zero)))
                     .GetAsync(new DateOnly(2026, 10, 1), new DateOnly(2026, 10, 31));
                 Assert.True(employeeCalendar.Succeeded);
                 Assert.Contains(employeeCalendar.Value!, item => item.RequestId == submitted.Value.RequestId);
@@ -401,7 +406,8 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
                 var outsideCalendar = await new LeaveCalendarService(
                     context,
                     new EmployeeIdentityResolver(context, fixture.ManagerTenant),
-                    new EmployeeManagerResolver(context, fixture.ManagerTenant))
+                    new EmployeeManagerResolver(context, fixture.ManagerTenant),
+                    new FixedClock(new DateTimeOffset(2026, 9, 15, 0, 0, 0, TimeSpan.Zero)))
                     .GetAsync(new DateOnly(2026, 11, 1), new DateOnly(2026, 11, 30));
                 Assert.True(outsideCalendar.Succeeded);
                 Assert.DoesNotContain(outsideCalendar.Value!, item => item.RequestId == submitted.Value.RequestId);
@@ -532,7 +538,23 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
             db.AccountEmployeeLinkEvents.AddRange(
                 LinkEvent(EmployeeLinkId, EmployeeUserId, EmployeeId, "employee-link"),
                 LinkEvent(ManagerLinkId, ManagerUserId, ManagerId, "manager-link"));
-            var approvePermission = await db.Permissions.SingleAsync(x => x.Name == Permissions.Leave.Approve);
+            var employeeRoleId = SeedData.RoleId(RoleNames.Employee);
+            if (!await db.Roles.AnyAsync(x => x.Id == employeeRoleId))
+                db.Roles.Add(new Role { Id = employeeRoleId, Name = RoleNames.Employee, Description = "Standard employee with self-service access." });
+            foreach (var permissionName in SeedData.RolePermissionMap[RoleNames.Employee])
+            {
+                var permissionId = SeedData.PermissionId(permissionName);
+                if (!await db.Permissions.AnyAsync(x => x.Id == permissionId))
+                    db.Permissions.Add(new Permission { Id = permissionId, Name = permissionName, Description = permissionName.Replace('.', ' ') });
+                if (!await db.RolePermissions.AnyAsync(x => x.RoleId == employeeRoleId && x.PermissionId == permissionId))
+                    db.RolePermissions.Add(new RolePermission { RoleId = employeeRoleId, PermissionId = permissionId });
+            }
+            db.UserRoles.Add(new UserRole { TenantId = TenantId, UserId = EmployeeUserId, RoleId = employeeRoleId });
+            var approvePermissionId = SeedData.PermissionId(Permissions.Leave.Approve);
+            var approvePermission = await db.Permissions.SingleOrDefaultAsync(x => x.Id == approvePermissionId)
+                ?? new Permission { Id = approvePermissionId, Name = Permissions.Leave.Approve, Description = Permissions.Leave.Approve.Replace('.', ' ') };
+            if (approvePermission.Id == approvePermissionId && db.Entry(approvePermission).State == EntityState.Detached)
+                db.Permissions.Add(approvePermission);
             PermissionId = approvePermission.Id;
             db.Roles.Add(new Role { Id = RoleId, Name = $"M{TenantId:N}"[..8] });
             db.UserRoles.Add(new UserRole { TenantId = TenantId, UserId = ManagerUserId, RoleId = RoleId });

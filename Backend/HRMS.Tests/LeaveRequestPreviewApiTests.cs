@@ -1,9 +1,11 @@
 using System.Reflection;
 using HRMS.API.Controllers;
+using HRMS.API.Security;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Leave;
 using HRMS.Domain.Enums;
+using HRMS.Domain.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -11,6 +13,34 @@ namespace HRMS.Tests;
 
 public sealed class LeaveRequestPreviewApiTests
 {
+    [Fact]
+    public void Self_service_leave_type_options_require_authentication_without_policy_permission()
+    {
+        var controller = typeof(LeaveRequestOptionsController);
+        var authorize = controller.GetCustomAttribute<AuthorizeAttribute>();
+        var endpoint = controller.GetMethod(nameof(LeaveRequestOptionsController.GetLeaveTypes));
+
+        Assert.NotNull(authorize);
+        Assert.Null(authorize!.Policy);
+        Assert.Equal(Permissions.Leave.TypeViewAvailable, endpoint!.GetCustomAttribute<HasPermissionAttribute>()!.Permission);
+        Assert.Equal("available", endpoint!.GetCustomAttribute<HttpGetAttribute>()!.Template);
+    }
+
+    [Fact]
+    public async Task Self_service_leave_type_options_propagate_missing_employee_link()
+    {
+        var controller = new LeaveRequestOptionsController(
+            new FixedIdentityResolver(Result<RuntimeEmployeeIdentity>.NotFound(
+                "The authenticated account is not linked to an Employee.")),
+            null!);
+
+        var action = await controller.GetLeaveTypes(CancellationToken.None);
+
+        var result = Assert.IsType<ObjectResult>(action.Result);
+        Assert.Equal(404, result.StatusCode);
+        Assert.Contains("not linked", ((ApiResponse<PagedResult<LeaveTypeDto>>)result.Value!).Message);
+    }
+
     [Fact]
     public void Preview_endpoint_requires_authentication_without_an_admin_permission()
     {
@@ -20,6 +50,7 @@ public sealed class LeaveRequestPreviewApiTests
 
         Assert.NotNull(authorize);
         Assert.Null(authorize!.Policy);
+        Assert.Equal(Permissions.Leave.RequestCreate, preview!.GetCustomAttribute<HasPermissionAttribute>()!.Permission);
         Assert.NotNull(preview?.GetCustomAttribute<HttpPostAttribute>());
         Assert.Equal("preview", preview!.GetCustomAttribute<HttpPostAttribute>()!.Template);
     }
@@ -161,5 +192,21 @@ public sealed class LeaveRequestPreviewApiTests
             Input = input;
             return Task.FromResult(_result);
         }
+    }
+
+    [Fact]
+    public void Own_balance_endpoint_requires_the_self_service_balance_permission()
+    {
+        var method = typeof(LeaveBalanceSummaryController).GetMethod(nameof(LeaveBalanceSummaryController.GetMine));
+
+        Assert.Equal(
+            Permissions.Leave.BalanceViewOwn,
+            method!.GetCustomAttribute<HasPermissionAttribute>()!.Permission);
+    }
+
+    private sealed class FixedIdentityResolver(Result<RuntimeEmployeeIdentity> result) : IEmployeeIdentityResolver
+    {
+        public Task<Result<RuntimeEmployeeIdentity>> ResolveCurrentAsync(
+            CancellationToken cancellationToken = default) => Task.FromResult(result);
     }
 }

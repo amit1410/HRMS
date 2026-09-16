@@ -235,17 +235,12 @@ public class AuthServiceRefreshTests
         var login = await SignInAsync(harness, Demo01, "hr@demo01.com");
         Assert.Equal(new[] { RoleNames.HRManager }, login.User.Roles);
 
-        // (UserId, RoleId) is the composite key, so the assignment is replaced rather than edited.
+        // Role assignments now have immutable history events, so change the current assignment in place
+        // rather than deleting a row referenced by its audit history.
         var arrange = harness.CreateUnscopedContext();
         var assignment = await arrange.UserRoles.IgnoreQueryFilters()
             .SingleAsync(ur => ur.UserId == SeedData.Users[1].Id);
-        arrange.UserRoles.Remove(assignment);
-        arrange.UserRoles.Add(new UserRole
-        {
-            UserId = SeedData.Users[1].Id,
-            RoleId = SeedData.RoleId(RoleNames.HRAdmin),
-            TenantId = SeedData.TenantIds.Demo01
-        });
+        assignment.RoleId = SeedData.RoleId(RoleNames.HRAdmin);
         await arrange.SaveChangesAsync();
 
         var refreshed = await harness.CreateService()

@@ -10,8 +10,13 @@ public sealed class MySqlDbContextFactory : IDesignTimeDbContextFactory<HrmsDbCo
 {
     public HrmsDbContext CreateDbContext(string[] args)
     {
-        var configured = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
-        var connection = string.IsNullOrWhiteSpace(configured) ? "Server=localhost;Database=HRMS_MigrationDesign;" : NormalizeForTest(configured);
+        var configured = Environment.GetEnvironmentVariable("ConnectionStrings__MySql");
+        var legacyTestConnection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
+        var connection = !string.IsNullOrWhiteSpace(configured)
+            ? configured
+            : !string.IsNullOrWhiteSpace(legacyTestConnection)
+                ? NormalizeForTest(legacyTestConnection)
+                : throw new InvalidOperationException("ConnectionStrings__MySql is required for MySQL EF design-time tooling.");
         var options = new DbContextOptionsBuilder<HrmsDbContext>()
             .UseMySQL(
                 connection,

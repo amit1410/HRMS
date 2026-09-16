@@ -334,7 +334,7 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
 
         var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
         var currentHistory = _db.EmployeeEmploymentHistory
-            .Where(h => h.TenantId == tenantId && h.EffectiveFrom <= businessDate &&
+            .Where(h => h.TenantId == tenantId && !h.IsSuperseded && h.EffectiveFrom <= businessDate &&
                         (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
 
         // Query employees eligible for the specified supervisor type. A scheduled retirement or joining

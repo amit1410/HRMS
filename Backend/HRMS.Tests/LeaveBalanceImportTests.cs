@@ -1,15 +1,41 @@
 using System.Text;
+using HRMS.API.Controllers;
 using HRMS.Application.Common;
 using HRMS.Application.Services;
 using HRMS.Domain.Entities;
 using HRMS.Infrastructure.Persistence;
 using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Mvc;
+using HRMS.API.Security;
+using HRMS.Domain.Authorization;
 
 namespace HRMS.Tests;
 
 public sealed class LeaveBalanceImportTests
 {
+    [Fact]
+    public void Template_returns_the_import_contract_as_a_csv_download()
+    {
+        var controller = new LeaveBalanceImportsController(null!);
+
+        var file = Assert.IsType<FileContentResult>(controller.Template());
+        var csv = Encoding.UTF8.GetString(file.FileContents);
+
+        Assert.Equal("text/csv", file.ContentType);
+        Assert.Equal("leave-balance-import-template.csv", file.FileDownloadName);
+        Assert.Equal("EmployeeCode,LeaveTypeCode,LeavePeriod,OpeningBalance,EffectiveDate,Remarks\r\n", csv);
+    }
+
+    [Fact]
+    public void Template_requires_the_balance_import_permission()
+    {
+        var method = typeof(LeaveBalanceImportsController).GetMethod(nameof(LeaveBalanceImportsController.Template));
+
+        var permission = Assert.Single(method!.GetCustomAttributes(typeof(HasPermissionAttribute), inherit: true));
+        Assert.Equal(Permissions.Leave.BalanceImport, ((HasPermissionAttribute)permission).Permission);
+    }
+
     [Fact]
     public async Task Valid_csv_creates_opening_ledger_and_is_idempotent()
     {

@@ -14,6 +14,15 @@ export interface NavItem {
    */
   available: boolean
   requiresEmployeeIdentity?: boolean
+  group?: NavGroupId
+}
+
+export type NavGroupId = 'employee' | 'leave' | 'attendance' | 'reports' | 'administration' | 'profile'
+
+export interface NavGroup {
+  id: NavGroupId
+  label: string
+  collapsible: boolean
 }
 
 /**
@@ -25,54 +34,68 @@ export interface NavItem {
  */
 export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Dashboard', to: '/dashboard', available: true },
-  { label: 'My Profile', to: '/my-profile', available: true, requiresEmployeeIdentity: true },
-  { label: 'Change Password', to: '/change-password', available: true },
+  { label: 'My Profile', to: '/my-profile', available: true, requiresEmployeeIdentity: true, group: 'profile' },
+  { label: 'Change Password', to: '/change-password', available: true, group: 'profile' },
   {
     label: 'Employees',
     to: '/employees',
     permission: Permissions.employee.view,
     available: true,
+    group: 'employee',
   },
   {
     label: 'Employee Code Configuration',
     to: '/configuration/employee-code',
     permission: Permissions.employeeCodeConfiguration.view,
     available: true,
+    group: 'employee',
   },
-  { label: 'Login Settings', to: '/configuration/login-settings', permission: Permissions.user.edit, available: true },
-  { label: 'Password Recovery', to: '/configuration/password-recovery', permission: Permissions.user.edit, available: true },
+  { label: 'Login Settings', to: '/configuration/login-settings', permission: Permissions.user.edit, available: true, group: 'administration' },
+  { label: 'Password Recovery', to: '/configuration/password-recovery', permission: Permissions.user.edit, available: true, group: 'administration' },
   {
     label: 'Masters',
     to: '/masters/holding-companies',
     anyPermission: [Permissions.geography.view, Permissions.department.view, Permissions.designation.view],
     available: true,
+    group: 'employee',
   },
   {
     label: 'Account–Employee Links',
     to: '/administration/account-employee-links',
     permission: Permissions.accountEmployeeLink.view,
     available: true,
+    group: 'employee',
   },
-  { label: 'Leave Types', to: '/leave-management/types', permission: Permissions.leave.typeManage, available: true },
-  { label: 'Leave Periods', to: '/leave-management/periods', permission: Permissions.leave.periodManage, available: true },
-  { label: 'Leave Policies', to: '/leave-management/policies', permission: Permissions.leave.policyView, available: true },
-  { label: 'Working Day Calendar', to: '/leave-management/working-day-calendar', permission: Permissions.leave.policyView, available: true },
-  { label: 'Leave Dashboard', to: '/leave-management', available: true },
-  { label: 'Leave Reports', to: '/leave-management/reports', permission: Permissions.leave.reportsView, available: true },
-  { label: 'Apply Leave (Preview)', to: '/leave-management/apply', available: true },
-  { label: 'My Leave Requests', to: '/leave-management/my-requests', available: true },
-  { label: 'Team Leave Calendar', to: '/leave-management/team-calendar', available: true },
-  { label: 'Leave Balance Import', to: '/leave-management/balances/import', permission: Permissions.leave.balanceImport, available: true },
-  { label: 'Leave Approvals', to: '/leave-management/approvals', permission: Permissions.leave.approve, available: true },
-    { label: 'Shifts', to: '/attendance/shifts', permission: Permissions.attendance.view, available: true },
-    { label: 'Shift Patterns', to: '/attendance/shift-patterns', permission: Permissions.attendance.view, available: true },
-    { label: 'Shift Applicability', to: '/attendance/applicability', permission: Permissions.attendance.view, available: true },
-    { label: 'Roster', to: '/attendance/roster', permission: Permissions.attendance.view, available: true },
-  { label: 'Roster Upload', to: '/attendance/roster-upload', permission: Permissions.attendance.view, available: true },
-  { label: 'My Attendance', to: '/attendance/my-attendance', available: true, requiresEmployeeIdentity: true },
-  { label: 'Attendance Requests', to: '/attendance/requests', available: true, requiresEmployeeIdentity: true },
-  { label: 'Team Attendance', to: '/attendance/team', permission: Permissions.attendance.view, available: true },
-  { label: 'Attendance Reports', to: '/attendance/reports', permission: Permissions.attendance.reportView, available: true },
+  { label: 'Role Management', to: '/role-management', permission: Permissions.roleManagement.assignmentView, available: true, group: 'administration' },
+  { label: 'Leave Types', to: '/leave-management/types', permission: Permissions.leave.typeManage, available: true, group: 'leave' },
+  { label: 'Leave Periods', to: '/leave-management/periods', permission: Permissions.leave.periodManage, available: true, group: 'leave' },
+  { label: 'Leave Policies', to: '/leave-management/policies', permission: Permissions.leave.policyView, available: true, group: 'leave' },
+  { label: 'Working Day Calendar', to: '/leave-management/working-day-calendar', permission: Permissions.leave.policyView, available: true, group: 'leave' },
+  { label: 'Leave Dashboard', to: '/leave-management', available: true, group: 'leave' },
+  { label: 'Apply Leave', to: '/leave-management/apply', permission: Permissions.leave.requestCreate, available: true, group: 'leave' },
+  { label: 'My Leave Requests', to: '/leave-management/my-requests', permission: Permissions.leave.requestViewOwn, available: true, group: 'leave' },
+  { label: 'Team Leave Calendar', to: '/leave-management/team-calendar', available: true, group: 'leave' },
+  { label: 'Leave Balance Import', to: '/leave-management/balances/import', permission: Permissions.leave.balanceImport, available: true, group: 'leave' },
+  { label: 'Leave Approvals', to: '/leave-management/approvals', permission: Permissions.leave.approve, available: true, group: 'leave' },
+  { label: 'Leave Reports', to: '/leave-management/reports', permission: Permissions.leave.reportsView, available: true, group: 'reports' },
+  { label: 'Shifts', to: '/attendance/shifts', permission: Permissions.attendance.view, available: true, group: 'attendance' },
+  { label: 'Shift Patterns', to: '/attendance/shift-patterns', permission: Permissions.attendance.view, available: true, group: 'attendance' },
+  { label: 'Shift Applicability', to: '/attendance/applicability', permission: Permissions.attendance.view, available: true, group: 'attendance' },
+  { label: 'Roster', to: '/attendance/roster', permission: Permissions.attendance.view, available: true, group: 'attendance' },
+  { label: 'Roster Upload', to: '/attendance/roster-upload', permission: Permissions.attendance.view, available: true, group: 'attendance' },
+  { label: 'My Attendance', to: '/attendance/my-attendance', available: true, requiresEmployeeIdentity: true, group: 'attendance' },
+  { label: 'Attendance Requests', to: '/attendance/requests', available: true, requiresEmployeeIdentity: true, group: 'attendance' },
+  { label: 'Team Attendance', to: '/attendance/team', permission: Permissions.attendance.view, available: true, group: 'attendance' },
+  { label: 'Attendance Reports', to: '/attendance/reports', permission: Permissions.attendance.reportView, available: true, group: 'reports' },
+]
+
+export const NAV_GROUPS: readonly NavGroup[] = [
+  { id: 'employee', label: 'Employee Management', collapsible: true },
+  { id: 'leave', label: 'Leave Management', collapsible: true },
+  { id: 'attendance', label: 'Attendance Management', collapsible: true },
+  { id: 'reports', label: 'Reports', collapsible: true },
+  { id: 'administration', label: 'Administration', collapsible: true },
+  { id: 'profile', label: 'User/Profile', collapsible: true },
 ]
 
 export function visibleNavItems(can: (permission: string) => boolean, user?: AuthenticatedUser | null): NavItem[] {
@@ -81,4 +104,9 @@ export function visibleNavItems(can: (permission: string) => boolean, user?: Aut
     (item.anyPermission === undefined || item.anyPermission.some(can)) &&
     (!item.requiresEmployeeIdentity || user?.employeeIdentity?.status === 'Linked'),
   )
+}
+
+export function visibleNavGroups(can: (permission: string) => boolean, user?: AuthenticatedUser | null): Array<NavGroup & { items: NavItem[] }> {
+  const items = visibleNavItems(can, user)
+  return NAV_GROUPS.map(group => ({ ...group, items: items.filter(item => item.group === group.id) })).filter(group => group.items.length > 0)
 }

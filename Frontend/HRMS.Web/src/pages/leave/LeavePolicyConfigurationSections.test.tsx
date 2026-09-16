@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Permissions } from '../../auth/permissions.ts'
 import { makeUser, paged } from '../../test/fixtures.ts'
 import { fail, installStubAdapter, ok, type StubAdapter } from '../../test/stubAdapter.ts'
@@ -38,6 +38,22 @@ describe('LeavePolicyConfigurationSections', () => {
     await userEvent.click(screen.getByRole('checkbox', { name: /CL — Casual Leave/ }))
     await userEvent.click(screen.getByRole('button', { name: 'Save Leave Types' }))
     await waitFor(() => expect(stub.callsTo('put', '/api/leave-policies/policy-1/versions/version-1/leave-types')[0]?.body).toEqual({ leaveTypeIds: ['type-inactive', 'type-active'], concurrencyToken: 'version-token' }))
+  })
+
+  it('keeps the server-canonical selection after saving and refreshes the parent version', async () => {
+    const onSaved = vi.fn().mockResolvedValue(undefined)
+    const onNotice = vi.fn()
+    stub.on('get', '/api/leave-types', () => ({ data: ok(paged([activeType, inactiveType])) }))
+    stub.on('get', '/api/leave-policies/policy-1/versions/version-1/applicability', () => ({ data: ok([]) }))
+    stub.on('put', '/api/leave-policies/policy-1/versions/version-1/leave-types', () => ({ data: ok([activeType]) }))
+    renderAsUser(<LeavePolicyConfigurationSections policyId={policyId} version={version} selectedLeaveTypes={[inactiveType]} canManage onNotice={onNotice} onSaved={onSaved} />, { user: makeUser({ permissions: [Permissions.leave.policyManage] }) })
+    await screen.findByText(/CL.*Casual Leave/)
+    await userEvent.click(screen.getByRole('checkbox', { name: /CL.*Casual Leave/ }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save Leave Types' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalledOnce())
+    expect(screen.getByRole('checkbox', { name: /CL.*Casual Leave/ })).toBeChecked()
+    expect(screen.queryByRole('checkbox', { name: /OLD.*Old Leave/ })).not.toBeInTheDocument()
+    expect(onNotice).toHaveBeenCalledWith('Leave Types saved successfully.')
   })
 
   it('finds active Leave Types by code or name with case-insensitive search', async () => {

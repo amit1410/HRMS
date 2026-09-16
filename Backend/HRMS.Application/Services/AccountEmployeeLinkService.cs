@@ -5,6 +5,7 @@ using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace HRMS.Application.Services;
 
@@ -14,17 +15,25 @@ public sealed class AccountEmployeeLinkService : IAccountEmployeeLinkService
     private readonly ITenantContext _tenant;
     private readonly TimeProvider _clock;
     private readonly Func<Task>? _beforeSaveHook;
+    private readonly IManagerRoleProvisioningService _managerRoleProvisioning;
+    private readonly IEmployeeRoleProvisioningService _employeeRoleProvisioning;
 
     public AccountEmployeeLinkService(
         IHrmsDbContext db,
         ITenantContext tenant,
         TimeProvider? clock = null,
-        Func<Task>? beforeSaveHook = null)
+        Func<Task>? beforeSaveHook = null,
+        IManagerRoleProvisioningService? managerRoleProvisioning = null,
+        IEmployeeRoleProvisioningService? employeeRoleProvisioning = null)
     {
         _db = db;
         _tenant = tenant;
         _clock = clock ?? TimeProvider.System;
         _beforeSaveHook = beforeSaveHook;
+        _managerRoleProvisioning = managerRoleProvisioning ??
+            new ManagerRoleProvisioningService(db, NullLogger<ManagerRoleProvisioningService>.Instance, _clock);
+        _employeeRoleProvisioning = employeeRoleProvisioning ??
+            new EmployeeRoleProvisioningService(db, NullLogger<EmployeeRoleProvisioningService>.Instance);
     }
 
     public Task<Result<AccountEmployeeCurrentStateDto>> GetUserAsync(Guid userId, CancellationToken ct = default) =>
@@ -102,7 +111,13 @@ public sealed class AccountEmployeeLinkService : IAccountEmployeeLinkService
         if (operation == "Link") evt.BeforeEmployeeId = null;
         _db.AccountEmployeeLinkEvents.Add(evt);
         if (current is not null) _db.AccountEmployeeCurrentLinks.Remove(current);
-        if (target is not null) _db.AccountEmployeeCurrentLinks.Add(new AccountEmployeeCurrentLink { LinkId = evt.Id, TenantId = subject.TenantId, UserId = userId, EmployeeId = target.Id });
+        if (target is not null)
+        {
+            _db.AccountEmployeeCurrentLinks.Add(new AccountEmployeeCurrentLink { LinkId = evt.Id, TenantId = subject.TenantId, UserId = userId, EmployeeId = target.Id });
+            await _employeeRoleProvisioning.EnsureForLinkedEmployeeAsync(subject.TenantId, userId, target.Id, ct);
+        }
+        if (target is not null)
+            await _managerRoleProvisioning.EnsureForLinkedEmployeeAsync(subject.TenantId, userId, target.Id, ct);
         if (_beforeSaveHook is not null) await _beforeSaveHook();
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
@@ -138,7 +153,7 @@ public sealed class AccountEmployeeLinkService : IAccountEmployeeLinkService
         var date = DateOnly.FromDateTime(_clock.GetUtcNow().DateTime);
         if (e.DateOfJoining > date) return e.Status == EmployeeStatus.Active;
         if (e.Status != EmployeeStatus.Active) return false;
-        var history = await _db.EmployeeEmploymentHistory.Where(h => h.EmployeeId == e.Id && h.EffectiveFrom <= date && (h.EffectiveTo == null || h.EffectiveTo >= date)).ToListAsync(ct);
+        var history = await _db.EmployeeEmploymentHistory.Where(h => h.EmployeeId == e.Id && !h.IsSuperseded && h.EffectiveFrom <= date && (h.EffectiveTo == null || h.EffectiveTo >= date)).ToListAsync(ct);
         return history.Count == 1 && history[0].EmploymentStatus == EmployeeStatus.Active;
     }
 
@@ -146,7 +161,8 @@ public sealed class AccountEmployeeLinkService : IAccountEmployeeLinkService
     {
         if (_tenant.TenantId is not Guid tenantId || _tenant.UserId is not Guid actorId) return (ResultStatus.Unauthorized, "No authenticated tenant.");
         var actor = await _db.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == actorId, ct); if (actor is null) return (ResultStatus.Unauthorized, "Authenticated account not found."); if (!actor.IsActive) return (ResultStatus.Forbidden, "This account has been deactivated.");
-        var allowed = await (from ur in _db.UserRoles where ur.UserId == actorId && ur.TenantId == tenantId join rp in _db.RolePermissions on ur.RoleId equals rp.RoleId join p in _db.Permissions on rp.PermissionId equals p.Id where p.Name == permission select p.Id).AnyAsync(ct);
+        var businessDate = DateOnly.FromDateTime(_clock.GetUtcNow().DateTime);
+        var allowed = await (from ur in _db.UserRoles where ur.UserId == actorId && ur.TenantId == tenantId && ur.EffectiveFrom <= businessDate && (ur.EffectiveTo == null || ur.EffectiveTo >= businessDate) join rp in _db.RolePermissions on ur.RoleId equals rp.RoleId join p in _db.Permissions on rp.PermissionId equals p.Id where p.Name == permission select p.Id).AnyAsync(ct);
         return allowed ? null : (ResultStatus.Forbidden, "You do not have permission to perform this action.");
     }
 

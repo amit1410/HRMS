@@ -21,11 +21,13 @@ internal sealed class ShardConnectionStringFactory : IShardConnectionStringFacto
     private readonly string? _mySqlTemplate;
     private readonly string? _sqliteTemplate;
     private readonly bool _sqlite;
+    private readonly bool _development;
 
     public ShardConnectionStringFactory(
         IConfiguration configuration,
         IOptions<ShardingOptions> options,
-        ILogger<ShardConnectionStringFactory> logger)
+        ILogger<ShardConnectionStringFactory> logger,
+        bool development = true)
     {
         _configuration = configuration;
         _sqlite = ConfiguredProvider.IsSqlite(configuration);
@@ -35,6 +37,7 @@ internal sealed class ShardConnectionStringFactory : IShardConnectionStringFacto
         _sqlServerTemplate = NullIfWhiteSpace(sharding.SqlServerConnectionStringTemplate);
         _mySqlTemplate = NullIfWhiteSpace(sharding.MySqlConnectionStringTemplate);
         _sqliteTemplate = NullIfWhiteSpace(sharding.SqliteConnectionStringTemplate);
+        _development = development;
 
         if (_sqlite)
         {
@@ -77,7 +80,10 @@ internal sealed class ShardConnectionStringFactory : IShardConnectionStringFacto
                 + "'_', and start with a letter or digit.");
         }
 
-        return template.Replace(ShardingOptions.ShardKeyPlaceholder, shard.ShardKey, StringComparison.Ordinal);
+        var connectionString = template.Replace(ShardingOptions.ShardKeyPlaceholder, shard.ShardKey, StringComparison.Ordinal);
+        return shard.DatabaseProvider == DatabaseProviderType.MySql
+            ? MySqlConnectionStringNormalizer.ForRuntime(connectionString, _development)
+            : connectionString;
     }
 
     private string SharedConnectionString(DatabaseProviderType provider)

@@ -284,7 +284,7 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
     setError(null)
     setSuccess(null)
     try {
-      if (import.meta.env.DEV) console.debug('EMPLOYMENT SAVE CLICKED', { employeeId, effectiveDate: values.effectiveFrom, changeReason: values.positionChangeReasonId, holdingCompanyId: values.holdingCompanyId, lobId: values.lobId, organisationId: values.organisationId, departmentId: values.departmentId, designationId: values.designationId })
+      if (import.meta.env.DEV) console.debug('EMPLOYMENT SAVE CLICKED', { employeeId, effectiveDate: values.effectiveFrom, changeReason: values.positionChangeReasonId, managerId: values.managerId, holdingCompanyId: values.holdingCompanyId, lobId: values.lobId, organisationId: values.organisationId, departmentId: values.departmentId, designationId: values.designationId })
       const saved = await createEmploymentChange(employeeId, toRequest(values))
       setValues((previous) => formValuesFromHistory(saved, employeeCode || previous.employeeCode))
       setSuccess('Employment change recorded.')
@@ -307,6 +307,7 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
 
   const records = history.data ?? []
   const current = records.find((record) => isEffectiveToday(record))
+  const sameDayCorrection = values.changeReason === 'Correction' && records.some((record) => record.effectiveFrom === values.effectiveFrom && record.isSuperseded !== true)
   const display = (value: string | null | undefined) => value || '—'
   const period = (record: (typeof records)[number]) =>
     `${formatDate(record.effectiveFrom)} – ${record.effectiveTo ? formatDate(record.effectiveTo) : 'Present'}`
@@ -328,6 +329,7 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
               <Summary label="Department" value={current.departmentName} />
               <Summary label="Grade" value={current.gradeName} />
               <Summary label="Work Location" value={current.workLocationName} />
+              <Summary label="Reporting Manager" value={managerDisplay(current)} />
               <Summary label="Effective From" value={formatDate(current.effectiveFrom)} />
               <Summary label="Change Reason" value={current.positionChangeReasonName} />
               <Summary label="Employee Type" value={current.employeeTypeName} />
@@ -344,7 +346,7 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
                 <div className="timeline-content"><div className="timeline-meta"><span>{employmentState(record, current?.id)}</span><time>{period(record)}<span className="sr-only"> {record.effectiveFrom}</span></time></div>
                   <div className="timeline-title-row"><h3>{display(record.designationName)}</h3><span className="change-reason-badge">{display(record.positionChangeReasonName)}</span></div>
                   <p className="timeline-subtitle">{display(record.departmentName)} · {display(record.organisationName)}</p>
-                  <dl className="timeline-details"><div><dt>Grade</dt><dd>{display(record.gradeName)}</dd></div><div><dt>Location</dt><dd>{display(record.workLocationName)}</dd></div><div><dt>Effective</dt><dd>{period(record)}</dd></div></dl>
+                  <dl className="timeline-details"><div><dt>Grade</dt><dd>{display(record.gradeName)}</dd></div><div><dt>Location</dt><dd>{display(record.workLocationName)}</dd></div><div><dt>Reporting Manager</dt><dd>{managerDisplay(record)}</dd></div><div><dt>Effective</dt><dd>{period(record)}</dd></div></dl>
                 </div>
               </article>)}
             </div> : <Notice tone="info">No employment history recorded yet. Add the first entry below.</Notice>}
@@ -353,6 +355,7 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
 
         <Card className="employment-card change-panel">
           <div className="employment-card-heading"><div><p className="eyebrow">Employment</p><h2>Add Employment Change</h2></div></div>
+            {sameDayCorrection && <Notice tone="info">This will create a new correction revision for the employment record effective {formatDate(values.effectiveFrom)}.</Notice>}
             <form className="employment-editor" onSubmit={saveEmploymentChange} noValidate>
               <EmploymentAccordion title="1. Employment Details" defaultOpen>
                 <div className="form-grid">
@@ -640,6 +643,13 @@ function employmentState(record: EmployeeEmploymentHistory, currentId?: string):
 }
 
 function Summary({ label, value }: { label: string; value?: string | null }) { return <div className="employment-summary-item"><span>{label}</span><strong>{value || '—'}</strong></div> }
+
+export function managerDisplay(record: EmployeeEmploymentHistory): string {
+  const code = record.managerEmployeeCode
+  const name = record.managerFullName
+  if (code && name) return `${code} — ${name}`
+  return code ?? name ?? '—'
+}
 function EmploymentAccordion({ title, defaultOpen, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) { return <details className="employment-accordion" open={defaultOpen}><summary>{title}</summary><div className="employment-accordion-body">{children}</div></details> }
 
 interface JoiningValues {
@@ -653,6 +663,9 @@ interface JoiningValues {
   referredByEmployeeId: string
   noticePeriod: string
   noticePeriodUnit: string
+  noticeStartDate: string
+  noticeEndDate: string
+  noticeStatus: 'NotServing' | 'Active' | 'Completed' | 'Cancelled'
 }
 
 const EMPTY_JOINING: JoiningValues = {
@@ -666,6 +679,9 @@ const EMPTY_JOINING: JoiningValues = {
   referredByEmployeeId: '',
   noticePeriod: '',
   noticePeriodUnit: '',
+  noticeStartDate: '',
+  noticeEndDate: '',
+  noticeStatus: 'NotServing',
 }
 
 function joiningValuesFromEmployment(employment: EmployeeEmployment): JoiningValues {
@@ -680,6 +696,9 @@ function joiningValuesFromEmployment(employment: EmployeeEmployment): JoiningVal
     referredByEmployeeId: employment.referredByEmployeeId ?? '',
     noticePeriod: employment.noticePeriod?.toString() ?? '',
     noticePeriodUnit: employment.noticePeriodUnit ?? '',
+    noticeStartDate: employment.noticeStartDate ?? '',
+    noticeEndDate: employment.noticeEndDate ?? '',
+    noticeStatus: employment.noticeStatus ?? 'NotServing',
   }
 }
 
@@ -702,6 +721,9 @@ function joiningRequestFromValues(values: JoiningValues): EmployeeEmploymentRequ
     referredByEmployeeId: values.referredByEmployeeId.trim() || null,
     noticePeriod: numberOrNull(values.noticePeriod),
     noticePeriodUnit: values.noticePeriodUnit || null,
+    noticeStartDate: values.noticeStartDate || null,
+    noticeEndDate: values.noticeEndDate || null,
+    noticeStatus: values.noticeStatus,
   }
 }
 
@@ -859,6 +881,37 @@ function JoiningEmploymentForm({ employeeId }: EmploymentSectionFormProps) {
               ]}
               placeholder="— Select —"
               error={fieldError('noticePeriodUnit')}
+            />
+            <SelectField
+              id="noticeStatus"
+              label="Notice status"
+              value={values.noticeStatus}
+              onChange={(value) => update('noticeStatus', value as JoiningValues['noticeStatus'])}
+              options={[
+                { value: 'NotServing', label: 'Not serving' },
+                { value: 'Active', label: 'Serving notice' },
+                { value: 'Completed', label: 'Completed' },
+                { value: 'Cancelled', label: 'Cancelled' },
+              ]}
+              error={fieldError('noticeStatus')}
+            />
+            <TextField
+              id="noticeStartDate"
+              label="Notice start date"
+              type="date"
+              value={values.noticeStartDate}
+              onChange={(value) => update('noticeStartDate', value)}
+              hint="Required when serving notice."
+              error={fieldError('noticeStartDate')}
+            />
+            <TextField
+              id="noticeEndDate"
+              label="Notice end date / last working day"
+              type="date"
+              value={values.noticeEndDate}
+              onChange={(value) => update('noticeEndDate', value)}
+              hint="Optional for an open-ended active notice period."
+              error={fieldError('noticeEndDate')}
             />
             <TextField
               id="referredByEmployeeId"

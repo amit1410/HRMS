@@ -10,7 +10,7 @@ public sealed class MySqlTransientErrorClassifier : ILeaveRequestSubmissionDeadl
     {
         for (Exception? current = exception; current is not null; current = current.InnerException)
         {
-            if (current is MySqlException mySqlException && mySqlException.Number == 1213)
+            if (current is MySqlException mySqlException && mySqlException.Number is 1213 or 40001)
                 return true;
         }
 

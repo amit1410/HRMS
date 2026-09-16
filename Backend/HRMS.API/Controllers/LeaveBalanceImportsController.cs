@@ -1,3 +1,4 @@
+using System.Text;
 using HRMS.API.Extensions;
 using HRMS.API.Security;
 using HRMS.Application.Abstractions;
@@ -14,7 +15,10 @@ namespace HRMS.API.Controllers;
 public sealed class LeaveBalanceImportsController(ILeaveBalanceImportService service) : ControllerBase
 {
     [HttpGet("template"), HasPermission(Permissions.Leave.BalanceImport)]
-    public IActionResult Template() => File("EmployeeCode,LeaveTypeCode,LeavePeriod,OpeningBalance,EffectiveDate,Remarks\r\n", "text/csv", "leave-balance-import-template.csv");
+    public IActionResult Template() => File(
+        Encoding.UTF8.GetBytes("EmployeeCode,LeaveTypeCode,LeavePeriod,OpeningBalance,EffectiveDate,Remarks\r\n"),
+        "text/csv",
+        "leave-balance-import-template.csv");
 
     [HttpPost("validate"), HasPermission(Permissions.Leave.BalanceImport)]
     [RequestSizeLimit(5_000_000)]

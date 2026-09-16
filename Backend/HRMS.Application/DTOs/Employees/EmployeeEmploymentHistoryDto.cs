@@ -11,6 +11,9 @@ public record EmployeeEmploymentHistoryDto(
     Guid EmployeeId,
     DateOnly EffectiveFrom,
     DateOnly? EffectiveTo,
+    int RevisionNumber,
+    bool IsSuperseded,
+    DateTime? SupersededAtUtc,
 
     // Organizational FK references + display names
     Guid? HoldingCompanyId, string? HoldingCompanyCode, string? HoldingCompanyName,

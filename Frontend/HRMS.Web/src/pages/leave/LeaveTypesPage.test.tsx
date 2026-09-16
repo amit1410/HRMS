@@ -58,6 +58,7 @@ describe('LeaveTypesPage', () => {
     renderPage(); await userEvent.click(await screen.findByRole('button', { name: 'Add Leave Type' }))
     await userEvent.type(screen.getByLabelText(/Code/), 'EL'); await userEvent.type(screen.getByLabelText(/Name/), 'Earned Leave'); await userEvent.click(screen.getByRole('button', { name: 'Save Leave Type' }))
     await waitFor(() => expect(stub.callsTo('post', '/api/leave-types')).toHaveLength(1))
+    expect(stub.callsTo('post', '/api/leave-types')[0]?.body).toMatchObject({ code: 'EL', name: 'Earned Leave', defaultUnit: 'Day', isPaid: true, isActive: true })
     expect(await screen.findByText('Leave Type created.')).toBeInTheDocument()
   })
 

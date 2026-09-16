@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { ApiError } from '../../api/errors.ts'
-import { listLeaveTypes, type LeaveType } from '../../api/leaveConfiguration.ts'
-import { previewLeaveRequest, submitLeaveRequest, type LeaveRequestPreview, type LeaveRequestSubmission } from '../../api/leaveRequests.ts'
+import { type LeaveType } from '../../api/leaveConfiguration.ts'
+import { listLeaveTypesForRequest, previewLeaveRequest, submitLeaveRequest, type LeaveRequestPreview, type LeaveRequestSubmission } from '../../api/leaveRequests.ts'
 import { Card } from '../../components/Card.tsx'
 import { Notice } from '../../components/Notice.tsx'
 import { PageHeader } from '../../components/PageHeader.tsx'
@@ -33,7 +33,7 @@ export function LeaveRequestPreviewPage() {
   const previewBusyRef = useRef(false)
   const submitBusyRef = useRef(false)
   const requestSequenceRef = useRef(0)
-  const types = useApiQuery(signal => listLeaveTypes({ page: 1, pageSize: 100, isActive: true }, signal), [])
+  const types = useApiQuery(signal => listLeaveTypesForRequest(signal), [])
   const selectedType = useMemo(() => types.data?.items.find(item => item.id === draft.leaveTypeId), [draft.leaveTypeId, types.data])
   const previewIsCurrent = preview !== null && previewDraft !== null && previewDraft.leaveTypeId === draft.leaveTypeId && previewDraft.startDate === draft.startDate && previewDraft.endDate === draft.endDate
 
@@ -116,6 +116,9 @@ export function LeaveRequestPreviewPage() {
   }
 
   const unsupported = error?.message.toLowerCase().includes('unsupportedconfiguration') || error?.message.toLowerCase().includes('unsupported configuration')
+  const previewErrorMessage = unsupported
+    ? `${selectedType?.name ?? 'This leave type'} is temporarily unavailable because its policy needs administrator attention.`
+    : error?.message
   const submitErrorMessage = submitError?.message.toLowerCase().includes('balancenotinitialized')
     ? 'Your leave balance has not been initialized for this leave period. Please contact HR.'
     : submitError?.message.toLowerCase().includes('insufficientleavebalance')
@@ -136,7 +139,7 @@ export function LeaveRequestPreviewPage() {
       <div className="leave-preview-main">
         <Card className="leave-preview-form-card" title="Leave details" subtitle="Provide the leave period and type for your request.">
           <div className="leave-preview-stepper" aria-label="Leave request progress"><div className="is-current"><span>1</span><div><strong>Leave Details</strong><small>Select dates and type</small></div></div><div><span>2</span><div><strong>Review</strong><small>Check details</small></div></div><div><span>3</span><div><strong>Submit</strong><small>Preview only</small></div></div></div>
-          {(localError || error || submitError) ? <div className="leave-preview-form-errors">{localError ? <InlineError message={localError} /> : null}{error ? <InlineError message={`${unsupported ? 'This Leave Policy uses a configuration that is not supported in preview yet. ' : ''}${error.message}`} /> : null}{submitError ? <InlineError message={submitErrorMessage ?? 'Unable to submit this Leave request.'} /> : null}</div> : null}
+          {(localError || error || submitError) ? <div className="leave-preview-form-errors">{localError ? <InlineError message={localError} /> : null}{error ? <InlineError message={previewErrorMessage ?? 'Unable to preview this Leave request.'} /> : null}{submitError ? <InlineError message={submitErrorMessage ?? 'Unable to submit this Leave request.'} /> : null}</div> : null}
           <form className="form-stack leave-preview-form" onSubmit={previewRequest} aria-busy={previewing}>
             {types.isLoading ? <div className="leave-preview-loading"><Spinner label="Loading Leave Types" /></div> : types.error ? <InlineError message={types.error.message} /> : <label className="field"><span>Leave Type <em>(required)</em></span><div className="leave-preview-input-wrap"><ApplyIcon name="layers" /><select className="input" value={draft.leaveTypeId} onChange={event => changeDraft('leaveTypeId', event.target.value)} disabled={previewing || submitting || submission !== null} required><option value="">Select leave type</option>{(types.data?.items ?? []).filter(item => item.isActive).map(item => <option key={item.id} value={item.id}>{item.code} — {item.name}</option>)}</select></div></label>}
             <div className="form-grid"><label className="field"><span>Start Date <em>(required)</em></span><div className="leave-preview-input-wrap"><ApplyIcon name="calendar" /><input className="input" type="date" value={draft.startDate} onChange={event => changeDraft('startDate', event.target.value)} disabled={previewing || submitting || submission !== null} required /></div></label><label className="field"><span>End Date <em>(required)</em></span><div className="leave-preview-input-wrap"><ApplyIcon name="calendar" /><input className="input" type="date" value={draft.endDate} onChange={event => changeDraft('endDate', event.target.value)} disabled={previewing || submitting || submission !== null} required /></div></label></div>

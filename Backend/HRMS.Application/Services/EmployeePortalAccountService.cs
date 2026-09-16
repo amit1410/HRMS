@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace HRMS.Application.Services;
 
@@ -27,6 +28,8 @@ public sealed class EmployeePortalAccountService : IEmployeePortalAccountService
     private readonly IConfiguration _configuration;
     private readonly IHostEnvironment _environment;
     private readonly ILogger<EmployeePortalAccountService> _logger;
+    private readonly IEmployeeRoleProvisioningService _employeeRoleProvisioning;
+    private readonly IManagerRoleProvisioningService _managerRoleProvisioning;
 
     public EmployeePortalAccountService(
         IHrmsDbContext db,
@@ -37,7 +40,9 @@ public sealed class EmployeePortalAccountService : IEmployeePortalAccountService
         TimeProvider clock,
         IConfiguration configuration,
         IHostEnvironment environment,
-        ILogger<EmployeePortalAccountService> logger)
+        ILogger<EmployeePortalAccountService> logger,
+        IEmployeeRoleProvisioningService? employeeRoleProvisioning = null,
+        IManagerRoleProvisioningService? managerRoleProvisioning = null)
     {
         _db = db;
         _tenant = tenant;
@@ -48,6 +53,8 @@ public sealed class EmployeePortalAccountService : IEmployeePortalAccountService
         _configuration = configuration;
         _environment = environment;
         _logger = logger;
+        _employeeRoleProvisioning = employeeRoleProvisioning ?? new EmployeeRoleProvisioningService(db, NullLogger<EmployeeRoleProvisioningService>.Instance);
+        _managerRoleProvisioning = managerRoleProvisioning ?? new ManagerRoleProvisioningService(db, NullLogger<ManagerRoleProvisioningService>.Instance, clock);
     }
 
     public async Task<Result<PortalAccountDto>> GetAsync(Guid employeeId, CancellationToken cancellationToken = default)
@@ -173,8 +180,6 @@ public sealed class EmployeePortalAccountService : IEmployeePortalAccountService
                 PasswordHash = _passwordHasher.Hash(GenerateToken()), IsActive = false
             };
             _db.Users.Add(user);
-            var employeeRoleId = await _db.Roles.Where(x => x.Name == RoleNames.Employee).Select(x => x.Id).SingleAsync(cancellationToken);
-            _db.UserRoles.Add(new UserRole { UserId = user.Id, TenantId = tenantId, RoleId = employeeRoleId });
             var linkEvent = new AccountEmployeeLinkEvent
             {
                 Id = Guid.NewGuid(), TenantId = tenantId, SubjectUserId = user.Id, ActorUserId = actorId,
@@ -184,6 +189,8 @@ public sealed class EmployeePortalAccountService : IEmployeePortalAccountService
             linkEvent.NewLinkId = linkEvent.Id;
             _db.AccountEmployeeLinkEvents.Add(linkEvent);
             _db.AccountEmployeeCurrentLinks.Add(new AccountEmployeeCurrentLink { LinkId = linkEvent.Id, TenantId = tenantId, UserId = user.Id, EmployeeId = employeeId });
+            await _employeeRoleProvisioning.EnsureForLinkedEmployeeAsync(tenantId, user.Id, employeeId, cancellationToken);
+            await _managerRoleProvisioning.EnsureForLinkedEmployeeAsync(tenantId, user.Id, employeeId, cancellationToken);
         }
 
         var old = await _db.UserInvitations.Where(x => x.UserId == user.Id && x.TenantId == tenantId
@@ -197,7 +204,19 @@ public sealed class EmployeePortalAccountService : IEmployeePortalAccountService
         };
         _db.UserInvitations.Add(created);
         await _db.SaveChangesAsync(cancellationToken);
-        await _emailSender.SendWelcomeInviteAsync(new(email, employee.FirstName, tenantName, inviteUrl, expiry), cancellationToken);
+        try
+        {
+            await _emailSender.SendWelcomeInviteAsync(new(email, employee.FirstName, tenantName, inviteUrl, expiry), cancellationToken);
+        }
+        catch (EmailDeliveryException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            _logger.LogError(exception,
+                "Portal invitation email delivery failed. Kind {FailureKind}, Host {Host}, Port {Port}, EmployeeId {EmployeeId}, TenantId {TenantId}.",
+                exception.Kind, exception.Host, exception.Port, employeeId, tenantId);
+            return Result<CreatePortalAccountResponse>.Unavailable(
+                "The portal account could not be created because the welcome email could not be delivered.");
+        }
         await transaction.CommitAsync(cancellationToken);
 
         _logger.LogInformation("Portal invitation sent by {ActorUserId} for tenant {TenantId}, employee {EmployeeId}, user {UserId}.", actorId, tenantId, employeeId, user.Id);

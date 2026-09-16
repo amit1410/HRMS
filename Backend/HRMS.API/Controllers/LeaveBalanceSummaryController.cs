@@ -1,6 +1,8 @@
 using HRMS.API.Extensions;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
+using HRMS.API.Security;
+using HRMS.Domain.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -14,7 +16,7 @@ public sealed class LeaveBalanceSummaryController : ControllerBase
 
     public LeaveBalanceSummaryController(ILeaveBalanceSummaryReader reader) => _reader = reader;
 
-    [HttpGet("mine")]
+    [HttpGet("mine"), HasPermission(Permissions.Leave.BalanceViewOwn)]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<LeaveBalanceSummaryDto>>>> GetMine(CancellationToken cancellationToken = default) =>
         (await _reader.GetMineAsync(cancellationToken)).ToActionResult();
 }

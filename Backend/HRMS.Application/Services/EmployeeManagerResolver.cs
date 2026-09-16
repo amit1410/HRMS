@@ -35,7 +35,7 @@ public sealed class EmployeeManagerResolver : IEmployeeManagerResolver
             return Result<EmployeeManagerResolution>.NotFound("Employee not found.");
 
         var records = await _db.EmployeeEmploymentHistory.AsNoTracking()
-            .Where(h => h.TenantId == tenantId && h.EmployeeId == employeeId &&
+            .Where(h => h.TenantId == tenantId && h.EmployeeId == employeeId && !h.IsSuperseded &&
                         h.EffectiveFrom <= asOfDate &&
                         (h.EffectiveTo == null || h.EffectiveTo >= asOfDate))
             .OrderBy(h => h.EffectiveFrom)
@@ -82,7 +82,7 @@ public sealed class EmployeeManagerResolver : IEmployeeManagerResolver
                 "The effective manager reference is missing or belongs to another tenant."));
 
         var managerHistory = await _db.EmployeeEmploymentHistory.AsNoTracking()
-            .Where(h => h.TenantId == tenantId && h.EmployeeId == managerId &&
+            .Where(h => h.TenantId == tenantId && h.EmployeeId == managerId && !h.IsSuperseded &&
                         h.EffectiveFrom <= asOfDate &&
                         (h.EffectiveTo == null || h.EffectiveTo >= asOfDate))
             .ToListAsync(cancellationToken);
@@ -157,7 +157,7 @@ public sealed class EmployeeManagerResolver : IEmployeeManagerResolver
                 return true;
 
             var managerIds = await _db.EmployeeEmploymentHistory.AsNoTracking()
-                .Where(h => h.TenantId == tenantId && h.EmployeeId == currentId &&
+                .Where(h => h.TenantId == tenantId && h.EmployeeId == currentId && !h.IsSuperseded &&
                             h.EffectiveFrom <= asOfDate &&
                             (h.EffectiveTo == null || h.EffectiveTo >= asOfDate))
                 .Select(h => h.ManagerId)

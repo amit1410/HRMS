@@ -17,6 +17,8 @@
          are used directly here, so they are referenced directly. -->
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Identity.Core" Version="10.0.11" />
     <!-- Pinned to the version Microsoft.AspNetCore.Authentication.JwtBearer 10.0.11 resolves, so the
          library that signs tokens here is the same one the API validates them with. -->

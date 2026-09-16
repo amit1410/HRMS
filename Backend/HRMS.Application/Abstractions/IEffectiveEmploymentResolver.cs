@@ -56,4 +56,7 @@ public sealed record EffectiveEmploymentSnapshot(
     DateOnly DateOfJoining,
     DateOnly? GroupDateOfJoining,
     DateOnly? DateOfLeaving,
-    HRMS.Domain.Enums.Gender Gender);
+    HRMS.Domain.Enums.Gender Gender,
+    DateOnly? NoticeStartDate = null,
+    DateOnly? NoticeEndDate = null,
+    HRMS.Domain.Enums.NoticePeriodStatus NoticeStatus = HRMS.Domain.Enums.NoticePeriodStatus.NotServing);

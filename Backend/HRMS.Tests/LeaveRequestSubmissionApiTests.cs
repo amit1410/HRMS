@@ -3,6 +3,8 @@ using HRMS.API.Controllers;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Leave;
+using HRMS.API.Security;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -20,6 +22,7 @@ public sealed class LeaveRequestSubmissionApiTests
 
         Assert.NotNull(authorize);
         Assert.Null(authorize!.Policy);
+        Assert.Equal(Permissions.Leave.RequestCreate, submit!.GetCustomAttribute<HasPermissionAttribute>()!.Permission);
         Assert.Equal("api/leave-requests", controller.GetCustomAttribute<RouteAttribute>()!.Template);
         Assert.Null(submit!.GetCustomAttribute<HttpPostAttribute>()!.Template);
     }

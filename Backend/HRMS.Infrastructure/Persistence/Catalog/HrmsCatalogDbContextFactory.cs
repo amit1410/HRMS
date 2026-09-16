@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
+using MySql.EntityFrameworkCore.Extensions;
 
 namespace HRMS.Infrastructure.Persistence.Catalog;
 
@@ -23,16 +24,19 @@ public class HrmsCatalogDbContextFactory : IDesignTimeDbContextFactory<HrmsCatal
 {
     public HrmsCatalogDbContext CreateDbContext(string[] args)
     {
-        var options = new DbContextOptionsBuilder<HrmsCatalogDbContext>()
-            .UseSqlServer(
-                "Server=localhost;Database=HRMS_Catalog;Trusted_Connection=True;TrustServerCertificate=True;",
-                sql =>
-                {
-                    sql.MigrationsAssembly(typeof(HrmsCatalogDbContext).Assembly.FullName);
-                    sql.MigrationsHistoryTable(DependencyInjection.CatalogHistoryTable);
-                })
-            .Options;
+        var configuration = DesignTimeDatabaseConfiguration.Load();
+        var provider = DesignTimeDatabaseConfiguration.ResolveProvider(configuration, "Database:CatalogProvider");
+        var connection = DesignTimeDatabaseConfiguration.ResolveConnection(configuration, provider, true);
+        var optionsBuilder = new DbContextOptionsBuilder<HrmsCatalogDbContext>();
+        if (provider == DesignTimeDatabaseConfiguration.MySql)
+            optionsBuilder.UseMySQL(connection, mysql => mysql.MigrationsAssembly(DatabaseProviderNames.MySqlCatalogMigrationsAssembly));
+        else
+            optionsBuilder.UseSqlServer(connection, sql =>
+            {
+                sql.MigrationsAssembly(typeof(HrmsCatalogDbContext).Assembly.FullName);
+                sql.MigrationsHistoryTable(DependencyInjection.CatalogHistoryTable);
+            });
 
-        return new HrmsCatalogDbContext(options);
+        return new HrmsCatalogDbContext(optionsBuilder.Options);
     }
 }

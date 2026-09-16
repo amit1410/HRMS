@@ -4,6 +4,8 @@ using HRMS.Domain.Authorization;
 using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence.Catalog;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace HRMS.Infrastructure.Persistence.Seed;
 
@@ -58,7 +60,8 @@ public static class DatabaseSeeder
         HrmsDbContext db,
         IPasswordHasher passwordHasher,
         Tenant tenant,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(tenant);
 
@@ -82,6 +85,62 @@ public static class DatabaseSeeder
         await SeedCountriesAsync(db, ct);
         await SeedStatesAsync(db, ct);
         await SeedCitiesAsync(db, ct);
+        await ReconcileManagerRolesAsync(db, tenant.Id, logger ?? NullLogger.Instance, ct);
+        await BackfillRoleAssignmentEventsAsync(db, tenant.Id, ct);
+    }
+
+    /// <summary>
+    /// Repairs Manager roles for current and scheduled reporting relationships. This is intentionally
+    /// additive and idempotent so startup can safely repair databases created before automatic provisioning.
+    /// </summary>
+    private static async Task ReconcileManagerRolesAsync(
+        HrmsDbContext db,
+        Guid tenantId,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var managerRole = await db.Roles.SingleOrDefaultAsync(r => r.Name == RoleNames.Manager, ct);
+        var employeeRole = await db.Roles.SingleOrDefaultAsync(r => r.Name == RoleNames.Employee, ct);
+        if (managerRole is null || employeeRole is null)
+        {
+            logger.LogWarning("System role configuration is incomplete during tenant reconciliation {TenantId}.", tenantId);
+            return;
+        }
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var managerEmployeeIds = await db.EmployeeEmploymentHistory
+            .Where(h => h.TenantId == tenantId && !h.IsSuperseded && h.ManagerId.HasValue &&
+                        (h.EffectiveTo == null || h.EffectiveTo >= today))
+            .Select(h => h.ManagerId!.Value)
+            .Distinct()
+            .ToListAsync(ct);
+
+        var linked = await db.AccountEmployeeCurrentLinks
+            .Where(l => l.TenantId == tenantId)
+            .Select(l => new { l.UserId, l.EmployeeId })
+            .ToListAsync(ct);
+        var existing = await db.UserRoles
+            .Where(ur => ur.TenantId == tenantId && (ur.RoleId == managerRole.Id || ur.RoleId == employeeRole.Id))
+            .Select(ur => new { ur.UserId, ur.RoleId })
+            .ToListAsync(ct);
+        var existingAssignments = existing.Select(x => (x.UserId, x.RoleId)).ToHashSet();
+        var managerSet = managerEmployeeIds.ToHashSet();
+        var additions = linked
+            .SelectMany(x => new[] { (x.UserId, RoleId: employeeRole.Id), (x.UserId, RoleId: managerRole.Id) }
+                .Where(a => a.RoleId == employeeRole.Id || managerSet.Contains(x.EmployeeId)))
+            .Where(a => existingAssignments.Add(a))
+            .Select(a => new UserRole { TenantId = tenantId, UserId = a.UserId, RoleId = a.RoleId })
+            .ToList();
+
+        if (additions.Count > 0)
+        {
+            db.UserRoles.AddRange(additions);
+            await db.SaveChangesAsync(ct);
+        }
+
+        logger.LogInformation(
+            "System role reconciliation completed for tenant {TenantId}: {ManagerEmployees} manager employees, {LinkedAccounts} linked accounts, {AddedRoles} roles added.",
+            tenantId, managerEmployeeIds.Count, linked.Count, additions.Count);
     }
 
     private static async Task SeedPermissionsAsync(HrmsDbContext db, CancellationToken ct)
@@ -233,21 +292,28 @@ public static class DatabaseSeeder
     private static async Task SeedUserRolesAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
     {
         var existing = await db.UserRoles.IgnoreQueryFilters()
-            .Select(ur => new { ur.UserId, ur.RoleId })
+            .Select(ur => new { ur.TenantId, ur.UserId, ur.RoleId })
             .ToListAsync(ct);
-        var existingSet = existing.Select(x => (x.UserId, x.RoleId)).ToHashSet();
+        var existingSet = existing.Select(x => (x.TenantId, x.UserId, x.RoleId)).ToHashSet();
 
         var toAdd = new List<UserRole>();
         foreach (var seedUser in SeedData.Users.Where(u => u.TenantId == tenantId))
         {
             var roleId = SeedData.RoleId(seedUser.RoleName);
-            if (existingSet.Add((seedUser.Id, roleId)))
+            if (existingSet.Add((seedUser.TenantId, seedUser.Id, roleId)))
             {
                 toAdd.Add(new UserRole
                 {
+                    Id = Guid.NewGuid(),
                     UserId = seedUser.Id,
                     RoleId = roleId,
-                    TenantId = seedUser.TenantId
+                    TenantId = seedUser.TenantId,
+                    EffectiveFrom = new DateOnly(2026, 9, 15),
+                    AssignmentSource = seedUser.RoleName is RoleNames.Employee or RoleNames.Manager
+                        ? RoleAssignmentSource.System
+                        : RoleAssignmentSource.Manual,
+                    AssignmentReason = "Seeded role assignment",
+                    CreatedAtUtc = DateTime.UtcNow
                 });
             }
         }
@@ -255,8 +321,47 @@ public static class DatabaseSeeder
         if (toAdd.Count > 0)
         {
             db.UserRoles.AddRange(toAdd);
+            db.UserRoleAssignmentEvents.AddRange(toAdd.Select(assignment => new UserRoleAssignmentEvent
+            {
+                Id = Guid.NewGuid(),
+                TenantId = assignment.TenantId,
+                AssignmentId = assignment.Id,
+                UserId = assignment.UserId,
+                RoleId = assignment.RoleId,
+                EventType = UserRoleAssignmentEventType.Assigned,
+                EffectiveFrom = assignment.EffectiveFrom,
+                EffectiveTo = assignment.EffectiveTo,
+                AssignmentSource = assignment.AssignmentSource,
+                Reason = assignment.AssignmentReason,
+                OccurredAtUtc = assignment.CreatedAtUtc
+            }));
             await db.SaveChangesAsync(ct);
         }
+    }
+
+    private static async Task BackfillRoleAssignmentEventsAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var assignments = await db.UserRoles.IgnoreQueryFilters().Include(x => x.Role)
+            .Where(x => x.TenantId == tenantId).ToListAsync(ct);
+        var eventIds = await db.UserRoleAssignmentEvents.IgnoreQueryFilters()
+            .Where(x => x.TenantId == tenantId).Select(x => x.AssignmentId).ToListAsync(ct);
+        var missing = assignments.Where(x => !eventIds.Contains(x.Id)).ToList();
+        foreach (var assignment in missing)
+        {
+            if (assignment.Role?.Name is RoleNames.Employee or RoleNames.Manager)
+                assignment.AssignmentSource = RoleAssignmentSource.System;
+            assignment.AssignmentReason ??= "Legacy role assignment backfill";
+            db.UserRoleAssignmentEvents.Add(new UserRoleAssignmentEvent
+            {
+                Id = Guid.NewGuid(), TenantId = tenantId, AssignmentId = assignment.Id,
+                UserId = assignment.UserId, RoleId = assignment.RoleId,
+                EventType = UserRoleAssignmentEventType.Assigned,
+                EffectiveFrom = assignment.EffectiveFrom, EffectiveTo = assignment.EffectiveTo,
+                AssignmentSource = assignment.AssignmentSource, Reason = assignment.AssignmentReason,
+                OccurredAtUtc = new DateTime(2026, 9, 15, 0, 0, 0, DateTimeKind.Utc)
+            });
+        }
+        if (missing.Count > 0) await db.SaveChangesAsync(ct);
     }
 
     private static async Task SeedDepartmentsAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)

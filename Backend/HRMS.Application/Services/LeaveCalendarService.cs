@@ -11,12 +11,14 @@ public sealed class LeaveCalendarService : ILeaveCalendarService
     private readonly IHrmsDbContext _db;
     private readonly IEmployeeIdentityResolver _identity;
     private readonly IEmployeeManagerResolver _managerResolver;
+    private readonly TimeProvider _timeProvider;
 
-    public LeaveCalendarService(IHrmsDbContext db, IEmployeeIdentityResolver identity, IEmployeeManagerResolver managerResolver)
+    public LeaveCalendarService(IHrmsDbContext db, IEmployeeIdentityResolver identity, IEmployeeManagerResolver managerResolver, TimeProvider timeProvider)
     {
         _db = db;
         _identity = identity;
         _managerResolver = managerResolver;
+        _timeProvider = timeProvider;
     }
 
     public async Task<Result<IReadOnlyList<LeaveCalendarEventDto>>> GetAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken = default)
@@ -76,10 +78,13 @@ public sealed class LeaveCalendarService : ILeaveCalendarService
         return Result<IReadOnlyList<LeaveCalendarEventDto>>.Success(result);
     }
 
-    private async Task<bool> HasApprovalPermissionAsync(RuntimeEmployeeIdentity identity, CancellationToken cancellationToken) =>
-        await (from userRole in _db.UserRoles
+    private async Task<bool> HasApprovalPermissionAsync(RuntimeEmployeeIdentity identity, CancellationToken cancellationToken)
+    {
+        var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+        return await (from userRole in _db.UserRoles
                join rolePermission in _db.RolePermissions on userRole.RoleId equals rolePermission.RoleId
                join permission in _db.Permissions on rolePermission.PermissionId equals permission.Id
-               where userRole.TenantId == identity.TenantId && userRole.UserId == identity.UserId && permission.Name == Permissions.Leave.Approve
+               where userRole.TenantId == identity.TenantId && userRole.UserId == identity.UserId && userRole.EffectiveFrom <= businessDate && (userRole.EffectiveTo == null || userRole.EffectiveTo >= businessDate) && permission.Name == Permissions.Leave.Approve
                select permission.Id).AnyAsync(cancellationToken);
+    }
 }

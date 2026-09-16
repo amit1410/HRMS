@@ -60,7 +60,7 @@ public sealed class LeavePolicyQuery : PagedQuery
 public sealed record LeavePolicyDto(
     Guid Id, string Code, string Name, string? Description, bool IsActive,
     int VersionCount, int? CurrentVersionNumber, DateTime CreatedDate, DateTime? ModifiedDate,
-    string ConcurrencyToken);
+    string ConcurrencyToken, int OverlapCount = 0);
 
 public sealed class LeavePolicyVersionRequest
 {
@@ -129,10 +129,37 @@ public sealed record LeaveApplicabilityGroupDto(
 
 public sealed record LeavePolicyValidationDto(bool IsValid, IReadOnlyList<ValidationError> Errors, IReadOnlyList<string> Warnings);
 
+public sealed class LeavePolicyPublishRequest
+{
+    public bool AcknowledgeOverlap { get; set; }
+}
+
 public sealed record LeavePolicyEditorDto(
     LeavePolicyDto Policy, LeavePolicyVersionDto? CurrentVersion,
     IReadOnlyList<LeaveTypeSelectionDto> LeaveTypes,
     IReadOnlyList<LeaveApplicabilityGroupDto> ApplicabilityGroups);
+
+public sealed class LeavePolicyTestRequest
+{
+    public Guid EmployeeId { get; set; }
+    public Guid LeaveTypeId { get; set; }
+    public DateOnly Date { get; set; }
+}
+
+public sealed record LeavePolicyTestCandidateDto(
+    Guid PolicyId, string PolicyCode, string PolicyName, Guid PolicyVersionId,
+    int VersionNumber, LeavePolicyVersionStatus Status, DateOnly EffectiveFrom,
+    DateOnly? EffectiveTo, int Priority, int Specificity, bool IsWinner);
+
+public sealed record LeavePolicyTestDto(
+    Guid EmployeeId, Guid LeaveTypeId, string LeaveTypeCode, string LeaveTypeName,
+    Guid PolicyId, string PolicyCode, string PolicyName, Guid PolicyVersionId,
+    int VersionNumber, LeavePolicyVersionStatus Status, DateOnly EffectiveFrom,
+    DateOnly? EffectiveTo, int Priority, int Specificity, string Reason,
+    PartialDayMode PartialDayMode, EligibilityMode EligibilityMode,
+    ProbationMode ProbationMode, NoticePeriodMode NoticePeriodMode,
+    SandwichMode SandwichMode, HolidayTreatment HolidayTreatment, WeekOffTreatment WeekOffTreatment,
+    IReadOnlyList<LeavePolicyTestCandidateDto> CompetingPolicies);
 
 public sealed class LeavePolicyEligibilityRuleRequest
 {

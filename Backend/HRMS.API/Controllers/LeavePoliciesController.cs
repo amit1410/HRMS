@@ -29,6 +29,12 @@ public sealed class LeavePoliciesController : ControllerBase
     [HttpGet("{policyId:guid}/editor"), HasPermission(Permissions.Leave.PolicyView)]
     public async Task<ActionResult<ApiResponse<LeavePolicyEditorDto>>> Editor(Guid policyId, [FromQuery] Guid? versionId, CancellationToken ct) => (await _service.GetEditorAsync(policyId, versionId, ct)).ToActionResult();
 
+    [HttpPost("{policyId:guid}/edit"), HasPermission(Permissions.Leave.PolicyManage)]
+    public async Task<ActionResult<ApiResponse<LeavePolicyEditorDto>>> BeginEdit(Guid policyId, CancellationToken ct) => (await _service.BeginEditAsync(policyId, ct)).ToActionResult();
+
+    [HttpPost("test"), HasPermission(Permissions.Leave.PolicyView)]
+    public async Task<ActionResult<ApiResponse<LeavePolicyTestDto>>> Test([FromBody] LeavePolicyTestRequest request, CancellationToken ct) => (await _service.TestPolicyAsync(request, ct)).ToActionResult();
+
     [HttpGet("{policyId:guid}/versions"), HasPermission(Permissions.Leave.PolicyView)]
     public async Task<ActionResult<ApiResponse<PagedResult<LeavePolicyVersionDto>>>> Versions(Guid policyId, CancellationToken ct) => (await _service.GetVersionsAsync(policyId, ct)).ToActionResult();
 
@@ -99,7 +105,7 @@ public sealed class LeavePoliciesController : ControllerBase
     public async Task<ActionResult<ApiResponse<LeavePolicyValidationDto>>> Validate(Guid policyId, Guid versionId, CancellationToken ct) => (await _service.ValidateAsync(policyId, versionId, ct)).ToActionResult();
 
     [HttpPost("{policyId:guid}/versions/{versionId:guid}/publish"), HasPermission(Permissions.Leave.PolicyPublish)]
-    public async Task<ActionResult<ApiResponse<LeavePolicyVersionDto>>> Publish(Guid policyId, Guid versionId, CancellationToken ct) => (await _service.PublishAsync(policyId, versionId, ct)).ToActionResult();
+    public async Task<ActionResult<ApiResponse<LeavePolicyVersionDto>>> Publish(Guid policyId, Guid versionId, [FromBody] LeavePolicyPublishRequest? request, CancellationToken ct) => (await _service.PublishAsync(policyId, versionId, request?.AcknowledgeOverlap == true, ct)).ToActionResult();
 
     [HttpPost("{policyId:guid}/versions/{versionId:guid}/retire"), HasPermission(Permissions.Leave.PolicyPublish)]
     public async Task<ActionResult<ApiResponse<LeavePolicyVersionDto>>> Retire(Guid policyId, Guid versionId, CancellationToken ct) => (await _service.RetireAsync(policyId, versionId, ct)).ToActionResult();

@@ -159,6 +159,142 @@ public sealed class LeavePolicyFoundationTests
     }
 
     [Fact]
+    public async Task Configuration_service_rejects_unsupported_partial_day_mode_at_publish()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = Guid.NewGuid(); var employee = Guid.NewGuid(); var type = Guid.NewGuid();
+        using var context = db.CreateContext(new TestTenantContext(tenant)); await AddBaseAsync(context, tenant, employee, type);
+        var policy = NewPolicy(tenant, true); var version = Version(tenant, policy, 1, new(2027, 1, 1), null, LeavePolicyVersionStatus.Draft, 1);
+        var rule = new LeavePolicyRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyVersionId = version.Id, LeaveTypeId = type };
+        context.LeavePolicies.Add(policy); context.LeavePolicyVersions.Add(version); context.LeavePolicyRules.Add(rule);
+        context.LeavePolicyRequestRules.Add(new LeavePolicyRequestRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyRuleId = rule.Id, PartialDayMode = PartialDayMode.HalfDayAllowed });
+        await context.SaveChangesAsync();
+
+        var result = await new LeaveConfigurationService(context, new TestTenantContext(tenant)).PublishAsync(policy.Id, version.Id);
+
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Contains(result.Errors!, error => error.Field == "partialDayMode" && error.Message.Contains("HalfDayAllowed") && error.Message.Contains("Full Day only"));
+    }
+
+    [Fact]
+    public async Task Configuration_service_allows_disabled_sandwich_calendar_at_publish()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = Guid.NewGuid(); var employee = Guid.NewGuid(); var type = Guid.NewGuid();
+        using var context = db.CreateContext(new TestTenantContext(tenant)); await AddBaseAsync(context, tenant, employee, type);
+        var policy = NewPolicy(tenant, true); var version = Version(tenant, policy, 1, new(2027, 1, 1), null, LeavePolicyVersionStatus.Draft, 1);
+        var rule = new LeavePolicyRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyVersionId = version.Id, LeaveTypeId = type };
+        context.LeavePolicies.Add(policy); context.LeavePolicyVersions.Add(version); context.LeavePolicyRules.Add(rule);
+        context.LeavePolicyRequestRules.Add(new LeavePolicyRequestRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyRuleId = rule.Id, PartialDayMode = PartialDayMode.FullDayOnly });
+        context.LeavePolicyCalendarRules.Add(new LeavePolicyCalendarRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyRuleId = rule.Id, SandwichMode = SandwichMode.Disabled });
+        await context.SaveChangesAsync();
+
+        var result = await new LeaveConfigurationService(context, new TestTenantContext(tenant)).PublishAsync(policy.Id, version.Id);
+
+        Assert.NotEqual(ResultStatus.ValidationFailed, result.Status);
+    }
+
+    [Theory]
+    [InlineData(SandwichMode.Holiday)]
+    [InlineData(SandwichMode.WeekOff)]
+    [InlineData(SandwichMode.HolidayAndWeekOff)]
+    public async Task Configuration_service_rejects_unsupported_sandwich_mode_at_publish(SandwichMode sandwichMode)
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = Guid.NewGuid(); var employee = Guid.NewGuid(); var type = Guid.NewGuid();
+        using var context = db.CreateContext(new TestTenantContext(tenant)); await AddBaseAsync(context, tenant, employee, type);
+        var policy = NewPolicy(tenant, true); var version = Version(tenant, policy, 1, new(2027, 1, 1), null, LeavePolicyVersionStatus.Draft, 1);
+        var rule = new LeavePolicyRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyVersionId = version.Id, LeaveTypeId = type };
+        context.LeavePolicies.Add(policy); context.LeavePolicyVersions.Add(version); context.LeavePolicyRules.Add(rule);
+        context.LeavePolicyRequestRules.Add(new LeavePolicyRequestRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyRuleId = rule.Id, PartialDayMode = PartialDayMode.FullDayOnly });
+        context.LeavePolicyCalendarRules.Add(new LeavePolicyCalendarRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyRuleId = rule.Id, SandwichMode = sandwichMode });
+        await context.SaveChangesAsync();
+
+        var result = await new LeaveConfigurationService(context, new TestTenantContext(tenant)).PublishAsync(policy.Id, version.Id);
+
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Contains(result.Errors!, error => error.Field == "sandwichMode" && error.Message.Contains("Sandwich Leave is not supported"));
+    }
+
+    [Fact]
+    public async Task Configuration_service_begin_edit_clones_published_version_and_reuses_existing_draft()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = Guid.NewGuid(); var employee = Guid.NewGuid(); var type = Guid.NewGuid();
+        using var context = db.CreateContext(new TestTenantContext(tenant)); await AddBaseAsync(context, tenant, employee, type);
+        var policy = NewPolicy(tenant, true);
+        var published = Version(tenant, policy, 1, new(2027, 1, 1), new(2027, 12, 31), LeavePolicyVersionStatus.Published, 9);
+        var rule = new LeavePolicyRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyVersionId = published.Id, LeaveTypeId = type };
+        context.LeavePolicies.Add(policy); context.LeavePolicyVersions.Add(published); context.LeavePolicyRules.Add(rule);
+        context.LeavePolicyRequestRules.Add(new LeavePolicyRequestRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyRuleId = rule.Id, PartialDayMode = PartialDayMode.FullDayOnly });
+        await context.SaveChangesAsync();
+
+        var service = new LeaveConfigurationService(context, new TestTenantContext(tenant));
+        var first = await service.BeginEditAsync(policy.Id);
+        Assert.Equal(ResultStatus.Success, first.Status);
+        Assert.NotNull(first.Value?.CurrentVersion);
+        Assert.Equal(LeavePolicyVersionStatus.Draft, first.Value!.CurrentVersion!.Status);
+        Assert.Equal(published.EffectiveFrom, first.Value.CurrentVersion.EffectiveFrom);
+        Assert.Equal(published.Priority, first.Value.CurrentVersion.Priority);
+
+        var second = await service.BeginEditAsync(policy.Id);
+        Assert.Equal(first.Value.CurrentVersion.Id, second.Value!.CurrentVersion!.Id);
+        Assert.Equal(2, await context.LeavePolicyVersions.CountAsync());
+        Assert.Equal(2, await context.LeavePolicyRules.CountAsync());
+    }
+
+    [Fact]
+    public async Task Configuration_service_publishing_replacement_supersedes_same_policy_without_self_overlap_acknowledgement()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = Guid.NewGuid(); var employee = Guid.NewGuid(); var type = Guid.NewGuid();
+        using var context = db.CreateContext(new TestTenantContext(tenant)); await AddBaseAsync(context, tenant, employee, type);
+        var policy = NewPolicy(tenant, true); var other = NewPolicy(tenant, true); other.Code = "POL2";
+        var v1 = Version(tenant, policy, 1, new(2026, 1, 1), new(2026, 12, 31), LeavePolicyVersionStatus.Published, 9);
+        var v2 = Version(tenant, policy, 2, new(2026, 1, 1), new(2026, 12, 31), LeavePolicyVersionStatus.Draft, 9);
+        var otherVersion = Version(tenant, other, 1, new(2026, 1, 1), new(2026, 12, 31), LeavePolicyVersionStatus.Published, 0);
+        context.LeavePolicies.AddRange(policy, other); context.LeavePolicyVersions.AddRange(v1, v2, otherVersion);
+        context.LeavePolicyRules.AddRange(
+            new LeavePolicyRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyVersionId = v1.Id, LeaveTypeId = type },
+            new LeavePolicyRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyVersionId = v2.Id, LeaveTypeId = type },
+            new LeavePolicyRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyVersionId = otherVersion.Id, LeaveTypeId = type });
+        await context.SaveChangesAsync();
+
+        var service = new LeaveConfigurationService(context, new TestTenantContext(tenant));
+        var blocked = await service.PublishAsync(policy.Id, v2.Id);
+        Assert.Equal(ResultStatus.ValidationFailed, blocked.Status);
+        Assert.Contains(blocked.Errors!, error => error.Field == "overlapAcknowledgement");
+        Assert.Equal(LeavePolicyVersionStatus.Published, (await context.LeavePolicyVersions.FindAsync(v1.Id))!.Status);
+
+        var published = await service.PublishAsync(policy.Id, v2.Id, acknowledgeOverlap: true);
+        Assert.Equal(ResultStatus.Success, published.Status);
+        Assert.Equal(LeavePolicyVersionStatus.Retired, (await context.LeavePolicyVersions.FindAsync(v1.Id))!.Status);
+        Assert.Equal(LeavePolicyVersionStatus.Published, (await context.LeavePolicyVersions.FindAsync(v2.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task Configuration_service_future_replacement_truncates_predecessor_and_resolver_uses_new_version()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = Guid.NewGuid(); var employee = Guid.NewGuid(); var type = Guid.NewGuid();
+        using var context = db.CreateContext(new TestTenantContext(tenant)); await AddBaseAsync(context, tenant, employee, type);
+        var policy = NewPolicy(tenant, true);
+        var v1 = Version(tenant, policy, 1, new(2026, 1, 1), new(2026, 12, 31), LeavePolicyVersionStatus.Published, 9);
+        var v2 = Version(tenant, policy, 2, new(2026, 10, 1), new(2026, 12, 31), LeavePolicyVersionStatus.Draft, 9);
+        context.LeavePolicies.Add(policy); context.LeavePolicyVersions.AddRange(v1, v2);
+        context.LeavePolicyRules.AddRange(new LeavePolicyRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyVersionId = v1.Id, LeaveTypeId = type }, new LeavePolicyRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyVersionId = v2.Id, LeaveTypeId = type });
+        await context.SaveChangesAsync();
+
+        var result = await new LeaveConfigurationService(context, new TestTenantContext(tenant)).PublishAsync(policy.Id, v2.Id);
+        Assert.Equal(ResultStatus.Success, result.Status);
+        var predecessor = await context.LeavePolicyVersions.FindAsync(v1.Id);
+        Assert.Equal(new(2026, 9, 30), predecessor!.EffectiveTo);
+        Assert.Equal(LeavePolicyVersionStatus.Published, predecessor.Status);
+        var resolved = await new LeavePolicyResolver(context).ResolveAsync(tenant, employee, type, new(2026, 10, 1));
+        Assert.Equal(v2.Id, resolved.LeavePolicyVersionId);
+    }
+
+    [Fact]
     public async Task Foundation_service_validates_leave_period_range_overlap_and_tenant_code_scope()
     {
         using var db = new SqliteInMemoryDatabase(); var tenant = Guid.NewGuid(); var otherTenant = Guid.NewGuid(); var employee = Guid.NewGuid(); var type = Guid.NewGuid();

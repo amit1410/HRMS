@@ -58,6 +58,7 @@ public sealed class MigrationDiscoveryTests
         Assert.True(
             Array.IndexOf(migrations, "20260907182740_AddUserInvitations")
                 < Array.IndexOf(migrations, "20260908161324_AddPasswordResetOtps"));
+        Assert.Contains("20260913121202_AddEmployeeNoticePeriod", migrations);
     }
 
     [Fact]
@@ -75,5 +76,6 @@ public sealed class MigrationDiscoveryTests
         Assert.True(
             Array.IndexOf(migrations, "20260907182803_AddUserInvitations")
                 < Array.IndexOf(migrations, "20260908163000_AddPasswordResetOtps"));
+        Assert.Contains("20260913130001_AddEmployeeNoticePeriod", migrations);
     }
 }

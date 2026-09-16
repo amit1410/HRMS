@@ -4,6 +4,8 @@ using HRMS.Domain.Entities;
 using HRMS.Infrastructure.Persistence.Conversions;
 using Microsoft.EntityFrameworkCore;
 using MySql.EntityFrameworkCore.Extensions;
+using RoleEntity = HRMS.Domain.Entities.Role;
+using System.Data;
 
 namespace HRMS.Infrastructure.Persistence;
 
@@ -36,9 +38,11 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<AccountEmployeeCurrentLink> AccountEmployeeCurrentLinks => Set<AccountEmployeeCurrentLink>();
     public DbSet<AccountEmployeeLinkEvent> AccountEmployeeLinkEvents => Set<AccountEmployeeLinkEvent>();
-    public DbSet<Role> Roles => Set<Role>();
+    public DbSet<RoleEntity> Roles => Set<RoleEntity>();
     public DbSet<Permission> Permissions => Set<Permission>();
     public DbSet<UserRole> UserRoles => Set<UserRole>();
+    public DbSet<UserRoleAssignmentEvent> UserRoleAssignmentEvents => Set<UserRoleAssignmentEvent>();
+    public DbSet<UserRoleAssignmentScope> UserRoleAssignmentScopes => Set<UserRoleAssignmentScope>();
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<UserInvitation> UserInvitations => Set<UserInvitation>();
@@ -307,6 +311,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<AccountEmployeeCurrentLink>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AccountEmployeeLinkEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<UserRole>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<UserRoleAssignmentEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<UserRoleAssignmentScope>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<RefreshToken>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<Department>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<Designation>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -409,6 +415,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
         => Database.BeginTransactionAsync(cancellationToken);
 
+    public Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction> BeginTransactionAsync(IsolationLevel isolationLevel, CancellationToken cancellationToken = default)
+        => Database.BeginTransactionAsync(isolationLevel, cancellationToken);
+
     public void ClearChangeTracker() => ChangeTracker.Clear();
 
     /// <summary>
@@ -432,6 +441,11 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         {
             if (entry.State is EntityState.Modified or EntityState.Deleted)
                 throw new InvalidOperationException("Leave request events are immutable.");
+        }
+        foreach (var entry in ChangeTracker.Entries<UserRoleAssignmentEvent>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new InvalidOperationException("User role assignment events are immutable.");
         }
         foreach (var entry in ChangeTracker.Entries<EmployeeRosterChangeHistory>())
         {

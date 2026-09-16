@@ -21,6 +21,11 @@ public static class DependencyInjection
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IPasswordRecoveryService, PasswordRecoveryService>();
         services.AddScoped<IAccountEmployeeLinkService, AccountEmployeeLinkService>();
+        services.AddScoped<IManagerRoleProvisioningService, ManagerRoleProvisioningService>();
+        services.AddScoped<IEmployeeRoleProvisioningService, EmployeeRoleProvisioningService>();
+        services.AddScoped<IRoleAssignmentService, RoleAssignmentService>();
+        services.AddScoped<IRoleResolutionService, RoleResolutionService>();
+        services.AddScoped<IRoleScopeResolver, RoleScopeResolver>();
         services.AddScoped<ITenantBrandingService, TenantBrandingService>();
         services.AddScoped<IDepartmentService, DepartmentService>();
         services.AddScoped<IDesignationService, DesignationService>();

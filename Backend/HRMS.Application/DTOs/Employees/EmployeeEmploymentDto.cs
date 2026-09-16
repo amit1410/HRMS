@@ -1,3 +1,5 @@
+using HRMS.Domain.Enums;
+
 namespace HRMS.Application.DTOs.Employees;
 
 /// <summary>
@@ -18,5 +20,8 @@ public record EmployeeEmploymentDto(
     string? ReferredByEmployeeName,
     int? NoticePeriod,
     string? NoticePeriodUnit,
+    DateOnly? NoticeStartDate,
+    DateOnly? NoticeEndDate,
+    NoticePeriodStatus NoticeStatus,
     DateTime CreatedDate,
     DateTime? ModifiedDate);

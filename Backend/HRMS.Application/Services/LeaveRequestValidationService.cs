@@ -7,6 +7,8 @@ using HRMS.Application.DTOs.Leave;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace HRMS.Application.Services;
 
@@ -22,6 +24,9 @@ public static class LeaveRequestValidationErrorCodes
     public const string BackdatedRequestNotAllowed = "BackdatedRequestNotAllowed";
     public const string BackdateLimitExceeded = "BackdateLimitExceeded";
     public const string MinimumServiceNotMet = "MinimumServiceNotMet";
+    public const string ProbationNotAllowed = "ProbationNotAllowed";
+    public const string ConfirmationNotMet = "ConfirmationNotMet";
+    public const string NoticePeriodNotAllowed = "NoticePeriodNotAllowed";
     public const string InactiveEmployment = "InactiveEmployment";
 }
 
@@ -40,6 +45,8 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
     private readonly ILeavePolicyResolver _policyResolver;
     private readonly IWorkingDayCalendarResolver? _workingDayCalendarResolver;
     private readonly TimeProvider _timeProvider;
+    private readonly IHostEnvironment? _environment;
+    private readonly ILogger<LeaveRequestValidationService>? _logger;
 
     public LeaveRequestValidationService(
         IHrmsDbContext db,
@@ -48,7 +55,9 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
         ILeavePeriodResolver periodResolver,
         ILeavePolicyResolver policyResolver,
         IWorkingDayCalendarResolver? workingDayCalendarResolver = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IHostEnvironment? environment = null,
+        ILogger<LeaveRequestValidationService>? logger = null)
     {
         _db = db;
         _identityResolver = identityResolver;
@@ -57,6 +66,8 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
         _policyResolver = policyResolver;
         _workingDayCalendarResolver = workingDayCalendarResolver;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _environment = environment;
+        _logger = logger;
     }
 
     public async Task<Result<LeaveRequestValidationResult>> ValidateAsync(
@@ -73,6 +84,7 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
 
         var subject = identity.Value;
         var employee = await _db.Employees.AsNoTracking()
+            .Include(x => x.Employment)
             .SingleOrDefaultAsync(x => x.TenantId == subject.TenantId && x.Id == subject.EmployeeId, cancellationToken);
         if (employee is null)
             return Result<LeaveRequestValidationResult>.NotFound("The authenticated Employee was not found in the tenant.");
@@ -105,6 +117,29 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
         if (rule is null)
             return Result<LeaveRequestValidationResult>.NotFound("The resolved Leave Policy rule was not found.");
 
+        if (_environment?.EnvironmentName == Environments.Development && _logger is not null)
+        {
+            var version = await _db.LeavePolicyVersions.AsNoTracking()
+                .Include(x => x.LeavePolicy)
+                .SingleOrDefaultAsync(x => x.TenantId == subject.TenantId && x.Id == startContext.Value!.PolicyVersionId, cancellationToken);
+            _logger.LogInformation(
+                "Resolved Leave policy: TenantId={TenantId}, EmployeeId={EmployeeId}, LeaveType={LeaveTypeCode} ({LeaveTypeId}), StartDate={StartDate}, PolicyId={PolicyId}, PolicyVersionId={PolicyVersionId}, VersionNumber={VersionNumber}, PolicyName={PolicyName}, PolicyStatus={PolicyStatus}, EffectiveFrom={EffectiveFrom}, EffectiveTo={EffectiveTo}, RuleId={RuleId}, PartialDayMode={PartialDayMode}",
+                subject.TenantId,
+                subject.EmployeeId,
+                leaveType.Code,
+                input.LeaveTypeId,
+                input.StartDate,
+                version?.LeavePolicyId,
+                version?.Id,
+                version?.VersionNumber,
+                version?.LeavePolicy?.Name,
+                version?.Status,
+                version?.EffectiveFrom,
+                version?.EffectiveTo,
+                rule.Id,
+                rule.RequestRule?.PartialDayMode);
+        }
+
         var employmentFailure = ValidateEmploymentContext(startContext.Value!, input.StartDate);
         if (employmentFailure is not null)
             return employmentFailure;
@@ -114,7 +149,7 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
             return LeaveRequestValidationFailures.Unsupported(supportedPolicy);
         var context = startContext.Value!;
 
-        var eligibilityFailure = ValidateEligibility(rule.EligibilityRule, context.DateOfJoining, input.StartDate);
+        var eligibilityFailure = ValidateEligibility(rule.EligibilityRule, employee, context, input.StartDate);
         if (eligibilityFailure is not null)
             return eligibilityFailure;
 
@@ -241,6 +276,9 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
             employment.Employment.DateOfJoining,
             employment.Employment.DateOfLeaving,
             employment.Employment.EmploymentStatus,
+            employment.Employment.NoticeStartDate,
+            employment.Employment.NoticeEndDate,
+            employment.Employment.NoticeStatus,
             policy.Priority ?? 0,
             policy.Specificity ?? 0));
     }
@@ -257,21 +295,71 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
 
     private static Result<LeaveRequestValidationResult>? ValidateEligibility(
         LeavePolicyEligibilityRule? rule,
-        DateOnly dateOfJoining,
+        Employee employee,
+        ValidationContext context,
         DateOnly requestStart)
     {
-        if (rule?.EligibilityMode != EligibilityMode.MinimumService)
+        if (rule is null)
             return null;
-        if (rule.MinimumServiceValue is not int value || rule.MinimumServiceUnit is null)
-            return LeaveRequestValidationFailures.Unsupported("Minimum-service eligibility is incomplete.");
-        var eligibleFrom = rule.MinimumServiceUnit == EligibilityServiceUnit.Months
-            ? dateOfJoining.AddMonths(value)
-            : dateOfJoining.AddDays(value);
-        return requestStart < eligibleFrom
-            ? Result<LeaveRequestValidationResult>.Invalid(
-                "eligibility",
-                $"{LeaveRequestValidationErrorCodes.MinimumServiceNotMet}: The employee has not completed the minimum service period.")
-            : null;
+        if (rule.EligibilityMode == EligibilityMode.MinimumService)
+        {
+            if (rule.MinimumServiceValue is not int value || rule.MinimumServiceUnit is null)
+                return LeaveRequestValidationFailures.Unsupported("Eligibility rule 'MinimumService' is incomplete.");
+            var eligibleFrom = rule.MinimumServiceUnit == EligibilityServiceUnit.Months
+                ? context.DateOfJoining.AddMonths(value)
+                : context.DateOfJoining.AddDays(value);
+            if (requestStart < eligibleFrom)
+                return Result<LeaveRequestValidationResult>.Invalid(
+                    "eligibility",
+                    $"{LeaveRequestValidationErrorCodes.MinimumServiceNotMet}: The employee has not completed the minimum service period.");
+        }
+
+        var employment = employee.Employment;
+        var jobStatus = employee.JobStatus ?? employment?.JobStatus;
+        if (rule.ProbationMode == ProbationMode.NotAllowed)
+        {
+            if (string.Equals(jobStatus, "Probation", StringComparison.OrdinalIgnoreCase))
+                return Result<LeaveRequestValidationResult>.Invalid(
+                    "eligibility",
+                    $"{LeaveRequestValidationErrorCodes.ProbationNotAllowed}: Leave is not available while the employee is on probation.");
+            if (string.IsNullOrWhiteSpace(jobStatus) && employment?.ConfirmationDate is null)
+                return LeaveRequestValidationFailures.Unsupported(
+                    "Eligibility rule 'ProbationMode.NotAllowed' requires an authoritative JobStatus or ConfirmationDate.");
+        }
+
+        if (rule.ProbationMode == ProbationMode.AfterConfirmation)
+        {
+            if (employment?.ConfirmationDate is not DateOnly confirmationDate)
+                return LeaveRequestValidationFailures.Unsupported(
+                    "Eligibility rule 'ProbationMode.AfterConfirmation' requires an authoritative ConfirmationDate.");
+            if (requestStart < confirmationDate)
+                return Result<LeaveRequestValidationResult>.Invalid(
+                    "eligibility",
+                    $"{LeaveRequestValidationErrorCodes.ConfirmationNotMet}: The employee has not reached the configured confirmation date.");
+        }
+
+        if (rule.NoticePeriodMode is NoticePeriodMode.NotAllowed or NoticePeriodMode.AllowedWithApproval)
+        {
+            if (!Enum.IsDefined(context.NoticeStatus))
+                return LeaveRequestValidationFailures.Unsupported(
+                    $"Eligibility rule 'NoticeStatus' has unsupported value '{context.NoticeStatus}'.");
+
+            if (context.NoticeStatus == NoticePeriodStatus.Active)
+            {
+                if (context.NoticeStartDate is not DateOnly noticeStart)
+                    return LeaveRequestValidationFailures.Unsupported(
+                        "Eligibility rule 'NoticeStatus.Active' requires an authoritative NoticeStartDate.");
+
+                var inNoticePeriod = requestStart >= noticeStart &&
+                    (context.NoticeEndDate is null || requestStart <= context.NoticeEndDate.Value);
+                if (inNoticePeriod && rule.NoticePeriodMode == NoticePeriodMode.NotAllowed)
+                    return Result<LeaveRequestValidationResult>.Invalid(
+                        "eligibility",
+                        $"{LeaveRequestValidationErrorCodes.NoticePeriodNotAllowed}: Leave is not available during the employee's notice period.");
+            }
+        }
+
+        return null;
     }
 
     private Result<LeaveRequestValidationResult>? ValidateRequestTiming(
@@ -347,11 +435,15 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
     private static string? ValidateSupportedPolicy(LeavePolicyRule rule)
     {
         var eligibility = rule.EligibilityRule;
-        if (eligibility is not null &&
-            (eligibility.EligibilityMode is not (EligibilityMode.Immediate or EligibilityMode.MinimumService) ||
-             eligibility.ProbationMode != ProbationMode.Allowed ||
-             eligibility.NoticePeriodMode != NoticePeriodMode.Allowed))
-            return "The resolved Eligibility configuration requires an unsupported employment rule.";
+        if (eligibility is not null)
+        {
+            if (eligibility.EligibilityMode is not (EligibilityMode.Immediate or EligibilityMode.MinimumService))
+                return $"Eligibility rule 'EligibilityMode' has unsupported value '{eligibility.EligibilityMode}'.";
+            if (!Enum.IsDefined(eligibility.ProbationMode))
+                return $"Eligibility rule 'ProbationMode' has unsupported value '{eligibility.ProbationMode}'.";
+            if (!Enum.IsDefined(eligibility.NoticePeriodMode))
+                return $"Eligibility rule 'NoticePeriodMode' has unsupported value '{eligibility.NoticePeriodMode}'.";
+        }
 
         var request = rule.RequestRule;
         if (request is not null && !Enum.IsDefined(request.BackdatedRequestMode))
@@ -512,6 +604,9 @@ public sealed class LeaveRequestValidationService : ILeaveRequestValidationServi
         DateOnly DateOfJoining,
         DateOnly? DateOfLeaving,
         EmployeeStatus EmploymentStatus,
+        DateOnly? NoticeStartDate,
+        DateOnly? NoticeEndDate,
+        NoticePeriodStatus NoticeStatus,
         int PolicyPriority,
         int PolicySpecificity);
 

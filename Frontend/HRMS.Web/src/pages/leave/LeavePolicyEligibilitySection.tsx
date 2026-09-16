@@ -6,13 +6,13 @@ import { Card } from '../../components/Card.tsx'
 import { Notice } from '../../components/Notice.tsx'
 import { Spinner } from '../../components/Spinner.tsx'
 
-interface Props { policyId: string; version: LeavePolicyVersion; leaveTypes: LeaveTypeSelection[]; canManage: boolean; onNotice: (message: string) => void; onChanged?: () => void }
+interface Props { policyId: string; version: LeavePolicyVersion; leaveTypes: LeaveTypeSelection[]; canManage: boolean; onNotice: (message: string) => void; onChanged?: () => void; onSaved?: () => Promise<void> | void }
 interface FormState { eligibilityMode: EligibilityMode; minimumServiceValue: string; minimumServiceUnit: EligibilityServiceUnit; probationMode: ProbationMode; noticePeriodMode: NoticePeriodMode }
 
 const defaultForm: FormState = { eligibilityMode: 'Immediate', minimumServiceValue: '', minimumServiceUnit: 'Days', probationMode: 'Allowed', noticePeriodMode: 'Allowed' }
 function formFromRule(rule: LeavePolicyEligibilityRule | null): FormState { return rule ? { eligibilityMode: rule.eligibilityMode, minimumServiceValue: rule.minimumServiceValue?.toString() ?? '', minimumServiceUnit: rule.minimumServiceUnit ?? 'Days', probationMode: rule.probationMode, noticePeriodMode: rule.noticePeriodMode } : { ...defaultForm } }
 
-export function LeavePolicyEligibilitySection({ policyId, version, leaveTypes, canManage, onNotice, onChanged }: Props) {
+export function LeavePolicyEligibilitySection({ policyId, version, leaveTypes, canManage, onNotice, onChanged, onSaved }: Props) {
   const [selectedTypeId, setSelectedTypeId] = useState(leaveTypes[0]?.id ?? '')
   const [, setRule] = useState<LeavePolicyEligibilityRule | null>(null)
   const [form, setForm] = useState<FormState>({ ...defaultForm })
@@ -37,7 +37,7 @@ export function LeavePolicyEligibilitySection({ policyId, version, leaveTypes, c
     const minimumServiceValue = form.minimumServiceValue === '' ? null : Number(form.minimumServiceValue)
     try {
       const saved = await saveLeaveTypeEligibility(policyId, version.id, selectedTypeId, { eligibilityMode: form.eligibilityMode, minimumServiceValue: form.eligibilityMode === 'MinimumService' ? minimumServiceValue : null, minimumServiceUnit: form.eligibilityMode === 'MinimumService' ? form.minimumServiceUnit : null, probationMode: form.probationMode, noticePeriodMode: form.noticePeriodMode, concurrencyToken: version.concurrencyToken })
-      setRule(saved); setForm(formFromRule(saved)); onChanged?.(); onNotice('Eligibility saved.')
+      setRule(saved); setForm(formFromRule(saved)); await onSaved?.(); onChanged?.(); onNotice('Eligibility saved.')
     } catch (caught) { setError(caught instanceof ApiError ? caught : new ApiError('Unable to save Eligibility.')) } finally { setSaving(false) }
   }
   const selectedType = leaveTypes.find(item => item.id === selectedTypeId)

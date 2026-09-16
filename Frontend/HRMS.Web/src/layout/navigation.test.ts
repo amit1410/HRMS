@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Permissions } from '../auth/permissions.ts'
-import { NAV_ITEMS, visibleNavItems } from './navigation.ts'
+import { NAV_GROUPS, NAV_ITEMS, visibleNavGroups, visibleNavItems } from './navigation.ts'
 import { makeUser } from '../test/fixtures.ts'
 
 const linkedUser = makeUser({ employeeIdentity: { status: 'Linked', revision: null, linkId: 'link-1', employee: { id: 'employee-1', displayName: 'Priya Raman', employeeCode: 'EMP-1' }, employmentEligibility: 'ActiveEmployment', businessDate: '2026-09-08' } })
@@ -26,8 +26,8 @@ describe('visibleNavItems', () => {
 
   it('returns public signed-in entries when the user has no module permissions', () => {
     const items = visibleNavItems(canNever)
-    expect(items).toHaveLength(6)
-    expect(items.map(item => item.label)).toEqual(['Dashboard', 'Change Password', 'Leave Dashboard', 'Apply Leave (Preview)', 'My Leave Requests', 'Team Leave Calendar'])
+    expect(items).toHaveLength(4)
+    expect(items.map(item => item.label)).toEqual(['Dashboard', 'Change Password', 'Leave Dashboard', 'Team Leave Calendar'])
   })
 
   it('hides items whose required permission the user lacks', () => {
@@ -69,5 +69,32 @@ describe('visibleNavItems', () => {
   it('is case-insensitive in the permission check', () => {
     const items = visibleNavItems(canWith('employee.view'))
     expect(items.map((i) => i.label)).toContain('Employees')
+  })
+})
+
+describe('grouped report navigation', () => {
+  it('keeps Reports as a separate top-level group', () => {
+    expect(NAV_GROUPS.map(group => group.label)).toContain('Reports')
+    const reports = NAV_GROUPS.find(group => group.id === 'reports')
+    expect(reports?.collapsible).toBe(true)
+    expect(NAV_ITEMS.filter(item => item.group === 'reports').map(item => item.label)).toEqual(['Leave Reports', 'Attendance Reports'])
+  })
+
+  it('places report links only under Reports with their original permissions and routes', () => {
+    const reportItems = NAV_ITEMS.filter(item => item.group === 'reports')
+    expect(reportItems).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Leave Reports', to: '/leave-management/reports', permission: Permissions.leave.reportsView }),
+      expect.objectContaining({ label: 'Attendance Reports', to: '/attendance/reports', permission: Permissions.attendance.reportView }),
+    ]))
+    expect(NAV_ITEMS.filter(item => item.group === 'leave').map(item => item.label)).not.toContain('Leave Reports')
+    expect(NAV_ITEMS.filter(item => item.group === 'attendance').map(item => item.label)).not.toContain('Attendance Reports')
+  })
+
+  it('filters Reports children independently and hides the empty Reports group', () => {
+    const leaveOnly = visibleNavGroups(canWith(Permissions.leave.reportsView)).find(group => group.id === 'reports')
+    expect(leaveOnly?.items.map(item => item.label)).toEqual(['Leave Reports'])
+    const attendanceOnly = visibleNavGroups(canWith(Permissions.attendance.reportView)).find(group => group.id === 'reports')
+    expect(attendanceOnly?.items.map(item => item.label)).toEqual(['Attendance Reports'])
+    expect(visibleNavGroups(canNever).some(group => group.id === 'reports')).toBe(false)
   })
 })

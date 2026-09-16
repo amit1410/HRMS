@@ -20,12 +20,12 @@ vi.mock('../../api/employeeSubsections.ts', () => ({
   getEmploymentHistory: vi.fn().mockResolvedValue([
     {
       id: 'history-1', employeeId: 'employee-1', effectiveFrom: '2026-03-04', effectiveTo: null,
-      managerId: 'manager-1', managerCode: 'EMP-002', managerName: 'Owen Brand',
+      managerId: 'manager-1', managerEmployeeCode: 'EMP-002', managerFullName: 'Owen Brand',
       employmentType: 'FullTime', employmentStatus: 'Active', changeReason: 'NewJoining',
     },
     {
       id: 'history-2', employeeId: 'employee-1', effectiveFrom: '2026-10-01', effectiveTo: null,
-      managerId: 'manager-3', managerCode: 'EMP-003', managerName: 'Maya Singh',
+      managerId: 'manager-3', managerEmployeeCode: 'EMP-003', managerFullName: 'Maya Singh',
       employmentType: 'FullTime', employmentStatus: 'Active', changeReason: 'Transfer',
     },
   ]),
@@ -41,6 +41,7 @@ describe('SupervisorSectionForm', () => {
     await waitFor(() => expect(current).toHaveValue('EMP-002 — Owen Brand'))
     expect(current).toHaveAttribute('readonly')
     expect(screen.getByText(/Scheduled L1: EMP-003/)).toBeInTheDocument()
+    expect(screen.queryByText('manager-1')).not.toBeInTheDocument()
     expect(screen.getByText('Resolved')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Change through Employment' })).toBeInTheDocument()
   })

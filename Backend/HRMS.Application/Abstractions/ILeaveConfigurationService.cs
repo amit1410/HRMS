@@ -23,6 +23,8 @@ public interface ILeaveConfigurationService
     Task<Result<PagedResult<LeavePolicyVersionDto>>> GetVersionsAsync(Guid policyId, CancellationToken ct = default);
     Task<Result<LeavePolicyVersionDto>> GetVersionAsync(Guid policyId, Guid versionId, CancellationToken ct = default);
     Task<Result<LeavePolicyEditorDto>> GetEditorAsync(Guid policyId, Guid? versionId, CancellationToken ct = default);
+    Task<Result<LeavePolicyEditorDto>> BeginEditAsync(Guid policyId, CancellationToken ct = default);
+    Task<Result<LeavePolicyTestDto>> TestPolicyAsync(LeavePolicyTestRequest request, CancellationToken ct = default);
     Task<Result<LeavePolicyVersionDto>> CreateVersionAsync(Guid policyId, LeavePolicyVersionRequest request, CancellationToken ct = default);
     Task<Result<LeavePolicyVersionDto>> UpdateVersionAsync(Guid policyId, Guid versionId, LeavePolicyVersionUpdateRequest request, CancellationToken ct = default);
     Task<Result<IReadOnlyList<LeaveTypeSelectionDto>>> GetVersionLeaveTypesAsync(Guid policyId, Guid versionId, CancellationToken ct = default);
@@ -44,6 +46,6 @@ public interface ILeaveConfigurationService
     Task<Result<IReadOnlyList<LeavePolicyClubbingRuleDto>>> SaveClubbingAsync(Guid policyId, Guid versionId, LeavePolicyClubbingRequest request, CancellationToken ct = default);
     Task<Result<LeavePolicyCancellationRuleDto?>> GetCancellationRuleAsync(Guid policyId, Guid versionId, Guid leaveTypeId, CancellationToken ct = default);
     Task<Result<LeavePolicyCancellationRuleDto?>> SaveCancellationRuleAsync(Guid policyId, Guid versionId, Guid leaveTypeId, LeavePolicyCancellationRuleRequest request, CancellationToken ct = default);
-    Task<Result<LeavePolicyVersionDto>> PublishAsync(Guid policyId, Guid versionId, CancellationToken ct = default);
+    Task<Result<LeavePolicyVersionDto>> PublishAsync(Guid policyId, Guid versionId, bool acknowledgeOverlap = false, CancellationToken ct = default);
     Task<Result<LeavePolicyVersionDto>> RetireAsync(Guid policyId, Guid versionId, CancellationToken ct = default);
 }

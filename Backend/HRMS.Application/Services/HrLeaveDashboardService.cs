@@ -52,7 +52,7 @@ public sealed class HrLeaveDashboardService : IHrLeaveDashboardService
         var approved = requests.Where(x => x.Status == LeaveRequestStatus.Approved).ToList();
         var onLeaveToday = approved.Where(x => x.StartDate <= today && x.EndDate >= today).Select(x => x.EmployeeId).Distinct().Count();
         var activeEmployees = await _db.EmployeeEmploymentHistory.AsNoTracking()
-            .Where(x => x.TenantId == _tenant.TenantId.Value && x.EffectiveFrom <= today && (x.EffectiveTo == null || x.EffectiveTo >= today) && x.EmploymentStatus == EmployeeStatus.Active)
+            .Where(x => x.TenantId == _tenant.TenantId.Value && !x.IsSuperseded && x.EffectiveFrom <= today && (x.EffectiveTo == null || x.EffectiveTo >= today) && x.EmploymentStatus == EmployeeStatus.Active)
             .Select(x => x.EmployeeId).Distinct().CountAsync(cancellationToken);
         var upcomingEnd = today.AddDays(30);
         var upcoming = approved.Where(x => x.StartDate >= today && x.StartDate <= upcomingEnd).OrderBy(x => x.StartDate).ThenBy(x => x.EmployeeName).ToList();

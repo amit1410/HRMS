@@ -232,7 +232,7 @@ public class DepartmentService : IDepartmentService
     private IQueryable<DepartmentDto> Project(IQueryable<Department> departments, DateOnly businessDate)
     {
         var currentHistory = _db.EmployeeEmploymentHistory
-            .Where(h => h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
+            .Where(h => !h.IsSuperseded && h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
 
         return departments.Select(d => new DepartmentDto(
             d.Id,

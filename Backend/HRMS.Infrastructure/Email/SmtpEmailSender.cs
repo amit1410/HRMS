@@ -3,16 +3,20 @@ using System.Net.Mail;
 using System.Net.Sockets;
 using HRMS.Application.Abstractions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace HRMS.Infrastructure.Email;
 
 /// <summary>Hostinger-ready SMTP adapter. Credentials are read only from configuration.</summary>
-public sealed class SmtpEmailSender(IConfiguration configuration) : IEmailSender
+public sealed class SmtpEmailSender(
+    IConfiguration configuration,
+    ILogger<SmtpEmailSender> logger) : IEmailSender
 {
     private readonly ISmtpEmailTransport transport = new SmtpClientEmailTransport();
 
     internal SmtpEmailSender(IConfiguration configuration, ISmtpEmailTransport transport)
-        : this(configuration)
+        : this(configuration, NullLogger<SmtpEmailSender>.Instance)
     {
         this.transport = transport;
     }
@@ -78,6 +82,16 @@ public sealed class SmtpEmailSender(IConfiguration configuration) : IEmailSender
         }
         catch (SmtpException exception)
         {
+            logger.LogError(exception,
+                "SMTP delivery failed. StatusCode {SmtpStatusCode} ({SmtpStatusCodeValue}), ServerResponse {SmtpServerResponse}, Host {SmtpHost}, Port {SmtpPort}, From {SmtpFrom}, Recipient {SmtpRecipient}, EnableSsl {SmtpEnableSsl}.",
+                exception.StatusCode,
+                (int)exception.StatusCode,
+                exception.Message,
+                settings.Host,
+                settings.Port,
+                mail.From?.Address,
+                string.Join(",", mail.To.Select(x => x.Address)),
+                settings.EnableSsl);
             var kind = HasTimeoutFailure(exception) ? EmailDeliveryFailureKind.Timeout : HasNetworkFailure(exception) ? EmailDeliveryFailureKind.Network : IsAuthenticationFailure(exception) ? EmailDeliveryFailureKind.Authentication : EmailDeliveryFailureKind.Server;
             var message = kind switch
             {
@@ -148,11 +162,17 @@ internal interface ISmtpEmailTransport
 
 internal sealed class SmtpClientEmailTransport : ISmtpEmailTransport
 {
+    internal static SmtpClient CreateClient(SmtpEmailSettings settings) => new(settings.Host, settings.Port)
+    {
+        EnableSsl = settings.EnableSsl,
+        UseDefaultCredentials = false,
+        Credentials = new NetworkCredential(settings.Username!, settings.Password!),
+        Timeout = 30_000
+    };
+
     public async Task SendAsync(SmtpEmailSettings settings, MailMessage mail, CancellationToken cancellationToken)
     {
-        using var client = new SmtpClient(settings.Host, settings.Port) { EnableSsl = settings.EnableSsl };
-        if (!string.IsNullOrWhiteSpace(settings.Username))
-            client.Credentials = new NetworkCredential(settings.Username, settings.Password);
+        using var client = CreateClient(settings);
         await client.SendMailAsync(mail, cancellationToken);
     }
 }

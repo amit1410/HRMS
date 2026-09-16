@@ -48,6 +48,7 @@ public class AuthService : IAuthService
     private readonly ITenantBrandingService _tenantBranding;
     private readonly JwtSettings _jwtSettings;
     private readonly TimeProvider _timeProvider;
+    private readonly IRoleResolutionService? _roleResolution;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
@@ -59,7 +60,8 @@ public class AuthService : IAuthService
         IOptions<JwtSettings> jwtSettings,
         TimeProvider timeProvider,
         ILogger<AuthService> logger,
-        ITenantBrandingService? tenantBranding = null)
+        ITenantBrandingService? tenantBranding = null,
+        IRoleResolutionService? roleResolution = null)
     {
         _db = db;
         _passwordHasher = passwordHasher;
@@ -70,6 +72,7 @@ public class AuthService : IAuthService
         _jwtSettings = jwtSettings.Value;
         _timeProvider = timeProvider;
         _logger = logger;
+        _roleResolution = roleResolution;
     }
 
     public async Task<Result<LoginResponse>> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -458,11 +461,14 @@ public class AuthService : IAuthService
     private async Task<(List<string> Roles, List<string> Permissions)> LoadAuthorizationAsync(
         Guid userId, Guid tenantId, CancellationToken cancellationToken)
     {
-        var roleIds = await _db.UserRoles
-            .IgnoreQueryFilters()
-            .Where(ur => ur.UserId == userId && ur.TenantId == tenantId)
-            .Select(ur => ur.RoleId)
-            .ToListAsync(cancellationToken);
+        var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+        var roleIds = _roleResolution is not null
+            ? await _roleResolution.GetEffectiveRoleIdsAsync(tenantId, userId, businessDate, cancellationToken)
+            : await _db.UserRoles.IgnoreQueryFilters()
+                .Where(ur => ur.UserId == userId && ur.TenantId == tenantId &&
+                             ur.EffectiveFrom <= businessDate &&
+                             (ur.EffectiveTo == null || ur.EffectiveTo >= businessDate))
+                .Select(ur => ur.RoleId).Distinct().ToListAsync(cancellationToken);
 
         if (roleIds.Count == 0)
         {
@@ -529,7 +535,7 @@ public class AuthService : IAuthService
         if (link is null) return new("Unlinked", latest?.Id, null, null, "NotLinked", today);
         var employee = await _db.Employees.AsNoTracking().SingleOrDefaultAsync(x => x.Id == link.EmployeeId && x.TenantId == tenantId, ct);
         if (employee is null) return new("Invalid", null, null, null, "RequiresReview", today);
-        var history = await _db.EmployeeEmploymentHistory.AsNoTracking().Where(x => x.EmployeeId == employee.Id && x.EffectiveFrom <= today && (x.EffectiveTo == null || x.EffectiveTo >= today)).ToListAsync(ct);
+        var history = await _db.EmployeeEmploymentHistory.AsNoTracking().Where(x => x.EmployeeId == employee.Id && !x.IsSuperseded && x.EffectiveFrom <= today && (x.EffectiveTo == null || x.EffectiveTo >= today)).ToListAsync(ct);
         var eligibility = employee.DateOfJoining > today ? "FutureJoining" : history.Count != 1 ? "NoApplicableEmployment" : history[0].EmploymentStatus == EmployeeStatus.Active && employee.Status == EmployeeStatus.Active ? "ActiveEmployment" : "Separated";
         var creation = await _db.AccountEmployeeLinkEvents.AsNoTracking().SingleOrDefaultAsync(x => x.Id == link.LinkId, ct);
         if (creation is null) return new("Invalid", null, null, null, "RequiresReview", today);

@@ -51,7 +51,7 @@ export function SupervisorSectionForm({ employeeId, onEmploymentChange }: Superv
     }
 
     const current = history.data?.find(isEffectiveToday)
-    if (current) setValues((previous) => ({ ...previous, l1ManagerId: current.managerId ?? null, l1ManagerCode: current.managerCode ?? null, l1ManagerName: current.managerName ?? null }))
+    if (current) setValues((previous) => ({ ...previous, l1ManagerId: current.managerId ?? null, l1ManagerCode: current.managerEmployeeCode ?? null, l1ManagerName: current.managerFullName ?? null }))
   }, [supervisor.data, history.data])
 
   function updateRole(role: Role, managerId: string, option: SupervisorOption | null): void {
@@ -105,7 +105,7 @@ export function SupervisorSectionForm({ employeeId, onEmploymentChange }: Superv
       </div>
       {history.data?.filter(isScheduled).map((record) => (
         <div className="supervisor-scheduled" key={record.id} role="status">
-          Scheduled L1: {record.managerCode ?? 'Unassigned'} — {record.managerName ?? 'No manager'} effective {record.effectiveFrom}.
+          Scheduled L1: {record.managerEmployeeCode ?? 'Unassigned'} — {record.managerFullName ?? 'No manager'} effective {record.effectiveFrom}.
         </div>
       ))}
       {canEdit ? <form onSubmit={submit} noValidate>

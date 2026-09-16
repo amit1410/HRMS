@@ -3,6 +3,8 @@ using HRMS.API.Controllers;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Leave;
+using HRMS.API.Security;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -18,6 +20,8 @@ public sealed class LeaveRequestReadApiTests
         Assert.NotNull(controller.GetCustomAttribute<AuthorizeAttribute>());
         Assert.NotNull(controller.GetMethod(nameof(LeaveRequestsController.GetMine)));
         Assert.NotNull(controller.GetMethod(nameof(LeaveRequestsController.GetMineById)));
+        Assert.Equal(Permissions.Leave.RequestViewOwn, controller.GetMethod(nameof(LeaveRequestsController.GetMine))!.GetCustomAttribute<HasPermissionAttribute>()!.Permission);
+        Assert.Equal(Permissions.Leave.RequestViewOwn, controller.GetMethod(nameof(LeaveRequestsController.GetMineById))!.GetCustomAttribute<HasPermissionAttribute>()!.Permission);
     }
 
     [Fact]

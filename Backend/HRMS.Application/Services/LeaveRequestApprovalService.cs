@@ -225,12 +225,15 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
         if (!active)
             return Result<LeaveRequestApprovalResult>.Forbidden("The authenticated account is not active.");
 
+        var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
         var hasPermission = await (
             from userRole in _db.UserRoles
             join rolePermission in _db.RolePermissions on userRole.RoleId equals rolePermission.RoleId
             join permission in _db.Permissions on rolePermission.PermissionId equals permission.Id
             where userRole.TenantId == identity.TenantId &&
                   userRole.UserId == identity.UserId &&
+                  userRole.EffectiveFrom <= businessDate &&
+                  (userRole.EffectiveTo == null || userRole.EffectiveTo >= businessDate) &&
                   permission.Name == Permissions.Leave.Approve
             select permission.Id).AnyAsync(cancellationToken);
         if (!hasPermission)

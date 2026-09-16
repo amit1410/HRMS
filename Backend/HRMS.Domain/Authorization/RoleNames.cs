@@ -14,10 +14,17 @@ public static class RoleNames
     public const string Employee = "Employee";
     public const string AccountLinkAdministrator = "AccountLinkAdministrator";
     public const string AccountLinkAuditor = "AccountLinkAuditor";
+    public const string EmployeeRelationshipOfficer = "EmployeeRelationshipOfficer";
+    public const string HRBP = "HRBP";
+    public const string TimeManager = "TimeManager";
+    public const string IT = "IT";
+    public const string Accounts = "Accounts";
+    public const string SuperHR = "SuperHR";
 
     public static readonly IReadOnlyList<string> All = new[]
     {
         SuperAdmin, TenantAdmin, HRAdmin, HRManager, Manager, Employee,
-        AccountLinkAdministrator, AccountLinkAuditor
+        AccountLinkAdministrator, AccountLinkAuditor, EmployeeRelationshipOfficer,
+        HRBP, TimeManager, IT, Accounts, SuperHR
     };
 }

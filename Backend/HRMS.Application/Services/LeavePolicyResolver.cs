@@ -29,7 +29,13 @@ public sealed record LeavePolicyResolutionResult(
     Guid? LeavePolicyRuleId,
     int? Priority,
     int? Specificity,
-    string Message);
+    string Message,
+    IReadOnlyList<LeavePolicyResolutionCandidate>? Candidates = null);
+
+public sealed record LeavePolicyResolutionCandidate(
+    Guid PolicyId, Guid PolicyVersionId, Guid RuleId, string PolicyCode, string PolicyName,
+    int VersionNumber, LeavePolicyVersionStatus Status, DateOnly EffectiveFrom, DateOnly? EffectiveTo,
+    int Priority, int Specificity, bool IsWinner);
 
 public sealed class LeavePolicyResolver : ILeavePolicyResolver
 {
@@ -73,7 +79,7 @@ public sealed class LeavePolicyResolver : ILeavePolicyResolver
         }
         var h = employment.Employment;
 
-        var versions = await _db.LeavePolicyVersions.AsNoTracking().Where(x => x.TenantId == tenantId && x.Status == LeavePolicyVersionStatus.Published && x.EffectiveFrom <= effectiveDate && (x.EffectiveTo == null || effectiveDate <= x.EffectiveTo) && x.LeavePolicy != null && x.LeavePolicy.IsActive).ToListAsync(ct);
+        var versions = await _db.LeavePolicyVersions.AsNoTracking().Include(x => x.LeavePolicy).Where(x => x.TenantId == tenantId && x.Status == LeavePolicyVersionStatus.Published && x.EffectiveFrom <= effectiveDate && (x.EffectiveTo == null || effectiveDate <= x.EffectiveTo) && x.LeavePolicy != null && x.LeavePolicy.IsActive).ToListAsync(ct);
         var versionIds = versions.Select(x => x.Id).ToList();
         var rules = await _db.LeavePolicyRules.AsNoTracking().Where(x => x.TenantId == tenantId && x.IsActive && versionIds.Contains(x.LeavePolicyVersionId) && x.LeaveTypeId == leaveTypeId).ToListAsync(ct);
         var sets = await _db.LeavePolicyApplicabilitySets.AsNoTracking().Where(x => x.TenantId == tenantId && versionIds.Contains(x.LeavePolicyVersionId)).ToListAsync(ct);
@@ -88,13 +94,21 @@ public sealed class LeavePolicyResolver : ILeavePolicyResolver
             if (specificity >= 0) candidates.Add(new(version, rule, specificity));
         }
         if (candidates.Count == 0) return Failure(LeavePolicyResolutionStatus.NoPolicy, tenantId, employeeId, leaveTypeId, effectiveDate, "No published policy applies to this LeaveType and effective employment.");
+        var samePolicyVersions = candidates.GroupBy(x => x.Version.LeavePolicyId).Where(x => x.Select(candidate => candidate.Version.Id).Distinct().Count() > 1).ToList();
+        if (samePolicyVersions.Count != 0)
+        {
+            var samePolicyDiagnosticCandidates = candidatesForDiagnostic(candidates, null);
+            return new(LeavePolicyResolutionStatus.ConfigurationAmbiguity, tenantId, employeeId, leaveTypeId, effectiveDate, null, null, null, null, null,
+                "Multiple Published versions of the same LeavePolicy apply to this date. Repair the policy version effective ranges before resolving leave.", samePolicyDiagnosticCandidates);
+        }
         var bestPriority = candidates.Max(x => x.Version.Priority);
         var priorityCandidates = candidates.Where(x => x.Version.Priority == bestPriority).ToList();
         var bestSpecificity = priorityCandidates.Max(x => x.Specificity);
         var winners = priorityCandidates.Where(x => x.Specificity == bestSpecificity).ToList();
-        if (winners.Count != 1) return Failure(LeavePolicyResolutionStatus.ConfigurationAmbiguity, tenantId, employeeId, leaveTypeId, effectiveDate, "Multiple published policies have the same best priority and specificity.");
+        var diagnosticCandidates = candidatesForDiagnostic(candidates, winners.Count == 1 ? winners[0] : null);
+        if (winners.Count != 1) return new(LeavePolicyResolutionStatus.ConfigurationAmbiguity, tenantId, employeeId, leaveTypeId, effectiveDate, null, null, null, null, null, "Multiple published policies have the same best priority and specificity.", diagnosticCandidates);
         var winner = winners[0];
-        return new(LeavePolicyResolutionStatus.Resolved, tenantId, employeeId, leaveTypeId, effectiveDate, winner.Version.LeavePolicyId, winner.Version.Id, winner.Rule.Id, winner.Version.Priority, winner.Specificity, "A unique published policy rule was resolved.");
+        return new(LeavePolicyResolutionStatus.Resolved, tenantId, employeeId, leaveTypeId, effectiveDate, winner.Version.LeavePolicyId, winner.Version.Id, winner.Rule.Id, winner.Version.Priority, winner.Specificity, "A unique published policy rule was resolved.", diagnosticCandidates);
     }
 
     private static bool Matches(LeavePolicyApplicabilitySet s, EffectiveEmploymentSnapshot h) =>
@@ -110,6 +124,8 @@ public sealed class LeavePolicyResolver : ILeavePolicyResolver
 
     private static int Specificity(LeavePolicyApplicabilitySet s) =>
         (s.Gender.HasValue ? 1 : 0) + new Guid?[] { s.HoldingCompanyId, s.LobId, s.OrganisationId, s.DepartmentId, s.SubDepartmentId, s.SectionId, s.SubSectionId, s.FunctionId, s.SubFunctionId, s.GradeId, s.DesignationId, s.EmployeeTypeId, s.CountryLocationId, s.WorkLocationId, s.CostCenterId }.Count(x => x.HasValue);
+
+    private static IReadOnlyList<LeavePolicyResolutionCandidate> candidatesForDiagnostic(IEnumerable<Candidate> source, Candidate? winner) => source.Select(x => new LeavePolicyResolutionCandidate(x.Version.LeavePolicyId, x.Version.Id, x.Rule.Id, x.Version.LeavePolicy!.Code, x.Version.LeavePolicy.Name, x.Version.VersionNumber, x.Version.Status, x.Version.EffectiveFrom, x.Version.EffectiveTo, x.Version.Priority, x.Specificity, winner?.Version.Id == x.Version.Id && winner.Rule.Id == x.Rule.Id)).ToList();
 
     private static LeavePolicyResolutionResult Failure(LeavePolicyResolutionStatus status, Guid tenantId, Guid employeeId, Guid leaveTypeId, DateOnly date, string message) => new(status, tenantId, employeeId, leaveTypeId, date, null, null, null, null, null, message);
     private sealed record Candidate(LeavePolicyVersion Version, LeavePolicyRule Rule, int Specificity);

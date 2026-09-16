@@ -389,7 +389,21 @@ Migrations live in `Backend/HRMS.Infrastructure` and target **SQL Server** (via 
 # Add a migration
 dotnet ef migrations add <Name> --project Backend/HRMS.Infrastructure --startup-project Backend/HRMS.API --output-dir Persistence/Migrations
 
-# Apply migrations to a SQL Server database
+# EF Core design-time provider selection
+# SQL Server (default when Database__Provider is omitted)
+$env:Database__Provider = "SqlServer"
+$env:ConnectionStrings__SqlServer = "Server=localhost;Database=HRMS;Trusted_Connection=True;TrustServerCertificate=True;"
+dotnet ef migrations list --context HrmsDbContext --project Backend/HRMS.Infrastructure --startup-project Backend/HRMS.API
+
+# MySQL (must use an explicit, non-production design-time database)
+$env:Database__Provider = "MySql"
+$env:ConnectionStrings__MySql = "Server=localhost;Port=3306;Database=HRMS_Design;User ID=...;Password=...;"
+dotnet ef migrations list --context HrmsDbContext --project Backend/HRMS.Infrastructure --startup-project Backend/HRMS.API
+
+# The catalog factory uses Database__CatalogProvider when set, otherwise Database__Provider.
+# Use ConnectionStrings__SqlServerCatalog or ConnectionStrings__MySqlCatalog for catalog tooling.
+
+# Apply migrations only after reviewing the generated script.
 dotnet ef database update --project Backend/HRMS.Infrastructure --startup-project Backend/HRMS.API
 ```
 
@@ -477,4 +491,3 @@ module's own list.
 Every module in the plan is built, tested and reachable from the UI.
 
 Authorization infrastructure is in place and exercised end to end (`[HasPermission]`, one policy per permission, tenant-claim requirement, fallback policy), and the three domain modules sit behind it with tenant isolation enforced on reads *and* writes. The frontend now drives that API for real — sign-in, session restore, refresh rotation, permission-aware navigation, a dashboard, the CSV export, and full create/read/update/delete for all three modules, with every list's paging, search, sort and filters carried in the URL so a view can be linked to and returned to.
-

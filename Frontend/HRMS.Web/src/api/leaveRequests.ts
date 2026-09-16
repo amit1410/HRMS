@@ -1,5 +1,11 @@
 import { api, request } from './client.ts'
+import type { LeaveType } from './leaveConfiguration.ts'
 import type { ApiResponse } from './types.ts'
+import type { PagedResult } from './types.ts'
+
+export function listLeaveTypesForRequest(signal?: AbortSignal): Promise<PagedResult<LeaveType>> {
+  return request(() => api.get<ApiResponse<PagedResult<LeaveType>>>('/api/leave-types/available', { signal }))
+}
 
 export interface LeaveRequestPreviewRequest {
   leaveTypeId: string

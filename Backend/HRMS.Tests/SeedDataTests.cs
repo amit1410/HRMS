@@ -156,7 +156,25 @@ public class SeedDataTests
         var employeeGrants = await context.RolePermissions
             .CountAsync(rp => rp.RoleId == SeedData.RoleId(RoleNames.Employee));
         Assert.Equal(SeedData.RolePermissionMap[RoleNames.Employee].Length, employeeGrants);
-        Assert.Equal(new[] { DomainPermissions.Geography.View, DomainPermissions.Attendance.MonthlyViewSelf }, SeedData.RolePermissionMap[RoleNames.Employee]);
+        Assert.Equal(new[]
+        {
+            DomainPermissions.Geography.View,
+            DomainPermissions.Attendance.MonthlyViewSelf,
+            DomainPermissions.Leave.RequestCreate,
+            DomainPermissions.Leave.RequestViewOwn,
+            DomainPermissions.Leave.RequestWithdrawOwn,
+            DomainPermissions.Leave.RequestCancelOwn,
+            DomainPermissions.Leave.BalanceViewOwn,
+            DomainPermissions.Leave.TypeViewAvailable
+        }, SeedData.RolePermissionMap[RoleNames.Employee]);
+        Assert.DoesNotContain(DomainPermissions.Leave.PolicyView, SeedData.RolePermissionMap[RoleNames.Employee]);
+        Assert.DoesNotContain(DomainPermissions.Leave.Approve, SeedData.RolePermissionMap[RoleNames.Employee]);
+        Assert.Contains(DomainPermissions.Leave.Approve, SeedData.RolePermissionMap[RoleNames.Manager]);
+        var managerGrants = await context.RolePermissions
+            .CountAsync(rp => rp.RoleId == SeedData.RoleId(RoleNames.Manager));
+        Assert.Equal(SeedData.RolePermissionMap[RoleNames.Manager].Length, managerGrants);
+        Assert.Equal(62, SeedData.PermissionId(DomainPermissions.Leave.RequestCreate));
+        Assert.Equal(67, SeedData.PermissionId(DomainPermissions.Leave.TypeViewAvailable));
     }
 
     /// <summary>

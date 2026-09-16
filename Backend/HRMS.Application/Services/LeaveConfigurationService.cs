@@ -15,11 +15,13 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
     private const string NotFound = "The requested Leave configuration was not found.";
     private readonly IHrmsDbContext _db;
     private readonly ITenantContext _tenant;
+    private readonly ILeavePolicyResolver _resolver;
 
-    public LeaveConfigurationService(IHrmsDbContext db, ITenantContext tenant)
+    public LeaveConfigurationService(IHrmsDbContext db, ITenantContext tenant, ILeavePolicyResolver? resolver = null)
     {
         _db = db;
         _tenant = tenant;
+        _resolver = resolver ?? new LeavePolicyResolver(db, tenantContext: tenant);
     }
 
     public async Task<Result<PagedResult<LeaveTypeDto>>> GetLeaveTypesAsync(LeaveTypeQuery query, CancellationToken ct = default)
@@ -120,8 +122,14 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         if (!HasTenant()) return Result<PagedResult<LeavePolicyDto>>.Unauthorized(NoTenant);
         var source = _db.LeavePolicies.AsNoTracking(); if (query.IsActive is bool active) source = source.Where(x => x.IsActive == active);
         if (!string.IsNullOrWhiteSpace(query.Search)) { var search = query.Search.Trim().ToLowerInvariant(); source = source.Where(x => x.Code.ToLower().Contains(search) || x.Name.ToLower().Contains(search)); }
-        var items = await source.OrderBy(x => x.Code).ThenBy(x => x.Id).ToListAsync(ct);
-        return Result<PagedResult<LeavePolicyDto>>.Success(Page(items.Select(ToDto), query));
+        var items = await source.Include(x => x.Versions).OrderBy(x => x.Code).ThenBy(x => x.Id).ToListAsync(ct);
+        var published = await _db.LeavePolicyVersions.AsNoTracking().Where(x => x.Status == LeavePolicyVersionStatus.Published).Include(x => x.Rules).ToListAsync(ct);
+        var overlapPolicyIds = items.ToDictionary(x => x.Id, _ => new HashSet<Guid>());
+        foreach (var version in published)
+            foreach (var other in published.Where(x => x.LeavePolicyId != version.LeavePolicyId && x.EffectiveFrom <= (version.EffectiveTo ?? DateOnly.MaxValue) && (x.EffectiveTo == null || version.EffectiveFrom <= x.EffectiveTo)))
+                if (version.Rules.Where(x => x.IsActive).Select(x => x.LeaveTypeId).Intersect(other.Rules.Where(x => x.IsActive).Select(x => x.LeaveTypeId)).Any() && overlapPolicyIds.TryGetValue(version.LeavePolicyId, out var conflicts)) conflicts.Add(other.LeavePolicyId);
+        var mapped = items.Select(x => ToDto(x, overlapPolicyIds.TryGetValue(x.Id, out var conflicts) ? conflicts.Count : 0));
+        return Result<PagedResult<LeavePolicyDto>>.Success(Page(mapped, query));
     }
 
     public async Task<Result<LeavePolicyDto>> GetPolicyAsync(Guid id, CancellationToken ct = default)
@@ -171,6 +179,63 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         var version = versionId is Guid id ? await _db.LeavePolicyVersions.Include(x => x.Rules).Include(x => x.ApplicabilitySets).FirstOrDefaultAsync(x => x.Id == id && x.LeavePolicyId == policyId, ct) : policy.Versions.OrderByDescending(x => x.VersionNumber).FirstOrDefault();
         var typeRows = version is null ? [] : await _db.LeaveTypes.AsNoTracking().Where(x => version.Rules.Select(r => r.LeaveTypeId).Contains(x.Id)).OrderBy(x => x.Code).ToListAsync(ct);
         return Result<LeavePolicyEditorDto>.Success(new(ToDto(policy), version is null ? null : ToDto(version), typeRows.Select(x => new LeaveTypeSelectionDto(x.Id, x.Code, x.Name, x.IsActive)).ToList(), version?.ApplicabilitySets.Select(ToDto).ToList() ?? []));
+    }
+
+    public async Task<Result<LeavePolicyEditorDto>> BeginEditAsync(Guid policyId, CancellationToken ct = default)
+    {
+        if (!HasTenant()) return Result<LeavePolicyEditorDto>.Unauthorized(NoTenant);
+
+        var policy = await _db.LeavePolicies
+            .Include(x => x.Versions)
+            .FirstOrDefaultAsync(x => x.Id == policyId, ct);
+        if (policy is null) return Result<LeavePolicyEditorDto>.NotFound(NotFound);
+        if (!policy.IsActive) return Result<LeavePolicyEditorDto>.Conflict("An inactive LeavePolicy is view-only.");
+
+        // A policy has at most one working Draft in the normal workflow. Reuse it so
+        // repeated clicks cannot create a trail of abandoned copies.
+        var draft = policy.Versions
+            .Where(x => x.Status == LeavePolicyVersionStatus.Draft)
+            .OrderByDescending(x => x.VersionNumber)
+            .FirstOrDefault();
+        if (draft is not null) return await GetEditorAsync(policyId, draft.Id, ct);
+
+        var published = policy.Versions
+            .Where(x => x.Status == LeavePolicyVersionStatus.Published)
+            .OrderByDescending(x => x.VersionNumber)
+            .FirstOrDefault();
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var request = new LeavePolicyVersionRequest
+        {
+            EffectiveFrom = published?.EffectiveFrom ?? today,
+            EffectiveTo = published?.EffectiveTo,
+            Priority = published?.Priority ?? 0,
+            CopyFromVersionId = published?.Id
+        };
+        await using var transaction = await _db.BeginTransactionAsync(ct);
+        var created = await CreateVersionAsync(policyId, request, ct);
+        if (!created.Succeeded || created.Value is null)
+            return Result<LeavePolicyEditorDto>.Failure(created.Status, created.Message, created.Errors);
+        var editor = await GetEditorAsync(policyId, created.Value.Id, ct);
+        if (!editor.Succeeded) return editor;
+        await transaction.CommitAsync(ct);
+        return editor;
+    }
+
+    public async Task<Result<LeavePolicyTestDto>> TestPolicyAsync(LeavePolicyTestRequest request, CancellationToken ct = default)
+    {
+        if (!HasTenant()) return Result<LeavePolicyTestDto>.Unauthorized(NoTenant);
+        var tenantId = _tenant.TenantId!.Value;
+        var resolution = await _resolver.ResolveAsync(tenantId, request.EmployeeId, request.LeaveTypeId, request.Date, ct);
+        if (resolution.Status != LeavePolicyResolutionStatus.Resolved || resolution.LeavePolicyVersionId is not Guid versionId || resolution.LeavePolicyRuleId is not Guid ruleId)
+            return Result<LeavePolicyTestDto>.Invalid("resolution", resolution.Message);
+
+        var type = await _db.LeaveTypes.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == request.LeaveTypeId, ct);
+        var version = await _db.LeavePolicyVersions.AsNoTracking().Include(x => x.LeavePolicy).SingleAsync(x => x.TenantId == tenantId && x.Id == versionId, ct);
+        var rule = await _db.LeavePolicyRules.AsNoTracking().Include(x => x.EligibilityRule).Include(x => x.RequestRule).SingleAsync(x => x.TenantId == tenantId && x.Id == ruleId, ct);
+        var candidates = (resolution.Candidates ?? []).Where(x => !x.IsWinner).Select(x => new LeavePolicyTestCandidateDto(x.PolicyId, x.PolicyCode, x.PolicyName, x.PolicyVersionId, x.VersionNumber, x.Status, x.EffectiveFrom, x.EffectiveTo, x.Priority, x.Specificity, x.IsWinner)).ToList();
+        var reason = candidates.Count == 0 ? "The only matching published policy." : "Higher-priority matching policy.";
+        return Result<LeavePolicyTestDto>.Success(new(request.EmployeeId, request.LeaveTypeId, type!.Code, type.Name, version.LeavePolicyId, version.LeavePolicy!.Code, version.LeavePolicy.Name, version.Id, version.VersionNumber, version.Status, version.EffectiveFrom, version.EffectiveTo, version.Priority, resolution.Specificity ?? 0, reason, rule.RequestRule?.PartialDayMode ?? PartialDayMode.FullDayOnly, rule.EligibilityRule?.EligibilityMode ?? EligibilityMode.Immediate, rule.EligibilityRule?.ProbationMode ?? ProbationMode.Allowed, rule.EligibilityRule?.NoticePeriodMode ?? NoticePeriodMode.Allowed, rule.CalendarRule?.SandwichMode ?? SandwichMode.Disabled, rule.CalendarRule?.HolidayTreatment ?? HolidayTreatment.Exclude, rule.CalendarRule?.WeekOffTreatment ?? WeekOffTreatment.Exclude, candidates));
     }
 
     public async Task<Result<LeavePolicyVersionDto>> CreateVersionAsync(Guid policyId, LeavePolicyVersionRequest request, CancellationToken ct = default)
@@ -285,7 +350,7 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
     public async Task<Result<LeavePolicyValidationDto>> ValidateAsync(Guid policyId, Guid versionId, CancellationToken ct = default)
     {
         var version = await VersionAsync(policyId, versionId, ct); if (version is null) return Result<LeavePolicyValidationDto>.NotFound(NotFound);
-        var errors = await ValidateForPublishAsync(version, ct); return Result<LeavePolicyValidationDto>.Success(new(errors.Count == 0, errors, []));
+        var errors = await ValidateForPublishAsync(version, false, ct); return Result<LeavePolicyValidationDto>.Success(new(errors.Count == 0, errors, []));
     }
 
     public async Task<Result<LeavePolicyEligibilityRuleDto?>> GetEligibilityAsync(Guid policyId, Guid versionId, Guid leaveTypeId, CancellationToken ct = default)
@@ -475,11 +540,41 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         var entity = rule.CancellationRule ?? new LeavePolicyCancellationRule { Id = Guid.NewGuid(), TenantId = version.TenantId, LeavePolicyRuleId = rule.Id }; entity.WithdrawAllowed = request.WithdrawAllowed; entity.CancelAllowed = request.CancelAllowed; entity.ModifyAllowed = request.ModifyAllowed; if (rule.CancellationRule is null) _db.LeavePolicyCancellationRules.Add(entity); version.ModifiedDate = DateTime.UtcNow; try { await _db.SaveChangesAsync(ct); } catch (DbUpdateConcurrencyException) { return Conflict<LeavePolicyCancellationRuleDto?>("Configuration changed by another user. Reload before saving."); } return Result<LeavePolicyCancellationRuleDto?>.Success(ToDto(entity), "Cancellation rules saved.");
     }
 
-    public async Task<Result<LeavePolicyVersionDto>> PublishAsync(Guid policyId, Guid versionId, CancellationToken ct = default)
+    public async Task<Result<LeavePolicyVersionDto>> PublishAsync(Guid policyId, Guid versionId, bool acknowledgeOverlap = false, CancellationToken ct = default)
     {
-        var version = await VersionAsync(policyId, versionId, ct); if (version is null) return Result<LeavePolicyVersionDto>.NotFound(NotFound); if (version.Status != LeavePolicyVersionStatus.Draft) return Result<LeavePolicyVersionDto>.Conflict("Only Draft versions can be published.");
-        var errors = await ValidateForPublishAsync(version, ct); if (errors.Count != 0) return Result<LeavePolicyVersionDto>.Invalid("LeavePolicyVersion cannot be published.", errors);
-        version.Status = LeavePolicyVersionStatus.Published; version.ModifiedDate = DateTime.UtcNow; await _db.SaveChangesAsync(ct); return Result<LeavePolicyVersionDto>.Success(ToDto(version), "Version published.");
+        var version = await VersionAsync(policyId, versionId, ct);
+        if (version is null) return Result<LeavePolicyVersionDto>.NotFound(NotFound);
+        if (version.Status != LeavePolicyVersionStatus.Draft) return Result<LeavePolicyVersionDto>.Conflict("Only Draft versions can be published.");
+
+        // Validation and version supersession are one unit. This prevents a replacement
+        // from ever being left alongside its predecessor as two current versions.
+        await using var transaction = await _db.BeginTransactionAsync(ct);
+        var errors = await ValidateForPublishAsync(version, acknowledgeOverlap, ct);
+        if (errors.Count != 0) return Result<LeavePolicyVersionDto>.Invalid("LeavePolicyVersion cannot be published.", errors);
+
+        var publishedAt = DateTime.UtcNow;
+        var predecessors = await _db.LeavePolicyVersions
+            .Where(x => x.Id != version.Id && x.LeavePolicyId == version.LeavePolicyId && x.Status == LeavePolicyVersionStatus.Published && x.EffectiveFrom <= (version.EffectiveTo ?? DateOnly.MaxValue) && (x.EffectiveTo == null || version.EffectiveFrom <= x.EffectiveTo))
+            .ToListAsync(ct);
+        foreach (var predecessor in predecessors)
+        {
+            if (predecessor.EffectiveFrom < version.EffectiveFrom)
+            {
+                // Keep the historical predecessor for dates before the replacement.
+                predecessor.EffectiveTo = version.EffectiveFrom.AddDays(-1);
+            }
+            else
+            {
+                predecessor.Status = LeavePolicyVersionStatus.Retired;
+            }
+            predecessor.ModifiedDate = publishedAt;
+        }
+
+        version.Status = LeavePolicyVersionStatus.Published;
+        version.ModifiedDate = publishedAt;
+        await _db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+        return Result<LeavePolicyVersionDto>.Success(ToDto(version), predecessors.Count == 0 ? "Version published." : $"Version {version.VersionNumber} published; previous version superseded.");
     }
 
     public async Task<Result<LeavePolicyVersionDto>> RetireAsync(Guid policyId, Guid versionId, CancellationToken ct = default)
@@ -488,7 +583,7 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         version.Status = LeavePolicyVersionStatus.Retired; version.ModifiedDate = DateTime.UtcNow; await _db.SaveChangesAsync(ct); return Result<LeavePolicyVersionDto>.Success(ToDto(version), "Version retired.");
     }
 
-    private async Task<List<ValidationError>> ValidateForPublishAsync(LeavePolicyVersion version, CancellationToken ct)
+    private async Task<List<ValidationError>> ValidateForPublishAsync(LeavePolicyVersion version, bool acknowledgeOverlap = false, CancellationToken ct = default)
     {
         var errors = new List<ValidationError>(); var policy = await PolicyAsync(version.LeavePolicyId, ct);
         if (policy is null || !policy.IsActive) errors.Add(new("policyId", "The parent LeavePolicy must be active."));
@@ -499,15 +594,46 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         if (active.Count == 0) errors.Add(new("leaveTypeIds", "At least one active LeaveType rule is required."));
         if (active.GroupBy(x => x.LeaveTypeId).Any(x => x.Count() > 1)) errors.Add(new("leaveTypeIds", "A LeaveType may appear only once in a version."));
         var types = await _db.LeaveTypes.Where(x => active.Select(r => r.LeaveTypeId).Contains(x.Id)).ToListAsync(ct); if (types.Count != active.Select(x => x.LeaveTypeId).Distinct().Count() || types.Any(x => !x.IsActive)) errors.Add(new("leaveTypeIds", "Every active rule must reference an active LeaveType in this tenant."));
+        if (types.Any(x => x.DefaultUnit != LeaveUnit.Day)) errors.Add(new("leaveTypeIds", "Hourly or non-day Leave Types cannot be published because the current Leave request runtime supports Day-based leave only."));
         foreach (var rule in active) errors.AddRange(ValidateEligibility(rule.EligibilityRule));
         foreach (var rule in active) errors.AddRange(ValidateEntitlement(rule.EntitlementRule));
         foreach (var rule in active) errors.AddRange(ValidateRequestRule(rule.RequestRule));
+        foreach (var rule in active) errors.AddRange(ValidatePublishRequestRule(rule.RequestRule));
         foreach (var rule in active) errors.AddRange(ValidateCalendarRule(rule.CalendarRule));
+        foreach (var rule in active) errors.AddRange(ValidatePublishCalendarRule(rule.CalendarRule));
         foreach (var rule in active) errors.AddRange(ValidateAttachmentRule(rule.AttachmentRule));
+        foreach (var rule in active) errors.AddRange(ValidatePublishAttachmentRule(rule.AttachmentRule));
         var clubbing = await _db.LeavePolicyClubbingRules.Where(x => x.LeavePolicyVersionId == version.Id).ToListAsync(ct); errors.AddRange(ValidateClubbing(clubbing, version, active));
+        if (clubbing.Count != 0) errors.Add(new("clubbing", "Advanced leave clubbing rules are not supported yet and cannot be published."));
         var groups = await _db.LeavePolicyApplicabilitySets.Where(x => x.LeavePolicyVersionId == version.Id).ToListAsync(ct); errors.AddRange(await ValidateGroupsAsync(groups.Select(ToRequest).ToList(), ct));
-        if (await _db.LeavePolicyVersions.AnyAsync(x => x.Id != version.Id && x.LeavePolicyId == version.LeavePolicyId && x.Status == LeavePolicyVersionStatus.Published && x.EffectiveFrom <= (version.EffectiveTo ?? DateOnly.MaxValue) && (x.EffectiveTo == null || version.EffectiveFrom <= x.EffectiveTo), ct)) errors.Add(new("effectiveFrom", "Published versions of one policy may not overlap.") );
+        var predecessors = await _db.LeavePolicyVersions
+            .Where(x => x.Id != version.Id && x.LeavePolicyId == version.LeavePolicyId && x.Status == LeavePolicyVersionStatus.Published && x.EffectiveFrom <= (version.EffectiveTo ?? DateOnly.MaxValue) && (x.EffectiveTo == null || version.EffectiveFrom <= x.EffectiveTo))
+            .ToListAsync(ct);
+        // A single predecessor row cannot represent a split range. Reject that unusual
+        // shape rather than silently creating a gap or rewriting the version twice.
+        if (predecessors.Any(x => x.EffectiveTo is null || (version.EffectiveTo is DateOnly newTo && x.EffectiveTo > newTo)))
+            errors.Add(new("effectiveTo", "The replacement must cover the remainder of the published version it replaces; create a separate future version for a split range."));
+        errors.AddRange(await ValidatePublishedPolicyOverlapsAsync(version, acknowledgeOverlap, ct));
         return errors;
+    }
+
+    private async Task<List<ValidationError>> ValidatePublishedPolicyOverlapsAsync(LeavePolicyVersion version, bool acknowledged, CancellationToken ct)
+    {
+        var result = new List<ValidationError>();
+        var ownTypes = await _db.LeavePolicyRules.AsNoTracking().Where(x => x.LeavePolicyVersionId == version.Id && x.IsActive).Select(x => x.LeaveTypeId).ToListAsync(ct);
+        if (ownTypes.Count == 0) return result;
+        var others = await _db.LeavePolicyVersions.AsNoTracking().Include(x => x.LeavePolicy).Include(x => x.Rules).Where(x => x.TenantId == version.TenantId && x.Status == LeavePolicyVersionStatus.Published && x.LeavePolicyId != version.LeavePolicyId && x.EffectiveFrom <= (version.EffectiveTo ?? DateOnly.MaxValue) && (x.EffectiveTo == null || version.EffectiveFrom <= x.EffectiveTo)).ToListAsync(ct);
+        foreach (var other in others)
+        {
+            var shared = ownTypes.Intersect(other.Rules.Where(x => x.IsActive).Select(x => x.LeaveTypeId)).ToList();
+            if (shared.Count == 0) continue;
+            var samePriority = version.Priority == other.Priority;
+            if (samePriority)
+                result.Add(new("overlap", $"This policy conflicts with published policy '{other.LeavePolicy!.Name}' and the system cannot determine which policy should apply. Resolve the overlap before publishing."));
+            else if (!acknowledged)
+                result.Add(new("overlapAcknowledgement", $"This policy overlaps published policy '{other.LeavePolicy!.Name}' for {shared.Count} Leave Type(s) and will take precedence because its priority is {version.Priority} versus {other.Priority}. Acknowledge the intentional override before publishing."));
+        }
+        return result;
     }
 
     private async Task<List<ValidationError>> ValidateGroupsAsync(IEnumerable<LeaveApplicabilityGroupRequest> groups, CancellationToken ct)
@@ -551,7 +677,6 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         if (!Enum.IsDefined(request.NoticePeriodMode)) errors.Add(new("noticePeriodMode", "Notice period mode is invalid."));
         if (request.EligibilityMode == EligibilityMode.MinimumService && (request.MinimumServiceValue is not > 0 || request.MinimumServiceUnit is null)) errors.Add(new("minimumService", "Minimum service value and unit must be provided and positive."));
         if (request.EligibilityMode == EligibilityMode.Immediate && (request.MinimumServiceValue is not null || request.MinimumServiceUnit is not null)) errors.Add(new("minimumService", "Immediate eligibility cannot include a minimum service restriction."));
-        if (request.ProbationMode == ProbationMode.AfterConfirmation) errors.Add(new("probationMode", "AfterConfirmation is unavailable until an authoritative confirmation source is approved."));
         return errors;
     }
     private static bool IsBaseline(LeavePolicyEligibilityRuleRequest request) => request.EligibilityMode == EligibilityMode.Immediate && request.MinimumServiceValue is null && request.MinimumServiceUnit is null && request.ProbationMode == ProbationMode.Allowed && request.NoticePeriodMode == NoticePeriodMode.Allowed;
@@ -597,6 +722,10 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         if (!Enum.IsDefined(request.PartialDayMode)) errors.Add(new("partialDayMode", "Partial-day mode is invalid."));
         return errors;
     }
+    private static List<ValidationError> ValidatePublishRequestRule(LeavePolicyRequestRule? rule) =>
+        rule is null || rule.PartialDayMode == PartialDayMode.FullDayOnly
+            ? []
+            : [new("partialDayMode", $"Partial-day mode '{rule.PartialDayMode}' cannot be published because the current Leave request runtime supports Full Day only.")];
     private static bool IsRequestBaseline(LeavePolicyRequestRuleRequest request) => request.MinimumRequestQuantity is null && request.MaximumRequestQuantity is null && request.MaximumConsecutiveQuantity is null && request.MinimumAdvanceNoticeDays == 0 && request.BackdatedRequestMode == BackdatedRequestMode.NotAllowed && request.MaximumBackdatedDays is null && request.MaximumRequestsPerPeriod is null && request.MaximumQuantityPerPeriod is null && request.RequestLimitPeriod is null && request.PartialDayMode == PartialDayMode.FullDayOnly;
     private static List<ValidationError> ValidateCalendarRule(LeavePolicyCalendarRule? rule) => rule is null ? [] : ValidateCalendarRule(new LeavePolicyCalendarRuleRequest { HolidayTreatment = rule.HolidayTreatment, WeekOffTreatment = rule.WeekOffTreatment, SandwichMode = rule.SandwichMode, ApplyToPrefix = rule.ApplyToPrefix, ApplyToSuffix = rule.ApplyToSuffix, ApplyToBetween = rule.ApplyToBetween });
     private static List<ValidationError> ValidateCalendarRule(LeavePolicyCalendarRuleRequest request)
@@ -606,6 +735,10 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         return errors;
     }
     private static bool IsCalendarBaseline(LeavePolicyCalendarRuleRequest request) => request.HolidayTreatment == HolidayTreatment.Exclude && request.WeekOffTreatment == WeekOffTreatment.Exclude && request.SandwichMode == SandwichMode.Disabled && !request.ApplyToPrefix && !request.ApplyToSuffix && !request.ApplyToBetween;
+    private static List<ValidationError> ValidatePublishCalendarRule(LeavePolicyCalendarRule? rule) =>
+        rule is null || (rule.SandwichMode == SandwichMode.Disabled && !rule.ApplyToPrefix && !rule.ApplyToSuffix && !rule.ApplyToBetween)
+            ? []
+            : [new("sandwichMode", "Sandwich Leave is not supported by the current Leave request runtime. Disable Sandwich Leave before publishing this policy.")];
     private static List<ValidationError> ValidateAttachmentRule(LeavePolicyAttachmentRule? rule) => rule is null ? [] : ValidateAttachmentRule(new LeavePolicyAttachmentRuleRequest { AttachmentRequirement = rule.AttachmentRequirement, ThresholdQuantity = rule.ThresholdQuantity, DocumentLabel = rule.DocumentLabel });
     private static List<ValidationError> ValidateAttachmentRule(LeavePolicyAttachmentRuleRequest request)
     {
@@ -614,6 +747,10 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         if (request.AttachmentRequirement != AttachmentRequirement.RequiredAboveQuantity && request.ThresholdQuantity is not null) errors.Add(new("thresholdQuantity", "A threshold is only valid for RequiredAboveQuantity."));
         return errors;
     }
+    private static List<ValidationError> ValidatePublishAttachmentRule(LeavePolicyAttachmentRule? rule) =>
+        rule is null || rule.AttachmentRequirement == AttachmentRequirement.None
+            ? []
+            : [new("attachmentRequirement", "Attachment requirements cannot be published because attachment upload and declaration runtime support is not available yet. Select No attachment required.")];
     private static bool IsAttachmentBaseline(LeavePolicyAttachmentRuleRequest request) => request.AttachmentRequirement == AttachmentRequirement.None && request.ThresholdQuantity is null && string.IsNullOrWhiteSpace(request.DocumentLabel);
     private static List<ValidationError> ValidateClubbing(IEnumerable<LeavePolicyClubbingRule> rules, LeavePolicyVersion version, IReadOnlyCollection<LeavePolicyRule> selected)
     {
@@ -641,7 +778,7 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
     private static PagedResult<T> Page<T>(IEnumerable<T> source, PagedQuery query) { var page = Math.Max(1, query.Page); var size = Math.Clamp(query.PageSize, 1, PagedQuery.MaxPageSize); var list = source.ToList(); return new(list.Skip((page - 1) * size).Take(size).ToList(), page, size, list.Count); }
     private static LeaveTypeDto ToDto(LeaveType x) => new(x.Id, x.Code, x.Name, x.Description, x.DefaultUnit, x.IsPaid, x.IsActive, x.CreatedDate, x.ModifiedDate, Token(x));
     private static LeavePeriodDto ToDto(LeavePeriod x) => new(x.Id, x.Code, x.Name, x.StartDate, x.EndDate, x.IsActive, x.CreatedDate, x.ModifiedDate, Token(x));
-    private static LeavePolicyDto ToDto(LeavePolicy x) { var current = x.Versions?.Where(v => v.Status == LeavePolicyVersionStatus.Published).OrderByDescending(v => v.EffectiveFrom).FirstOrDefault(); return new(x.Id, x.Code, x.Name, x.Description, x.IsActive, x.Versions?.Count ?? 0, current?.VersionNumber, x.CreatedDate, x.ModifiedDate, Token(x)); }
+    private static LeavePolicyDto ToDto(LeavePolicy x, int overlapCount = 0) { var current = x.Versions?.Where(v => v.Status == LeavePolicyVersionStatus.Published).OrderByDescending(v => v.EffectiveFrom).FirstOrDefault(); return new(x.Id, x.Code, x.Name, x.Description, x.IsActive, x.Versions?.Count ?? 0, current?.VersionNumber, x.CreatedDate, x.ModifiedDate, Token(x), overlapCount); }
     private static LeavePolicyVersionDto ToDto(LeavePolicyVersion x) => new(x.Id, x.VersionNumber, x.EffectiveFrom, x.EffectiveTo, x.Status, x.Priority, x.Rules?.Count(r => r.IsActive) ?? 0, x.ApplicabilitySets?.Count ?? 0, x.CreatedDate, x.CreatedBy, x.ModifiedDate, Token(x), new(x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Published, true));
     private static LeaveApplicabilityGroupDto ToDto(LeavePolicyApplicabilitySet x) => new(x.Id, x.Gender, x.HoldingCompanyId, x.LobId, x.OrganisationId, x.DepartmentId, x.SubDepartmentId, x.SectionId, x.SubSectionId, x.FunctionId, x.SubFunctionId, x.GradeId, x.DesignationId, x.EmployeeTypeId, x.CountryLocationId, x.WorkLocationId, x.CostCenterId);
     private static LeavePolicyEligibilityRuleDto ToDto(LeavePolicyEligibilityRule x) => new(x.Id, x.LeavePolicyRuleId, x.EligibilityMode, x.MinimumServiceValue, x.MinimumServiceUnit, x.ProbationMode, x.NoticePeriodMode, Token(x));

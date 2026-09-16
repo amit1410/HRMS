@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Mail;
 using System.Net.Sockets;
 using HRMS.Application.Abstractions;
@@ -8,6 +9,20 @@ namespace HRMS.Tests;
 
 public sealed class SmtpEmailSenderTests
 {
+    [Fact]
+    public void Smtp_client_uses_explicit_configured_credentials_and_not_windows_credentials()
+    {
+        using var client = SmtpClientEmailTransport.CreateClient(new SmtpEmailSettings(
+            "smtp.example.test", 587, true, "mailbox@example.test", "secret", "mailbox@example.test", "HRMS"));
+
+        Assert.False(client.UseDefaultCredentials);
+        var credentials = Assert.IsType<NetworkCredential>(client.Credentials);
+        Assert.Equal("mailbox@example.test", credentials.UserName);
+        Assert.Equal("secret", credentials.Password);
+        Assert.True(client.EnableSsl);
+        Assert.Equal(30_000, client.Timeout);
+    }
+
     [Fact]
     public async Task Password_reset_uses_alias_from_name_and_separate_smtp_credentials()
     {

@@ -1,3 +1,4 @@
+using System.Net.Mail;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Auth;
@@ -20,6 +21,34 @@ namespace HRMS.Tests;
 
 public sealed class EmployeePortalAccountServiceTests
 {
+    [Fact]
+    public async Task Invalid_explicit_login_email_is_rejected_before_email_delivery()
+    {
+        using var fixture = await Fixture.CreateAsync();
+
+        var result = await fixture.Service.CreateAsync(fixture.EmployeeId, new() { LoginEmail = "not-an-email" });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Null(fixture.Email.Invite);
+    }
+
+    [Fact]
+    public async Task Email_delivery_failure_rolls_back_account_and_invitation()
+    {
+        using var fixture = await Fixture.CreateAsync();
+        fixture.Email.ThrowOnWelcome = true;
+
+        var result = await fixture.Service.CreateAsync(fixture.EmployeeId, new());
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ResultStatus.ServiceUnavailable, result.Status);
+        using var db = fixture.Database.CreateContext(fixture.TenantContext);
+        Assert.Empty(await db.Users.IgnoreQueryFilters().Where(x => x.Email == fixture.EmailAddress).ToListAsync());
+        Assert.Empty(await db.UserInvitations.IgnoreQueryFilters().ToListAsync());
+        Assert.Empty(await db.AccountEmployeeCurrentLinks.IgnoreQueryFilters().Where(x => x.EmployeeId == fixture.EmployeeId).ToListAsync());
+    }
+
     [Fact]
     public async Task Create_creates_inactive_employee_account_role_link_and_hashed_invitation()
     {
@@ -127,7 +156,13 @@ public sealed class EmployeePortalAccountServiceTests
         public Task SendLeaveNotificationAsync(LeaveNotificationEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<string?> SendPasswordResetOtpAsync(OtpDeliveryMessage message, CancellationToken cancellationToken = default) => Task.FromResult<string?>(message.Otp);
         public WelcomeEmailMessage? Invite { get; private set; }
-        public Task SendWelcomeInviteAsync(WelcomeEmailMessage message, CancellationToken cancellationToken = default) { Invite = message; return Task.CompletedTask; }
+        public bool ThrowOnWelcome { get; set; }
+        public Task SendWelcomeInviteAsync(WelcomeEmailMessage message, CancellationToken cancellationToken = default)
+        {
+            if (ThrowOnWelcome) throw new EmailDeliveryException(EmailDeliveryFailureKind.Server, "SMTP server rejected or could not complete delivery.", "smtp.example.test", 587, new SmtpException("5.7.1 rejected"));
+            Invite = message;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class TestEnvironment : IHostEnvironment

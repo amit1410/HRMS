@@ -4,6 +4,7 @@ using HRMS.API.Security;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Leave;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,12 +16,12 @@ public sealed class LeaveRequestCancellationApiTests
     private static readonly Guid RequestId = new("70000000-0000-0000-0000-000000000001");
 
     [Fact]
-    public void Cancel_requires_authentication_and_no_permission()
+    public void Cancel_requires_authentication_and_own_request_permission()
     {
         var controller = typeof(LeaveRequestsController);
         var cancel = controller.GetMethod(nameof(LeaveRequestsController.Cancel))!;
         Assert.NotNull(controller.GetCustomAttribute<AuthorizeAttribute>());
-        Assert.Null(cancel.GetCustomAttribute<HasPermissionAttribute>());
+        Assert.Equal(Permissions.Leave.RequestCancelOwn, cancel.GetCustomAttribute<HasPermissionAttribute>()!.Permission);
     }
 
     [Fact]

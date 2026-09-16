@@ -101,7 +101,13 @@ public static class SeedData
             [RoleNames.Manager] = 5,
             [RoleNames.Employee] = 6,
             [RoleNames.AccountLinkAdministrator] = 7,
-            [RoleNames.AccountLinkAuditor] = 8
+            [RoleNames.AccountLinkAuditor] = 8,
+            [RoleNames.EmployeeRelationshipOfficer] = 9,
+            [RoleNames.HRBP] = 10,
+            [RoleNames.TimeManager] = 11,
+            [RoleNames.IT] = 12,
+            [RoleNames.Accounts] = 13,
+            [RoleNames.SuperHR] = 14
         };
 
     /// <summary>Permission ids. Fixed for the same reasons as <see cref="RoleIds"/>.</summary>
@@ -137,6 +143,11 @@ public static class SeedData
             [DomainPermissions.AccountEmployeeLink.View] = 27,
             [DomainPermissions.AccountEmployeeLink.ViewHistory] = 28,
             [DomainPermissions.AccountEmployeeLink.Manage] = 29,
+            [DomainPermissions.RoleManagement.View] = 68,
+            [DomainPermissions.RoleManagement.Manage] = 69,
+            [DomainPermissions.RoleManagement.AssignmentView] = 70,
+            [DomainPermissions.RoleManagement.AssignmentManage] = 71,
+            [DomainPermissions.RoleManagement.AssignmentViewHistory] = 72,
             [DomainPermissions.Leave.TypeManage] = 30,
             [DomainPermissions.Leave.PeriodManage] = 31,
             [DomainPermissions.Leave.PolicyView] = 32,
@@ -167,8 +178,14 @@ public static class SeedData
         [DomainPermissions.Attendance.MonthlyClose] = 57,
         [DomainPermissions.Attendance.MonthlyReopen] = 58,
         [DomainPermissions.Attendance.AdminCorrectionManage] = 59,
-        [DomainPermissions.Attendance.ReportView] = 60,
-        [DomainPermissions.Attendance.ReportExport] = 61,
+            [DomainPermissions.Attendance.ReportView] = 60,
+            [DomainPermissions.Attendance.ReportExport] = 61,
+            [DomainPermissions.Leave.RequestCreate] = 62,
+            [DomainPermissions.Leave.RequestViewOwn] = 63,
+            [DomainPermissions.Leave.RequestWithdrawOwn] = 64,
+            [DomainPermissions.Leave.RequestCancelOwn] = 65,
+            [DomainPermissions.Leave.BalanceViewOwn] = 66,
+            [DomainPermissions.Leave.TypeViewAvailable] = 67,
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>
@@ -199,6 +216,12 @@ public static class SeedData
         [RoleNames.Employee] = "Standard employee with self-service access.",
         [RoleNames.AccountLinkAdministrator] = "Named operator who can manage account-to-employee links.",
         [RoleNames.AccountLinkAuditor] = "Named operator who can review account-to-employee link history."
+        ,[RoleNames.EmployeeRelationshipOfficer] = "Employee relationship officer."
+        ,[RoleNames.HRBP] = "Human resources business partner."
+        ,[RoleNames.TimeManager] = "Time and attendance manager."
+        ,[RoleNames.IT] = "Information technology operator."
+        ,[RoleNames.Accounts] = "Accounts operator."
+        ,[RoleNames.SuperHR] = "Privileged tenant HR administrator."
     };
 
     public static IReadOnlyList<Role> Roles =>
@@ -259,11 +282,28 @@ public static class SeedData
         [RoleNames.Manager] = new[]
         {
             DomainPermissions.Employee.View, DomainPermissions.Department.View, DomainPermissions.Designation.View,
-            DomainPermissions.Geography.View, DomainPermissions.Attendance.MonthlyViewTeam
+            DomainPermissions.Geography.View, DomainPermissions.Attendance.MonthlyViewTeam,
+            DomainPermissions.Leave.Approve
         },
-        [RoleNames.Employee] = new[] { DomainPermissions.Geography.View, DomainPermissions.Attendance.MonthlyViewSelf },
+        [RoleNames.Employee] = new[]
+        {
+            DomainPermissions.Geography.View,
+            DomainPermissions.Attendance.MonthlyViewSelf,
+            DomainPermissions.Leave.RequestCreate,
+            DomainPermissions.Leave.RequestViewOwn,
+            DomainPermissions.Leave.RequestWithdrawOwn,
+            DomainPermissions.Leave.RequestCancelOwn,
+            DomainPermissions.Leave.BalanceViewOwn,
+            DomainPermissions.Leave.TypeViewAvailable
+        },
         [RoleNames.AccountLinkAdministrator] = new[] { DomainPermissions.AccountEmployeeLink.View, DomainPermissions.AccountEmployeeLink.Manage },
         [RoleNames.AccountLinkAuditor] = new[] { DomainPermissions.AccountEmployeeLink.View, DomainPermissions.AccountEmployeeLink.ViewHistory }
+        ,[RoleNames.EmployeeRelationshipOfficer] = new[] { DomainPermissions.Employee.View, DomainPermissions.EmploymentHistory.View }
+        ,[RoleNames.HRBP] = new[] { DomainPermissions.Employee.View, DomainPermissions.EmploymentHistory.View, DomainPermissions.Leave.Approve }
+        ,[RoleNames.TimeManager] = new[] { DomainPermissions.Employee.View, DomainPermissions.Attendance.View }
+        ,[RoleNames.IT] = new[] { DomainPermissions.User.View, DomainPermissions.User.Edit, DomainPermissions.AccountEmployeeLink.View }
+        ,[RoleNames.Accounts] = new[] { DomainPermissions.Employee.View }
+        ,[RoleNames.SuperHR] = new[] { DomainPermissions.Employee.View, DomainPermissions.Employee.Edit, DomainPermissions.EmploymentHistory.View, DomainPermissions.EmploymentHistory.Change, DomainPermissions.Leave.Approve, DomainPermissions.RoleManagement.View, DomainPermissions.RoleManagement.AssignmentView }
     };
 
     /// <summary>

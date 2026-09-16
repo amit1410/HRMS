@@ -96,6 +96,7 @@ export interface LeavePolicy {
   createdDate: string
   modifiedDate?: string | null
   concurrencyToken: string
+  overlapCount: number
 }
 
 export type LeavePolicyListItem = LeavePolicy
@@ -148,6 +149,9 @@ export interface LeaveApplicabilityRequest { groups: LeaveApplicabilityGroupRequ
 export interface LeavePolicyValidation { isValid: boolean; errors: ValidationError[]; warnings: string[] }
 
 export interface LeavePolicyEditor { policy: LeavePolicy; currentVersion?: LeavePolicyVersion | null; leaveTypes: LeaveTypeSelection[]; applicabilityGroups: LeaveApplicabilityGroup[] }
+export interface LeavePolicyTestRequest { employeeId: string; leaveTypeId: string; date: string }
+export interface LeavePolicyTestCandidate { policyId: string; policyCode: string; policyName: string; policyVersionId: string; versionNumber: number; status: LeavePolicyVersionStatus; effectiveFrom: string; effectiveTo?: string | null; priority: number; specificity: number; isWinner: boolean }
+export interface LeavePolicyTest { employeeId: string; leaveTypeId: string; leaveTypeCode: string; leaveTypeName: string; policyId: string; policyCode: string; policyName: string; policyVersionId: string; versionNumber: number; status: LeavePolicyVersionStatus; effectiveFrom: string; effectiveTo?: string | null; priority: number; specificity: number; reason: string; partialDayMode: PartialDayMode; eligibilityMode: EligibilityMode; probationMode: ProbationMode; noticePeriodMode: NoticePeriodMode; sandwichMode?: SandwichMode; holidayTreatment?: HolidayTreatment; weekOffTreatment?: WeekOffTreatment; competingPolicies: LeavePolicyTestCandidate[] }
 export type EligibilityMode = 'Immediate' | 'MinimumService'
 export type EligibilityServiceUnit = 'Days' | 'Months'
 export type ProbationMode = 'Allowed' | 'NotAllowed' | 'AfterConfirmation'
@@ -246,6 +250,14 @@ export function getLeavePolicyEditor(policyId: string, versionId?: string, signa
   return request(() => api.get<ApiResponse<LeavePolicyEditor>>(`/api/leave-policies/${policyId}/editor`, { params: cleanParams({ versionId }), signal }))
 }
 
+export function beginEditLeavePolicy(policyId: string): Promise<LeavePolicyEditor> {
+  return request(() => api.post<ApiResponse<LeavePolicyEditor>>(`/api/leave-policies/${policyId}/edit`))
+}
+
+export function testLeavePolicy(body: LeavePolicyTestRequest): Promise<LeavePolicyTest> {
+  return request(() => api.post<ApiResponse<LeavePolicyTest>>('/api/leave-policies/test', body))
+}
+
 export function createLeavePolicyVersion(policyId: string, body: LeavePolicyVersionRequest): Promise<LeavePolicyVersion> {
   return request(() => api.post<ApiResponse<LeavePolicyVersion>>(`/api/leave-policies/${policyId}/versions`, body))
 }
@@ -317,8 +329,8 @@ export function validateLeavePolicyVersion(policyId: string, versionId: string):
   return request(() => api.post<ApiResponse<LeavePolicyValidation>>(`/api/leave-policies/${policyId}/versions/${versionId}/validate`))
 }
 
-export function publishLeavePolicyVersion(policyId: string, versionId: string): Promise<LeavePolicyVersion> {
-  return request(() => api.post<ApiResponse<LeavePolicyVersion>>(`/api/leave-policies/${policyId}/versions/${versionId}/publish`))
+export function publishLeavePolicyVersion(policyId: string, versionId: string, acknowledgeOverlap = false): Promise<LeavePolicyVersion> {
+  return request(() => api.post<ApiResponse<LeavePolicyVersion>>(`/api/leave-policies/${policyId}/versions/${versionId}/publish`, { acknowledgeOverlap }))
 }
 
 export function retireLeavePolicyVersion(policyId: string, versionId: string): Promise<LeavePolicyVersion> {

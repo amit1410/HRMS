@@ -12,6 +12,21 @@ export function LeaveBalanceImportPage() {
   useEffect(() => { void listLeaveBalanceImportHistory().then(setHistory).catch(() => undefined) }, [])
   async function validate() { if (!file || busy) return; setBusy(true); setError(null); setNotice(null); try { const value = await validateLeaveBalanceImport(file); setBatch(value); setErrors(value.invalidRows ? await getLeaveBalanceImportErrors(value.id) : []); setNotice(value.invalidRows ? 'Review the validation errors before importing.' : 'Validation passed. The batch is ready to import.') } catch (caught) { setError(caught instanceof ApiError ? caught : new ApiError('Unable to validate the balance import.')) } finally { setBusy(false) } }
   async function commit() { if (!batch || batch.status !== 'Validated' || busy) return; setBusy(true); setError(null); try { const value = await commitLeaveBalanceImport(batch.id); setBatch(value); setHistory(previous => [value, ...previous.filter(item => item.id !== value.id)]); setNotice('Opening balances imported successfully.') } catch (caught) { setError(caught instanceof ApiError ? caught : new ApiError('Unable to commit the balance import.')) } finally { setBusy(false) } }
-  async function template() { const blob = await downloadLeaveBalanceTemplate(); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'leave-balance-import-template.csv'; link.click(); URL.revokeObjectURL(url) }
+  async function template() {
+    setError(null)
+    try {
+      const blob = await downloadLeaveBalanceTemplate()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'leave-balance-import-template.csv'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught : new ApiError('Unable to download leave balance import template.'))
+    }
+  }
   return <div className="leave-admin-page"><PageHeader title="Leave Balance Import" subtitle="Upload opening balances as append-only Leave ledger transactions." actions={<button className="button button-secondary" type="button" onClick={() => { void template() }}>Download Template</button>} />{notice ? <Notice tone="success">{notice}</Notice> : null}{error ? <Notice tone="error">{error.message}</Notice> : null}<Card title="Validate CSV"><label className="field"><span>Balance file <em>(CSV required)</em></span><input className="input" type="file" accept=".csv,text/csv" onChange={event => { setFile(event.target.files?.[0] ?? null); setBatch(null); setErrors([]) }} /></label><div className="form-actions"><button className="button button-primary" type="button" disabled={!file || busy} onClick={() => { void validate() }}>{busy ? <Spinner size={14} label="Processing…" /> : 'Validate File'}</button>{batch?.status === 'Validated' ? <button className="button button-primary" type="button" disabled={busy} onClick={() => { void commit() }}>Import Opening Balances</button> : null}</div></Card>{batch ? <Card title="Preview"><p>{batch.totalRows} total · {batch.validRows} valid · {batch.invalidRows} invalid · {batch.importedRows} imported</p>{errors.length ? <div className="table-wrap"><table className="data-table"><caption className="sr-only">Import validation errors</caption><thead><tr><th>Row</th><th>Employee</th><th>Leave Type</th><th>Error</th></tr></thead><tbody>{errors.map(row => <tr key={row.rowNumber}><td>{row.rowNumber}</td><td>{row.employeeCode}</td><td>{row.leaveTypeCode}</td><td>{row.errorMessage}</td></tr>)}</tbody></table></div> : <p className="state-message">All rows are valid. Import is enabled.</p>}</Card> : null}<Card title="Import History">{history.length ? <div className="table-wrap"><table className="data-table"><caption className="sr-only">Leave balance import history</caption><thead><tr><th>File</th><th>Status</th><th>Rows</th><th>Uploaded</th></tr></thead><tbody>{history.map(item => <tr key={item.id}><td>{item.fileName}</td><td>{item.status}</td><td>{item.totalRows}</td><td>{new Date(item.uploadedAtUtc).toLocaleString()}</td></tr>)}</tbody></table></div> : <EmptyState title="No balance imports yet." />}</Card></div>
 }

@@ -88,6 +88,21 @@ public static class Permissions
         public const string BalanceAdjust = "LeaveBalance.Adjust";
         public const string BalanceImport = "LeaveBalance.Import";
         public const string BalanceViewImportHistory = "LeaveBalance.ViewImportHistory";
+        public const string RequestCreate = "Leave.RequestCreate";
+        public const string RequestViewOwn = "Leave.RequestViewOwn";
+        public const string RequestWithdrawOwn = "Leave.RequestWithdrawOwn";
+        public const string RequestCancelOwn = "Leave.RequestCancelOwn";
+        public const string BalanceViewOwn = "Leave.BalanceViewOwn";
+        public const string TypeViewAvailable = "Leave.TypeViewAvailable";
+    }
+
+    public static class RoleManagement
+    {
+        public const string View = "Role.View";
+        public const string Manage = "Role.Manage";
+        public const string AssignmentView = "RoleAssignment.View";
+        public const string AssignmentManage = "RoleAssignment.Manage";
+        public const string AssignmentViewHistory = "RoleAssignment.ViewHistory";
     }
     public static class Attendance
     {
@@ -124,8 +139,12 @@ public static class Permissions
         Designation.View, Designation.Create, Designation.Edit, Designation.Delete,
         User.View, User.Create, User.Edit, User.Delete,
         AccountEmployeeLink.View, AccountEmployeeLink.ViewHistory, AccountEmployeeLink.Manage,
+        RoleManagement.View, RoleManagement.Manage, RoleManagement.AssignmentView,
+        RoleManagement.AssignmentManage, RoleManagement.AssignmentViewHistory,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
-        Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory
+        Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
+        Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,
+        Leave.BalanceViewOwn, Leave.TypeViewAvailable
         , Attendance.View, Attendance.ShiftManage, Attendance.PatternManage, Attendance.RosterManage, Attendance.RosterUpload,
         Attendance.RegularizationRequest, Attendance.RegularizationApprove, Attendance.OnDutyRequest, Attendance.OnDutyApprove,
         Attendance.MonthlyViewSelf, Attendance.MonthlyViewTeam, Attendance.MonthlyViewAll, Attendance.MonthlyProcess, Attendance.MonthlyClose, Attendance.MonthlyReopen, Attendance.ExceptionView, Attendance.AdminCorrectionManage, Attendance.ReportView, Attendance.ReportExport

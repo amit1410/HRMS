@@ -25,6 +25,7 @@ import { isApexHost } from './lib/isApexHost.ts'
 import { isPlatformHost } from './lib/isPlatformHost.ts'
 import { MasterManagementPage } from './pages/masters/MasterManagementPage.tsx'
 import { AccountEmployeeLinksPage } from './pages/administration/AccountEmployeeLinksPage.tsx'
+import { RoleManagementPage } from './pages/administration/RoleManagementPage.tsx'
 import { LeaveTypesPage } from './pages/leave/LeaveTypesPage.tsx'
 import { LeavePeriodsPage } from './pages/leave/LeavePeriodsPage.tsx'
 import { LeavePoliciesPage } from './pages/leave/LeavePoliciesPage.tsx'
@@ -119,6 +120,7 @@ function TenantApplication() {
                   <Route path="configuration/login-settings" element={<RequirePermission permission={Permissions.user.edit}><TenantLoginSettingsPage /></RequirePermission>} />
                   <Route path="configuration/password-recovery" element={<RequirePermission permission={Permissions.user.edit}><TenantPasswordRecoverySettingsPage /></RequirePermission>} />
                   <Route path="administration/account-employee-links" element={<RequirePermission permission={Permissions.accountEmployeeLink.view}><AccountEmployeeLinksPage /></RequirePermission>} />
+                  <Route path="role-management" element={<RequirePermission permission={Permissions.roleManagement.assignmentView}><RoleManagementPage /></RequirePermission>} />
                   <Route path="masters/:kind" element={<MasterManagementPage />} />
                   <Route
                     path="configuration/employee-code"
@@ -135,9 +137,9 @@ function TenantApplication() {
                   <Route path="leave-management/periods" element={<RequirePermission permission={Permissions.leave.periodManage}><LeavePeriodsPage /></RequirePermission>} />
                   <Route path="leave-management/policies" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePoliciesPage /></RequirePermission>} />
                   <Route path="leave-management/policies/:policyId" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePolicyEditorPage /></RequirePermission>} />
-                  <Route path="leave-management/apply" element={<LeaveRequestPreviewPage />} />
-                  <Route path="leave-management/my-requests" element={<MyLeaveRequestsPage />} />
-                  <Route path="leave-management/my-requests/:requestId" element={<MyLeaveRequestDetailPage />} />
+                  <Route path="leave-management/apply" element={<RequirePermission permission={Permissions.leave.requestCreate}><LeaveRequestPreviewPage /></RequirePermission>} />
+                  <Route path="leave-management/my-requests" element={<RequirePermission permission={Permissions.leave.requestViewOwn}><MyLeaveRequestsPage /></RequirePermission>} />
+                  <Route path="leave-management/my-requests/:requestId" element={<RequirePermission permission={Permissions.leave.requestViewOwn}><MyLeaveRequestDetailPage /></RequirePermission>} />
                   <Route path="leave-management/team-calendar" element={<TeamLeaveCalendarPage />} />
                   <Route path="leave-management/balances/import" element={<RequirePermission permission={Permissions.leave.balanceImport}><LeaveBalanceImportPage /></RequirePermission>} />
                   <Route path="leave-management/approvals" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalsPage /></RequirePermission>} />

@@ -6,8 +6,8 @@ using HRMS.Domain.Enums;
 namespace HRMS.Application.Validators.Employees;
 
 /// <summary>
-/// Shape and cross-field validation for employment change requests. Effective date must be today or
-/// in the future; department and designation must be supplied. Any referential-integrity checks (that
+/// Shape and cross-field validation for employment change requests. Department and designation must be
+/// supplied. Any referential-integrity checks (that
 /// the department or designation actually exists in this tenant) are handled by the service layer.
 /// </summary>
 public class EmploymentChangeRequestValidator : AbstractValidator<EmploymentChangeRequest>
@@ -15,9 +15,7 @@ public class EmploymentChangeRequestValidator : AbstractValidator<EmploymentChan
     public EmploymentChangeRequestValidator()
     {
         RuleFor(x => x.EffectiveFrom)
-            .NotEmpty().WithMessage("Effective date is required.")
-            .GreaterThanOrEqualTo(Today)
-                .WithMessage("Effective date must be today or in the future.");
+            .NotEmpty().WithMessage("Effective date is required.");
 
         RuleFor(x => x.EmployeeCode)
             .MaximumLength(100)
@@ -57,10 +55,4 @@ public class EmploymentChangeRequestValidator : AbstractValidator<EmploymentChan
         RuleFor(x => x.ChangeReasonDescription)
             .MaximumLength(500).WithMessage("Change reason description must not exceed 500 characters.");
     }
-
-    /// <summary>
-    /// Today in UTC, read per validation rather than captured once, so a long-lived validator instance
-    /// cannot go stale across a date boundary.
-    /// </summary>
-    private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
 }

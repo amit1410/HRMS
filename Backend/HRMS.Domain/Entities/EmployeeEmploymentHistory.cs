@@ -29,6 +29,14 @@ public class EmployeeEmploymentHistory : BaseEntity, ITenantEntity
     /// </summary>
     public DateOnly? EffectiveTo { get; set; }
 
+    /// <summary>Stable revision order for records with the same business effective date.</summary>
+    public int RevisionNumber { get; set; } = 1;
+
+    /// <summary>Superseded revisions remain available for audit but never resolve as effective.</summary>
+    public bool IsSuperseded { get; set; }
+
+    public DateTime? SupersededAtUtc { get; set; }
+
     // --- Organizational FK references ---
 
     public Guid? HoldingCompanyId { get; set; }

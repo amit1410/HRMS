@@ -44,4 +44,17 @@ describe('MasterDropdown', () => {
     await userEvent.click(screen.getByRole('option', { name: /IN2.*Other Inactive Master/ }))
     expect(onChange).not.toHaveBeenCalled()
   })
+
+  it('shows lookup errors and retries instead of retaining a failed request', async () => {
+    const fetcher = vi.fn()
+      .mockRejectedValueOnce(new Error('Lookup unavailable'))
+      .mockResolvedValueOnce([active])
+    renderAsUser(<MasterDropdown id="master" label="Master" value="" onChange={() => undefined} fetcher={fetcher} />)
+
+    expect(await screen.findByText('Lookup unavailable')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await userEvent.click(screen.getByLabelText('Master'))
+    expect(await screen.findByRole('option', { name: 'AC - Active Master' })).toBeInTheDocument()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
 })

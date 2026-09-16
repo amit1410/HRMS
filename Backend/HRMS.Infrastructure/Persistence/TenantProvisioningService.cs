@@ -72,7 +72,8 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
             db,
             provider.GetRequiredService<IPasswordHasher>(),
             tenant,
-            cancellationToken);
+            cancellationToken,
+            _logger);
     }
 
     public async Task SynchronizeTenantIdentityAsync(

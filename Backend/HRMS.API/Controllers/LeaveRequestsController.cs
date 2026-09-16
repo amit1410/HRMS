@@ -67,7 +67,7 @@ public sealed class LeaveRequestsController : ControllerBase
         _cancellationService = cancellationService;
     }
 
-    [HttpGet]
+    [HttpGet, HasPermission(Permissions.Leave.RequestViewOwn)]
     public async Task<ActionResult<ApiResponse<PagedResult<LeaveRequestListItemDto>>>> GetMine(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 25,
@@ -77,14 +77,14 @@ public sealed class LeaveRequestsController : ControllerBase
         return (await _readService.GetMineAsync(page, pageSize, cancellationToken)).ToActionResult();
     }
 
-    [HttpGet("{requestId:guid}")]
+    [HttpGet("{requestId:guid}"), HasPermission(Permissions.Leave.RequestViewOwn)]
     public async Task<ActionResult<ApiResponse<LeaveRequestDetailDto>>> GetMineById(Guid requestId, CancellationToken cancellationToken)
     {
         if (_readService is null) throw new InvalidOperationException("Leave request read service is not configured.");
         return (await _readService.GetMineByIdAsync(requestId, cancellationToken)).ToActionResult();
     }
 
-    [HttpPost("preview")]
+    [HttpPost("preview"), HasPermission(Permissions.Leave.RequestCreate)]
     public async Task<ActionResult<ApiResponse<LeaveRequestPreviewResponse>>> Preview(
         [FromBody] LeaveRequestPreviewRequest request,
         CancellationToken cancellationToken)
@@ -125,7 +125,7 @@ public sealed class LeaveRequestsController : ControllerBase
         return Result<LeaveRequestPreviewResponse>.Success(response).ToActionResult();
     }
 
-    [HttpPost]
+    [HttpPost, HasPermission(Permissions.Leave.RequestCreate)]
     public async Task<ActionResult<ApiResponse<LeaveRequestSubmissionResponse>>> Submit(
         [FromBody] LeaveRequestSubmissionRequest request,
         CancellationToken cancellationToken)
@@ -196,7 +196,7 @@ public sealed class LeaveRequestsController : ControllerBase
         return (await _approvalService.RejectAsync(requestId, cancellationToken)).ToActionResult();
     }
 
-    [HttpPost("{requestId:guid}/withdraw")]
+    [HttpPost("{requestId:guid}/withdraw"), HasPermission(Permissions.Leave.RequestWithdrawOwn)]
     public async Task<ActionResult<ApiResponse<LeaveRequestWithdrawalResult>>> Withdraw(
         Guid requestId,
         CancellationToken cancellationToken)
@@ -206,7 +206,7 @@ public sealed class LeaveRequestsController : ControllerBase
         return (await _withdrawalService.WithdrawAsync(requestId, cancellationToken)).ToActionResult();
     }
 
-    [HttpPost("{requestId:guid}/cancel")]
+    [HttpPost("{requestId:guid}/cancel"), HasPermission(Permissions.Leave.RequestCancelOwn)]
     public async Task<ActionResult<ApiResponse<LeaveRequestCancellationResult>>> Cancel(
         Guid requestId,
         CancellationToken cancellationToken)
