@@ -14,7 +14,7 @@ public sealed class RoleAssignmentsController(IRoleAssignmentService service) : 
     [HttpGet][HasPermission(Permissions.RoleManagement.AssignmentView)]
     public async Task<ActionResult<ApiResponse<PagedResult<RoleAssignmentDto>>>> Assignments([FromQuery] RoleAssignmentQuery query, CancellationToken ct) => (await service.GetAssignmentsAsync(query, ct)).ToActionResult();
     [HttpGet("candidates")][HasPermission(Permissions.RoleManagement.AssignmentManage)]
-    public async Task<ActionResult<ApiResponse<PagedResult<RoleManagementCandidateDto>>>> Candidates([FromQuery] PagedQuery query, CancellationToken ct) => (await service.GetCandidatesAsync(query, ct)).ToActionResult();
+    public async Task<ActionResult<ApiResponse<PagedResult<RoleManagementCandidateDto>>>> Candidates([FromQuery] PagedQueryModel query, CancellationToken ct) => (await service.GetCandidatesAsync(query, ct)).ToActionResult();
     [HttpGet("roles")][HasPermission(Permissions.RoleManagement.AssignmentView)]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<RoleSummary>>>> Roles([FromQuery] bool assignableOnly, CancellationToken ct) => (await service.GetRolesAsync(assignableOnly, ct)).ToActionResult();
     [HttpGet("users/{userId:guid}")][HasPermission(Permissions.RoleManagement.AssignmentView)]

@@ -2,8 +2,10 @@ using HRMS.Application.Abstractions;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Authorization;
 using HRMS.Domain.Enums;
+using DomainPermissions = HRMS.Domain.Authorization.Permissions;
 using HRMS.Infrastructure.Persistence.Catalog;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -61,7 +63,9 @@ public static class DatabaseSeeder
         IPasswordHasher passwordHasher,
         Tenant tenant,
         CancellationToken ct = default,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IConfiguration? configuration = null,
+        bool isDevelopment = false)
     {
         ArgumentNullException.ThrowIfNull(tenant);
 
@@ -80,6 +84,7 @@ public static class DatabaseSeeder
         await SeedEmployeesAsync(db, tenant.Id, ct);
         await SeedPositionChangeReasonsAsync(db, tenant.Id, ct);
         await SeedOrganisationHierarchyAsync(db, tenant.Id, ct);
+        await SeedDevelopmentRoleManagementVerificationAsync(db, passwordHasher, tenant, configuration, isDevelopment, ct, logger ?? NullLogger.Instance);
 
         // Global reference data — not tenant-scoped, seeded once per database.
         await SeedCountriesAsync(db, ct);
@@ -87,6 +92,186 @@ public static class DatabaseSeeder
         await SeedCitiesAsync(db, ct);
         await ReconcileManagerRolesAsync(db, tenant.Id, logger ?? NullLogger.Instance, ct);
         await BackfillRoleAssignmentEventsAsync(db, tenant.Id, ct);
+    }
+
+    private static async Task SeedDevelopmentRoleManagementVerificationAsync(
+        HrmsDbContext db,
+        IPasswordHasher passwordHasher,
+        Tenant tenant,
+        IConfiguration? configuration,
+        bool isDevelopment,
+        CancellationToken ct,
+        ILogger logger)
+    {
+        const string tenantCode = "ANEVRA01";
+        const string roleName = "RoleManagementVerification";
+        const string email = "anevra01-role-verification@local.invalid";
+        const string employeeCode = "DEV-ROLE-VERIFY";
+        var password = configuration?["DevelopmentSeed:AnevraAdminPassword"];
+        var resetPassword = configuration?.GetValue<bool>("DevelopmentSeed:ResetAnevraVerificationPassword") == true;
+
+        if (!isDevelopment || !tenant.TenantCode.Equals(tenantCode, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (resetPassword && string.IsNullOrWhiteSpace(password))
+        {
+            logger.LogWarning("Development verification password reset was requested, but no password was provided.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(password))
+            return;
+
+        var role = await db.Roles.SingleOrDefaultAsync(x => x.Name == roleName, ct);
+        if (role is null)
+        {
+            if (await db.Roles.AnyAsync(x => x.Id == 15, ct))
+                throw new InvalidOperationException("Role id 15 is already occupied; the development verification role cannot be seeded safely.");
+
+            role = new Role { Id = 15, Name = roleName, Description = "Development-only Role Management verification role." };
+            db.Roles.Add(role);
+            await db.SaveChangesAsync(ct);
+        }
+
+        var verificationPermissions = new[]
+        {
+            DomainPermissions.RoleManagement.View,
+            DomainPermissions.RoleManagement.Manage,
+            DomainPermissions.RoleManagement.AssignmentView,
+            DomainPermissions.RoleManagement.AssignmentManage,
+            DomainPermissions.RoleManagement.AssignmentViewHistory
+        };
+        var permissionIds = await db.Permissions
+            .Where(x => verificationPermissions.Contains(x.Name))
+            .ToDictionaryAsync(x => x.Name, x => x.Id, ct);
+        var existingPermissionIds = await db.RolePermissions
+            .Where(x => x.RoleId == role.Id)
+            .Select(x => x.PermissionId)
+            .ToListAsync(ct);
+        var missingPermissions = verificationPermissions
+            .Where(permissionIds.ContainsKey)
+            .Select(permission => permissionIds[permission])
+            .Except(existingPermissionIds)
+            .Select(permissionId => new RolePermission { RoleId = role.Id, PermissionId = permissionId })
+            .ToList();
+        if (missingPermissions.Count > 0)
+        {
+            db.RolePermissions.AddRange(missingPermissions);
+            await db.SaveChangesAsync(ct);
+        }
+
+        var user = await db.Users.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.TenantId == tenant.Id && x.Email == email, ct);
+        if (user is null)
+        {
+            user = new User
+            {
+                Id = new Guid("a1e7f0e1-6b6c-4b40-9f75-5e4f70a0d001"),
+                TenantId = tenant.Id,
+                Email = email,
+                FirstName = "ANEVRA01",
+                LastName = "Role Verification",
+                IsActive = true,
+                PasswordHash = passwordHasher.Hash(password)
+            };
+            db.Users.Add(user);
+            await db.SaveChangesAsync(ct);
+        }
+        else if (resetPassword)
+        {
+            user.PasswordHash = passwordHasher.Hash(password);
+            await db.SaveChangesAsync(ct);
+            logger.LogInformation("Development verification password was refreshed for account {EmployeeCode}.", employeeCode);
+        }
+
+        if (!await db.UserRoles.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenant.Id && x.UserId == user.Id && x.RoleId == role.Id, ct))
+        {
+            var assignment = new UserRole
+            {
+                Id = new Guid("b1e7f0e1-6b6c-4b40-9f75-5e4f70a0d001"),
+                TenantId = tenant.Id,
+                UserId = user.Id,
+                RoleId = role.Id,
+                EffectiveFrom = new DateOnly(2026, 9, 15),
+                AssignmentSource = RoleAssignmentSource.System,
+                AssignmentReason = "Development-only Role Management verification account",
+                CreatedAtUtc = DateTime.UtcNow,
+                AssignedByUserId = user.Id
+            };
+            db.UserRoles.Add(assignment);
+            db.UserRoleAssignmentEvents.Add(new UserRoleAssignmentEvent
+            {
+                Id = new Guid("c1e7f0e1-6b6c-4b40-9f75-5e4f70a0d001"),
+                TenantId = tenant.Id,
+                AssignmentId = assignment.Id,
+                UserId = user.Id,
+                RoleId = role.Id,
+                EventType = UserRoleAssignmentEventType.Assigned,
+                EffectiveFrom = assignment.EffectiveFrom,
+                AssignmentSource = assignment.AssignmentSource,
+                Reason = assignment.AssignmentReason,
+                PerformedByUserId = user.Id,
+                OccurredAtUtc = assignment.CreatedAtUtc
+            });
+            await db.SaveChangesAsync(ct);
+        }
+
+        var employee = await db.Employees.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.TenantId == tenant.Id && x.EmployeeCode == employeeCode, ct);
+        if (employee is null)
+        {
+            employee = new Employee
+            {
+                Id = new Guid("d1e7f0e1-6b6c-4b40-9f75-5e4f70a0d001"),
+                TenantId = tenant.Id,
+                EmployeeCode = employeeCode,
+                FirstName = "ANEVRA01",
+                LastName = "Role Verification",
+                Email = "anevra01-role-verification-employee@local.invalid",
+                DateOfJoining = new DateOnly(2026, 9, 15),
+                Status = EmployeeStatus.Active,
+                Gender = Gender.Unspecified,
+                Address = "Development-only verification employee"
+            };
+            db.Employees.Add(employee);
+            await db.SaveChangesAsync(ct);
+        }
+
+        var userLink = await db.AccountEmployeeCurrentLinks.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.TenantId == tenant.Id && x.UserId == user.Id, ct);
+        if (userLink is null)
+        {
+            var employeeLink = await db.AccountEmployeeCurrentLinks.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.TenantId == tenant.Id && x.EmployeeId == employee.Id, ct);
+            if (employeeLink is not null && employeeLink.UserId != user.Id)
+            {
+                logger.LogWarning("Development verification employee {EmployeeCode} is already linked to another account; no link was changed.", employeeCode);
+                return;
+            }
+
+            var linkId = new Guid("e1e7f0e1-6b6c-4b40-9f75-5e4f70a0d001");
+            var occurredAt = DateTime.UtcNow;
+            db.AccountEmployeeLinkEvents.Add(new AccountEmployeeLinkEvent
+            {
+                Id = linkId,
+                TenantId = tenant.Id,
+                SubjectUserId = user.Id,
+                ActorUserId = user.Id,
+                Sequence = 1,
+                Operation = "Link",
+                NewLinkId = linkId,
+                AfterEmployeeId = employee.Id,
+                OccurredAtUtc = occurredAt,
+                Reason = "Development-only Role Management verification link",
+                CorrelationId = "dev-role-management-verification"
+            });
+            db.AccountEmployeeCurrentLinks.Add(new AccountEmployeeCurrentLink
+            {
+                LinkId = linkId,
+                TenantId = tenant.Id,
+                UserId = user.Id,
+                EmployeeId = employee.Id
+            });
+            await db.SaveChangesAsync(ct);
+        }
+
+        logger.LogInformation("Development Role Management verification seed is present for tenant {TenantCode}; existing account data was not overwritten.", tenant.TenantCode);
     }
 
     /// <summary>

@@ -18,6 +18,7 @@ namespace HRMS.Infrastructure.Persistence;
 /// </summary>
 public class HrmsDbContext : DbContext, IHrmsDbContext
 {
+    public bool IsMySql => Database.IsMySql();
     /// <summary>
     /// Configurations under this namespace belong to the catalog database and are excluded from this
     /// model. Both contexts live in one assembly, so the split has to be stated somewhere; stating it

@@ -19,6 +19,7 @@ namespace HRMS.Application.Abstractions;
 /// </summary>
 public interface IHrmsDbContext
 {
+    bool IsMySql { get; }
     DbSet<Tenant> Tenants { get; }
     DbSet<User> Users { get; }
     DbSet<AccountEmployeeCurrentLink> AccountEmployeeCurrentLinks { get; }

@@ -1,14 +1,23 @@
 using HRMS.Domain.Authorization;
+using HRMS.Domain.Entities;
+using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence.Seed;
 using HRMS.Infrastructure.Security;
 using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using System.Collections.Concurrent;
 using DomainPermissions = HRMS.Domain.Authorization.Permissions;
 
 namespace HRMS.Tests;
 
 public class SeedDataTests
 {
+    private const string VerificationPassword = "Original-password-123!";
+    private const string ResetPassword = "Reset-password-456!";
+
     [Fact]
     public async Task Seed_populates_expected_reference_data_and_demo_tenants()
     {
@@ -291,5 +300,149 @@ public class SeedDataTests
     {
         Assert.All(SeedData.Roles, role => Assert.Equal(SeedData.RoleId(role.Name), role.Id));
         Assert.All(SeedData.Permissions, p => Assert.Equal(SeedData.PermissionId(p.Name), p.Id));
+    }
+
+    [Fact]
+    public async Task Development_verification_password_reset_is_never_applied_outside_development()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = await EnsureVerificationTenantAsync(db);
+        await SeedVerificationAsync(db, tenant, VerificationPassword, reset: false, isDevelopment: true);
+
+        await SeedVerificationAsync(db, tenant, ResetPassword, reset: true, isDevelopment: false);
+
+        using var context = db.CreateContext(new TestTenantContext());
+        var user = await context.Users.IgnoreQueryFilters().SingleAsync(x => x.Email == VerificationEmail);
+        var hasher = new IdentityPasswordHasher();
+        Assert.True(hasher.Verify(user.PasswordHash, VerificationPassword));
+        Assert.False(hasher.Verify(user.PasswordHash, ResetPassword));
+    }
+
+    [Fact]
+    public async Task Development_verification_password_is_unchanged_without_reset_flag()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = await EnsureVerificationTenantAsync(db);
+        await SeedVerificationAsync(db, tenant, VerificationPassword, reset: false, isDevelopment: true);
+
+        await SeedVerificationAsync(db, tenant, ResetPassword, reset: false, isDevelopment: true);
+
+        using var context = db.CreateContext(new TestTenantContext());
+        var user = await context.Users.IgnoreQueryFilters().SingleAsync(x => x.Email == VerificationEmail);
+        var hasher = new IdentityPasswordHasher();
+        Assert.True(hasher.Verify(user.PasswordHash, VerificationPassword));
+        Assert.False(hasher.Verify(user.PasswordHash, ResetPassword));
+    }
+
+    [Fact]
+    public async Task Development_reset_updates_only_the_fixed_verification_account()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = await EnsureVerificationTenantAsync(db);
+        await SeedVerificationAsync(db, tenant, VerificationPassword, reset: false, isDevelopment: true);
+
+        using (var context = db.CreateContext(new TestTenantContext()))
+        {
+            context.Users.Add(new User
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenant.Id,
+                Email = "unrelated-development-user@local.invalid",
+                FirstName = "Unrelated",
+                LastName = "User",
+                PasswordHash = new IdentityPasswordHasher().Hash(VerificationPassword)
+            });
+            await context.SaveChangesAsync();
+        }
+
+        await SeedVerificationAsync(db, tenant, ResetPassword, reset: true, isDevelopment: true);
+
+        using var verification = db.CreateContext(new TestTenantContext());
+        var users = await verification.Users.IgnoreQueryFilters()
+            .Where(x => x.Email == VerificationEmail || x.Email == "unrelated-development-user@local.invalid")
+            .ToDictionaryAsync(x => x.Email);
+        var hasher = new IdentityPasswordHasher();
+        Assert.True(hasher.Verify(users[VerificationEmail].PasswordHash, ResetPassword));
+        Assert.True(hasher.Verify(users["unrelated-development-user@local.invalid"].PasswordHash, VerificationPassword));
+    }
+
+    [Fact]
+    public async Task Development_reset_without_password_does_not_change_password_and_logs_safe_warning()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = await EnsureVerificationTenantAsync(db);
+        await SeedVerificationAsync(db, tenant, VerificationPassword, reset: false, isDevelopment: true);
+        var loggerProvider = new RecordingLoggerProvider();
+
+        await SeedVerificationAsync(db, tenant, password: null, reset: true, isDevelopment: true, loggerProvider);
+
+        using var context = db.CreateContext(new TestTenantContext());
+        var user = await context.Users.IgnoreQueryFilters().SingleAsync(x => x.Email == VerificationEmail);
+        Assert.True(new IdentityPasswordHasher().Verify(user.PasswordHash, VerificationPassword));
+        var warning = Assert.Single(loggerProvider.Messages, message => message.Contains("no password", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(VerificationPassword, warning, StringComparison.Ordinal);
+        Assert.DoesNotContain(ResetPassword, warning, StringComparison.Ordinal);
+    }
+
+    private const string VerificationEmail = "anevra01-role-verification@local.invalid";
+
+    private static async Task<Tenant> EnsureVerificationTenantAsync(SqliteInMemoryDatabase db)
+    {
+        var tenant = new Tenant
+        {
+            Id = new Guid("f92b6b9a-512a-42b2-b653-907cc2c1f70e"),
+            TenantCode = "ANEVRA01",
+            Host = "anevra01.localhost",
+            ShardKey = "anevra01",
+            DatabaseProvider = DatabaseProviderType.MySql,
+            TenantName = "ANEVRA01",
+            Status = TenantStatus.Active
+        };
+        using var context = db.CreateContext(new TestTenantContext());
+        context.Tenants.Add(tenant);
+        await context.SaveChangesAsync();
+        return tenant;
+    }
+
+    private static async Task SeedVerificationAsync(
+        SqliteInMemoryDatabase db,
+        Tenant tenant,
+        string? password,
+        bool reset,
+        bool isDevelopment,
+        RecordingLoggerProvider? loggerProvider = null)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["DevelopmentSeed:AnevraAdminPassword"] = password,
+            ["DevelopmentSeed:ResetAnevraVerificationPassword"] = reset.ToString()
+        };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+        using var context = db.CreateContext(new TestTenantContext());
+        await DatabaseSeeder.SeedShardAsync(
+            context,
+            new IdentityPasswordHasher(),
+            tenant,
+            CancellationToken.None,
+            loggerProvider?.CreateLogger("seed") ?? NullLogger.Instance,
+            configuration,
+            isDevelopment);
+    }
+
+    private sealed class RecordingLoggerProvider : ILoggerProvider
+    {
+        public ConcurrentBag<string> Messages { get; } = new();
+
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(Messages);
+
+        public void Dispose() { }
+    }
+
+    private sealed class RecordingLogger(ConcurrentBag<string> messages) : ILogger
+    {
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullLogger.Instance.BeginScope(state);
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => messages.Add(formatter(state, exception));
     }
 }

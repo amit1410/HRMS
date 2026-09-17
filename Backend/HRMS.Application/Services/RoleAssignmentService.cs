@@ -6,6 +6,8 @@ using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using System.Data;
+using System.Linq.Expressions;
+using System.Text;
 using RoleDto = HRMS.Application.Abstractions.RoleSummary;
 
 namespace HRMS.Application.Services;
@@ -69,19 +71,34 @@ public sealed class RoleAssignmentService : IRoleAssignmentService
         }
 
         var total = await source.CountAsync(ct);
-        var assignments = await source.Include(x => x.Role).Include(x => x.Scopes)
-            .OrderByDescending(x => x.EffectiveFrom).ThenByDescending(x => x.Id)
-            .Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToListAsync(ct);
+        List<UserRole> assignments;
+        if (_db.IsMySql)
+        {
+            var pageIds = await GetMySqlAssignmentPageIdsAsync(query, tenantId, today, ct);
+            var pageRows = await HydrateMySqlAssignmentsAsync(pageIds, tenantId, ct);
+            var byId = pageRows.ToDictionary(x => x.Id);
+            assignments = pageIds.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
+        }
+        else
+        {
+            assignments = await source.Include(x => x.Role).Include(x => x.Scopes)
+                .OrderByDescending(x => x.EffectiveFrom).ThenByDescending(x => x.Id)
+                .Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToListAsync(ct);
+        }
         if (assignments.Count == 0) return Result<PagedResult<RoleAssignmentDto>>.Success(new([], query.Page, query.PageSize, total));
 
         var assignmentIds = assignments.Select(x => x.Id).ToArray();
         var userIds = assignments.Select(x => x.UserId).Distinct().ToArray();
-        var links = await _db.AccountEmployeeCurrentLinks.AsNoTracking().Include(x => x.Employee).ThenInclude(x => x!.Department)
-            .Include(x => x.Employee).ThenInclude(x => x!.Designation)
-            .Where(x => x.TenantId == tenantId && userIds.Contains(x.UserId)).ToListAsync(ct);
-        var latestRevocations = await _db.UserRoleAssignmentEvents.AsNoTracking()
-            .Where(x => x.TenantId == tenantId && assignmentIds.Contains(x.AssignmentId) && x.EventType == UserRoleAssignmentEventType.Revoked)
-            .GroupBy(x => x.AssignmentId).Select(x => x.OrderByDescending(e => e.OccurredAtUtc).ThenByDescending(e => e.Id).First()).ToListAsync(ct);
+        var links = _db.IsMySql
+            ? await HydrateMySqlLinksAsync(userIds, tenantId, ct)
+            : await _db.AccountEmployeeCurrentLinks.AsNoTracking().Include(x => x.Employee).ThenInclude(x => x!.Department)
+                .Include(x => x.Employee).ThenInclude(x => x!.Designation)
+                .Where(x => x.TenantId == tenantId && userIds.Contains(x.UserId)).ToListAsync(ct);
+        var latestRevocations = _db.IsMySql
+            ? await HydrateMySqlRevocationsAsync(assignmentIds, tenantId, ct)
+            : await _db.UserRoleAssignmentEvents.AsNoTracking()
+                .Where(x => x.TenantId == tenantId && assignmentIds.Contains(x.AssignmentId) && x.EventType == UserRoleAssignmentEventType.Revoked)
+                .GroupBy(x => x.AssignmentId).Select(x => x.OrderByDescending(e => e.OccurredAtUtc).ThenByDescending(e => e.Id).First()).ToListAsync(ct);
         var linkByUser = links.ToDictionary(x => x.UserId);
         var revokeByAssignment = latestRevocations.ToDictionary(x => x.AssignmentId);
         var items = assignments.Select(x => Map(x, linkByUser.GetValueOrDefault(x.UserId), revokeByAssignment.GetValueOrDefault(x.Id), today)).ToList();
@@ -103,12 +120,25 @@ public sealed class RoleAssignmentService : IRoleAssignmentService
                     _db.Employees.Any(employee => employee.Id == link.EmployeeId && ((employee.EmployeeCode ?? "").Contains(search) || employee.FirstName.Contains(search) || employee.LastName.Contains(search)))));
         }
         var total = await source.CountAsync(ct);
-        var users = await source.OrderBy(x => x.LastName).ThenBy(x => x.FirstName).ThenBy(x => x.Id)
-            .Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToListAsync(ct);
+        List<User> users;
+        if (_db.IsMySql)
+        {
+            var pageIds = await GetMySqlCandidatePageIdsAsync(query, tenantId, ct);
+            var pageRows = await HydrateMySqlCandidatesAsync(pageIds, tenantId, ct);
+            var byId = pageRows.ToDictionary(x => x.Id);
+            users = pageIds.Where(byId.ContainsKey).Select(id => byId[id]).ToList();
+        }
+        else
+        {
+            users = await source.OrderBy(x => x.LastName).ThenBy(x => x.FirstName).ThenBy(x => x.Id)
+                .Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToListAsync(ct);
+        }
         var userIds = users.Select(x => x.Id).ToArray();
-        var links = await _db.AccountEmployeeCurrentLinks.AsNoTracking().Include(x => x.Employee).ThenInclude(x => x!.Department)
-            .Include(x => x.Employee).ThenInclude(x => x!.Designation)
-            .Where(x => x.TenantId == tenantId && userIds.Contains(x.UserId)).ToListAsync(ct);
+        var links = _db.IsMySql
+            ? await HydrateMySqlLinksAsync(userIds, tenantId, ct)
+            : await _db.AccountEmployeeCurrentLinks.AsNoTracking().Include(x => x.Employee).ThenInclude(x => x!.Department)
+                .Include(x => x.Employee).ThenInclude(x => x!.Designation)
+                .Where(x => x.TenantId == tenantId && userIds.Contains(x.UserId)).ToListAsync(ct);
         var linkByUser = links.ToDictionary(x => x.UserId);
         var items = users.Select(user =>
         {
@@ -238,6 +268,141 @@ public sealed class RoleAssignmentService : IRoleAssignmentService
                 x.PerformedByUserId, x.OccurredAtUtc)).ToListAsync(ct);
 
     private bool CanManage() => _tenant.TenantId is Guid && _tenant.UserId is Guid;
+
+    // MySql.EntityFrameworkCore 10.0.9 fails while binding parameterized LIMIT/OFFSET values.
+    // Keep filtering and counting in EF, then use validated integer literals for only the bounded page-ID query.
+    private async Task<List<Guid>> GetMySqlAssignmentPageIdsAsync(RoleAssignmentQuery query, Guid tenantId, DateOnly today, CancellationToken ct)
+    {
+        var sql = new StringBuilder("SELECT u.* FROM `UserRoles` AS u WHERE u.`TenantId` = {0}");
+        var parameters = new List<object> { tenantId };
+        var nextParameter = 1;
+        void Add(string template, params object[] values)
+        {
+            var condition = template;
+            foreach (var value in values)
+            {
+                var marker = condition.IndexOf("{p}", StringComparison.Ordinal);
+                if (marker < 0) throw new InvalidOperationException("MySQL query parameter placeholder count did not match its values.");
+                condition = condition[..marker] + $"{{{nextParameter}}}" + condition[(marker + 3)..];
+                parameters.Add(value);
+                nextParameter++;
+            }
+            sql.Append(" AND ").Append(condition);
+        }
+
+        if (query.RoleId is int roleId) Add("u.`RoleId` = {p}", roleId);
+        if (query.Source is RoleAssignmentSource source)
+        {
+            // MySql.EntityFrameworkCore 10.0.9 can leave an enum supplied through
+            // FromSqlRaw without a relational type mapping. The column is persisted
+            // as int, so pass only the validated database representation.
+            var sourceValue = source switch
+            {
+                RoleAssignmentSource.System => 0,
+                RoleAssignmentSource.Manual => 1,
+                RoleAssignmentSource.Rule => 2,
+                _ => throw new ArgumentOutOfRangeException(nameof(query.Source), source, "Unsupported assignment source.")
+            };
+            Add("u.`AssignmentSource` = {p}", sourceValue);
+        }
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var search = query.Search.Trim();
+            Add("(EXISTS (SELECT 1 FROM `Users` AS su WHERE su.`TenantId` = {p} AND su.`Id` = u.`UserId` AND (su.`FirstName` LIKE CONCAT('%', {p}, '%') OR su.`LastName` LIKE CONCAT('%', {p}, '%') OR su.`Email` LIKE CONCAT('%', {p}, '%'))) OR EXISTS (SELECT 1 FROM `AccountEmployeeCurrentLinks` AS sl INNER JOIN `Employees` AS se ON se.`Id` = sl.`EmployeeId` AND se.`TenantId` = {p} WHERE sl.`TenantId` = {p} AND sl.`UserId` = u.`UserId` AND (se.`EmployeeCode` LIKE CONCAT('%', {p}, '%') OR se.`FirstName` LIKE CONCAT('%', {p}, '%') OR se.`LastName` LIKE CONCAT('%', {p}, '%'))))",
+                tenantId, search, search, search, tenantId, tenantId, search, search, search);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Status))
+        {
+            var status = query.Status.Trim();
+            var revoked = "EXISTS (SELECT 1 FROM `UserRoleAssignmentEvents` AS re WHERE re.`TenantId` = {p} AND re.`AssignmentId` = u.`Id` AND re.`EventType` = {p})";
+            if (status.Equals("Revoked", StringComparison.OrdinalIgnoreCase))
+                Add(revoked, tenantId, (int)UserRoleAssignmentEventType.Revoked);
+            else
+            {
+                Add("NOT " + revoked, tenantId, (int)UserRoleAssignmentEventType.Revoked);
+                if (status.Equals("Scheduled", StringComparison.OrdinalIgnoreCase)) Add("u.`EffectiveFrom` > {p}", today);
+                if (status.Equals("Expired", StringComparison.OrdinalIgnoreCase)) Add("u.`EffectiveTo` < {p}", today);
+                if (status.Equals("Active", StringComparison.OrdinalIgnoreCase)) Add("u.`EffectiveFrom` <= {p} AND (u.`EffectiveTo` IS NULL OR u.`EffectiveTo` >= {p})", today, today);
+            }
+        }
+
+        return await ExecuteMySqlPageIdsAsync<UserRole>(sql, parameters, query.Page, query.PageSize, "u.`EffectiveFrom` DESC, u.`Id` DESC", ct);
+    }
+
+    private async Task<List<Guid>> GetMySqlCandidatePageIdsAsync(PagedQuery query, Guid tenantId, CancellationToken ct)
+    {
+        var sql = new StringBuilder("SELECT u.* FROM `Users` AS u WHERE u.`TenantId` = {0} AND u.`IsActive` = 1 AND u.`Id` <> {1}");
+        var parameters = new List<object> { tenantId, _tenant.UserId!.Value };
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var search = query.Search.Trim();
+            sql.Append(" AND (u.`FirstName` LIKE CONCAT('%', {2}, '%') OR u.`LastName` LIKE CONCAT('%', {2}, '%') OR u.`Email` LIKE CONCAT('%', {2}, '%') OR EXISTS (SELECT 1 FROM `AccountEmployeeCurrentLinks` AS sl INNER JOIN `Employees` AS se ON se.`Id` = sl.`EmployeeId` WHERE sl.`TenantId` = {0} AND sl.`UserId` = u.`Id` AND (se.`EmployeeCode` LIKE CONCAT('%', {2}, '%') OR se.`FirstName` LIKE CONCAT('%', {2}, '%') OR se.`LastName` LIKE CONCAT('%', {2}, '%'))))");
+            parameters.Add(search);
+        }
+
+        return await ExecuteMySqlPageIdsAsync<User>(sql, parameters, query.Page, query.PageSize, "u.`LastName`, u.`FirstName`, u.`Id`", ct);
+    }
+
+    private async Task<List<Guid>> ExecuteMySqlPageIdsAsync<TEntity>(StringBuilder sql, List<object> parameters, int page, int pageSize, string orderBy, CancellationToken ct)
+        where TEntity : class
+    {
+        var offset = checked((page - 1) * pageSize);
+        sql.Append(" ORDER BY ").Append(orderBy).Append(" LIMIT ").Append(pageSize).Append(" OFFSET ").Append(offset);
+        var query = typeof(TEntity) == typeof(UserRole)
+            ? _db.UserRoles.FromSqlRaw(sql.ToString(), parameters.ToArray()).Select(x => x.Id)
+            : _db.Users.FromSqlRaw(sql.ToString(), parameters.ToArray()).Select(x => x.Id);
+        return await query.ToListAsync(ct);
+    }
+
+    private async Task<List<UserRole>> HydrateMySqlAssignmentsAsync(IReadOnlyList<Guid> pageIds, Guid tenantId, CancellationToken ct)
+    {
+        var ids = BuildMySqlGuidLiteralList(pageIds);
+        if (ids is null) return [];
+        var sql = $"SELECT u.* FROM `UserRoles` AS u WHERE u.`TenantId` = {{0}} AND u.`Id` IN ({ids})";
+        return await _db.UserRoles.FromSqlRaw<UserRole>(sql, tenantId).IgnoreQueryFilters().AsNoTracking().Include(x => x.Role).Include(x => x.Scopes).ToListAsync(ct);
+    }
+
+    private async Task<List<User>> HydrateMySqlCandidatesAsync(IReadOnlyList<Guid> pageIds, Guid tenantId, CancellationToken ct)
+    {
+        var ids = BuildMySqlGuidLiteralList(pageIds);
+        if (ids is null) return [];
+        var sql = $"SELECT u.* FROM `Users` AS u WHERE u.`TenantId` = {{0}} AND u.`Id` IN ({ids})";
+        return await _db.Users.FromSqlRaw<User>(sql, tenantId).IgnoreQueryFilters().AsNoTracking().ToListAsync(ct);
+    }
+
+    private async Task<List<AccountEmployeeCurrentLink>> HydrateMySqlLinksAsync(IEnumerable<Guid> userIds, Guid tenantId, CancellationToken ct)
+    {
+        var ids = BuildMySqlGuidLiteralList(userIds);
+        if (ids is null) return [];
+        var sql = $"SELECT l.* FROM `AccountEmployeeCurrentLinks` AS l WHERE l.`TenantId` = {{0}} AND l.`UserId` IN ({ids})";
+        return await _db.AccountEmployeeCurrentLinks.FromSqlRaw<AccountEmployeeCurrentLink>(sql, tenantId)
+            .IgnoreQueryFilters().AsNoTracking().Include(x => x.Employee).ThenInclude(x => x!.Department)
+            .Include(x => x.Employee).ThenInclude(x => x!.Designation).ToListAsync(ct);
+    }
+
+    private async Task<List<UserRoleAssignmentEvent>> HydrateMySqlRevocationsAsync(IEnumerable<Guid> assignmentIds, Guid tenantId, CancellationToken ct)
+    {
+        var ids = BuildMySqlGuidLiteralList(assignmentIds);
+        if (ids is null) return [];
+        var sql = $"SELECT e.* FROM `UserRoleAssignmentEvents` AS e WHERE e.`TenantId` = {{0}} AND e.`AssignmentId` IN ({ids}) AND e.`EventType` = {{1}}";
+        var events = await _db.UserRoleAssignmentEvents.FromSqlRaw<UserRoleAssignmentEvent>(sql, tenantId, (int)UserRoleAssignmentEventType.Revoked)
+            .IgnoreQueryFilters().AsNoTracking().ToListAsync(ct);
+        return events.GroupBy(x => x.AssignmentId)
+            .Select(x => x.OrderByDescending(e => e.OccurredAtUtc).ThenByDescending(e => e.Id).First()).ToList();
+    }
+
+    /// <summary>
+    /// Oracle's MySQL EF provider cannot bind multi-element Guid collection parameters. These values are
+    /// database-derived typed Guid identities, never request text, so only their canonical D-form is
+    /// placed in this narrow MySQL hydration predicate. Scalar tenant parameters remain parameterized.
+    /// </summary>
+    private static string? BuildMySqlGuidLiteralList(IEnumerable<Guid> values)
+    {
+        var ids = values.Where(x => x != Guid.Empty).Distinct().Select(x => $"'{x:D}'").ToArray();
+        return ids.Length == 0 ? null : string.Join(", ", ids);
+    }
+
     private async Task<bool> HasRoleAsync(Guid userId, string roleName, Guid tenantId, CancellationToken ct) => await (from ur in _db.UserRoles join r in _db.Roles on ur.RoleId equals r.Id where ur.TenantId == tenantId && ur.UserId == userId && r.Name == roleName && ur.EffectiveFrom <= DateOnly.FromDateTime(_clock.GetUtcNow().DateTime) && (ur.EffectiveTo == null || ur.EffectiveTo >= DateOnly.FromDateTime(_clock.GetUtcNow().DateTime)) select ur.Id).AnyAsync(ct);
     private async Task<bool> ScopeExistsAsync(RoleScopeType type, Guid id, Guid tenantId, CancellationToken ct) => type switch
     {
@@ -284,7 +449,7 @@ public sealed class RoleAssignmentService : IRoleAssignmentService
     {
         var employee = link?.Employee;
         var name = employee is null ? null : string.Join(" ", new[] { employee.FirstName, employee.MiddleName, employee.LastName }.Where(v => !string.IsNullOrWhiteSpace(v)));
-        var scopes = x.Scopes.Select(s => new RoleAssignmentScopeDto(s.ScopeType, s.ScopeEntityId)).ToList();
+        var scopes = (x.Scopes ?? []).Select(s => new RoleAssignmentScopeDto(s.ScopeType, s.ScopeEntityId)).ToList();
         var status = revoked is not null ? "Revoked" : x.EffectiveFrom > today ? "Scheduled" : x.EffectiveTo is DateOnly end && end < today ? "Expired" : "Active";
         return new(x.Id, x.UserId, link?.EmployeeId, employee?.EmployeeCode, name, x.RoleId, x.Role?.Name ?? "", x.AssignmentSource,
             x.EffectiveFrom, x.EffectiveTo, status == "Active", x.AssignmentReason, x.AssignedByUserId, scopes,

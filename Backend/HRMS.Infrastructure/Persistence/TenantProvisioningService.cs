@@ -5,7 +5,9 @@ using HRMS.Infrastructure.Persistence.Catalog;
 using HRMS.Infrastructure.Persistence.Seed;
 using HRMS.Infrastructure.Sharding;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using MySql.Data.MySqlClient;
 
@@ -73,7 +75,9 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
             provider.GetRequiredService<IPasswordHasher>(),
             tenant,
             cancellationToken,
-            _logger);
+            _logger,
+            provider.GetService<IConfiguration>(),
+            provider.GetService<IHostEnvironment>()?.IsDevelopment() == true);
     }
 
     public async Task SynchronizeTenantIdentityAsync(
