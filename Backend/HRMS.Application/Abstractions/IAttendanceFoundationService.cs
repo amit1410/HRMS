@@ -15,7 +15,7 @@ public interface IAttendanceFoundationService
     Task<Result<ShiftApplicabilityDto>> GetApplicabilityByIdAsync(Guid id, CancellationToken ct = default);
     Task<Result<ShiftApplicabilityDto>> UpdateApplicabilityAsync(Guid id, ShiftApplicabilityRequest request, CancellationToken ct = default);
     Task<Result<bool>> DeleteApplicabilityAsync(Guid id, CancellationToken ct = default);
-    Task<Result<ShiftResolutionDto>> ResolveAsync(Guid employeeId, DateOnly date, CancellationToken ct = default);
+    Task<Result<ShiftResolutionDto>> ResolveAsync(Guid employeeId, DateOnly date, CancellationToken ct = default, bool enforceAuthorization = true);
     Task<Result<IReadOnlyList<RosterDayDto>>> AssignRosterAsync(RosterAssignmentRequest request, CancellationToken ct = default);
     Task<Result<bool>> RemoveRosterAsync(Guid employeeId, DateOnly date, CancellationToken ct = default);
     Task<Result<PagedResult<RosterGridRowDto>>> GetRosterAsync(RosterQuery query, CancellationToken ct = default);

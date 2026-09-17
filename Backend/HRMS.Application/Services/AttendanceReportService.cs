@@ -1,11 +1,14 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
+using HRMS.Domain.Authorization;
+using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using System.Linq.Expressions;
 
 namespace HRMS.Application.Services;
 
-public sealed class AttendanceReportService(IHrmsDbContext db, ITenantContext tenant, IAttendanceMonthlyProcessor monthly) : IAttendanceReportService
+public sealed class AttendanceReportService(IHrmsDbContext db, ITenantContext tenant, IAttendanceMonthlyProcessor monthly, IAttendanceAuthorizationService? authorization = null) : IAttendanceReportService
 {
     private const int MaxInteractiveDays = 366;
     private const int MaxExportRows = 50_000;
@@ -17,7 +20,9 @@ public sealed class AttendanceReportService(IHrmsDbContext db, ITenantContext te
         if (!ValidPage(query)) return Result<PagedResult<AttendanceDailyReportRow>>.Invalid("page", "Page values are out of range.");
         if (!TryTenant(out var tenantId)) return Result<PagedResult<AttendanceDailyReportRow>>.Unauthorized("No authenticated tenant.");
         var from = query.FromDate!.Value; var to = query.ToDate!.Value;
-        var source = DailySource(tenantId, from, to, query);
+        var scope = await ScopeAsync(Permissions.Attendance.ReportView, from, ct);
+        if (!scope.Succeeded) return Result<PagedResult<AttendanceDailyReportRow>>.Failure(scope.Status, scope.Message, scope.Errors);
+        var source = DailySource(tenantId, from, to, query, scope.Value);
         var total = await source.CountAsync(ct);
         var page = await source.Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToListAsync(ct);
         var rows = await EnrichDailyAsync(page, ct);
@@ -29,13 +34,20 @@ public sealed class AttendanceReportService(IHrmsDbContext db, ITenantContext te
         if (!ValidPage(query)) return Result<PagedResult<AttendanceMonthlyReportRow>>.Invalid("page", "Page values are out of range.");
         if (!TryTenant(out var tenantId)) return Result<PagedResult<AttendanceMonthlyReportRow>>.Unauthorized("No authenticated tenant.");
         if (query.Month is < 1 or > 12 || query.Year is < 1 or > 9999) return Result<PagedResult<AttendanceMonthlyReportRow>>.Invalid("period", "A valid year and month are required.");
+        var scopeDate = query.Year is int reportYear && query.Month is int reportMonth
+            ? new DateOnly(reportYear, reportMonth, 1)
+            : DateOnly.FromDateTime(DateTime.UtcNow);
+        var scope = await ScopeAsync(Permissions.Attendance.ReportView, scopeDate, ct);
+        if (!scope.Succeeded) return Result<PagedResult<AttendanceMonthlyReportRow>>.Failure(scope.Status, scope.Message, scope.Errors);
         var source = from s in db.EmployeeAttendanceMonthlySummaries.AsNoTracking()
                      join p in db.AttendancePeriods.AsNoTracking() on new { s.TenantId, Id = s.AttendancePeriodId } equals new { p.TenantId, Id = p.Id }
                      where s.TenantId == tenantId && (!query.PeriodId.HasValue || s.AttendancePeriodId == query.PeriodId) && (!query.Year.HasValue || p.Year == query.Year) && (!query.Month.HasValue || p.Month == query.Month) && (!query.EmployeeId.HasValue || s.EmployeeId == query.EmployeeId)
                      orderby p.Year, p.Month, s.EmployeeCode, s.EmployeeId
-                     select new AttendanceMonthlyReportRow(p.Id, p.Year, p.Month, p.Status, s.EmployeeCode, s.EmployeeName, s.WorkingDays, s.PresentDays, s.AbsentDays, s.OnLeaveDays, s.OnDutyDays, s.IncompleteDays, s.NotProcessedDays, s.ExpectedWorkMinutes, s.ActualWorkMinutes, s.ExceptionCount, s.SourceDataVersion);
-        var total = await source.CountAsync(ct);
-        var rows = await source.Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToListAsync(ct);
+                     select new { Period = p, Summary = s };
+        if (scope.Value is not null) source = source.Where(s => db.Employees.Where(scope.Value).Any(e => e.Id == s.Summary.EmployeeId));
+        var projected = source.Select(x => new AttendanceMonthlyReportRow(x.Period.Id, x.Period.Year, x.Period.Month, x.Period.Status, x.Summary.EmployeeCode, x.Summary.EmployeeName, x.Summary.WorkingDays, x.Summary.PresentDays, x.Summary.AbsentDays, x.Summary.OnLeaveDays, x.Summary.OnDutyDays, x.Summary.IncompleteDays, x.Summary.NotProcessedDays, x.Summary.ExpectedWorkMinutes, x.Summary.ActualWorkMinutes, x.Summary.ExceptionCount, x.Summary.SourceDataVersion));
+        var total = await projected.CountAsync(ct);
+        var rows = await projected.Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToListAsync(ct);
         return Result<PagedResult<AttendanceMonthlyReportRow>>.Success(new(rows, query.Page, query.PageSize, total));
     }
 
@@ -44,12 +56,12 @@ public sealed class AttendanceReportService(IHrmsDbContext db, ITenantContext te
         var validation = ValidateDates(query.FromDate, query.ToDate, MaxInteractiveDays, allowMissing: true);
         if (validation is not null) return Result<PagedResult<AttendanceExceptionDto>>.Invalid("dateRange", validation);
         if (!ValidPage(query)) return Result<PagedResult<AttendanceExceptionDto>>.Invalid("page", "Page values are out of range.");
-        var result = await monthly.GetExceptionsAsync(query.PeriodId, new AttendanceExceptionQuery { Page = 1, PageSize = PagedQuery.MaxPageSize }, ct);
+        var result = await monthly.GetExceptionsAsync(query.PeriodId, new AttendanceExceptionQuery { Page = 1, PageSize = PagedQuery.MaxPageSize }, ct, Permissions.Attendance.ReportView);
         if (!result.Succeeded) return Result<PagedResult<AttendanceExceptionDto>>.Failure(result.Status, result.Message, result.Errors);
         var allExceptions = result.Value!.Items.ToList();
         for (var page = 2; allExceptions.Count < result.Value.TotalCount; page++)
         {
-            var next = await monthly.GetExceptionsAsync(query.PeriodId, new AttendanceExceptionQuery { Page = page, PageSize = PagedQuery.MaxPageSize }, ct);
+            var next = await monthly.GetExceptionsAsync(query.PeriodId, new AttendanceExceptionQuery { Page = page, PageSize = PagedQuery.MaxPageSize }, ct, Permissions.Attendance.ReportView);
             if (!next.Succeeded) return Result<PagedResult<AttendanceExceptionDto>>.Failure(next.Status, next.Message, next.Errors);
             allExceptions.AddRange(next.Value!.Items);
         }
@@ -67,7 +79,8 @@ public sealed class AttendanceReportService(IHrmsDbContext db, ITenantContext te
     {
         var validation = ValidateDates(query.FromDate, query.ToDate, 3660); if (validation is not null) return Result<AttendanceReportExport>.Invalid("dateRange", validation);
         if (!TryTenant(out var tenantId)) return Result<AttendanceReportExport>.Unauthorized("No authenticated tenant.");
-        var source = DailySource(tenantId, query.FromDate!.Value, query.ToDate!.Value, query); var total = await source.CountAsync(ct); if (total > MaxExportRows) return Result<AttendanceReportExport>.Invalid("export", $"The report contains more than {MaxExportRows} rows. Narrow the filters and try again.");
+        var scope = await ScopeAsync(Permissions.Attendance.ReportView, query.FromDate!.Value, ct); if (!scope.Succeeded) return Result<AttendanceReportExport>.Failure(scope.Status, scope.Message, scope.Errors);
+        var source = DailySource(tenantId, query.FromDate!.Value, query.ToDate!.Value, query, scope.Value); var total = await source.CountAsync(ct); if (total > MaxExportRows) return Result<AttendanceReportExport>.Invalid("export", $"The report contains more than {MaxExportRows} rows. Narrow the filters and try again.");
         var page = await source.Take(MaxExportRows).ToListAsync(ct);
         var rows = await EnrichDailyAsync(page, ct);
         var csv = new CsvBuilder("Employee Code", "Employee Name", "Business Date", "Status", "In Time UTC", "Out Time UTC", "Actual Work Minutes", "Expected Work Minutes", "Late", "Early Out", "Shift", "Department", "Work Location");
@@ -111,14 +124,24 @@ public sealed class AttendanceReportService(IHrmsDbContext db, ITenantContext te
         return Result<List<AttendanceExceptionDto>>.Success(rows);
     }
 
-    private IQueryable<DailySourceRow> DailySource(Guid tenantId, DateOnly fromDate, DateOnly toDate, AttendanceDailyReportQuery query)
+    private IQueryable<DailySourceRow> DailySource(Guid tenantId, DateOnly fromDate, DateOnly toDate, AttendanceDailyReportQuery query, Expression<Func<Employee, bool>>? scope)
     {
         var days = db.EmployeeAttendanceDays.AsNoTracking().Where(d => d.TenantId == tenantId && d.BusinessDate >= fromDate && d.BusinessDate <= toDate);
         if (query.EmployeeId is Guid employeeId) days = days.Where(d => d.EmployeeId == employeeId);
+        if (scope is not null) days = days.Where(d => db.Employees.Where(scope).Any(e => e.Id == d.EmployeeId));
         if (query.Status is EmployeeAttendanceDayStatus status) days = days.Where(d => d.Status == status);
         if (query.DepartmentId is Guid departmentId) days = days.Where(d => db.EmployeeEmploymentHistory.Any(h => h.TenantId == tenantId && h.EmployeeId == d.EmployeeId && !h.IsSuperseded && h.EffectiveFrom <= d.BusinessDate && (h.EffectiveTo == null || h.EffectiveTo >= d.BusinessDate) && h.DepartmentId == departmentId));
         if (query.WorkLocationId is Guid locationId) days = days.Where(d => db.EmployeeEmploymentHistory.Any(h => h.TenantId == tenantId && h.EmployeeId == d.EmployeeId && !h.IsSuperseded && h.EffectiveFrom <= d.BusinessDate && (h.EffectiveTo == null || h.EffectiveTo >= d.BusinessDate) && h.WorkLocationId == locationId));
         return from d in days join e in db.Employees.AsNoTracking() on new { d.TenantId, d.EmployeeId } equals new { e.TenantId, EmployeeId = e.Id } orderby d.BusinessDate descending, e.EmployeeCode, d.EmployeeId select new DailySourceRow(d.EmployeeId, e.EmployeeCode, (e.FirstName + " " + e.LastName).Trim(), d.BusinessDate, d.Status, d.FirstPunchAtUtc, d.LastPunchAtUtc, d.WorkedMinutes, d.ExpectedWorkMinutes, d.IsLateIn, d.IsEarlyOut, d.ShiftCode);
+    }
+
+    private async Task<Result<Expression<Func<Employee, bool>>?>> ScopeAsync(string permission, DateOnly date, CancellationToken ct)
+    {
+        if (authorization is null) return Result<Expression<Func<Employee, bool>>?>.Success(null);
+        var result = await authorization.BuildEmployeePredicateAsync(permission, includeSelf: true, includeManager: true, includeRoleScope: true, date, ct);
+        return !result.Succeeded || result.Value is null
+            ? Result<Expression<Func<Employee, bool>>?>.Failure(result.Status, result.Message, result.Errors)
+            : Result<Expression<Func<Employee, bool>>?>.Success(result.Value);
     }
 
     private async Task<List<AttendanceDailyReportRow>> EnrichDailyAsync(IReadOnlyList<DailySourceRow> rows, CancellationToken ct)

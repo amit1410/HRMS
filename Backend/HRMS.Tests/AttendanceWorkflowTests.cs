@@ -429,6 +429,44 @@ public sealed class AttendanceWorkflowTests
     }
 
     [Fact]
+    public async Task Multi_day_on_duty_requires_manager_authority_for_every_date()
+    {
+        using var f = await FixtureAsync();
+        var managerB = Guid.NewGuid();
+        await f.Inner.AddEmployeeAsync(managerB, "MGRB");
+        var boundary = new DateOnly(2026, 9, 11);
+        var originalHistory = f.Context.EmployeeEmploymentHistory.Single(x => x.EmployeeId == f.EmployeeId);
+        originalHistory.ManagerId = f.ManagerId;
+        originalHistory.EffectiveTo = boundary.AddDays(-1);
+        f.Context.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory
+        {
+            Id = Guid.NewGuid(),
+            TenantId = f.TenantId,
+            EmployeeId = f.EmployeeId,
+            EffectiveFrom = boundary,
+            ManagerId = managerB,
+            EmploymentStatus = EmployeeStatus.Active
+        });
+        await f.Context.SaveChangesAsync();
+
+        var request = (await Service(f).SubmitOnDutyAsync(new(
+            boundary.AddDays(-1),
+            boundary,
+            "spans manager boundary"))).Value!;
+
+        var managerResolver = new EmployeeManagerResolver(f.Context, f.Inner.TenantContext);
+        f.Identity.EmployeeId = f.ManagerId;
+        var managerA = new AttendanceWorkflowService(f.Context, f.Identity, managerResolver, f.Processor);
+        Assert.Equal(ResultStatus.Forbidden, (await managerA.ApproveOnDutyAsync(request.Id)).Status);
+        Assert.Equal(AttendanceRequestStatus.Pending, (await f.Context.AttendanceOnDutyRequests.SingleAsync(x => x.Id == request.Id)).Status);
+
+        f.Identity.EmployeeId = managerB;
+        var managerBService = new AttendanceWorkflowService(f.Context, f.Identity, managerResolver, f.Processor);
+        Assert.Equal(ResultStatus.Forbidden, (await managerBService.ApproveOnDutyAsync(request.Id)).Status);
+        Assert.Equal(AttendanceRequestStatus.Pending, (await f.Context.AttendanceOnDutyRequests.SingleAsync(x => x.Id == request.Id)).Status);
+    }
+
+    [Fact]
     public async Task Wrong_manager_direct_id_mutations_have_no_side_effects()
     {
         using var f = await FixtureAsync();

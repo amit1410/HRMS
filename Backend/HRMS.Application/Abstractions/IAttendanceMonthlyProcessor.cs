@@ -56,5 +56,5 @@ public interface IAttendanceMonthlyProcessor
     Task<Result<IReadOnlyList<AttendancePeriodEventDto>>> GetEventsAsync(Guid periodId, CancellationToken ct = default);
     Task<Result<AttendancePeriodOverviewDto>> GetOverviewAsync(Guid periodId, CancellationToken ct = default);
     Task<Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>> GetSummariesAsync(Guid periodId, AttendanceMonthlySummaryQuery query, CancellationToken ct = default);
-    Task<Result<PagedResult<AttendanceExceptionDto>>> GetExceptionsAsync(Guid periodId, AttendanceExceptionQuery query, CancellationToken ct = default);
+    Task<Result<PagedResult<AttendanceExceptionDto>>> GetExceptionsAsync(Guid periodId, AttendanceExceptionQuery query, CancellationToken ct = default, string? authorizationPermission = null);
 }

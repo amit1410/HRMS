@@ -1,3 +1,4 @@
+using HRMS.Application.Abstractions;
 using HRMS.Application.Services;
 using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
@@ -13,6 +14,108 @@ namespace HRMS.Tests;
 [Collection("Attendance MySQL")]
 public sealed class MySqlPageAccessAuthorizationIntegrationTests
 {
+    [Fact]
+    public async Task Real_mysql_attendance_authorization_keeps_permission_scope_union_and_effective_dates_server_side()
+    {
+        var connection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connection)) throw SkipException.ForSkip("MySQL Attendance scope tests not executed: HRMS_MYSQL_TEST_CONNECTION is absent.");
+        var fixture = new MySqlLeaveLifecycleIntegrationTests.Fixture(connection);
+        var scopedUserId = Guid.NewGuid();
+        var multiUserId = Guid.NewGuid();
+        var scopedRoleId = Random.Shared.Next(100_000, 900_000);
+        var secondRoleId = scopedRoleId + 1;
+        var multiRoleId = scopedRoleId + 2;
+        var itId = Guid.NewGuid();
+        var hrId = Guid.NewGuid();
+        var financeId = Guid.NewGuid();
+        var noidaId = Guid.NewGuid();
+        var gurgaonId = Guid.NewGuid();
+        try
+        {
+            await RemoveStaleLifecycleTenantsAsync(connection);
+            await fixture.SeedAsync();
+            await using (var setup = fixture.CreateContext(new TestTenantContext()))
+            {
+                var attendanceView = await GetOrAddPermissionAsync(setup, Permissions.Attendance.View);
+                setup.Users.AddRange(
+                    new User { Id = scopedUserId, TenantId = fixture.TenantId, Email = $"attendance-scope-{scopedUserId:N}@test.invalid", FirstName = "Attendance", LastName = "Scoped", IsActive = true },
+                    new User { Id = multiUserId, TenantId = fixture.TenantId, Email = $"attendance-multi-{multiUserId:N}@test.invalid", FirstName = "Attendance", LastName = "Multi", IsActive = true });
+                setup.Departments.AddRange(
+                    new Department { Id = itId, TenantId = fixture.TenantId, Code = $"IT{itId:N}"[..8], Name = "Attendance IT" },
+                    new Department { Id = hrId, TenantId = fixture.TenantId, Code = $"HR{hrId:N}"[..8], Name = "Attendance HR" },
+                    new Department { Id = financeId, TenantId = fixture.TenantId, Code = $"FN{financeId:N}"[..8], Name = "Attendance Finance" });
+                setup.WorkLocations.AddRange(
+                    new WorkLocation { Id = noidaId, TenantId = fixture.TenantId, Code = $"NO{noidaId:N}"[..8], Name = "Attendance Noida" },
+                    new WorkLocation { Id = gurgaonId, TenantId = fixture.TenantId, Code = $"GU{gurgaonId:N}"[..8], Name = "Attendance Gurgaon" });
+                setup.Roles.AddRange(
+                    new Role { Id = scopedRoleId, Name = $"Attendance Scoped {scopedRoleId}" },
+                    new Role { Id = secondRoleId, Name = $"Attendance Scoped {secondRoleId}" },
+                    new Role { Id = multiRoleId, Name = $"Attendance Multi {multiRoleId}" });
+                setup.RolePermissions.AddRange(
+                    new RolePermission { RoleId = scopedRoleId, PermissionId = attendanceView.Id },
+                    new RolePermission { RoleId = secondRoleId, PermissionId = attendanceView.Id },
+                    new RolePermission { RoleId = multiRoleId, PermissionId = attendanceView.Id });
+                setup.UserRoles.AddRange(
+                    new UserRole { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserId = scopedUserId, RoleId = scopedRoleId, EffectiveFrom = new(2026, 1, 1) },
+                    new UserRole { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserId = scopedUserId, RoleId = secondRoleId, EffectiveFrom = new(2026, 1, 1) },
+                    new UserRole { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserId = multiUserId, RoleId = multiRoleId, EffectiveFrom = new(2026, 1, 1) });
+                await setup.SaveChangesAsync();
+                var scopedAssignments = await setup.UserRoles.IgnoreQueryFilters().Where(x => x.TenantId == fixture.TenantId && x.UserId == scopedUserId).OrderBy(x => x.Id).ToListAsync();
+                var multiAssignment = await setup.UserRoles.IgnoreQueryFilters().SingleAsync(x => x.TenantId == fixture.TenantId && x.UserId == multiUserId);
+                setup.UserRoleAssignmentScopes.AddRange(
+                    new() { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserRoleAssignmentId = scopedAssignments[0].Id, ScopeType = RoleScopeType.Department, ScopeEntityId = itId },
+                    new() { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserRoleAssignmentId = scopedAssignments[0].Id, ScopeType = RoleScopeType.Location, ScopeEntityId = noidaId },
+                    new() { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserRoleAssignmentId = scopedAssignments[1].Id, ScopeType = RoleScopeType.Department, ScopeEntityId = hrId },
+                    new() { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserRoleAssignmentId = scopedAssignments[1].Id, ScopeType = RoleScopeType.Location, ScopeEntityId = gurgaonId },
+                    new() { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserRoleAssignmentId = multiAssignment.Id, ScopeType = RoleScopeType.Department, ScopeEntityId = itId },
+                    new() { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserRoleAssignmentId = multiAssignment.Id, ScopeType = RoleScopeType.Department, ScopeEntityId = hrId },
+                    new() { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserRoleAssignmentId = multiAssignment.Id, ScopeType = RoleScopeType.Location, ScopeEntityId = noidaId });
+                var itNoida = AddEmployee(setup, fixture.TenantId, "Attendance IT Noida", itId, noidaId);
+                var hrGurgaon = AddEmployee(setup, fixture.TenantId, "Attendance HR Gurgaon", hrId, gurgaonId);
+                var itGurgaon = AddEmployee(setup, fixture.TenantId, "Attendance IT Gurgaon", itId, gurgaonId);
+                var hrNoida = AddEmployee(setup, fixture.TenantId, "Attendance HR Noida", hrId, noidaId);
+                var changing = AddEmployee(setup, fixture.TenantId, "Attendance Finance", financeId, noidaId);
+                var initial = setup.EmployeeEmploymentHistory.Local.Single(x => x.EmployeeId == changing.Id && x.EffectiveFrom == new DateOnly(2026, 1, 1));
+                initial.EffectiveTo = new(2026, 9, 30);
+                setup.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory { Id = Guid.NewGuid(), TenantId = fixture.TenantId, EmployeeId = changing.Id, EffectiveFrom = new(2026, 10, 1), DepartmentId = itId, WorkLocationId = noidaId, EmploymentStatus = EmployeeStatus.Active });
+                await setup.SaveChangesAsync();
+
+                await using var scopedDb = fixture.CreateContext(new TestTenantContext(fixture.TenantId, scopedUserId));
+                var scopedAuth = new AttendanceAuthorizationService(scopedDb, new TestTenantContext(fixture.TenantId, scopedUserId), new EmployeeIdentityResolver(scopedDb, new TestTenantContext(fixture.TenantId, scopedUserId)), new EmployeeAccessScopeService(scopedDb, new TestTenantContext(fixture.TenantId, scopedUserId)), new EmployeeManagerResolver(scopedDb, new TestTenantContext(fixture.TenantId, scopedUserId)), new NoopAuthorizationContext());
+                var scopedPredicate = await scopedAuth.BuildEmployeePredicateAsync(Permissions.Attendance.View, false, false, true, new(2026, 9, 17));
+                Assert.True(scopedPredicate.Succeeded);
+                var scopedIds = await scopedDb.Employees.Where(scopedPredicate.Value!).Select(x => x.Id).ToListAsync();
+                Assert.Contains(itNoida.Id, scopedIds);
+                Assert.Contains(hrGurgaon.Id, scopedIds);
+                Assert.DoesNotContain(itGurgaon.Id, scopedIds);
+                Assert.DoesNotContain(hrNoida.Id, scopedIds);
+                Assert.DoesNotContain(changing.Id, scopedIds);
+                var effectivePredicate = await scopedAuth.BuildEmployeePredicateAsync(Permissions.Attendance.View, false, false, true, new(2026, 10, 1));
+                Assert.Contains(changing.Id, await scopedDb.Employees.Where(effectivePredicate.Value!).Select(x => x.Id).ToListAsync());
+
+                await using var multiDb = fixture.CreateContext(new TestTenantContext(fixture.TenantId, multiUserId));
+                var multiContext = new TestTenantContext(fixture.TenantId, multiUserId);
+                var multiAuth = new AttendanceAuthorizationService(multiDb, multiContext, new EmployeeIdentityResolver(multiDb, multiContext), new EmployeeAccessScopeService(multiDb, multiContext), new EmployeeManagerResolver(multiDb, multiContext), new NoopAuthorizationContext());
+                var multiPredicate = await multiAuth.BuildEmployeePredicateAsync(Permissions.Attendance.View, false, false, true, new(2026, 9, 17));
+                var multiIds = await multiDb.Employees.Where(multiPredicate.Value!).Select(x => x.Id).ToListAsync();
+                Assert.Contains(itNoida.Id, multiIds);
+                Assert.Contains(hrNoida.Id, multiIds);
+                Assert.DoesNotContain(itGurgaon.Id, multiIds);
+            }
+        }
+        finally
+        {
+            await using (var cleanup = fixture.CreateContext(new TestTenantContext()))
+            {
+                await cleanup.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `UserRoleAssignmentScopes` WHERE `TenantId` IN ({fixture.TenantId}, {fixture.OtherTenantId})");
+                await cleanup.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `WorkLocations` WHERE `TenantId` IN ({fixture.TenantId}, {fixture.OtherTenantId})");
+                await cleanup.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Departments` WHERE `TenantId` IN ({fixture.TenantId}, {fixture.OtherTenantId})");
+            }
+            await fixture.CleanupAsync();
+            await DeleteRolesAsync(connection, scopedRoleId, secondRoleId, multiRoleId);
+        }
+    }
+
     [Fact]
     public async Task Real_mysql_page_access_uses_only_effective_roles_and_preserves_tenant_isolation()
     {
@@ -265,5 +368,10 @@ public sealed class MySqlPageAccessAuthorizationIntegrationTests
         db.Employees.Add(employee);
         db.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory { Id = Guid.NewGuid(), TenantId = tenantId, EmployeeId = employee.Id, EffectiveFrom = new(2026, 1, 1), DepartmentId = departmentId, WorkLocationId = locationId, EmploymentStatus = EmployeeStatus.Active });
         return employee;
+    }
+
+    private sealed class NoopAuthorizationContext : ICurrentAuthorizationContext
+    {
+        public bool HasAnyPermission(params string[] permissions) => false;
     }
 }

@@ -27,7 +27,7 @@ public sealed class AttendancePunchIngestionService(
         if (request.ExternalPunchId is { Length: > 200 }) return Result<AttendancePunchDto>.Invalid("externalPunchId", "External punch id cannot exceed 200 characters.");
 
         var candidate = request.BusinessDate ?? DateOnly.FromDateTime(request.PunchAtUtc.ToUniversalTime());
-        var resolution = await roster.ResolveAsync(request.EmployeeId, candidate, cancellationToken);
+        var resolution = await roster.ResolveAsync(request.EmployeeId, candidate, cancellationToken, enforceAuthorization: false);
         if (!resolution.Succeeded) return Result<AttendancePunchDto>.Failure(resolution.Status, resolution.Message, resolution.Errors);
         var shift = resolution.Value?.ShiftId is Guid shiftId
             ? await db.Shifts.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == shiftId && x.IsActive, cancellationToken)
@@ -36,7 +36,7 @@ public sealed class AttendancePunchIngestionService(
         if (shift is null && request.BusinessDate is null && candidate > DateOnly.MinValue)
         {
             var previous = candidate.AddDays(-1);
-            var overnightResolution = await roster.ResolveAsync(request.EmployeeId, previous, cancellationToken);
+            var overnightResolution = await roster.ResolveAsync(request.EmployeeId, previous, cancellationToken, enforceAuthorization: false);
             if (overnightResolution.Succeeded && overnightResolution.Value?.ShiftId is Guid previousShiftId)
             {
                 var previousShift = await db.Shifts.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == previousShiftId && x.IsActive, cancellationToken);

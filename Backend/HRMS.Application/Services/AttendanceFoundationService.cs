@@ -1,13 +1,14 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Attendance;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
 
-public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContext tenant, IEffectiveEmploymentResolver employmentResolver, IWorkingDayCalendarResolver? calendarResolver = null, TimeProvider? timeProvider = null, IAttendancePeriodLockService? periodLock = null) : IAttendanceFoundationService
+public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContext tenant, IEffectiveEmploymentResolver employmentResolver, IWorkingDayCalendarResolver? calendarResolver = null, TimeProvider? timeProvider = null, IAttendancePeriodLockService? periodLock = null, IAttendanceAuthorizationService? authorization = null) : IAttendanceFoundationService
 {
     private const int MaxUploadRows = 100_000;
     private bool TryTenant(out Guid id) { id = tenant.TenantId ?? Guid.Empty; return id != Guid.Empty; }
@@ -106,9 +107,15 @@ public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContex
         db.ShiftApplicabilityRules.Remove(item); await db.SaveChangesAsync(ct); return Result<bool>.Success(true, "Applicability rule deleted.");
     }
 
-    public async Task<Result<ShiftResolutionDto>> ResolveAsync(Guid employeeId, DateOnly date, CancellationToken ct = default)
+    public async Task<Result<ShiftResolutionDto>> ResolveAsync(Guid employeeId, DateOnly date, CancellationToken ct = default, bool enforceAuthorization = true)
     {
         if (!TryTenant(out var tid)) return Result<ShiftResolutionDto>.Unauthorized("No authenticated tenant.");
+        if (authorization is not null && enforceAuthorization)
+        {
+            var access = await authorization.CanAccessEmployeeAsync(employeeId, Permissions.Attendance.View, true, true, true, date, ct);
+            if (!access.Succeeded) return Result<ShiftResolutionDto>.Failure(access.Status, access.Message, access.Errors);
+            if (!access.Value) return Result<ShiftResolutionDto>.NotFound("Attendance roster was not found.");
+        }
         var employment = await employmentResolver.ResolveAsync(tid, employeeId, date, ct); if (employment.Status != EffectiveEmploymentResolutionStatus.Resolved || employment.Employment is null) return Result<ShiftResolutionDto>.NotFound(employment.Message);
         var manual = await db.EmployeeRosterDays.AsNoTracking().FirstOrDefaultAsync(x => x.TenantId == tid && x.EmployeeId == employeeId && x.RosterDate == date, ct);
         if (manual is not null) return Result<ShiftResolutionDto>.Success(new(employeeId, date, manual.ShiftId, manual.ShiftPatternId, null, manual.AssignmentSource, manual.IsCalendarOverride, "Explicit roster assignment overrides automatic applicability."));
@@ -130,6 +137,12 @@ public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContex
             if (!await db.Employees.AnyAsync(x => x.TenantId == tid && x.Id == employeeId, ct)) return Result<IReadOnlyList<RosterDayDto>>.Invalid("employeeIds", "One or more employees were not found in this tenant.");
             for (var d = r.FromDate; d <= r.ToDate; d = d.AddDays(1))
             {
+                if (authorization is not null)
+                {
+                    var access = await authorization.CanAccessEmployeeAsync(employeeId, Permissions.Attendance.RosterManage, false, true, true, d, ct);
+                    if (!access.Succeeded) return Result<IReadOnlyList<RosterDayDto>>.Failure(access.Status, access.Message, access.Errors);
+                    if (!access.Value) return Result<IReadOnlyList<RosterDayDto>>.NotFound("Roster assignment was not found.");
+                }
                 var originalCalendarDayType = await CalendarDayTypeAsync(employeeId, d, ct);
                 var item = await db.EmployeeRosterDays.FirstOrDefaultAsync(x => x.TenantId == tid && x.EmployeeId == employeeId && x.RosterDate == d, ct);
                 var wasNew = item is null;
@@ -147,6 +160,12 @@ public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContex
     public async Task<Result<bool>> RemoveRosterAsync(Guid employeeId, DateOnly date, CancellationToken ct = default)
     {
         if (!TryTenant(out var tid)) return Result<bool>.Unauthorized("No authenticated tenant.");
+        if (authorization is not null)
+        {
+            var access = await authorization.CanAccessEmployeeAsync(employeeId, Permissions.Attendance.RosterManage, false, true, true, date, ct);
+            if (!access.Succeeded) return Result<bool>.Failure(access.Status, access.Message, access.Errors);
+            if (!access.Value) return Result<bool>.NotFound("Roster assignment was not found.");
+        }
         if (periodLock is not null && !(await periodLock.EnsureDateIsOpenAsync(date, ct)).Succeeded) return Result<bool>.Conflict("The Attendance period is closed and must be reopened before this change.");
         var item = await db.EmployeeRosterDays.FirstOrDefaultAsync(x => x.TenantId == tid && x.EmployeeId == employeeId && x.RosterDate == date, ct);
         if (item is null) return Result<bool>.NotFound("Roster assignment was not found.");
@@ -161,6 +180,12 @@ public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContex
         if (from > to) return Result<PagedResult<RosterGridRowDto>>.Invalid("dateRange", "FromDate cannot be after ToDate.");
         if (to.DayNumber - from.DayNumber + 1 > 366) return Result<PagedResult<RosterGridRowDto>>.Invalid("dateRange", "Roster query range cannot exceed 366 days.");
         var employees = db.Employees.AsNoTracking().Where(x => x.TenantId == tid);
+        if (authorization is not null)
+        {
+            var scope = await authorization.BuildEmployeePredicateAsync(Permissions.Attendance.View, true, true, true, from, ct);
+            if (!scope.Succeeded || scope.Value is null) return Result<PagedResult<RosterGridRowDto>>.Failure(scope.Status, scope.Message, scope.Errors);
+            employees = employees.Where(scope.Value);
+        }
         if (query.EmployeeId is Guid employeeId) employees = employees.Where(x => x.Id == employeeId);
         if (!string.IsNullOrWhiteSpace(query.Search)) employees = employees.Where(x => x.EmployeeCode != null && x.EmployeeCode.Contains(query.Search));
         var employeeRows = await employees.OrderBy(x => x.EmployeeCode).ThenBy(x => x.Id).ToListAsync(ct);
@@ -216,6 +241,15 @@ public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContex
             if (row.DayType == RosterDayType.Shift && shift is null) { row.IsValid = false; row.ErrorMessage = "ShiftCode was not found or is inactive."; }
             if (row.IsValid && employee is not null)
             {
+                if (authorization is not null)
+                {
+                    var access = await authorization.CanAccessEmployeeAsync(employee.Id, Permissions.Attendance.RosterUpload, false, true, true, row.RosterDate, ct);
+                    if (!access.Succeeded) { row.IsValid = false; row.ErrorMessage = access.Message ?? "The employee is outside the authorized Attendance scope."; }
+                    else if (!access.Value) { row.IsValid = false; row.ErrorMessage = "The employee is outside the authorized Attendance scope."; }
+                }
+            }
+            if (row.IsValid && employee is not null)
+            {
                 row.UnderlyingCalendarDayType = await CalendarDayTypeAsync(employee.Id, row.RosterDate, ct);
                 var current = await db.EmployeeRosterDays.AsNoTracking().FirstOrDefaultAsync(x => x.TenantId == tid && x.EmployeeId == employee.Id && x.RosterDate == row.RosterDate, ct);
                 row.Action = current is null ? RosterUploadAction.New : current.ShiftId == shift?.Id && current.DayType == row.DayType ? RosterUploadAction.Unchanged : RosterUploadAction.Update;
@@ -246,6 +280,12 @@ public sealed class AttendanceFoundationService(IHrmsDbContext db, ITenantContex
         foreach (var row in batch.Rows.Where(x => x.IsValid))
         {
             var employee = await db.Employees.AsNoTracking().SingleAsync(x => x.TenantId == tid && x.EmployeeCode == row.EmployeeCode, ct);
+            if (authorization is not null)
+            {
+                var access = await authorization.CanAccessEmployeeAsync(employee.Id, Permissions.Attendance.RosterUpload, false, true, true, row.RosterDate, ct);
+                if (!access.Succeeded) return Result<RosterUploadBatchDto>.Failure(access.Status, access.Message, access.Errors);
+                if (!access.Value) return Result<RosterUploadBatchDto>.NotFound("Roster upload contains an employee outside the authorized Attendance scope.");
+            }
             var shift = string.IsNullOrWhiteSpace(row.ShiftCode) ? null : await db.Shifts.AsNoTracking().SingleAsync(x => x.TenantId == tid && x.ShiftCode == row.ShiftCode, ct);
             var item = await db.EmployeeRosterDays.FirstOrDefaultAsync(x => x.TenantId == tid && x.EmployeeId == employee.Id && x.RosterDate == row.RosterDate, ct);
             if (row.Action == RosterUploadAction.Unchanged || (item is not null && item.ShiftId == shift?.Id && item.DayType == row.DayType)) continue;

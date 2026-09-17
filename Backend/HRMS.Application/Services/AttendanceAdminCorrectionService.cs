@@ -1,5 +1,6 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,7 +12,10 @@ public sealed class AttendanceAdminCorrectionService(
     IEffectiveEmploymentResolver employment,
     IAttendanceDayProcessor processor,
     IAttendancePeriodLockService periodLock,
-    TimeProvider? timeProvider = null) : IAttendanceAdminCorrectionService
+    TimeProvider? timeProvider = null,
+    IAttendanceAuthorizationService? authorization = null,
+    IEmployeeAccessScopeService? accessScope = null,
+    IEmployeeManagerResolver? managers = null) : IAttendanceAdminCorrectionService
 {
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
 
@@ -19,6 +23,10 @@ public sealed class AttendanceAdminCorrectionService(
     {
         if (tenant.TenantId is not Guid tenantId || tenantId == Guid.Empty || tenant.UserId is not Guid userId || userId == Guid.Empty) return Result<AdminAttendanceCorrectionDto>.Unauthorized("An authenticated tenant and account are required.");
         if (request.EmployeeId == Guid.Empty) return Result<AdminAttendanceCorrectionDto>.Invalid("employeeId", "Employee is required.");
+        if (authorization is not null && !await CanAccessTargetAsync(tenantId, userId, request.EmployeeId, request.BusinessDate, ct))
+        {
+            return Result<AdminAttendanceCorrectionDto>.NotFound("Attendance correction was not found.");
+        }
         if (request.CorrectedInAtUtc is null && request.CorrectedOutAtUtc is null) return Result<AdminAttendanceCorrectionDto>.Invalid("correction", "At least one corrected punch is required.");
         if (request.CorrectedInAtUtc is DateTime input && request.CorrectedOutAtUtc is DateTime output && output < input) return Result<AdminAttendanceCorrectionDto>.Invalid("correctedOutAtUtc", "Corrected out time cannot precede corrected in time.");
         if (string.IsNullOrWhiteSpace(request.Reason)) return Result<AdminAttendanceCorrectionDto>.Invalid("reason", "A reason is required.");
@@ -53,6 +61,13 @@ public sealed class AttendanceAdminCorrectionService(
     {
         if (tenant.TenantId is not Guid tenantId || tenantId == Guid.Empty || tenant.UserId is not Guid userId || userId == Guid.Empty) return Result<PagedResult<AdminAttendanceCorrectionDto>>.Unauthorized("An authenticated tenant and account are required.");
         var q = db.AttendanceAdminCorrections.AsNoTracking().Where(x => x.TenantId == tenantId);
+        if (authorization is not null)
+        {
+            var date = query.FromDate ?? DateOnly.FromDateTime(clock.GetUtcNow().DateTime);
+            var scope = await authorization.BuildEmployeePredicateAsync(Permissions.Attendance.AdminCorrectionManage, false, true, true, date, ct);
+            if (!scope.Succeeded || scope.Value is null) return Result<PagedResult<AdminAttendanceCorrectionDto>>.Failure(scope.Status, scope.Message, scope.Errors);
+            q = q.Where(x => db.Employees.Where(scope.Value).Any(e => e.Id == x.EmployeeId));
+        }
         if (query.EmployeeId is Guid employeeId) q = q.Where(x => x.EmployeeId == employeeId);
         if (query.FromDate is DateOnly from) q = q.Where(x => x.BusinessDate >= from);
         if (query.ToDate is DateOnly to) q = q.Where(x => x.BusinessDate <= to);
@@ -65,7 +80,29 @@ public sealed class AttendanceAdminCorrectionService(
     {
         if (tenant.TenantId is not Guid tenantId || tenantId == Guid.Empty || tenant.UserId is not Guid userId || userId == Guid.Empty) return Result<AdminAttendanceCorrectionDto>.Unauthorized("An authenticated tenant and account are required.");
         var row = await db.AttendanceAdminCorrections.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == id, ct);
-        return row is null ? Result<AdminAttendanceCorrectionDto>.NotFound("Attendance correction was not found.") : Result<AdminAttendanceCorrectionDto>.Success(Map(row));
+        if (row is null) return Result<AdminAttendanceCorrectionDto>.NotFound("Attendance correction was not found.");
+        if (authorization is not null && !await CanAccessTargetAsync(tenantId, userId, row.EmployeeId, row.BusinessDate, ct))
+        {
+            return Result<AdminAttendanceCorrectionDto>.NotFound("Attendance correction was not found.");
+        }
+        return Result<AdminAttendanceCorrectionDto>.Success(Map(row));
+    }
+
+    private async Task<bool> CanAccessTargetAsync(Guid tenantId, Guid userId, Guid employeeId, DateOnly date, CancellationToken ct)
+    {
+        var linkedEmployeeId = await db.AccountEmployeeCurrentLinks.AsNoTracking().Where(x => x.TenantId == tenantId && x.UserId == userId).Select(x => (Guid?)x.EmployeeId).SingleOrDefaultAsync(ct);
+        if (linkedEmployeeId == employeeId) return true;
+        if (accessScope is not null)
+        {
+            var predicate = await accessScope.BuildRoleScopePredicateAsync(date, ct);
+            if (await db.Employees.AsNoTracking().Where(x => x.TenantId == tenantId).Where(predicate).AnyAsync(x => x.Id == employeeId, ct)) return true;
+        }
+        if (managers is not null && linkedEmployeeId is Guid managerId)
+        {
+            var resolved = await managers.ResolveAsync(employeeId, date, ct);
+            if (resolved.Succeeded && resolved.Value?.Status == EmployeeManagerResolutionStatus.Resolved && resolved.Value.ManagerId == managerId) return true;
+        }
+        return false;
     }
 
     private static AdminAttendanceCorrectionDto Map(AttendanceAdminCorrection x) => new(x.Id, x.EmployeeId, x.BusinessDate, x.CorrectedInAtUtc, x.CorrectedOutAtUtc, x.Reason, x.CreatedByUserId, x.CreatedAtUtc, x.CorrectionVersion);

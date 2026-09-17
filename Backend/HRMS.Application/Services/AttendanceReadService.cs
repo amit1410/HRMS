@@ -1,5 +1,6 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
+using HRMS.Domain.Authorization;
 using HRMS.Application.DTOs.Attendance;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
@@ -12,7 +13,8 @@ public sealed class AttendanceReadService(
     ITenantContext tenant,
     IAttendanceFoundationService roster,
     IEmployeeIdentityResolver identity,
-    IEmployeeManagerResolver managers) : IAttendanceReadService
+    IEmployeeManagerResolver managers,
+    IAttendanceAuthorizationService? authorization = null) : IAttendanceReadService
 {
     public async Task<Result<IReadOnlyList<AttendanceCalendarDayDto>>> GetMyCalendarAsync(AttendanceCalendarQuery query, CancellationToken ct = default)
     {
@@ -40,22 +42,35 @@ public sealed class AttendanceReadService(
         if (query.ToDate.DayNumber - query.FromDate.DayNumber + 1 > 92) return Result<ManagerAttendanceResult>.Invalid("dateRange", "Attendance team range cannot exceed 92 days.");
         if (query.Page < 1 || query.PageSize is < 1 or > PagedQuery.MaxPageSize) return Result<ManagerAttendanceResult>.Invalid("page", "Page values are out of range.");
 
-        var employees = await db.Employees.AsNoTracking()
-            .Where(x => x.TenantId == subject.Value!.TenantId && (query.EmployeeId == null || x.Id == query.EmployeeId))
-            .Select(x => new { x.Id, Code = x.EmployeeCode ?? string.Empty, Name = (x.FirstName + " " + x.LastName).Trim(), Department = (string?)null })
-            .ToListAsync(ct);
         var rows = new List<ManagerAttendanceRowDto>();
         for (var date = query.FromDate; date <= query.ToDate; date = date.AddDays(1))
-        foreach (var employee in employees)
         {
-            var manager = await managers.ResolveAsync(employee.Id, date, ct);
-            if (manager.Value?.ManagerId != subject.Value.EmployeeId) continue;
-            var day = await BuildDayAsync(employee.Id, date, ct);
-            if (query.Status is not null && day.AttendanceStatus != query.Status) continue;
-            if (query.DayType is not null && day.DayType != query.DayType) continue;
-            if (query.ShiftId is not null && day.ShiftId != query.ShiftId) continue;
-            if (!MatchesVariance(day, query.Variance)) continue;
-            rows.Add(new(day, employee.Id, employee.Code, employee.Name, employee.Department));
+            var employeesQuery = db.Employees.AsNoTracking().Where(x => x.TenantId == subject.Value!.TenantId && (query.EmployeeId == null || x.Id == query.EmployeeId));
+            if (authorization is not null)
+            {
+                var predicate = await authorization.BuildEmployeePredicateAsync(Permissions.Attendance.View, includeSelf: false, includeManager: true, includeRoleScope: true, date, ct);
+                if (!predicate.Succeeded || predicate.Value is null)
+                    return Result<ManagerAttendanceResult>.Failure(predicate.Status, predicate.Message, predicate.Errors);
+                employeesQuery = employeesQuery.Where(predicate.Value);
+            }
+
+            var employees = await employeesQuery
+                .Select(x => new { x.Id, Code = x.EmployeeCode ?? string.Empty, Name = (x.FirstName + " " + x.LastName).Trim(), Department = (string?)null })
+                .ToListAsync(ct);
+            foreach (var employee in employees)
+            {
+                if (authorization is null)
+                {
+                    var manager = await managers.ResolveAsync(employee.Id, date, ct);
+                    if (manager.Value?.ManagerId != subject.Value.EmployeeId) continue;
+                }
+                var day = await BuildDayAsync(employee.Id, date, ct);
+                if (query.Status is not null && day.AttendanceStatus != query.Status) continue;
+                if (query.DayType is not null && day.DayType != query.DayType) continue;
+                if (query.ShiftId is not null && day.ShiftId != query.ShiftId) continue;
+                if (!MatchesVariance(day, query.Variance)) continue;
+                rows.Add(new(day, employee.Id, employee.Code, employee.Name, employee.Department));
+            }
         }
         rows = rows.OrderBy(x => x.Day.Date).ThenBy(x => x.EmployeeCode).ToList();
         var summary = new AttendanceSummaryDto(rows.Count(x => x.Day.AttendanceStatus == EmployeeAttendanceDayStatus.Present), rows.Count(x => x.Day.AttendanceStatus == EmployeeAttendanceDayStatus.Absent), rows.Count(x => x.Day.AttendanceStatus == EmployeeAttendanceDayStatus.OnLeave), rows.Count(x => x.Day.AttendanceStatus == EmployeeAttendanceDayStatus.Holiday), rows.Count(x => x.Day.AttendanceStatus == EmployeeAttendanceDayStatus.WeeklyOff), rows.Count(x => x.Day.AttendanceStatus == EmployeeAttendanceDayStatus.Incomplete), rows.Count(x => x.Day.AttendanceStatus == EmployeeAttendanceDayStatus.NotProcessed), rows.Count(x => x.Day.IsLateIn), rows.Count(x => x.Day.IsEarlyOut), rows.Count(x => x.Day.LeaveConflict));
@@ -66,9 +81,18 @@ public sealed class AttendanceReadService(
     {
         var subject = await identity.ResolveCurrentAsync(ct);
         if (!subject.Succeeded) return Result<AttendanceDayDetailDto>.Failure(subject.Status, subject.Message, subject.Errors);
-        var relation = await managers.ResolveAsync(employeeId, date, ct);
-        if (!relation.Succeeded || relation.Value?.ManagerId != subject.Value!.EmployeeId)
-            return Result<AttendanceDayDetailDto>.Forbidden("The employee is not an effective report for this date.");
+        if (authorization is not null)
+        {
+            var access = await authorization.CanAccessEmployeeAsync(employeeId, Permissions.Attendance.View, includeSelf: false, includeManager: true, includeRoleScope: true, date, ct);
+            if (!access.Succeeded) return Result<AttendanceDayDetailDto>.Failure(access.Status, access.Message, access.Errors);
+            if (!access.Value) return Result<AttendanceDayDetailDto>.NotFound("Attendance was not found.");
+        }
+        else
+        {
+            var relation = await managers.ResolveAsync(employeeId, date, ct);
+            if (!relation.Succeeded || relation.Value?.ManagerId != subject.Value!.EmployeeId)
+                return Result<AttendanceDayDetailDto>.Forbidden("The employee is not an effective report for this date.");
+        }
         return Result<AttendanceDayDetailDto>.Success(await BuildDetailAsync(employeeId, date, ct));
     }
 

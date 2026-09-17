@@ -12,9 +12,11 @@ namespace HRMS.API.Controllers;
 public sealed class AttendanceReadController(IAttendanceReadService service) : ControllerBase
 {
     [HttpGet("me/calendar")]
+    [HasPermission(Permissions.Attendance.View)]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<AttendanceCalendarDayDto>>>> MyCalendar([FromQuery] AttendanceCalendarQuery query, CancellationToken ct) => (await service.GetMyCalendarAsync(query, ct)).ToActionResult();
 
     [HttpGet("me/days/{date}")]
+    [HasPermission(Permissions.Attendance.View)]
     public async Task<ActionResult<ApiResponse<AttendanceDayDetailDto>>> MyDay(DateOnly date, CancellationToken ct) => (await service.GetMyDayAsync(date, ct)).ToActionResult();
 
     [HttpGet("manager/team"), HasPermission(Permissions.Attendance.View)]

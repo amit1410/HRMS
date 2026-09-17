@@ -20,7 +20,7 @@ public sealed class AttendanceDayProcessor(
         if (tenant.TenantId is not Guid tenantId || tenantId == Guid.Empty) return Result<EmployeeAttendanceDayDto>.Unauthorized("No authenticated tenant.");
         if (periodLock is not null && !(await periodLock.EnsureDateIsOpenAsync(businessDate, cancellationToken)).Succeeded) return Result<EmployeeAttendanceDayDto>.Conflict("The Attendance period is closed and must be reopened before this change.");
         if (!await db.Employees.AnyAsync(x => x.TenantId == tenantId && x.Id == employeeId, cancellationToken)) return Result<EmployeeAttendanceDayDto>.NotFound("Employee was not found in this tenant.");
-        var resolution = await roster.ResolveAsync(employeeId, businessDate, cancellationToken);
+        var resolution = await roster.ResolveAsync(employeeId, businessDate, cancellationToken, enforceAuthorization: false);
         if (!resolution.Succeeded) return Result<EmployeeAttendanceDayDto>.Failure(resolution.Status, resolution.Message, resolution.Errors);
         var value = resolution.Value!;
         var shift = value.ShiftId is Guid shiftId ? await db.Shifts.AsNoTracking().Include(x => x.Breaks).SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == shiftId, cancellationToken) : null;

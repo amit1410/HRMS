@@ -1,5 +1,6 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -7,7 +8,7 @@ using System.Security.Cryptography;
 
 namespace HRMS.Application.Services;
 
-public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext tenant, TimeProvider? timeProvider = null) : IAttendanceMonthlyProcessor
+public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext tenant, TimeProvider? timeProvider = null, IAttendanceAuthorizationService? authorization = null) : IAttendanceMonthlyProcessor
 {
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
 
@@ -89,7 +90,7 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
             period.Status = AttendancePeriodStatus.ReadyToClose; period.ProcessedAtUtc = now; period.LastProcessedByUserId = userId; period.ConcurrencyVersion++;
             db.AttendancePeriodEvents.Add(Event(period, AttendancePeriodEventType.ProcessingCompleted, userId, "Monthly processing completed.", runId));
             await db.SaveChangesAsync(ct); await transaction.CommitAsync(ct);
-            var derived = await DeriveExceptions(period, ct);
+            var derived = await DeriveExceptions(period, ct, Permissions.Attendance.MonthlyViewAll);
             return Result<AttendancePeriodOverviewDto>.Success(Overview(period, summaries, derived.Count(x => x.IsBlocking)));
         }
         catch (DbUpdateConcurrencyException) { return Result<AttendancePeriodOverviewDto>.Conflict("The Attendance period was changed by another processing operation."); }
@@ -166,8 +167,15 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
         if (!TryTenant(out var tenantId, out _)) return Result<AttendancePeriodOverviewDto>.Unauthorized("No authenticated tenant.");
         var period = await db.AttendancePeriods.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == periodId, ct);
         if (period is null) return Result<AttendancePeriodOverviewDto>.NotFound("Attendance period was not found.");
-        var summaries = await db.EmployeeAttendanceMonthlySummaries.AsNoTracking().Where(x => x.TenantId == tenantId && x.AttendancePeriodId == periodId).ToListAsync(ct);
-        var exceptions = await DeriveExceptions(period, ct);
+        var summariesQuery = db.EmployeeAttendanceMonthlySummaries.AsNoTracking().Where(x => x.TenantId == tenantId && x.AttendancePeriodId == periodId);
+        if (authorization is not null)
+        {
+            var scope = await authorization.BuildEmployeePredicateAsync(Permissions.Attendance.MonthlyViewAll, true, true, true, period.StartDate, ct);
+            if (!scope.Succeeded || scope.Value is null) return Result<AttendancePeriodOverviewDto>.Failure(scope.Status, scope.Message, scope.Errors);
+            summariesQuery = summariesQuery.Where(x => db.Employees.Where(scope.Value).Any(e => e.Id == x.EmployeeId));
+        }
+        var summaries = await summariesQuery.ToListAsync(ct);
+        var exceptions = await DeriveExceptions(period, ct, Permissions.Attendance.MonthlyViewAll);
         return Result<AttendancePeriodOverviewDto>.Success(Overview(period, summaries, exceptions.Count(x => x.IsBlocking)));
     }
 
@@ -175,21 +183,28 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
     {
         if (!TryTenant(out var tenantId, out _)) return Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>.Unauthorized("No authenticated tenant.");
         if (!ValidPage(query)) return Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>.Invalid("page", "Page values are out of range.");
-        if (!await db.AttendancePeriods.AnyAsync(x => x.TenantId == tenantId && x.Id == periodId, ct)) return Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>.NotFound("Attendance period was not found.");
+        var period = await db.AttendancePeriods.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == periodId, ct);
+        if (period is null) return Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>.NotFound("Attendance period was not found.");
         var q = db.EmployeeAttendanceMonthlySummaries.AsNoTracking().Where(x => x.TenantId == tenantId && x.AttendancePeriodId == periodId);
+        if (authorization is not null)
+        {
+            var scope = await authorization.BuildEmployeePredicateAsync(Permissions.Attendance.MonthlyViewAll, true, true, true, period.StartDate, ct);
+            if (!scope.Succeeded || scope.Value is null) return Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>.Failure(scope.Status, scope.Message, scope.Errors);
+            q = q.Where(x => db.Employees.Where(scope.Value).Any(e => e.Id == x.EmployeeId));
+        }
         if (query.EmployeeId is Guid employeeId) q = q.Where(x => x.EmployeeId == employeeId);
         if (query.HasExceptions is bool has) q = has ? q.Where(x => x.ExceptionCount > 0) : q.Where(x => x.ExceptionCount == 0);
         var total = await q.CountAsync(ct); var rows = await q.OrderBy(x => x.EmployeeCode).ThenBy(x => x.EmployeeId).Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToListAsync(ct);
         return Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>.Success(new(rows.Select(Map).ToList(), query.Page, query.PageSize, total));
     }
 
-    public async Task<Result<PagedResult<AttendanceExceptionDto>>> GetExceptionsAsync(Guid periodId, AttendanceExceptionQuery query, CancellationToken ct = default)
+    public async Task<Result<PagedResult<AttendanceExceptionDto>>> GetExceptionsAsync(Guid periodId, AttendanceExceptionQuery query, CancellationToken ct = default, string? authorizationPermission = null)
     {
         if (!TryTenant(out var tenantId, out _)) return Result<PagedResult<AttendanceExceptionDto>>.Unauthorized("No authenticated tenant.");
         if (!ValidPage(query)) return Result<PagedResult<AttendanceExceptionDto>>.Invalid("page", "Page values are out of range.");
         var period = await db.AttendancePeriods.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == periodId, ct);
         if (period is null) return Result<PagedResult<AttendanceExceptionDto>>.NotFound("Attendance period was not found.");
-        var all = await DeriveExceptions(period, ct); IEnumerable<AttendanceExceptionDto> filtered = all;
+        var all = await DeriveExceptions(period, ct, authorizationPermission ?? Permissions.Attendance.MonthlyViewAll); IEnumerable<AttendanceExceptionDto> filtered = all;
         if (query.EmployeeId is Guid employeeId) filtered = filtered.Where(x => x.EmployeeId == employeeId);
         if (query.ExceptionType is AttendanceExceptionType type) filtered = filtered.Where(x => x.ExceptionType == type);
         if (query.IsBlocking is bool blocking) filtered = filtered.Where(x => x.IsBlocking == blocking);
@@ -198,9 +213,16 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
         return Result<PagedResult<AttendanceExceptionDto>>.Success(new(list.Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToList(), query.Page, query.PageSize, list.Count));
     }
 
-    private async Task<List<AttendanceExceptionDto>> DeriveExceptions(AttendancePeriod period, CancellationToken ct)
+    private async Task<List<AttendanceExceptionDto>> DeriveExceptions(AttendancePeriod period, CancellationToken ct, string authorizationPermission)
     {
-        var tenantId = period.TenantId; var employees = await db.Employees.AsNoTracking().Where(x => x.TenantId == tenantId && x.DateOfJoining <= period.EndDate && (x.DateOfLeaving == null || x.DateOfLeaving >= period.StartDate)).ToListAsync(ct); var result = new List<AttendanceExceptionDto>();
+        var tenantId = period.TenantId; var employeesQuery = db.Employees.AsNoTracking().Where(x => x.TenantId == tenantId && x.DateOfJoining <= period.EndDate && (x.DateOfLeaving == null || x.DateOfLeaving >= period.StartDate));
+        if (authorization is not null)
+        {
+            var scope = await authorization.BuildEmployeePredicateAsync(authorizationPermission, true, true, true, period.StartDate, ct);
+            if (!scope.Succeeded || scope.Value is null) return [];
+            employeesQuery = employeesQuery.Where(scope.Value);
+        }
+        var employees = await employeesQuery.ToListAsync(ct); var result = new List<AttendanceExceptionDto>();
         foreach (var employee in employees)
         {
                 var histories = await db.EmployeeEmploymentHistory.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employee.Id && !x.IsSuperseded && x.EffectiveFrom <= period.EndDate && (x.EffectiveTo == null || x.EffectiveTo >= period.StartDate)).ToListAsync(ct);
@@ -216,7 +238,7 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
     {
         var summaries = await db.EmployeeAttendanceMonthlySummaries.AsNoTracking().Where(x => x.TenantId == period.TenantId && x.AttendancePeriodId == period.Id).ToListAsync(ct);
         var employees = await db.Employees.AsNoTracking().Where(x => x.TenantId == period.TenantId && x.DateOfJoining <= period.EndDate && (x.DateOfLeaving == null || x.DateOfLeaving >= period.StartDate)).Select(x => x.Id).ToListAsync(ct);
-        var exceptions = await DeriveExceptions(period, ct);
+        var exceptions = await DeriveExceptions(period, ct, Permissions.Attendance.MonthlyViewAll);
         var pendingReg = exceptions.Count(x => x.ExceptionType == AttendanceExceptionType.PendingRegularization);
         var pendingOd = exceptions.Count(x => x.ExceptionType == AttendanceExceptionType.PendingOnDuty);
         var notProcessed = exceptions.Count(x => x.ExceptionType == AttendanceExceptionType.NotProcessed);
