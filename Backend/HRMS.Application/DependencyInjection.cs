@@ -35,6 +35,7 @@ public static class DependencyInjection
         services.AddScoped<ICityService, CityService>();
         services.AddScoped<IEmployeeService, EmployeeService>();
         services.AddScoped<IEmployeeAccessScopeService, EmployeeAccessScopeService>();
+        services.AddScoped<ILeaveAuthorizationService, LeaveAuthorizationService>();
         services.AddScoped<IEmployeePortalAccountService, EmployeePortalAccountService>();
         services.AddScoped<IEmployeeCodeConfigurationService, EmployeeCodeConfigurationService>();
         services.AddScoped<IEmployeeCodeSequenceService, EmployeeCodeSequenceService>();

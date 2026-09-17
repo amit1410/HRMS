@@ -1,5 +1,6 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -14,17 +15,22 @@ public sealed class LeaveReportService : ILeaveReportService
     private readonly ITenantContext _tenant;
     private readonly ILeavePeriodResolver _periods;
     private readonly TimeProvider _clock;
+    private readonly ILeaveAuthorizationService? _authorization;
+    private IQueryable<Guid>? _authorizedEmployeeIds;
 
-    public LeaveReportService(IHrmsDbContext db, ITenantContext tenant, ILeavePeriodResolver periods, TimeProvider clock)
+    public LeaveReportService(IHrmsDbContext db, ITenantContext tenant, ILeavePeriodResolver periods, TimeProvider clock, ILeaveAuthorizationService? authorization = null)
     {
         _db = db;
         _tenant = tenant;
         _periods = periods;
         _clock = clock;
+        _authorization = authorization;
     }
 
     public async Task<Result<PagedResult<LeaveRequestReportRow>>> GetRequestsAsync(LeaveReportQuery query, CancellationToken cancellationToken = default)
     {
+        var access = await EnsureEmployeeAccessAsync(cancellationToken);
+        if (!access.Succeeded) return Result<PagedResult<LeaveRequestReportRow>>.Failure(access.Status, access.Message, access.Errors);
         var scope = await ResolveScopeAsync(query, cancellationToken);
         if (!scope.Succeeded) return Result<PagedResult<LeaveRequestReportRow>>.Failure(scope.Status, scope.Message, scope.Errors);
         var source = ApplyRequestFilters(RequestSource(scope.Value!.From, scope.Value.To), query);
@@ -38,11 +44,13 @@ public sealed class LeaveReportService : ILeaveReportService
 
     public async Task<Result<PagedResult<LeaveBalanceReportRow>>> GetBalancesAsync(LeaveReportQuery query, CancellationToken cancellationToken = default)
     {
+        var access = await EnsureEmployeeAccessAsync(cancellationToken);
+        if (!access.Succeeded) return Result<PagedResult<LeaveBalanceReportRow>>.Failure(access.Status, access.Message, access.Errors);
         var validation = ValidatePaging<LeaveBalanceReportRow>(query);
         if (validation is not null) return Result<PagedResult<LeaveBalanceReportRow>>.Failure(validation.Status, validation.Message, validation.Errors);
         if (!Tenant(out var tenantId)) return Result<PagedResult<LeaveBalanceReportRow>>.Unauthorized("No authenticated tenant.");
         var balances = await _db.EmployeeLeaveBalances.AsNoTracking()
-            .Where(x => x.TenantId == tenantId && (!query.EmployeeId.HasValue || x.EmployeeId == query.EmployeeId) && (!query.LeaveTypeId.HasValue || x.LeaveTypeId == query.LeaveTypeId) && (!query.LeavePeriodId.HasValue || x.LeavePeriodId == query.LeavePeriodId))
+            .Where(x => x.TenantId == tenantId && _authorizedEmployeeIds!.Contains(x.EmployeeId) && (!query.EmployeeId.HasValue || x.EmployeeId == query.EmployeeId) && (!query.LeaveTypeId.HasValue || x.LeaveTypeId == query.LeaveTypeId) && (!query.LeavePeriodId.HasValue || x.LeavePeriodId == query.LeavePeriodId))
             .Select(x => new BalanceRow(x.EmployeeId, x.Employee!.EmployeeCode ?? string.Empty, x.Employee.FirstName, x.Employee.MiddleName, x.Employee.LastName, x.LeaveType!.Name, x.LeaveTypeId, EntitlementMode.Allocated, x.GrantedQuantity, x.ReservedQuantity, x.ConsumedQuantity, x.GrantedQuantity - x.ReservedQuantity - x.ConsumedQuantity, x.LeavePeriodId))
             .ToListAsync(cancellationToken);
         var today = Today();
@@ -64,6 +72,8 @@ public sealed class LeaveReportService : ILeaveReportService
 
     public async Task<Result<IReadOnlyList<LeaveUsageReportRow>>> GetUsageAsync(LeaveReportQuery query, CancellationToken cancellationToken = default)
     {
+        var access = await EnsureEmployeeAccessAsync(cancellationToken);
+        if (!access.Succeeded) return Result<IReadOnlyList<LeaveUsageReportRow>>.Failure(access.Status, access.Message, access.Errors);
         var scope = await ResolveScopeAsync(query, cancellationToken);
         if (!scope.Succeeded) return Result<IReadOnlyList<LeaveUsageReportRow>>.Failure(scope.Status, scope.Message, scope.Errors);
         var rows = await ProjectRequests(ApplyRequestFilters(RequestSource(scope.Value!.From, scope.Value.To), query).Where(x => x.Status == LeaveRequestStatus.Approved)).ToListAsync(cancellationToken);
@@ -73,14 +83,16 @@ public sealed class LeaveReportService : ILeaveReportService
 
     public async Task<Result<PagedResult<LeaveAccountingReportRow>>> GetAccountingAsync(LeaveReportQuery query, CancellationToken cancellationToken = default)
     {
+        var access = await EnsureEmployeeAccessAsync(cancellationToken);
+        if (!access.Succeeded) return Result<PagedResult<LeaveAccountingReportRow>>.Failure(access.Status, access.Message, access.Errors);
         var scope = await ResolveScopeAsync(query, cancellationToken);
         if (!scope.Succeeded) return Result<PagedResult<LeaveAccountingReportRow>>.Failure(scope.Status, scope.Message, scope.Errors);
         var tenantId = _tenant.TenantId!.Value;
         var transactions = await (from x in _db.LeaveBalanceTransactions.AsNoTracking()
-                                  where x.TenantId == tenantId && x.EffectiveDate >= scope.Value!.From && x.EffectiveDate <= scope.Value.To && (x.TransactionType == LeaveBalanceTransactionType.Accrual || x.TransactionType == LeaveBalanceTransactionType.CarryForward || x.TransactionType == LeaveBalanceTransactionType.Expiry) && (!query.EmployeeId.HasValue || x.EmployeeId == query.EmployeeId) && (!query.LeaveTypeId.HasValue || x.LeaveTypeId == query.LeaveTypeId)
+                                  where x.TenantId == tenantId && _authorizedEmployeeIds!.Contains(x.EmployeeId) && x.EffectiveDate >= scope.Value!.From && x.EffectiveDate <= scope.Value.To && (x.TransactionType == LeaveBalanceTransactionType.Accrual || x.TransactionType == LeaveBalanceTransactionType.CarryForward || x.TransactionType == LeaveBalanceTransactionType.Expiry) && (!query.EmployeeId.HasValue || x.EmployeeId == query.EmployeeId) && (!query.LeaveTypeId.HasValue || x.LeaveTypeId == query.LeaveTypeId)
                                   select new LeaveAccountingReportRow(x.EmployeeId, x.Employee!.EmployeeCode ?? string.Empty, x.Employee.FirstName + " " + x.Employee.LastName, x.LeaveType!.Name, x.EmployeeLeaveBalance!.LeavePeriod!.Name, x.EffectiveDate, x.TransactionType.ToString(), x.Quantity, x.SourceType, x.SourceReference, null, null, null)).ToListAsync(cancellationToken);
-        var occurrences = await _db.LeaveAccrualOccurrences.AsNoTracking().Where(x => x.TenantId == tenantId && x.OccurrenceDate >= scope.Value!.From && x.OccurrenceDate <= scope.Value.To && (!query.EmployeeId.HasValue || x.EmployeeId == query.EmployeeId) && (!query.LeaveTypeId.HasValue || x.LeaveTypeId == query.LeaveTypeId)).Select(x => new LeaveAccountingReportRow(x.EmployeeId, x.Employee!.EmployeeCode ?? string.Empty, x.Employee.FirstName + " " + x.Employee.LastName, x.LeaveType!.Name, x.LeavePeriod!.Name, x.OccurrenceDate, "Accrual occurrence", x.CreditedQuantity, LeaveBalanceSourceType.Policy, x.OccurrenceKey, x.CalculatedQuantity, x.CreditedQuantity, null)).ToListAsync(cancellationToken);
-        var closeRows = await _db.LeavePeriodCloseOccurrences.AsNoTracking().Where(x => x.TenantId == tenantId && (!query.EmployeeId.HasValue || x.EmployeeId == query.EmployeeId) && (!query.LeaveTypeId.HasValue || x.LeaveTypeId == query.LeaveTypeId)).Select(x => new { x.EmployeeId, x.LeaveTypeId, x.DestinationLeavePeriodId, x.SourceLeavePeriodId, x.CarriedQuantity, x.LapsedQuantity, x.OccurrenceKey }).ToListAsync(cancellationToken);
+        var occurrences = await _db.LeaveAccrualOccurrences.AsNoTracking().Where(x => x.TenantId == tenantId && _authorizedEmployeeIds!.Contains(x.EmployeeId) && x.OccurrenceDate >= scope.Value!.From && x.OccurrenceDate <= scope.Value.To && (!query.EmployeeId.HasValue || x.EmployeeId == query.EmployeeId) && (!query.LeaveTypeId.HasValue || x.LeaveTypeId == query.LeaveTypeId)).Select(x => new LeaveAccountingReportRow(x.EmployeeId, x.Employee!.EmployeeCode ?? string.Empty, x.Employee.FirstName + " " + x.Employee.LastName, x.LeaveType!.Name, x.LeavePeriod!.Name, x.OccurrenceDate, "Accrual occurrence", x.CreditedQuantity, LeaveBalanceSourceType.Policy, x.OccurrenceKey, x.CalculatedQuantity, x.CreditedQuantity, null)).ToListAsync(cancellationToken);
+        var closeRows = await _db.LeavePeriodCloseOccurrences.AsNoTracking().Where(x => x.TenantId == tenantId && _authorizedEmployeeIds!.Contains(x.EmployeeId) && (!query.EmployeeId.HasValue || x.EmployeeId == query.EmployeeId) && (!query.LeaveTypeId.HasValue || x.LeaveTypeId == query.LeaveTypeId)).Select(x => new { x.EmployeeId, x.LeaveTypeId, x.DestinationLeavePeriodId, x.SourceLeavePeriodId, x.CarriedQuantity, x.LapsedQuantity, x.OccurrenceKey }).ToListAsync(cancellationToken);
         var closeDates = await _db.LeavePeriods.AsNoTracking().Where(x => x.TenantId == tenantId && closeRows.Select(c => c.DestinationLeavePeriodId).Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.StartDate, cancellationToken);
         var closeTypes = await _db.LeaveTypes.AsNoTracking().Where(x => x.TenantId == tenantId && closeRows.Select(c => c.LeaveTypeId).Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, cancellationToken);
         var closeEmployees = await _db.Employees.AsNoTracking().Where(x => x.TenantId == tenantId && closeRows.Select(c => c.EmployeeId).Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => new { Code = x.EmployeeCode ?? string.Empty, Name = x.FirstName + " " + x.LastName }, cancellationToken);
@@ -92,6 +104,8 @@ public sealed class LeaveReportService : ILeaveReportService
 
     public async Task<Result<PagedResult<PendingApprovalReportRow>>> GetPendingAsync(LeaveReportQuery query, CancellationToken cancellationToken = default)
     {
+        var access = await EnsureEmployeeAccessAsync(cancellationToken);
+        if (!access.Succeeded) return Result<PagedResult<PendingApprovalReportRow>>.Failure(access.Status, access.Message, access.Errors);
         var scope = await ResolveScopeAsync(query, cancellationToken);
         if (!scope.Succeeded) return Result<PagedResult<PendingApprovalReportRow>>.Failure(scope.Status, scope.Message, scope.Errors);
         var rows = await ProjectRequests(ApplyRequestFilters(RequestSource(scope.Value!.From, scope.Value.To), query).Where(x => x.Status == LeaveRequestStatus.PendingApproval).OrderBy(x => x.SubmittedAtUtc)).ToListAsync(cancellationToken);
@@ -103,6 +117,8 @@ public sealed class LeaveReportService : ILeaveReportService
 
     public async Task<Result<IReadOnlyList<LeaveOrganizationReportRow>>> GetOrganizationAsync(LeaveReportQuery query, CancellationToken cancellationToken = default)
     {
+        var access = await EnsureEmployeeAccessAsync(cancellationToken);
+        if (!access.Succeeded) return Result<IReadOnlyList<LeaveOrganizationReportRow>>.Failure(access.Status, access.Message, access.Errors);
         var scope = await ResolveScopeAsync(query, cancellationToken);
         if (!scope.Succeeded) return Result<IReadOnlyList<LeaveOrganizationReportRow>>.Failure(scope.Status, scope.Message, scope.Errors);
         var rows = await ProjectRequests(ApplyRequestFilters(RequestSource(scope.Value!.From, scope.Value.To), query)).ToListAsync(cancellationToken);
@@ -140,6 +156,7 @@ public sealed class LeaveReportService : ILeaveReportService
 
     private async Task<Result<LeaveReportExportDto>> ExportRequestsAsync(LeaveReportQuery query, CancellationToken ct)
     {
+        var access = await EnsureEmployeeAccessAsync(ct); if (!access.Succeeded) return Result<LeaveReportExportDto>.Failure(access.Status, access.Message, access.Errors);
         var scope = await ResolveScopeAsync(query, ct); if (!scope.Succeeded) return Result<LeaveReportExportDto>.Failure(scope.Status, scope.Message, scope.Errors);
         var source = ApplyRequestFilters(RequestSource(scope.Value!.From, scope.Value.To), query); var total = await source.CountAsync(ct); if (total > MaxExportRows) return Result<LeaveReportExportDto>.Invalid("export", $"The report contains more than {MaxExportRows} rows. Narrow the filters and try again.");
         var csv = new CsvBuilder("Request Id", "Employee Code", "Employee Name", "Leave Type", "Start Date", "End Date", "Quantity", "Status", "Submitted Date", "Department", "WorkLocation", "Manager", "Leave Period");
@@ -154,7 +171,25 @@ public sealed class LeaveReportService : ILeaveReportService
     private async Task<Result<LeaveReportExportDto>> ExportOrganizationAsync(LeaveReportQuery query, CancellationToken ct) { var result = await GetOrganizationAsync(query, ct); if (!result.Succeeded) return Result<LeaveReportExportDto>.Failure(result.Status, result.Message, result.Errors); if (result.Value!.Count > MaxExportRows) return Result<LeaveReportExportDto>.Invalid("export", $"The report contains more than {MaxExportRows} rows. Narrow the filters and try again."); var csv = new CsvBuilder("Group", "Employees", "Requests", "Pending", "Approved Quantity"); foreach (var x in result.Value) csv.AppendRow(x.Group, x.EmployeeCount.ToString(), x.RequestCount.ToString(), x.PendingCount.ToString(), x.ApprovedQuantity.ToString()); return Result<LeaveReportExportDto>.Success(new("leave-organization-summary.csv", "text/csv; charset=utf-8", csv.ToUtf8Bytes(), csv.RowCount)); }
     private async Task<Result<LeaveReportExportDto>> ExportCalendarAsync(LeaveReportQuery query, CancellationToken ct) { var result = await GetCalendarAsync(query, ct); if (!result.Succeeded) return Result<LeaveReportExportDto>.Failure(result.Status, result.Message, result.Errors); if (result.Value!.Count > MaxExportRows) return Result<LeaveReportExportDto>.Invalid("export", $"The report contains more than {MaxExportRows} rows. Narrow the filters and try again."); var csv = new CsvBuilder("Kind", "Name", "Date", "Effective From", "Effective To", "Country Id", "WorkLocation Id", "Weekdays", "Active"); foreach (var x in result.Value) csv.AppendRow(x.Kind, x.Name, x.Date?.ToString("yyyy-MM-dd"), x.EffectiveFrom.ToString("yyyy-MM-dd"), x.EffectiveTo?.ToString("yyyy-MM-dd"), x.CountryId?.ToString("D"), x.WorkLocationId?.ToString("D"), x.Weekdays, x.IsActive.ToString()); return Result<LeaveReportExportDto>.Success(new("leave-holiday-calendar.csv", "text/csv; charset=utf-8", csv.ToUtf8Bytes(), csv.RowCount)); }
 
-    private IQueryable<LeaveRequest> RequestSource(DateOnly from, DateOnly to) => _db.LeaveRequests.AsNoTracking().Where(x => x.TenantId == _tenant.TenantId!.Value && x.StartDate <= to && x.EndDate >= from);
+    private IQueryable<LeaveRequest> RequestSource(DateOnly from, DateOnly to)
+    {
+        var source = _db.LeaveRequests.AsNoTracking().Where(x => x.TenantId == _tenant.TenantId!.Value && x.StartDate <= to && x.EndDate >= from);
+        return _authorizedEmployeeIds is null ? source : source.Where(x => _authorizedEmployeeIds.Contains(x.EmployeeId));
+    }
+    private async Task<Result<bool>> EnsureEmployeeAccessAsync(CancellationToken cancellationToken)
+    {
+        if (_authorizedEmployeeIds is not null) return Result<bool>.Success(true);
+        if (_tenant.TenantId is not Guid tenantId) return Result<bool>.Unauthorized("No authenticated tenant.");
+        if (_authorization is null)
+        {
+            _authorizedEmployeeIds = _db.Employees.AsNoTracking().Where(x => x.TenantId == tenantId).Select(x => x.Id);
+            return Result<bool>.Success(true);
+        }
+        var access = await _authorization.BuildEmployeePredicateAsync(Permissions.Leave.ReportsView, includeManager: false, includeRoleScope: true, Today(), cancellationToken);
+        if (!access.Succeeded || access.Value is null) return Result<bool>.Failure(access.Status, access.Message, access.Errors);
+        _authorizedEmployeeIds = _db.Employees.AsNoTracking().Where(access.Value).Select(x => x.Id);
+        return Result<bool>.Success(true);
+    }
     private static IQueryable<LeaveRequest> ApplyRequestFilters(IQueryable<LeaveRequest> source, LeaveReportQuery query) { if (query.EmployeeId is Guid employee) source = source.Where(x => x.EmployeeId == employee); if (query.LeaveTypeId is Guid type) source = source.Where(x => x.LeaveTypeId == type); if (query.Status is LeaveRequestStatus status) source = source.Where(x => x.Status == status); if (query.DepartmentId is Guid department) source = source.Where(x => x.EmployeeEmploymentHistory!.DepartmentId == department); if (query.WorkLocationId is Guid location) source = source.Where(x => x.EmployeeEmploymentHistory!.WorkLocationId == location); return source; }
     private static IQueryable<LeaveRequest> ApplyRequestSort(IQueryable<LeaveRequest> source, LeaveReportQuery query) => query.SortBy?.ToLowerInvariant() switch { "employeecode" => query.Descending ? source.OrderByDescending(x => x.Employee!.EmployeeCode) : source.OrderBy(x => x.Employee!.EmployeeCode), "employee" => query.Descending ? source.OrderByDescending(x => x.Employee!.FirstName).ThenByDescending(x => x.Employee!.LastName) : source.OrderBy(x => x.Employee!.FirstName).ThenBy(x => x.Employee!.LastName), "leavetype" => query.Descending ? source.OrderByDescending(x => x.LeaveType!.Name) : source.OrderBy(x => x.LeaveType!.Name), "status" => query.Descending ? source.OrderByDescending(x => x.Status) : source.OrderBy(x => x.Status), "startdate" => query.Descending ? source.OrderByDescending(x => x.StartDate) : source.OrderBy(x => x.StartDate), _ => source.OrderByDescending(x => x.StartDate).ThenBy(x => x.Employee!.EmployeeCode) };
     private static IQueryable<RequestRow> ProjectRequests(IQueryable<LeaveRequest> source) => source.Select(x => new RequestRow(x.Id, x.EmployeeId, x.Status, x.StartDate, x.EndDate, x.ChargeableQuantity, x.SubmittedAtUtc, x.LeaveTypeId, x.LeaveType!.Name, x.Employee!.EmployeeCode ?? string.Empty, x.Employee.FirstName, x.Employee.MiddleName, x.Employee.LastName, x.EmployeeEmploymentHistory!.DepartmentId, x.EmployeeEmploymentHistory.Department != null ? x.EmployeeEmploymentHistory.Department.Name : x.EmployeeEmploymentHistory.DepartmentName, x.EmployeeEmploymentHistory.WorkLocationId, x.EmployeeEmploymentHistory.WorkLocation!.Name, x.EmployeeEmploymentHistory.ManagerName, x.LeavePeriod!.Name));

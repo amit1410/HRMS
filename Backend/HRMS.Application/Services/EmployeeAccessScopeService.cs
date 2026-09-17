@@ -102,6 +102,56 @@ public sealed class EmployeeAccessScopeService(
         return Expression.Lambda<Func<Employee, bool>>(body ?? Expression.Constant(false), employee);
     }
 
+    public async Task<Expression<Func<Employee, bool>>> BuildRoleScopePredicateAsync(DateOnly effectiveDate, CancellationToken cancellationToken = default)
+    {
+        if (tenantContext.UserId is not Guid userId || tenantContext.TenantId is not Guid tenantId)
+            return _ => false;
+
+        var assignments = await db.UserRoles.AsNoTracking().Include(x => x.Scopes)
+            .Where(x => x.TenantId == tenantId && x.UserId == userId &&
+                        x.EffectiveFrom <= effectiveDate && (x.EffectiveTo == null || x.EffectiveTo >= effectiveDate))
+            .ToListAsync(cancellationToken);
+
+        if (assignments.Any(x => x.Scopes.Count == 0 && x.AssignmentSource != RoleAssignmentSource.System))
+            return _ => true;
+
+        var employee = Expression.Parameter(typeof(Employee), "employee");
+        Expression? body = null;
+        foreach (var assignment in assignments.Where(x => x.Scopes.Count > 0))
+        {
+            var history = Expression.Parameter(typeof(EmployeeEmploymentHistory), "history");
+            Expression? dimensions = null;
+            foreach (var dimension in assignment.Scopes.GroupBy(x => x.ScopeType))
+            {
+                Expression? alternatives = null;
+                foreach (var scope in dimension)
+                {
+                    var property = PropertyFor(dimension.Key);
+                    var equality = Expression.Equal(Expression.Property(history, property), Expression.Constant(scope.ScopeEntityId, typeof(Guid?)));
+                    alternatives = alternatives is null ? equality : Expression.OrElse(alternatives, equality);
+                }
+
+                dimensions = dimensions is null ? alternatives : Expression.AndAlso(dimensions, alternatives!);
+            }
+
+            var effective = Expression.AndAlso(
+                Expression.Not(Expression.Property(history, nameof(EmployeeEmploymentHistory.IsSuperseded))),
+                Expression.AndAlso(
+                    Expression.LessThanOrEqual(Expression.Property(history, nameof(EmployeeEmploymentHistory.EffectiveFrom)), Expression.Constant(effectiveDate)),
+                    Expression.OrElse(
+                        Expression.Equal(Expression.Property(history, nameof(EmployeeEmploymentHistory.EffectiveTo)), Expression.Constant(null, typeof(DateOnly?))),
+                        Expression.GreaterThanOrEqual(Expression.Property(history, nameof(EmployeeEmploymentHistory.EffectiveTo)), Expression.Convert(Expression.Constant(effectiveDate), typeof(DateOnly?))))));
+            var predicate = Expression.AndAlso(effective, dimensions!);
+            var any = Expression.Call(
+                typeof(Enumerable), nameof(Enumerable.Any), [typeof(EmployeeEmploymentHistory)],
+                Expression.Property(employee, nameof(Employee.EmploymentHistory)),
+                Expression.Lambda<Func<EmployeeEmploymentHistory, bool>>(predicate, history));
+            body = body is null ? any : Expression.OrElse(body, any);
+        }
+
+        return Expression.Lambda<Func<Employee, bool>>(body ?? Expression.Constant(false), employee);
+    }
+
     public async Task<bool> CanAccessEmployeeAsync(Guid employeeId, DateOnly effectiveDate, CancellationToken cancellationToken = default)
     {
         var predicate = await BuildPredicateAsync(effectiveDate, cancellationToken);

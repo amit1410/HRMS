@@ -7,5 +7,6 @@ namespace HRMS.Application.Abstractions;
 public interface IEmployeeAccessScopeService
 {
     Task<Expression<Func<Employee, bool>>> BuildPredicateAsync(DateOnly effectiveDate, CancellationToken cancellationToken = default);
+    Task<Expression<Func<Employee, bool>>> BuildRoleScopePredicateAsync(DateOnly effectiveDate, CancellationToken cancellationToken = default);
     Task<bool> CanAccessEmployeeAsync(Guid employeeId, DateOnly effectiveDate, CancellationToken cancellationToken = default);
 }

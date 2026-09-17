@@ -22,6 +22,7 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
     private readonly IDatabaseTransientErrorClassifier? _deadlockClassifier;
     private readonly ILeaveBalanceAccountingService? _balanceAccountingService;
     private readonly ILeaveNotificationService? _notificationService;
+    private readonly ILeaveAuthorizationService? _authorization;
 
     public LeaveRequestApprovalService(
         IHrmsDbContext db,
@@ -32,7 +33,8 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
         ILeaveRequestSubmissionRetryPolicy? retryPolicy = null,
         IDatabaseTransientErrorClassifier? deadlockClassifier = null,
         ILeaveBalanceAccountingService? balanceAccountingService = null,
-        ILeaveNotificationService? notificationService = null)
+        ILeaveNotificationService? notificationService = null,
+        ILeaveAuthorizationService? authorization = null)
     {
         _db = db;
         _identityResolver = identityResolver;
@@ -43,6 +45,7 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
         _deadlockClassifier = deadlockClassifier;
         _balanceAccountingService = balanceAccountingService;
         _notificationService = notificationService;
+        _authorization = authorization;
     }
 
     public Task<Result<LeaveRequestApprovalResult>> ApproveAsync(Guid requestId, CancellationToken cancellationToken = default) =>
@@ -218,6 +221,19 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
         if (identity.EmployeeId == request.EmployeeId)
             return Result<LeaveRequestApprovalResult>.Forbidden(
                 $"{LeaveRequestApprovalErrorCodes.ApproverNotAuthorized}: An employee cannot approve or reject their own request.");
+
+        if (_authorization is not null)
+        {
+            var access = await _authorization.CanAccessEmployeeAsync(
+                request.EmployeeId, Permissions.Leave.Approve, includeSelf: false, includeManager: true,
+                includeRoleScope: true, DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime), cancellationToken);
+            if (!access.Succeeded)
+                return Result<LeaveRequestApprovalResult>.Failure(access.Status, access.Message, access.Errors);
+            if (!access.Value)
+                return Result<LeaveRequestApprovalResult>.Forbidden(
+                    $"{LeaveRequestApprovalErrorCodes.ApproverNotAuthorized}: The authenticated account cannot access this employee's Leave request.");
+            return null;
+        }
 
         var active = await _db.Users.AsNoTracking().AnyAsync(
             x => x.TenantId == identity.TenantId && x.Id == identity.UserId && x.IsActive,

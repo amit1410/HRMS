@@ -1,6 +1,8 @@
 using HRMS.API.Extensions;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
+using HRMS.API.Security;
+using HRMS.Domain.Authorization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -14,7 +16,7 @@ public sealed class LeaveCalendarController : ControllerBase
 
     public LeaveCalendarController(ILeaveCalendarService service) => _service = service;
 
-    [HttpGet]
+    [HttpGet, HasPermission(Permissions.Leave.RequestViewOwn)]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<LeaveCalendarEventDto>>>> Get(
         [FromQuery] DateOnly from,
         [FromQuery] DateOnly to,

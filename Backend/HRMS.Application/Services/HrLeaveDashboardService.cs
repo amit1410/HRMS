@@ -1,5 +1,6 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,14 +11,16 @@ public sealed class HrLeaveDashboardService : IHrLeaveDashboardService
     private readonly IHrmsDbContext _db;
     private readonly ITenantContext _tenant;
     private readonly ILeavePeriodResolver _periodResolver;
+    private readonly ILeaveAuthorizationService? _authorization;
     private readonly TimeProvider _clock;
 
-    public HrLeaveDashboardService(IHrmsDbContext db, ITenantContext tenant, ILeavePeriodResolver periodResolver, TimeProvider clock)
+    public HrLeaveDashboardService(IHrmsDbContext db, ITenantContext tenant, ILeavePeriodResolver periodResolver, TimeProvider clock, ILeaveAuthorizationService? authorization = null)
     {
         _db = db;
         _tenant = tenant;
         _periodResolver = periodResolver;
         _clock = clock;
+        _authorization = authorization;
     }
 
     public async Task<Result<HrLeaveDashboardSummaryDto>> GetSummaryAsync(HrLeaveDashboardFilter filter, CancellationToken cancellationToken = default)
@@ -35,9 +38,24 @@ public sealed class HrLeaveDashboardService : IHrLeaveDashboardService
         if (to.DayNumber - from.DayNumber > 366)
             return Result<HrLeaveDashboardSummaryDto>.Invalid("to", "The dashboard range cannot exceed 366 days.");
 
-        var requests = await _db.LeaveRequests.AsNoTracking()
+        IQueryable<Guid>? authorizedEmployeeIds = null;
+        if (_authorization is not null)
+        {
+            var access = await _authorization.BuildEmployeePredicateAsync(
+                Permissions.Leave.DashboardViewAll, includeManager: false, includeRoleScope: true, today, cancellationToken);
+            if (!access.Succeeded || access.Value is null)
+                return Result<HrLeaveDashboardSummaryDto>.Failure(access.Status, access.Message, access.Errors);
+            authorizedEmployeeIds = _db.Employees.AsNoTracking().Where(access.Value).Select(x => x.Id);
+        }
+
+        var requestQuery = _db.LeaveRequests.AsNoTracking()
             .Where(x => x.TenantId == _tenant.TenantId.Value && x.StartDate <= to && x.EndDate >= from &&
-                (!filter.LeaveTypeId.HasValue || x.LeaveTypeId == filter.LeaveTypeId.Value))
+                (authorizedEmployeeIds == null || authorizedEmployeeIds.Contains(x.EmployeeId)) &&
+                (!filter.LeaveTypeId.HasValue || x.LeaveTypeId == filter.LeaveTypeId.Value) &&
+                (!filter.DepartmentId.HasValue || x.EmployeeEmploymentHistory!.DepartmentId == filter.DepartmentId.Value) &&
+                (!filter.WorkLocationId.HasValue || x.EmployeeEmploymentHistory!.WorkLocationId == filter.WorkLocationId.Value));
+
+        var requests = await requestQuery
             .Select(x => new RequestRow(
                 x.Id, x.EmployeeId, x.Status, x.StartDate, x.EndDate, x.ChargeableQuantity, x.SubmittedAtUtc,
                 x.LeaveTypeId, x.LeaveType!.Code, x.LeaveType.Name, x.Employee!.EmployeeCode ?? string.Empty,
@@ -47,8 +65,6 @@ public sealed class HrLeaveDashboardService : IHrLeaveDashboardService
                 x.EmployeeEmploymentHistory.ManagerName))
             .ToListAsync(cancellationToken);
 
-        requests = requests.Where(x => (!filter.DepartmentId.HasValue || x.DepartmentId == filter.DepartmentId) &&
-                                       (!filter.WorkLocationId.HasValue || x.WorkLocationId == filter.WorkLocationId)).ToList();
         var approved = requests.Where(x => x.Status == LeaveRequestStatus.Approved).ToList();
         var onLeaveToday = approved.Where(x => x.StartDate <= today && x.EndDate >= today).Select(x => x.EmployeeId).Distinct().Count();
         var activeEmployees = await _db.EmployeeEmploymentHistory.AsNoTracking()
