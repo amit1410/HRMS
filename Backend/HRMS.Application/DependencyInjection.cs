@@ -26,6 +26,7 @@ public static class DependencyInjection
         services.AddScoped<IRoleAssignmentService, RoleAssignmentService>();
         services.AddScoped<IRoleResolutionService, RoleResolutionService>();
         services.AddScoped<IRoleScopeResolver, RoleScopeResolver>();
+        services.AddScoped<IPageAccessService, PageAccessService>();
         services.AddScoped<ITenantBrandingService, TenantBrandingService>();
         services.AddScoped<IDepartmentService, DepartmentService>();
         services.AddScoped<IDesignationService, DesignationService>();
@@ -33,6 +34,7 @@ public static class DependencyInjection
         services.AddScoped<IStateService, StateService>();
         services.AddScoped<ICityService, CityService>();
         services.AddScoped<IEmployeeService, EmployeeService>();
+        services.AddScoped<IEmployeeAccessScopeService, EmployeeAccessScopeService>();
         services.AddScoped<IEmployeePortalAccountService, EmployeePortalAccountService>();
         services.AddScoped<IEmployeeCodeConfigurationService, EmployeeCodeConfigurationService>();
         services.AddScoped<IEmployeeCodeSequenceService, EmployeeCodeSequenceService>();

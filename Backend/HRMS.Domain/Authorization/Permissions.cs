@@ -104,6 +104,12 @@ public static class Permissions
         public const string AssignmentManage = "RoleAssignment.Manage";
         public const string AssignmentViewHistory = "RoleAssignment.ViewHistory";
     }
+
+    public static class PageAccess
+    {
+        public const string View = "PageAccess.View";
+        public const string Manage = "PageAccess.Manage";
+    }
     public static class Attendance
     {
         public const string View = "Attendance.View";
@@ -141,6 +147,7 @@ public static class Permissions
         AccountEmployeeLink.View, AccountEmployeeLink.ViewHistory, AccountEmployeeLink.Manage,
         RoleManagement.View, RoleManagement.Manage, RoleManagement.AssignmentView,
         RoleManagement.AssignmentManage, RoleManagement.AssignmentViewHistory,
+        PageAccess.View, PageAccess.Manage,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

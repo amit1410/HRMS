@@ -42,6 +42,23 @@ public sealed class RoleScopeResolverTests
         Assert.True(await resolver.AppliesAsync(global, Employee, new(2026, 9, 1)));
     }
 
+    [Fact]
+    public async Task Multiple_values_in_one_dimension_are_alternatives()
+    {
+        var resolver = new RoleScopeResolver(new DateAwareEmploymentResolver());
+        var assignment = new UserRole
+        {
+            TenantId = Tenant,
+            Scopes =
+            [
+                new UserRoleAssignmentScope { ScopeType = RoleScopeType.Department, ScopeEntityId = Finance },
+                new UserRoleAssignmentScope { ScopeType = RoleScopeType.Department, ScopeEntityId = It }
+            ]
+        };
+
+        Assert.True(await resolver.AppliesAsync(assignment, Employee, new(2026, 9, 1)));
+    }
+
     private sealed class DateAwareEmploymentResolver : IEffectiveEmploymentResolver
     {
         public Task<EffectiveEmploymentResolutionResult> ResolveAsync(Guid tenantId, Guid employeeId, DateOnly effectiveDate, CancellationToken cancellationToken = default)

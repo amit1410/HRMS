@@ -11,7 +11,10 @@ public sealed class RoleScopeResolver(IEffectiveEmploymentResolver employment) :
         if (assignment.Scopes.Count == 0) return true;
         var resolved = await employment.ResolveAsync(assignment.TenantId, employeeId, effectiveDate, cancellationToken);
         if (resolved.Employment is null) return false;
-        return assignment.Scopes.All(scope => ScopeMatches(scope.ScopeType, scope.ScopeEntityId, resolved.Employment));
+        // Values within one dimension are alternatives; different dimensions remain conjunctive.
+        return assignment.Scopes
+            .GroupBy(scope => scope.ScopeType)
+            .All(group => group.Any(scope => ScopeMatches(scope.ScopeType, scope.ScopeEntityId, resolved.Employment)));
     }
 
     private static bool ScopeMatches(RoleScopeType type, Guid id, EffectiveEmploymentSnapshot x) => type switch
@@ -28,6 +31,9 @@ public sealed class RoleScopeResolver(IEffectiveEmploymentResolver employment) :
         RoleScopeType.Country => x.CountryLocationId == id,
         RoleScopeType.Location or RoleScopeType.WorkLocation => x.WorkLocationId == id,
         RoleScopeType.CostCenter => x.CostCenterId == id,
+        RoleScopeType.Grade => x.GradeId == id,
+        RoleScopeType.Designation => x.DesignationId == id,
+        RoleScopeType.EmployeeType => x.EmployeeTypeId == id,
         _ => false
     };
 }

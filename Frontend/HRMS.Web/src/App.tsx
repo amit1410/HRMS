@@ -4,6 +4,7 @@ import { AuthProvider } from './auth/AuthProvider.tsx'
 import { Permissions } from './auth/permissions.ts'
 import { RequireAuth } from './auth/RequireAuth.tsx'
 import { RequirePermission } from './auth/RequirePermission.tsx'
+import { useAuth } from './auth/useAuth.ts'
 import { ErrorBoundary } from './components/ErrorBoundary.tsx'
 import { AppLayout } from './layout/AppLayout.tsx'
 import { DashboardPage } from './pages/DashboardPage.tsx'
@@ -26,6 +27,7 @@ import { isPlatformHost } from './lib/isPlatformHost.ts'
 import { MasterManagementPage } from './pages/masters/MasterManagementPage.tsx'
 import { AccountEmployeeLinksPage } from './pages/administration/AccountEmployeeLinksPage.tsx'
 import { RoleManagementPage } from './pages/administration/RoleManagementPage.tsx'
+import { PageAccessManagementPage } from './pages/administration/PageAccessManagementPage.tsx'
 import { LeaveTypesPage } from './pages/leave/LeaveTypesPage.tsx'
 import { LeavePeriodsPage } from './pages/leave/LeavePeriodsPage.tsx'
 import { LeavePoliciesPage } from './pages/leave/LeavePoliciesPage.tsx'
@@ -121,7 +123,8 @@ function TenantApplication() {
                   <Route path="configuration/password-recovery" element={<RequirePermission permission={Permissions.user.edit}><TenantPasswordRecoverySettingsPage /></RequirePermission>} />
                   <Route path="administration/account-employee-links" element={<RequirePermission permission={Permissions.accountEmployeeLink.view}><AccountEmployeeLinksPage /></RequirePermission>} />
                   <Route path="role-management" element={<RequirePermission permission={Permissions.roleManagement.assignmentView}><RoleManagementPage /></RequirePermission>} />
-                  <Route path="masters/:kind" element={<MasterManagementPage />} />
+                  <Route path="page-access-management" element={<RequirePermission permission={Permissions.pageAccess.view}><PageAccessManagementPage /></RequirePermission>} />
+                  <Route path="masters/:kind" element={<MasterRouteGuard />} />
                   <Route
                     path="configuration/employee-code"
                     element={
@@ -132,7 +135,7 @@ function TenantApplication() {
                   />
                   <Route path="leave-management/types" element={<RequirePermission permission={Permissions.leave.typeManage}><LeaveTypesPage /></RequirePermission>} />
                   <Route path="leave-management/working-day-calendar" element={<RequirePermission permission={Permissions.leave.policyView}><LeaveWorkingDayCalendarPage /></RequirePermission>} />
-                  <Route path="leave-management" element={<LeaveDashboardPage />} />
+                  <Route path="leave-management" element={<RequirePermission anyOf={[Permissions.leave.requestViewOwn, Permissions.leave.dashboardViewAll, Permissions.leave.approve]}><LeaveDashboardPage /></RequirePermission>} />
                   <Route path="leave-management/reports" element={<RequirePermission permission={Permissions.leave.reportsView}><LeaveReportsPage /></RequirePermission>} />
                   <Route path="leave-management/periods" element={<RequirePermission permission={Permissions.leave.periodManage}><LeavePeriodsPage /></RequirePermission>} />
                   <Route path="leave-management/policies" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePoliciesPage /></RequirePermission>} />
@@ -140,7 +143,7 @@ function TenantApplication() {
                   <Route path="leave-management/apply" element={<RequirePermission permission={Permissions.leave.requestCreate}><LeaveRequestPreviewPage /></RequirePermission>} />
                   <Route path="leave-management/my-requests" element={<RequirePermission permission={Permissions.leave.requestViewOwn}><MyLeaveRequestsPage /></RequirePermission>} />
                   <Route path="leave-management/my-requests/:requestId" element={<RequirePermission permission={Permissions.leave.requestViewOwn}><MyLeaveRequestDetailPage /></RequirePermission>} />
-                  <Route path="leave-management/team-calendar" element={<TeamLeaveCalendarPage />} />
+                  <Route path="leave-management/team-calendar" element={<RequirePermission anyOf={[Permissions.leave.requestViewOwn, Permissions.leave.dashboardViewAll, Permissions.leave.approve]}><TeamLeaveCalendarPage /></RequirePermission>} />
                   <Route path="leave-management/balances/import" element={<RequirePermission permission={Permissions.leave.balanceImport}><LeaveBalanceImportPage /></RequirePermission>} />
                   <Route path="leave-management/approvals" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalsPage /></RequirePermission>} />
                   <Route path="leave-management/approvals/:requestId" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalDetailPage /></RequirePermission>} />
@@ -150,7 +153,7 @@ function TenantApplication() {
                     <Route path="attendance/roster" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
                   <Route path="attendance/roster-upload" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
                   <Route path="attendance/shift-patterns" element={<RequirePermission permission={Permissions.attendance.view}><ShiftPatternsPage /></RequirePermission>} />
-                  <Route path="attendance/my-attendance" element={<MyAttendancePage />} />
+                  <Route path="attendance/my-attendance" element={<RequireEmployeeIdentity><MyAttendancePage /></RequireEmployeeIdentity>} />
                   <Route path="attendance/team" element={<RequirePermission permission={Permissions.attendance.view}><ManagerAttendancePage /></RequirePermission>} />
                   <Route path="attendance/requests" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceRequestsPage /></RequirePermission>} />
                   <Route path="attendance/reports" element={<RequirePermission permission={Permissions.attendance.reportView}><AttendanceReportsLandingPage /></RequirePermission>} />
@@ -215,4 +218,22 @@ function LegacyMasterRedirect({ kind }: { kind: 'departments' | 'designations' }
   const legacyId = parts[0] ?? ''
   const query = legacyId === 'new' ? '?add=1' : parts.length >= 2 && parts[1] === 'edit' ? `?edit=${encodeURIComponent(legacyId)}` : location.search
   return <Navigate replace to={`/masters/${kind}${query}`} />
+}
+
+function MasterRouteGuard() {
+  const { kind } = useParams()
+  const permission = kind === 'departments'
+    ? Permissions.department.view
+    : kind === 'designations'
+      ? Permissions.designation.view
+      : Permissions.geography.view
+
+  return <RequirePermission permission={permission}><MasterManagementPage /></RequirePermission>
+}
+
+function RequireEmployeeIdentity({ children }: { children: ReactNode }) {
+  const { user } = useAuth()
+  return user?.employeeIdentity?.status === 'Linked'
+    ? <>{children}</>
+    : <Navigate to="/forbidden" replace />
 }

@@ -16,6 +16,9 @@ export type RoleScopeType =
   | 'Location'
   | 'WorkLocation'
   | 'CostCenter'
+  | 'Grade'
+  | 'Designation'
+  | 'EmployeeType'
 export type RoleAssignmentEventType = 'Assigned' | 'EffectiveDatesChanged' | 'Revoked' | 'ScopeAdded' | 'ScopeRemoved'
 
 export interface RoleSummary { id: number; name: string; description?: string | null }

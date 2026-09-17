@@ -109,6 +109,7 @@ public static class DatabaseSeeder
         const string employeeCode = "DEV-ROLE-VERIFY";
         var password = configuration?["DevelopmentSeed:AnevraAdminPassword"];
         var resetPassword = configuration?.GetValue<bool>("DevelopmentSeed:ResetAnevraVerificationPassword") == true;
+        var enableVerificationAdmin = configuration?.GetValue<bool>("DevelopmentSeed:EnableAnevraVerificationAdmin") == true;
 
         if (!isDevelopment || !tenant.TenantCode.Equals(tenantCode, StringComparison.OrdinalIgnoreCase))
             return;
@@ -182,6 +183,9 @@ public static class DatabaseSeeder
             await db.SaveChangesAsync(ct);
             logger.LogInformation("Development verification password was refreshed for account {EmployeeCode}.", employeeCode);
         }
+
+        if (enableVerificationAdmin)
+            await EnsureDevelopmentVerificationAdminAsync(db, tenant, user, ct);
 
         if (!await db.UserRoles.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenant.Id && x.UserId == user.Id && x.RoleId == role.Id, ct))
         {
@@ -272,6 +276,45 @@ public static class DatabaseSeeder
         }
 
         logger.LogInformation("Development Role Management verification seed is present for tenant {TenantCode}; existing account data was not overwritten.", tenant.TenantCode);
+    }
+
+    private static async Task EnsureDevelopmentVerificationAdminAsync(HrmsDbContext db, Tenant tenant, User user, CancellationToken ct)
+    {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var tenantAdminRoleId = SeedData.RoleId(RoleNames.TenantAdmin);
+        var hasEffectiveTenantAdmin = await db.UserRoles.IgnoreQueryFilters().AnyAsync(x =>
+            x.TenantId == tenant.Id && x.UserId == user.Id && x.RoleId == tenantAdminRoleId &&
+            x.EffectiveFrom <= today && (x.EffectiveTo == null || x.EffectiveTo >= today), ct);
+        if (hasEffectiveTenantAdmin) return;
+
+        var assignment = new UserRole
+        {
+            Id = new Guid("b1e7f0e1-6b6c-4b40-9f75-5e4f70a0d002"),
+            TenantId = tenant.Id,
+            UserId = user.Id,
+            RoleId = tenantAdminRoleId,
+            EffectiveFrom = today,
+            AssignmentSource = RoleAssignmentSource.System,
+            AssignedByUserId = user.Id,
+            AssignmentReason = "Development-only ANEVRA01 verification login eligibility",
+            CreatedAtUtc = DateTime.UtcNow
+        };
+        db.UserRoles.Add(assignment);
+        db.UserRoleAssignmentEvents.Add(new UserRoleAssignmentEvent
+        {
+            Id = new Guid("c1e7f0e1-6b6c-4b40-9f75-5e4f70a0d002"),
+            TenantId = tenant.Id,
+            AssignmentId = assignment.Id,
+            UserId = user.Id,
+            RoleId = tenantAdminRoleId,
+            EventType = UserRoleAssignmentEventType.Assigned,
+            EffectiveFrom = assignment.EffectiveFrom,
+            AssignmentSource = assignment.AssignmentSource,
+            Reason = assignment.AssignmentReason,
+            PerformedByUserId = user.Id,
+            OccurredAtUtc = assignment.CreatedAtUtc
+        });
+        await db.SaveChangesAsync(ct);
     }
 
     /// <summary>

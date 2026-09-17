@@ -30,6 +30,7 @@ public interface IHrmsDbContext
     DbSet<UserRoleAssignmentEvent> UserRoleAssignmentEvents { get; }
     DbSet<UserRoleAssignmentScope> UserRoleAssignmentScopes { get; }
     DbSet<RolePermission> RolePermissions { get; }
+    DbSet<AuthorizationConfigurationEvent> AuthorizationConfigurationEvents { get; }
     DbSet<RefreshToken> RefreshTokens { get; }
     DbSet<UserInvitation> UserInvitations { get; }
     DbSet<PasswordResetOtp> PasswordResetOtps { get; }

@@ -1,6 +1,7 @@
 using HRMS.Application.Abstractions;
 using HRMS.Domain.Common;
 using HRMS.Domain.Entities;
+using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence.Conversions;
 using Microsoft.EntityFrameworkCore;
 using MySql.EntityFrameworkCore.Extensions;
@@ -45,6 +46,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<UserRoleAssignmentEvent> UserRoleAssignmentEvents => Set<UserRoleAssignmentEvent>();
     public DbSet<UserRoleAssignmentScope> UserRoleAssignmentScopes => Set<UserRoleAssignmentScope>();
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
+    public DbSet<AuthorizationConfigurationEvent> AuthorizationConfigurationEvents => Set<AuthorizationConfigurationEvent>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<UserInvitation> UserInvitations => Set<UserInvitation>();
     public DbSet<PasswordResetOtp> PasswordResetOtps => Set<PasswordResetOtp>();
@@ -314,6 +316,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<UserRole>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<UserRoleAssignmentEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<UserRoleAssignmentScope>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<AuthorizationConfigurationEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<RefreshToken>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<Department>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<Designation>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -428,6 +431,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     /// </summary>
     private void ApplyAuditAndTenantStamps()
     {
+        var utcNow = DateTime.UtcNow;
         foreach (var entry in ChangeTracker.Entries<AccountEmployeeLinkEvent>())
         {
             if (entry.State is EntityState.Modified or EntityState.Deleted)
@@ -448,6 +452,34 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
             if (entry.State is EntityState.Modified or EntityState.Deleted)
                 throw new InvalidOperationException("User role assignment events are immutable.");
         }
+        foreach (var entry in ChangeTracker.Entries<AuthorizationConfigurationEvent>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new InvalidOperationException("Authorization configuration events are immutable.");
+        }
+        foreach (var entry in ChangeTracker.Entries<UserRoleAssignmentScope>().Where(x => x.State is EntityState.Added or EntityState.Deleted).ToList())
+        {
+            var scope = entry.Entity;
+            AuthorizationConfigurationEvents.Add(new AuthorizationConfigurationEvent
+            {
+                Id = Guid.NewGuid(),
+                TenantId = scope.TenantId,
+                EventType = entry.State == EntityState.Added ? AuthorizationConfigurationEventType.RoleScopeAdded : AuthorizationConfigurationEventType.RoleScopeRemoved,
+                EntityType = nameof(UserRoleAssignmentScope),
+                EntityId = scope.Id,
+                RoleId = scope.Assignment?.RoleId,
+                UserRoleAssignmentId = scope.UserRoleAssignmentId,
+                UserId = scope.Assignment?.UserId,
+                ScopeDimension = scope.ScopeType,
+                ScopeValueId = scope.ScopeEntityId,
+                Action = entry.State == EntityState.Added ? "Added" : "Removed",
+                OldValue = entry.State == EntityState.Deleted ? scope.ScopeEntityId.ToString() : null,
+                NewValue = entry.State == EntityState.Added ? scope.ScopeEntityId.ToString() : null,
+                Reason = scope.Assignment?.AssignmentReason,
+                ActorUserId = _tenantContext.UserId ?? Guid.Empty,
+                OccurredAtUtc = utcNow
+            });
+        }
         foreach (var entry in ChangeTracker.Entries<EmployeeRosterChangeHistory>())
         {
             if (entry.State is EntityState.Modified or EntityState.Deleted)
@@ -463,8 +495,6 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
             if (entry.State is EntityState.Modified or EntityState.Deleted)
                 throw new InvalidOperationException("Attendance admin corrections are immutable.");
         }
-        var utcNow = DateTime.UtcNow;
-
         foreach (var entry in ChangeTracker.Entries())
         {
             // Defense in depth for tenant-scoped rows (spec: isolate on create AND update).

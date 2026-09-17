@@ -48,17 +48,20 @@ public class EmployeeService : IEmployeeService
     private readonly ITenantContext _tenantContext;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<EmployeeService> _logger;
+    private readonly IEmployeeAccessScopeService? _accessScope;
 
     public EmployeeService(
         IHrmsDbContext db,
         ITenantContext tenantContext,
         TimeProvider timeProvider,
-        ILogger<EmployeeService> logger)
+        ILogger<EmployeeService> logger,
+        IEmployeeAccessScopeService? accessScope = null)
     {
         _db = db;
         _tenantContext = tenantContext;
         _timeProvider = timeProvider;
         _logger = logger;
+        _accessScope = accessScope;
     }
 
     public async Task<Result<PagedResult<EmployeeListItemDto>>> GetAsync(
@@ -71,6 +74,11 @@ public class EmployeeService : IEmployeeService
 
         var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
         var employees = ApplyEffectiveSort(ApplyEffectiveFilters(_db.Employees.AsNoTracking(), query, businessDate), query, businessDate);
+        if (_accessScope is not null)
+        {
+            var scopePredicate = await _accessScope.BuildPredicateAsync(businessDate, cancellationToken);
+            employees = employees.Where(scopePredicate);
+        }
 
         var currentHistory = _db.EmployeeEmploymentHistory
             .Where(h => !h.IsSuperseded && h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
@@ -105,6 +113,13 @@ public class EmployeeService : IEmployeeService
         if (_tenantContext.TenantId is null)
         {
             return Result<EmployeeDto>.Unauthorized(NoTenantMessage);
+        }
+
+        if (_accessScope is not null)
+        {
+            var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+            if (!await _accessScope.CanAccessEmployeeAsync(id, businessDate, cancellationToken))
+                return Result<EmployeeDto>.NotFound(NotFoundMessage);
         }
 
         var employee = await ProjectDetail(_db.Employees.AsNoTracking().Where(e => e.Id == id))

@@ -30,7 +30,8 @@ try
 
     // Application + Infrastructure services (DbContext with configurable provider, password hasher,
     // token service, auth service, validators).
-    builder.Services.AddApplication();
+builder.Services.AddApplication();
+builder.Services.AddScoped<EmployeeScopeAuthorizationFilter>();
     builder.Services.AddInfrastructure(builder.Configuration, builder.Environment);
     builder.Services.AddSingleton<IPlatformTokenService, PlatformJwtTokenService>();
     builder.Services.AddScoped<IPlatformAuthService, PlatformAuthService>();
@@ -38,6 +39,7 @@ try
     // Tenant identity is resolved per-request from JWT claims (server-side, never from client input).
     builder.Services.AddHttpContextAccessor();
     builder.Services.AddScoped<HttpTenantContext>();
+    builder.Services.AddScoped<ICurrentAuthorizationContext, HttpCurrentAuthorizationContext>();
     builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<HttpTenantContext>());
     builder.Services.AddScoped<ITenantExecutionContext>(sp => sp.GetRequiredService<HttpTenantContext>());
     builder.Services.AddScoped<IPlatformContext, HttpPlatformContext>();

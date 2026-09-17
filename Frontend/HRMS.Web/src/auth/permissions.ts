@@ -87,6 +87,10 @@ export const Permissions = {
     assignmentManage: 'RoleAssignment.Manage',
     assignmentViewHistory: 'RoleAssignment.ViewHistory',
   },
+  pageAccess: {
+    view: 'PageAccess.View',
+    manage: 'PageAccess.Manage',
+  },
   attendance: {
     view: 'Attendance.View',
     shiftManage: 'Attendance.ShiftManage',

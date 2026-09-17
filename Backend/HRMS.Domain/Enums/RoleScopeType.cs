@@ -14,5 +14,8 @@ public enum RoleScopeType
     Country = 9,
     Location = 10,
     WorkLocation = 11,
-    CostCenter = 12
+    CostCenter = 12,
+    Grade = 13,
+    Designation = 14,
+    EmployeeType = 15
 }

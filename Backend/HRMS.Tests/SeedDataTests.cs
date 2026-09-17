@@ -384,6 +384,53 @@ public class SeedDataTests
         Assert.DoesNotContain(ResetPassword, warning, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Development_verification_admin_eligibility_is_not_added_outside_development()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = await EnsureVerificationTenantAsync(db);
+        await SeedVerificationAsync(db, tenant, VerificationPassword, reset: false, isDevelopment: true);
+        await SeedVerificationAsync(db, tenant, VerificationPassword, reset: false, isDevelopment: false, enableAdmin: true);
+
+        using var context = db.CreateContext(new TestTenantContext());
+        var user = await context.Users.IgnoreQueryFilters().SingleAsync(x => x.Email == VerificationEmail);
+        Assert.Empty(await context.UserRoles.IgnoreQueryFilters().Where(x => x.UserId == user.Id && x.RoleId == SeedData.RoleId(RoleNames.TenantAdmin)).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Development_exact_Anevra_verification_account_gets_existing_tenant_admin_eligibility()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = await EnsureVerificationTenantAsync(db);
+        await SeedVerificationAsync(db, tenant, VerificationPassword, reset: false, isDevelopment: true, enableAdmin: true);
+
+        using var context = db.CreateContext(new TestTenantContext());
+        var user = await context.Users.IgnoreQueryFilters().SingleAsync(x => x.Email == VerificationEmail);
+        Assert.Single(await context.UserRoles.IgnoreQueryFilters().Where(x => x.UserId == user.Id && x.RoleId == SeedData.RoleId(RoleNames.TenantAdmin)).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Development_admin_eligibility_does_not_affect_another_account_and_is_idempotent()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = await EnsureVerificationTenantAsync(db);
+        var unrelatedId = Guid.NewGuid();
+        using (var context = db.CreateContext(new TestTenantContext()))
+        {
+            context.Users.Add(new User { Id = unrelatedId, TenantId = tenant.Id, Email = "unrelated@local.invalid", FirstName = "Unrelated", LastName = "User", PasswordHash = new IdentityPasswordHasher().Hash(VerificationPassword), IsActive = true });
+            await context.SaveChangesAsync();
+        }
+
+        await SeedVerificationAsync(db, tenant, VerificationPassword, reset: false, isDevelopment: true, enableAdmin: true);
+        await SeedVerificationAsync(db, tenant, VerificationPassword, reset: false, isDevelopment: true, enableAdmin: true);
+
+        using var verification = db.CreateContext(new TestTenantContext());
+        var user = await verification.Users.IgnoreQueryFilters().SingleAsync(x => x.Email == VerificationEmail);
+        Assert.Single(await verification.UserRoles.IgnoreQueryFilters().Where(x => x.UserId == user.Id && x.RoleId == SeedData.RoleId(RoleNames.TenantAdmin)).ToListAsync());
+        Assert.Empty(await verification.UserRoles.IgnoreQueryFilters().Where(x => x.UserId == unrelatedId && x.RoleId == SeedData.RoleId(RoleNames.TenantAdmin)).ToListAsync());
+        Assert.Single(await verification.UserRoleAssignmentEvents.IgnoreQueryFilters().Where(x => x.UserId == user.Id && x.RoleId == SeedData.RoleId(RoleNames.TenantAdmin)).ToListAsync());
+    }
+
     private const string VerificationEmail = "anevra01-role-verification@local.invalid";
 
     private static async Task<Tenant> EnsureVerificationTenantAsync(SqliteInMemoryDatabase db)
@@ -410,12 +457,14 @@ public class SeedDataTests
         string? password,
         bool reset,
         bool isDevelopment,
-        RecordingLoggerProvider? loggerProvider = null)
+        RecordingLoggerProvider? loggerProvider = null,
+        bool enableAdmin = false)
     {
         var values = new Dictionary<string, string?>
         {
             ["DevelopmentSeed:AnevraAdminPassword"] = password,
-            ["DevelopmentSeed:ResetAnevraVerificationPassword"] = reset.ToString()
+            ["DevelopmentSeed:ResetAnevraVerificationPassword"] = reset.ToString(),
+            ["DevelopmentSeed:EnableAnevraVerificationAdmin"] = enableAdmin.ToString()
         };
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
         using var context = db.CreateContext(new TestTenantContext());

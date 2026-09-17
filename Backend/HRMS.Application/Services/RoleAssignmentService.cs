@@ -197,7 +197,7 @@ public sealed class RoleAssignmentService : IRoleAssignmentService
                 {
                     if (!await ScopeExistsAsync(scope.ScopeType, scope.ScopeEntityId, tenantId, ct))
                         return Result<RoleAssignmentDto>.Invalid("scopes", "A scope does not exist in the current tenant.");
-                    assignment.Scopes.Add(new UserRoleAssignmentScope { Id = Guid.NewGuid(), TenantId = tenantId, UserRoleAssignmentId = assignment.Id, ScopeType = scope.ScopeType, ScopeEntityId = scope.ScopeEntityId });
+                    assignment.Scopes.Add(new UserRoleAssignmentScope { Id = Guid.NewGuid(), TenantId = tenantId, UserRoleAssignmentId = assignment.Id, ScopeType = scope.ScopeType, ScopeEntityId = scope.ScopeEntityId, Assignment = assignment });
                 }
                 _db.UserRoleAssignmentEvents.Add(Event(assignment, UserRoleAssignmentEventType.Assigned, actorId));
                 await _db.SaveChangesAsync(ct); await tx.CommitAsync(ct);
@@ -419,6 +419,9 @@ public sealed class RoleAssignmentService : IRoleAssignmentService
         RoleScopeType.Location => await _db.WorkLocations.AnyAsync(x => x.Id == id && x.TenantId == tenantId, ct),
         RoleScopeType.WorkLocation => await _db.WorkLocations.AnyAsync(x => x.Id == id && x.TenantId == tenantId, ct),
         RoleScopeType.CostCenter => await _db.CostCenters.AnyAsync(x => x.Id == id && x.TenantId == tenantId, ct),
+        RoleScopeType.Grade => await _db.Grades.AnyAsync(x => x.Id == id && x.TenantId == tenantId, ct),
+        RoleScopeType.Designation => await _db.Designations.AnyAsync(x => x.Id == id && x.TenantId == tenantId, ct),
+        RoleScopeType.EmployeeType => await _db.EmployeeTypes.AnyAsync(x => x.Id == id && x.TenantId == tenantId, ct),
         _ => false
     };
     private static bool ScopesAllowed(string roleName, IReadOnlyList<RoleAssignmentScopeDto> scopes)
@@ -426,9 +429,9 @@ public sealed class RoleAssignmentService : IRoleAssignmentService
         if (scopes.Count == 0) return roleName is not (RoleNames.Employee or RoleNames.Manager);
         var allowed = roleName switch
         {
-            RoleNames.HRBP => new[] { RoleScopeType.HoldingCompany, RoleScopeType.Lob, RoleScopeType.Organisation, RoleScopeType.Department, RoleScopeType.Location },
-            RoleNames.EmployeeRelationshipOfficer => new[] { RoleScopeType.Organisation, RoleScopeType.Department, RoleScopeType.Location },
-            RoleNames.TimeManager => new[] { RoleScopeType.Organisation, RoleScopeType.Department, RoleScopeType.Location, RoleScopeType.WorkLocation },
+            RoleNames.HRBP => Enum.GetValues<RoleScopeType>(),
+            RoleNames.EmployeeRelationshipOfficer => Enum.GetValues<RoleScopeType>(),
+            RoleNames.TimeManager => Enum.GetValues<RoleScopeType>(),
             RoleNames.IT or RoleNames.Accounts or RoleNames.SuperHR => Array.Empty<RoleScopeType>(),
             _ => Array.Empty<RoleScopeType>()
         };

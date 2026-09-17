@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { toApiError, type ApiError } from '../../api/errors.ts'
-import { getDepartments, getHoldingCompanies, getLinesOfBusiness, getOrganisations, getWorkLocations } from '../../api/roleManagementMasters.ts'
+import { getCostCenters, getDepartments, getDesignations, getEmployeeTypes, getGrades, getHoldingCompanies, getLinesOfBusiness, getOrganisations, getWorkLocations } from '../../api/roleManagementMasters.ts'
 import {
   assignRole,
   getUserRoleHistory,
@@ -28,14 +28,14 @@ type MasterOption = { id: string; name: string; code: string }
 
 const SYSTEM_ROLES = new Set(['Employee', 'Manager'])
 const SCOPE_TYPES: Record<string, RoleScopeType[]> = {
-  HRBP: ['HoldingCompany', 'Lob', 'Organisation', 'Department', 'Location'],
-  'Employee Relationship Officer': ['Organisation', 'Department', 'Location'],
-  'Time Manager': ['Organisation', 'Department', 'Location', 'WorkLocation'],
+  HRBP: ['HoldingCompany', 'Lob', 'Organisation', 'Department', 'Location', 'Grade', 'Designation', 'EmployeeType', 'CostCenter'],
+  'Employee Relationship Officer': ['Organisation', 'Department', 'Location', 'Grade', 'Designation', 'EmployeeType', 'CostCenter'],
+  'Time Manager': ['Organisation', 'Department', 'Location', 'WorkLocation', 'Grade', 'Designation', 'EmployeeType', 'CostCenter'],
 }
 const SCOPE_LABELS: Record<RoleScopeType, string> = {
   HoldingCompany: 'Head Company', Lob: 'LOB', Organisation: 'Organization', Department: 'Department',
   SubDepartment: 'Sub-department', Section: 'Section', SubSection: 'Sub-section', Function: 'Function',
-  SubFunction: 'Sub-function', Country: 'Country', Location: 'Location', WorkLocation: 'Work Location', CostCenter: 'Cost Center',
+  SubFunction: 'Sub-function', Country: 'Country', Location: 'Location', WorkLocation: 'Work Location', CostCenter: 'Cost Center', Grade: 'Grade', Designation: 'Designation', EmployeeType: 'Employee type',
 }
 
 function today(): string {
@@ -155,7 +155,7 @@ function AssignDialog({ roles, onClose, onSaved }: { roles: RoleSummary[]; onClo
   useEffect(() => { void listRoleCandidates({ page: 1, pageSize: 100 }).then((result) => setUsers(result.items)).catch((caught) => setError(toApiError(caught).message)) }, [])
   const role = roles.find((item) => String(item.id) === roleId); const scopeTypes = role ? (SCOPE_TYPES[role.name] ?? []) : []
   useEffect(() => { setScopeType(''); setScopeValue(''); setScopes([]) }, [roleId])
-  useEffect(() => { let active = true; if (!scopeType) { setOptions([]); return } const loaders: Partial<Record<RoleScopeType, () => Promise<MasterOption[]>>> = { HoldingCompany: getHoldingCompanies, Lob: getLinesOfBusiness, Organisation: getOrganisations, Department: getDepartments, Location: getWorkLocations, WorkLocation: getWorkLocations }; void loaders[scopeType]?.().then((items) => { if (active) setOptions(items) }).catch(() => { if (active) setOptions([]) }); return () => { active = false } }, [scopeType])
+  useEffect(() => { let active = true; if (!scopeType) { setOptions([]); return } const loaders: Partial<Record<RoleScopeType, () => Promise<MasterOption[]>>> = { HoldingCompany: getHoldingCompanies, Lob: getLinesOfBusiness, Organisation: getOrganisations, Department: getDepartments, Location: getWorkLocations, WorkLocation: getWorkLocations, Grade: getGrades, Designation: getDesignations, EmployeeType: getEmployeeTypes, CostCenter: getCostCenters }; void loaders[scopeType]?.().then((items) => { if (active) setOptions(items) }).catch(() => { if (active) setOptions([]) }); return () => { active = false } }, [scopeType])
   const addScope = () => { if (!scopeType || !scopeValue || scopes.some((scope) => scope.scopeType === scopeType && scope.scopeEntityId === scopeValue)) return; setScopes([...scopes, { scopeType, scopeEntityId: scopeValue }]); setScopeValue('') }
   async function submit() { setError(''); if (!userId || !roleId || !from || (to && to < from)) { setError('Select a user and role, and ensure Effective To is not before Effective From.'); return } setBusy(true); try { onSaved(await assignRole(userId, { roleId: Number(roleId), effectiveFrom: from, effectiveTo: to || null, reason: reason.trim() || null, scopes: scopes.length ? scopes : null })) } catch (caught) { const apiError = toApiError(caught); setError(apiError.isConflict ? 'This role already has an overlapping effective assignment.' : apiError.message) } finally { setBusy(false) } }
   return <Modal title="Assign Role" onClose={busy ? () => undefined : onClose} footer={<><button className="button button-secondary" type="button" onClick={onClose} disabled={busy}>Cancel</button><button className="button button-primary" type="button" onClick={() => void submit()} disabled={busy || users.length === 0}>{busy ? 'Saving…' : 'Assign Role'}</button></>}>

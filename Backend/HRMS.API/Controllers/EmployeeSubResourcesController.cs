@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using HRMS.API.Extensions;
+using HRMS.API.Filters;
 using HRMS.API.Security;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
@@ -23,6 +24,7 @@ namespace HRMS.API.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/employees/{id:guid}")]
+[ServiceFilter(typeof(EmployeeScopeAuthorizationFilter))]
 [Produces("application/json")]
 public class EmployeeSubResourcesController : ControllerBase
 {
