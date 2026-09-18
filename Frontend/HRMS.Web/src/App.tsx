@@ -153,9 +153,9 @@ function TenantApplication() {
                     <Route path="attendance/roster" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
                   <Route path="attendance/roster-upload" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
                   <Route path="attendance/shift-patterns" element={<RequirePermission permission={Permissions.attendance.view}><ShiftPatternsPage /></RequirePermission>} />
-                  <Route path="attendance/my-attendance" element={<RequireEmployeeIdentity><MyAttendancePage /></RequireEmployeeIdentity>} />
+                  <Route path="attendance/my-attendance" element={<RequirePermission permission={Permissions.attendance.view}><RequireEmployeeIdentity><MyAttendancePage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="attendance/team" element={<RequirePermission permission={Permissions.attendance.view}><ManagerAttendancePage /></RequirePermission>} />
-                  <Route path="attendance/requests" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceRequestsPage /></RequirePermission>} />
+                  <Route path="attendance/requests" element={<RequirePermission permission={Permissions.attendance.view}><RequireEmployeeIdentity><AttendanceRequestsPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="attendance/reports" element={<RequirePermission permission={Permissions.attendance.reportView}><AttendanceReportsLandingPage /></RequirePermission>} />
                   <Route path="attendance/reports/daily" element={<RequirePermission permission={Permissions.attendance.reportView}><AttendanceReportPage kind="daily" /></RequirePermission>} />
                   <Route path="attendance/reports/monthly" element={<RequirePermission permission={Permissions.attendance.reportView}><AttendanceReportPage kind="monthly" /></RequirePermission>} />

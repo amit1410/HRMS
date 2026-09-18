@@ -57,6 +57,16 @@ describe('visibleNavItems', () => {
     expect(labels).not.toContain('My Leave Requests')
   })
 
+  it('requires Attendance.View and a linked employee for personal attendance navigation', () => {
+    const linkedAttendance = visibleNavItems(canWith(Permissions.attendance.view), linkedUser).map(item => item.label)
+    expect(linkedAttendance).toContain('My Attendance')
+    expect(linkedAttendance).toContain('Attendance Requests')
+
+    const withoutAttendance = visibleNavItems(canNever, linkedUser).map(item => item.label)
+    expect(withoutAttendance).not.toContain('My Attendance')
+    expect(withoutAttendance).not.toContain('Attendance Requests')
+  })
+
   it('filters independently per permission', () => {
     const items = visibleNavItems(
       canWith(Permissions.department.view, Permissions.designation.view),
