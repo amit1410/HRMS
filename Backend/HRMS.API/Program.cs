@@ -7,6 +7,7 @@ using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Infrastructure;
 using HRMS.Infrastructure.Persistence;
+using HRMS.Infrastructure.Persistence.Catalog;
 using HRMS.Infrastructure.Security;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi;
@@ -195,6 +196,32 @@ builder.Services.AddScoped<EmployeeScopeAuthorizationFilter>();
     // Liveness probe: deliberately anonymous, and explicitly so because the fallback authorization
     // policy would otherwise close it along with every other endpoint that declares nothing.
     app.MapGet("/health", () => Results.Ok(new { status = "Healthy", utc = DateTime.UtcNow }))
+        .AllowAnonymous();
+
+    // Readiness probe: unlike liveness, this verifies that the catalog dependency is reachable. It stays
+    // anonymous and returns only a safe status so load balancers can distinguish a started process from one
+    // that cannot route tenant traffic. Tenant databases are intentionally not scanned here.
+    app.MapGet("/ready", async (
+        HrmsCatalogDbContext catalog,
+        ILogger<Program> logger,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            if (await catalog.Database.CanConnectAsync(cancellationToken))
+                return Results.Ok(new { status = "Ready" });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Readiness check could not connect to the catalog database.");
+        }
+
+        return Results.Json(new { status = "NotReady" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+    })
         .AllowAnonymous();
 
     Log.Information("HRMS API starting up.");

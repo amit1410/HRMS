@@ -460,6 +460,7 @@ public class AuthEndpointsTests : IClassFixture<HrmsApiFactory>
 
         using var client = _factory.CreateClient();
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/ready")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/system/info")).StatusCode);
     }
 
