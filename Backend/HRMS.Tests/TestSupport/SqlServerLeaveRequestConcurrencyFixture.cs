@@ -18,11 +18,11 @@ public sealed class SqlServerLeaveRequestConcurrencyFixture : IAsyncLifetime
     private static readonly string[] ProtectedNames = ["master", "model", "msdb", "tempdb", "HRMS", "HRMS_Catalog"];
 
     public static bool IsConfigured =>
-        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ServerEnvironmentVariable)) &&
-        string.Equals(Environment.GetEnvironmentVariable(AuthEnvironmentVariable), "Integrated", StringComparison.OrdinalIgnoreCase);
+        SqlServerAcceptanceRun.IsConfigured;
 
     public string DatabaseName { get; private set; } = string.Empty;
     public string Server { get; private set; } = string.Empty;
+    private SqlConnectionStringBuilder BaseConnection { get; set; } = new();
     public Guid TenantA { get; } = Guid.Parse("a4000000-0000-0000-0000-000000000001");
     public Guid TenantB { get; } = Guid.Parse("b4000000-0000-0000-0000-000000000001");
     public Guid EmployeeA { get; } = Guid.Parse("a4000000-0000-0000-0000-000000000101");
@@ -48,10 +48,9 @@ public sealed class SqlServerLeaveRequestConcurrencyFixture : IAsyncLifetime
     public async Task InitializeAsync()
     {
         if (!IsConfigured) return;
-        Server = Environment.GetEnvironmentVariable(ServerEnvironmentVariable)!.Trim();
-        SqlServerAcceptanceRun.ValidateServer(Server);
-        if (!string.Equals(Environment.GetEnvironmentVariable(AuthEnvironmentVariable), "Integrated", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"{AuthEnvironmentVariable} must be 'Integrated'. Password authentication is not supported.");
+        BaseConnection = SqlServerAcceptanceRun.CreateBaseConnectionFromEnvironment()
+            ?? throw new InvalidOperationException("SQL Server test connection is not configured.");
+        Server = BaseConnection.DataSource;
         DatabaseName = Prefix + DateTimeOffset.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'") + "_" + Random.Shared.Next(100000, 999999);
         ValidateOwnedName(DatabaseName);
         await CreateDatabaseAsync();
@@ -62,12 +61,12 @@ public sealed class SqlServerLeaveRequestConcurrencyFixture : IAsyncLifetime
     public async Task DisposeAsync()
     {
         if (!IsConfigured || string.IsNullOrEmpty(DatabaseName)) return;
-        SqlConnection.ClearAllPools();
-        await using var master = new SqlConnection(MasterConnection().ConnectionString);
-        await master.OpenAsync();
-        await using var command = master.CreateCommand();
-        command.CommandText = $"DROP DATABASE [{DatabaseName.Replace("]", "]]", StringComparison.Ordinal)}]";
-        await command.ExecuteNonQueryAsync();
+        ValidateOwnedName(DatabaseName);
+        await SqlServerAcceptanceRun.DropOwnedDatabaseAsync(
+            BaseConnection,
+            DatabaseName,
+            Prefix,
+            "HRMS Leave Request Concurrency Tests");
     }
 
     public HrmsDbContext CreateContext(Guid? tenantId = null, Guid? userId = null) =>
@@ -112,14 +111,19 @@ public sealed class SqlServerLeaveRequestConcurrencyFixture : IAsyncLifetime
         return requestId;
     }
 
-    private SqlConnectionStringBuilder Connection() => new()
+    private SqlConnectionStringBuilder Connection() => new(BaseConnection.ConnectionString)
     {
-        DataSource = Server, InitialCatalog = DatabaseName, IntegratedSecurity = true,
-        Encrypt = true, TrustServerCertificate = true, ConnectTimeout = 10, CommandTimeout = 30,
+        InitialCatalog = DatabaseName,
+        ConnectTimeout = 10,
         ApplicationName = "HRMS Leave Request Concurrency Tests"
     };
 
-    private SqlConnectionStringBuilder MasterConnection() => new(Connection().ConnectionString) { InitialCatalog = "master" };
+    private SqlConnectionStringBuilder MasterConnection() => new(BaseConnection.ConnectionString)
+    {
+        InitialCatalog = "master",
+        ConnectTimeout = 10,
+        ApplicationName = "HRMS Leave Request Concurrency Tests"
+    };
 
     private async Task CreateDatabaseAsync()
     {
@@ -160,7 +164,7 @@ public sealed class SqlServerLeaveRequestConcurrencyFixture : IAsyncLifetime
     private static LeavePolicyVersion Version(Guid tenant, Guid policy, Guid id) => new() { Id = id, TenantId = tenant, LeavePolicyId = policy, VersionNumber = 1, EffectiveFrom = new DateOnly(2026, 1, 1), Status = LeavePolicyVersionStatus.Published, Priority = 1 };
     private static LeavePolicyRule Rule(Guid tenant, Guid version, Guid type, Guid id) => new() { Id = id, TenantId = tenant, LeavePolicyVersionId = version, LeaveTypeId = type, IsActive = true };
 
-    private static void ValidateOwnedName(string database)
+    internal static void ValidateOwnedName(string database)
     {
         if (ProtectedNames.Contains(database, StringComparer.OrdinalIgnoreCase) || !database.StartsWith(Prefix, StringComparison.Ordinal))
             throw new InvalidOperationException("Refusing a non-owned SQL Server test database.");
@@ -169,10 +173,10 @@ public sealed class SqlServerLeaveRequestConcurrencyFixture : IAsyncLifetime
 
 public sealed class SqlServerLeaveRequestConcurrencyFactAttribute : FactAttribute
 {
-    public SqlServerLeaveRequestConcurrencyFactAttribute() => Skip = SqlServerLeaveRequestConcurrencyFixture.IsConfigured ? null : $"SQL Server leave-request tests not executed: {SqlServerLeaveRequestConcurrencyFixture.ServerEnvironmentVariable} is absent or {SqlServerLeaveRequestConcurrencyFixture.AuthEnvironmentVariable} is not Integrated.";
+    public SqlServerLeaveRequestConcurrencyFactAttribute() => Skip = SqlServerLeaveRequestConcurrencyFixture.IsConfigured ? null : $"SQL Server leave-request tests not executed: {SqlServerAcceptanceRun.ConnectionEnvironmentVariable} or the Integrated-auth server configuration is absent.";
 }
 
 public sealed class SqlServerLeaveRequestConcurrencyTheoryAttribute : TheoryAttribute
 {
-    public SqlServerLeaveRequestConcurrencyTheoryAttribute() => Skip = SqlServerLeaveRequestConcurrencyFixture.IsConfigured ? null : $"SQL Server leave-request tests not executed: {SqlServerLeaveRequestConcurrencyFixture.ServerEnvironmentVariable} is absent or {SqlServerLeaveRequestConcurrencyFixture.AuthEnvironmentVariable} is not Integrated.";
+    public SqlServerLeaveRequestConcurrencyTheoryAttribute() => Skip = SqlServerLeaveRequestConcurrencyFixture.IsConfigured ? null : $"SQL Server leave-request tests not executed: {SqlServerAcceptanceRun.ConnectionEnvironmentVariable} or the Integrated-auth server configuration is absent.";
 }

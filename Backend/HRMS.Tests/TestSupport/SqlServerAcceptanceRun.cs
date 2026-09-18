@@ -11,16 +11,20 @@ namespace HRMS.Tests.TestSupport;
 /// <summary>Plans and owns one disposable SQL Server acceptance run. Planning is connection-free.</summary>
 public sealed class SqlServerAcceptanceRun
 {
+    public const string ConnectionEnvironmentVariable = "HRMS_SQLSERVER_TEST_CONNECTION";
     public const string ServerEnvironmentVariable = "HRMS_SQLSERVER_TEST_SERVER";
     public const string AuthEnvironmentVariable = "HRMS_SQLSERVER_TEST_AUTH";
     public const string ManifestEnvironmentVariable = "HRMS_PHASE3B_MANIFEST_PATH";
     public const string Prefix = "HRMS_Phase3B_Integration_";
+    internal const int CleanupMaxAttempts = 3;
 
     private static readonly string[] ProtectedNames = ["master", "model", "msdb", "tempdb", "HRMS", "HRMS_Catalog"];
+    private readonly SqlConnectionStringBuilder _baseConnection;
 
-    private SqlServerAcceptanceRun(string server, string runId, string manifestPath)
+    private SqlServerAcceptanceRun(SqlConnectionStringBuilder baseConnection, string runId, string manifestPath)
     {
-        Server = server;
+        _baseConnection = new SqlConnectionStringBuilder(baseConnection.ConnectionString);
+        Server = _baseConnection.DataSource;
         RunId = runId;
         ManifestPath = manifestPath;
         CatalogDatabaseName = $"{Prefix}{runId}_catalog";
@@ -35,31 +39,68 @@ public sealed class SqlServerAcceptanceRun
     public IReadOnlyList<string> AllDatabaseNames => [CatalogDatabaseName, .. TenantDatabaseNames];
 
     public static bool IsConfigured =>
+        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ConnectionEnvironmentVariable)) ||
         !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ServerEnvironmentVariable));
 
     public static SqlServerAcceptanceRun? FromEnvironment()
     {
-        var server = Environment.GetEnvironmentVariable(ServerEnvironmentVariable);
-        if (string.IsNullOrWhiteSpace(server)) return null;
-        var auth = Environment.GetEnvironmentVariable(AuthEnvironmentVariable);
-        if (!string.Equals(auth, "Integrated", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"{AuthEnvironmentVariable} must be 'Integrated'. Password authentication is not supported.");
+        var baseConnection = CreateBaseConnectionFromEnvironment();
+        if (baseConnection is null) return null;
         var runId = DateTimeOffset.UtcNow.ToString("yyyyMMdd'T'HHmmss'Z'") + "_" + Random.Shared.Next(100000, 999999);
         var configuredPath = Environment.GetEnvironmentVariable(ManifestEnvironmentVariable);
         var path = string.IsNullOrWhiteSpace(configuredPath)
             ? Path.Combine(AppContext.BaseDirectory, "phase3b-acceptance", $"{Prefix}{runId}.json")
             : Path.GetFullPath(configuredPath);
-        return Create(server.Trim(), runId, path);
+        return Create(baseConnection, runId, path);
     }
 
     public static SqlServerAcceptanceRun Create(string server, string runId, string manifestPath)
     {
         ValidateServer(server);
+        return Create(new SqlConnectionStringBuilder
+        {
+            DataSource = server.Trim(),
+            IntegratedSecurity = true,
+            Encrypt = true,
+            TrustServerCertificate = true
+        }, runId, manifestPath);
+    }
+
+    public static SqlServerAcceptanceRun CreateFromConnectionString(string connectionString, string runId, string manifestPath)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString)) throw new InvalidOperationException("SQL Server test connection is missing.");
+        return Create(new SqlConnectionStringBuilder(connectionString), runId, manifestPath);
+    }
+
+    private static SqlServerAcceptanceRun Create(SqlConnectionStringBuilder baseConnection, string runId, string manifestPath)
+    {
+        if (string.IsNullOrWhiteSpace(baseConnection.DataSource)) throw new InvalidOperationException("SQL Server test connection has no server.");
         ValidateRunId(runId);
-        var run = new SqlServerAcceptanceRun(server, runId, manifestPath);
+        var run = new SqlServerAcceptanceRun(baseConnection, runId, manifestPath);
         foreach (var database in run.AllDatabaseNames)
             ValidateDatabaseName(database, run.RunId, run.AllDatabaseNames);
         return run;
+    }
+
+    public static SqlConnectionStringBuilder? CreateBaseConnectionFromEnvironment()
+    {
+        var connection = Environment.GetEnvironmentVariable(ConnectionEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(connection))
+            return new SqlConnectionStringBuilder(connection);
+
+        var server = Environment.GetEnvironmentVariable(ServerEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(server)) return null;
+        var auth = Environment.GetEnvironmentVariable(AuthEnvironmentVariable);
+        if (!string.Equals(auth, "Integrated", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"{AuthEnvironmentVariable} must be 'Integrated' when {ConnectionEnvironmentVariable} is absent.");
+        ValidateServer(server);
+        return new SqlConnectionStringBuilder
+        {
+            DataSource = server.Trim(),
+            IntegratedSecurity = true,
+            Encrypt = true,
+            TrustServerCertificate = true
+        };
     }
 
     public static void ValidateServer(string? server)
@@ -92,26 +133,18 @@ public sealed class SqlServerAcceptanceRun
     public SqlConnectionStringBuilder Connection(string database)
     {
         ValidateDatabaseName(database, RunId, AllDatabaseNames);
-        return new SqlConnectionStringBuilder
+        var connection = new SqlConnectionStringBuilder(_baseConnection.ConnectionString)
         {
-            DataSource = Server,
             InitialCatalog = database,
-            IntegratedSecurity = true,
-            Encrypt = true,
-            TrustServerCertificate = true,
             ConnectTimeout = 10,
-            CommandTimeout = 30,
             ApplicationName = $"HRMS Phase 3B {RunId}"
         };
+        return connection;
     }
 
-    public SqlConnectionStringBuilder MasterConnection() => new()
+    public SqlConnectionStringBuilder MasterConnection() => new(_baseConnection.ConnectionString)
     {
-        DataSource = Server,
         InitialCatalog = "master",
-        IntegratedSecurity = true,
-        Encrypt = true,
-        TrustServerCertificate = true,
         ConnectTimeout = 10,
         ApplicationName = $"HRMS Phase 3B {RunId}"
     };
@@ -161,16 +194,80 @@ public sealed class SqlServerAcceptanceRun
     public async Task DropDatabasesAsync(CancellationToken cancellationToken = default)
     {
         ValidateManifestOwnership();
-        await using var master = new SqlConnection(MasterConnection().ConnectionString);
-        await master.OpenAsync(cancellationToken);
         foreach (var database in AllDatabaseNames.Reverse())
         {
             ValidateDatabaseName(database, RunId, AllDatabaseNames);
-            if (!await ExistsAsync(master, database, cancellationToken)) continue;
-            await using var command = master.CreateCommand();
-            command.CommandText = "DROP DATABASE " + QuoteIdentifier(database);
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            await DropDatabaseAsync(database, cancellationToken);
         }
+    }
+
+    internal static bool IsCleanupStateError(int number) => number is 615 or 3701;
+
+    private async Task DropDatabaseAsync(string database, CancellationToken cancellationToken)
+    {
+        await DropOwnedDatabaseAsync(_baseConnection, database, Prefix, $"HRMS Phase 3B {RunId}", cancellationToken);
+    }
+
+    internal static async Task DropOwnedDatabaseAsync(
+        SqlConnectionStringBuilder baseConnection,
+        string database,
+        string requiredPrefix,
+        string applicationName,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateOwnedDatabaseName(database, requiredPrefix);
+        for (var attempt = 1; attempt <= CleanupMaxAttempts; attempt++)
+        {
+            try
+            {
+                var masterConnection = new SqlConnectionStringBuilder(baseConnection.ConnectionString)
+                {
+                    InitialCatalog = "master",
+                    ConnectTimeout = 10,
+                    ApplicationName = applicationName
+                };
+                await using var master = new SqlConnection(masterConnection.ConnectionString);
+                await master.OpenAsync(cancellationToken);
+                if (!await ExistsAsync(master, database, cancellationToken)) return;
+
+                await using var command = master.CreateCommand();
+                var quotedDatabase = QuoteIdentifier(database);
+                command.CommandText = $"ALTER DATABASE {quotedDatabase} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE {quotedDatabase}";
+                await command.ExecuteNonQueryAsync(cancellationToken);
+                return;
+            }
+            catch (SqlException exception) when (IsCleanupStateError(exception.Number))
+            {
+                SqlConnection.ClearAllPools();
+                if (!await ExistsOnFreshMasterConnectionAsync(baseConnection, database, applicationName, cancellationToken)) return;
+                if (attempt == CleanupMaxAttempts) throw;
+                await Task.Delay(TimeSpan.FromMilliseconds(100 * attempt), cancellationToken);
+            }
+        }
+    }
+
+    internal static void ValidateOwnedDatabaseName(string? database, string requiredPrefix)
+    {
+        if (string.IsNullOrWhiteSpace(database)) throw new InvalidOperationException("Database name is missing.");
+        if (ProtectedNames.Contains(database, StringComparer.OrdinalIgnoreCase) || !database.StartsWith(requiredPrefix, StringComparison.Ordinal))
+            throw new InvalidOperationException("Refusing a non-owned SQL Server test database.");
+    }
+
+    private static async Task<bool> ExistsOnFreshMasterConnectionAsync(
+        SqlConnectionStringBuilder baseConnection,
+        string database,
+        string applicationName,
+        CancellationToken cancellationToken)
+    {
+        var masterConnection = new SqlConnectionStringBuilder(baseConnection.ConnectionString)
+        {
+            InitialCatalog = "master",
+            ConnectTimeout = 10,
+            ApplicationName = applicationName
+        };
+        await using var master = new SqlConnection(masterConnection.ConnectionString);
+        await master.OpenAsync(cancellationToken);
+        return await ExistsAsync(master, database, cancellationToken);
     }
 
     /// <summary>Validates all startup destinations before an isolated host is allowed to open them.</summary>
