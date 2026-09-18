@@ -140,9 +140,9 @@ function TenantApplication() {
                   <Route path="leave-management/periods" element={<RequirePermission permission={Permissions.leave.periodManage}><LeavePeriodsPage /></RequirePermission>} />
                   <Route path="leave-management/policies" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePoliciesPage /></RequirePermission>} />
                   <Route path="leave-management/policies/:policyId" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePolicyEditorPage /></RequirePermission>} />
-                  <Route path="leave-management/apply" element={<RequirePermission permission={Permissions.leave.requestCreate}><LeaveRequestPreviewPage /></RequirePermission>} />
-                  <Route path="leave-management/my-requests" element={<RequirePermission permission={Permissions.leave.requestViewOwn}><MyLeaveRequestsPage /></RequirePermission>} />
-                  <Route path="leave-management/my-requests/:requestId" element={<RequirePermission permission={Permissions.leave.requestViewOwn}><MyLeaveRequestDetailPage /></RequirePermission>} />
+                  <Route path="leave-management/apply" element={<RequirePermission permission={Permissions.leave.requestCreate}><RequireEmployeeIdentity><LeaveRequestPreviewPage /></RequireEmployeeIdentity></RequirePermission>} />
+                  <Route path="leave-management/my-requests" element={<RequirePermission permission={Permissions.leave.requestViewOwn}><RequireEmployeeIdentity><MyLeaveRequestsPage /></RequireEmployeeIdentity></RequirePermission>} />
+                  <Route path="leave-management/my-requests/:requestId" element={<RequirePermission permission={Permissions.leave.requestViewOwn}><RequireEmployeeIdentity><MyLeaveRequestDetailPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="leave-management/team-calendar" element={<RequirePermission anyOf={[Permissions.leave.requestViewOwn, Permissions.leave.dashboardViewAll, Permissions.leave.approve]}><TeamLeaveCalendarPage /></RequirePermission>} />
                   <Route path="leave-management/balances/import" element={<RequirePermission permission={Permissions.leave.balanceImport}><LeaveBalanceImportPage /></RequirePermission>} />
                   <Route path="leave-management/approvals" element={<RequirePermission permission={Permissions.leave.approve}><LeaveApprovalsPage /></RequirePermission>} />

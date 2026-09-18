@@ -1,4 +1,5 @@
 using HRMS.Application.Services;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -28,6 +29,12 @@ public sealed class MySqlHrLeaveDashboardIntegrationTests
                 var history = await setup.EmployeeEmploymentHistory.SingleAsync(x => x.Id == fixture.EmployeeHistoryId);
                 history.DepartmentId = departmentId;
                 history.WorkLocationId = workLocationId;
+                var dashboardPermission = await setup.Permissions.SingleOrDefaultAsync(x => x.Name == Permissions.Leave.DashboardViewAll)
+                    ?? new Permission { Id = HRMS.Infrastructure.Persistence.Seed.SeedData.PermissionId(Permissions.Leave.DashboardViewAll), Name = Permissions.Leave.DashboardViewAll, Description = Permissions.Leave.DashboardViewAll };
+                if (setup.Entry(dashboardPermission).State == EntityState.Detached) setup.Permissions.Add(dashboardPermission);
+                setup.RolePermissions.Add(new RolePermission { RoleId = fixture.RoleId, PermissionId = dashboardPermission.Id });
+                var managerAssignment = await setup.UserRoles.SingleAsync(x => x.TenantId == fixture.TenantId && x.UserId == fixture.ManagerUserId && x.RoleId == fixture.RoleId);
+                setup.UserRoleAssignmentScopes.Add(new UserRoleAssignmentScope { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserRoleAssignmentId = managerAssignment.Id, ScopeType = RoleScopeType.Department, ScopeEntityId = departmentId });
                 setup.LeaveTypes.Add(new LeaveType { Id = unlimitedTypeId, TenantId = fixture.TenantId, Code = "UL", Name = "Unlimited PTO", IsActive = true });
                 setup.LeavePolicyRules.Add(new LeavePolicyRule { Id = unlimitedRuleId, TenantId = fixture.TenantId, LeavePolicyVersionId = fixture.PolicyVersionId, LeaveTypeId = unlimitedTypeId, IsActive = true });
                 setup.LeavePolicyEntitlementRules.Add(new LeavePolicyEntitlementRule { Id = Guid.NewGuid(), TenantId = fixture.TenantId, LeavePolicyRuleId = unlimitedRuleId, EntitlementMode = EntitlementMode.Unlimited });
@@ -39,7 +46,8 @@ public sealed class MySqlHrLeaveDashboardIntegrationTests
 
             await using (var db = fixture.CreateContext())
             {
-                var result = await new HrLeaveDashboardService(db, fixture.EmployeeTenant, new HRMS.Application.Services.LeavePeriodResolver(db, fixture.EmployeeTenant), new FixedTimeProvider(new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero))).GetSummaryAsync(new());
+                var authorization = new LeaveAuthorizationService(db, fixture.ManagerTenant, new EmployeeIdentityResolver(db, fixture.ManagerTenant), new EmployeeAccessScopeService(db, fixture.ManagerTenant), new EmployeeManagerResolver(db, fixture.ManagerTenant));
+                var result = await new HrLeaveDashboardService(db, fixture.ManagerTenant, new HRMS.Application.Services.LeavePeriodResolver(db, fixture.ManagerTenant), new FixedTimeProvider(new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero)), authorization).GetSummaryAsync(new());
                 Assert.True(result.Succeeded, result.Message);
                 Assert.Equal(1, result.Value!.Kpis.EmployeesOnLeaveToday);
                 Assert.Equal(1, result.Value.Kpis.PendingApprovalRequests);

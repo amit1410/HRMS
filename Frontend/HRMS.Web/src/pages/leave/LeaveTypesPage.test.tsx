@@ -53,6 +53,18 @@ describe('LeaveTypesPage', () => {
     expect(stub.callsTo('post', '/api/leave-types')).toHaveLength(0)
   })
 
+  it('renders drawer guidance, counters and category options', async () => {
+    list([]); renderPage(); await userEvent.click(await screen.findByRole('button', { name: 'Add Leave Type' }))
+    expect(screen.getByText('Create a new leave category for your organization.')).toBeInTheDocument()
+    expect(screen.getByText('0 / 40')).toBeInTheDocument()
+    expect(screen.getByText('0 / 150')).toBeInTheDocument()
+    expect(screen.getByText('0 / 1000')).toBeInTheDocument()
+    expect(document.querySelectorAll('.leave-drawer-control > .leave-drawer-icon')).toHaveLength(2)
+    const unpaid = screen.getByRole('radio', { name: /Unpaid/ })
+    await userEvent.click(unpaid)
+    expect(unpaid).toBeChecked()
+  })
+
   it('creates a Leave Type and refreshes the list', async () => {
     list([]); stub.on('post', '/api/leave-types', call => ({ data: ok({ ...item, code: call.body && typeof call.body === 'object' && 'code' in call.body ? String(call.body.code) : 'EL' }) }))
     renderPage(); await userEvent.click(await screen.findByRole('button', { name: 'Add Leave Type' }))

@@ -24,6 +24,7 @@ logs/
 *.backup
 *.dump
 *.dmp
+/.db-backups/
 *.mdf
 *.ldf
 

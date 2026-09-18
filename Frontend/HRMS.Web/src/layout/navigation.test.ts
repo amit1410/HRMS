@@ -4,6 +4,7 @@ import { NAV_GROUPS, NAV_ITEMS, visibleNavGroups, visibleNavItems } from './navi
 import { makeUser } from '../test/fixtures.ts'
 
 const linkedUser = makeUser({ employeeIdentity: { status: 'Linked', revision: null, linkId: 'link-1', employee: { id: 'employee-1', displayName: 'Priya Raman', employeeCode: 'EMP-1' }, employmentEligibility: 'ActiveEmployment', businessDate: '2026-09-08' } })
+const unlinkedUser = makeUser({ permissions: [Permissions.leave.requestCreate, Permissions.leave.requestViewOwn] })
 
 function canAlways(): boolean {
   return true
@@ -48,6 +49,12 @@ describe('visibleNavItems', () => {
   it('shows My Profile only when the account has a linked employee identity', () => {
     expect(visibleNavItems(canNever).map(item => item.label)).not.toContain('My Profile')
     expect(visibleNavItems(canNever, linkedUser).map(item => item.label)).toContain('My Profile')
+  })
+
+  it('hides employee self-service leave actions when the account is not linked', () => {
+    const labels = visibleNavItems((permission) => unlinkedUser.permissions.includes(permission), unlinkedUser).map(item => item.label)
+    expect(labels).not.toContain('Apply Leave')
+    expect(labels).not.toContain('My Leave Requests')
   })
 
   it('filters independently per permission', () => {

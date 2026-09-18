@@ -79,8 +79,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
     available: true,
     group: 'leave',
   },
-  { label: 'Apply Leave', to: '/leave-management/apply', permission: Permissions.leave.requestCreate, available: true, group: 'leave' },
-  { label: 'My Leave Requests', to: '/leave-management/my-requests', permission: Permissions.leave.requestViewOwn, available: true, group: 'leave' },
+  { label: 'Apply Leave', to: '/leave-management/apply', permission: Permissions.leave.requestCreate, available: true, requiresEmployeeIdentity: true, group: 'leave' },
+  { label: 'My Leave Requests', to: '/leave-management/my-requests', permission: Permissions.leave.requestViewOwn, available: true, requiresEmployeeIdentity: true, group: 'leave' },
   {
     label: 'Team Leave Calendar',
     to: '/leave-management/team-calendar',

@@ -640,6 +640,7 @@ public sealed class MySqlLeaveLifecycleIntegrationTests
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `LeaveTypes` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `AccountEmployeeCurrentLinks` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `AccountEmployeeLinkEvents` WHERE `TenantId` = {TenantId}");
+            await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `UserRoleAssignmentScopes` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `UserRoles` WHERE `TenantId` = {TenantId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `RolePermissions` WHERE `RoleId` = {RoleId}");
             await db.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM `Roles` WHERE `Id` = {RoleId}");

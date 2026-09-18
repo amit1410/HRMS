@@ -2,6 +2,9 @@ import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react'
 
 interface ModalProps {
   title: string
+  subtitle?: ReactNode
+  icon?: ReactNode
+  className?: string
   /** Called for Escape, the backdrop, and the close button alike. */
   onClose: () => void
   /** Footer slot, in reading order — the confirming action last, where a mouse expects it. */
@@ -35,6 +38,9 @@ interface ModalProps {
  */
 export function Modal({
   title,
+  subtitle,
+  icon,
+  className,
   onClose,
   footer,
   role = 'dialog',
@@ -90,7 +96,7 @@ export function Modal({
       }}
     >
       <div
-        className="modal"
+        className={`modal${className ? ` ${className}` : ''}`}
         role={role}
         aria-modal="true"
         aria-labelledby={titleId}
@@ -99,9 +105,15 @@ export function Modal({
         ref={dialogRef}
       >
         <header className="modal-header">
-          <h2 className="modal-title" id={titleId}>
-            {title}
-          </h2>
+          <div className="modal-heading">
+            {icon}
+            <div>
+              <h2 className="modal-title" id={titleId}>
+                {title}
+              </h2>
+              {subtitle !== undefined && <p className="modal-subtitle">{subtitle}</p>}
+            </div>
+          </div>
           <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>

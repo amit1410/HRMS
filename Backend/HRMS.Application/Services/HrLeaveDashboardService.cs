@@ -1,6 +1,7 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Domain.Authorization;
+using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
@@ -38,22 +39,30 @@ public sealed class HrLeaveDashboardService : IHrLeaveDashboardService
         if (to.DayNumber - from.DayNumber > 366)
             return Result<HrLeaveDashboardSummaryDto>.Invalid("to", "The dashboard range cannot exceed 366 days.");
 
-        IQueryable<Guid>? authorizedEmployeeIds = null;
+        IQueryable<Employee>? authorizedEmployees = null;
         if (_authorization is not null)
         {
             var access = await _authorization.BuildEmployeePredicateAsync(
                 Permissions.Leave.DashboardViewAll, includeManager: false, includeRoleScope: true, today, cancellationToken);
             if (!access.Succeeded || access.Value is null)
                 return Result<HrLeaveDashboardSummaryDto>.Failure(access.Status, access.Message, access.Errors);
-            authorizedEmployeeIds = _db.Employees.AsNoTracking().Where(access.Value).Select(x => x.Id);
+            authorizedEmployees = _db.Employees.AsNoTracking().Where(access.Value);
         }
 
         var requestQuery = _db.LeaveRequests.AsNoTracking()
             .Where(x => x.TenantId == _tenant.TenantId.Value && x.StartDate <= to && x.EndDate >= from &&
-                (authorizedEmployeeIds == null || authorizedEmployeeIds.Contains(x.EmployeeId)) &&
                 (!filter.LeaveTypeId.HasValue || x.LeaveTypeId == filter.LeaveTypeId.Value) &&
                 (!filter.DepartmentId.HasValue || x.EmployeeEmploymentHistory!.DepartmentId == filter.DepartmentId.Value) &&
                 (!filter.WorkLocationId.HasValue || x.EmployeeEmploymentHistory!.WorkLocationId == filter.WorkLocationId.Value));
+
+        if (authorizedEmployees is not null)
+        {
+            requestQuery = from request in requestQuery
+                           join employee in authorizedEmployees
+                               on new { request.TenantId, request.EmployeeId }
+                               equals new { employee.TenantId, EmployeeId = employee.Id }
+                           select request;
+        }
 
         var requests = await requestQuery
             .Select(x => new RequestRow(

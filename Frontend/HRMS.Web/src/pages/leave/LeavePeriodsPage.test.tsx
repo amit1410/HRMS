@@ -28,8 +28,24 @@ describe('LeavePeriodsPage', () => {
     list([]); renderPage(); await userEvent.type(await screen.findByLabelText('Search Leave Periods'), 'FY27'); await userEvent.selectOptions(screen.getByLabelText('Leave Period status'), 'inactive'); await waitFor(() => expect(stub.calls.filter(call => call.method === 'get').at(-1)?.params).toMatchObject({ search: 'FY27', isActive: false }))
   })
 
+  it('requests only the selected server page', async () => {
+    stub.on('get', '/api/leave-periods', () => ({ data: ok(paged([item], { page: 1, pageSize: 10, totalCount: 25, totalPages: 3, hasNextPage: true })) })); renderPage(); await screen.findByRole('row', { name: /2027 Calendar 2027/ }); await userEvent.click(screen.getByRole('button', { name: 'Page 2' })); await waitFor(() => expect(stub.calls.filter(call => call.method === 'get').at(-1)?.params).toMatchObject({ page: 2, pageSize: 10 }))
+  })
+
+  it('resets pagination when filters are cleared', async () => {
+    stub.on('get', '/api/leave-periods', () => ({ data: ok(paged([item], { page: 2, pageSize: 10, totalCount: 25, totalPages: 3, hasPreviousPage: true })) })); renderPage(); await screen.findByRole('row', { name: /2027 Calendar 2027/ }); await userEvent.type(screen.getByLabelText('Search Leave Periods'), 'FY27'); await userEvent.click(screen.getByRole('button', { name: 'Clear filters' })); await waitFor(() => expect(stub.calls.filter(call => call.method === 'get').at(-1)?.params).toMatchObject({ page: 1, pageSize: 10 }))
+  })
+
   it('validates required fields before create', async () => {
     list([]); renderPage(); await userEvent.click(await screen.findByRole('button', { name: 'Add Leave Period' })); await userEvent.click(screen.getByRole('button', { name: 'Save Leave Period' })); expect(screen.getByLabelText(/Code/)).toBeInvalid(); expect(stub.callsTo('post', '/api/leave-periods')).toHaveLength(0)
+  })
+
+  it('renders drawer guidance, counters and scoped date icons', async () => {
+    list([]); renderPage(); await userEvent.click(await screen.findByRole('button', { name: 'Add Leave Period' }))
+    expect(screen.getByText('Define a new leave-year and accounting period.')).toBeInTheDocument()
+    expect(screen.getByText('0 / 40')).toBeInTheDocument()
+    expect(screen.getByText('0 / 150')).toBeInTheDocument()
+    expect(document.querySelectorAll('.leave-period-drawer-control > svg')).toHaveLength(4)
   })
 
   it('rejects a start date after the end date', async () => {
