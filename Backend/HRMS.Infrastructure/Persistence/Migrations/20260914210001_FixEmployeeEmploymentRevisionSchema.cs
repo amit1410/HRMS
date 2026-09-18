@@ -14,41 +14,14 @@ public partial class FixEmployeeEmploymentRevisionSchema : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)
     {
-        migrationBuilder.AddColumn<int>(
-            name: "RevisionNumber",
-            table: "EmployeeEmploymentHistory",
-            type: "int",
-            nullable: false,
-            defaultValue: 1);
-
-        migrationBuilder.AddColumn<bool>(
-            name: "IsSuperseded",
-            table: "EmployeeEmploymentHistory",
-            type: "bit",
-            nullable: false,
-            defaultValue: false);
-
-        migrationBuilder.AddColumn<DateTime>(
-            name: "SupersededAtUtc",
-            table: "EmployeeEmploymentHistory",
-            type: "datetime2",
-            nullable: true);
-
-        migrationBuilder.CreateIndex(
-            name: "IX_EmpHist_EffectiveRevision",
-            table: "EmployeeEmploymentHistory",
-            columns: new[] { "TenantId", "EmployeeId", "EffectiveFrom", "RevisionNumber" },
-            unique: true);
+        // The preceding AddEmploymentHistoryRevisions migration already creates
+        // this schema. Keep this migration in history for databases that have
+        // recorded it, but do not recreate the same columns and index.
     }
 
     protected override void Down(MigrationBuilder migrationBuilder)
     {
-        migrationBuilder.DropIndex(
-            name: "IX_EmpHist_EffectiveRevision",
-            table: "EmployeeEmploymentHistory");
-
-        migrationBuilder.DropColumn(name: "RevisionNumber", table: "EmployeeEmploymentHistory");
-        migrationBuilder.DropColumn(name: "IsSuperseded", table: "EmployeeEmploymentHistory");
-        migrationBuilder.DropColumn(name: "SupersededAtUtc", table: "EmployeeEmploymentHistory");
+        // The schema is owned by AddEmploymentHistoryRevisions, so rolling back
+        // this compatibility migration must not remove those objects.
     }
 }

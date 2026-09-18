@@ -52,14 +52,35 @@ public sealed class SqlServerIntegrationSmokeTests : IClassFixture<SqlServerInte
     public async Task Synthetic_employee_can_be_inserted_queried_and_deleted()
     {
         if (!_fixture.IsConfigured) return;
-        await using var context = _fixture.CreateContext(new TestTenantContext(Tenant));
+        var tenantId = Guid.NewGuid();
+        var tenant = new TestTenantContext(tenantId);
+        await using var context = _fixture.CreateContext(tenant);
+        context.Tenants.Add(new Tenant
+        {
+            Id = tenantId,
+            TenantCode = $"SMOKE{tenantId:N}"[..12],
+            Host = $"{tenantId:N}.test.invalid",
+            ShardKey = $"smoke-{tenantId:N}",
+            TenantName = "Integration Smoke Tenant",
+            Status = TenantStatus.Active
+        });
+        await context.SaveChangesAsync();
+
         var id = Guid.NewGuid();
-        context.Employees.Add(new Employee { Id = id, TenantId = Tenant, FirstName = "Integration", LastName = "Smoke", Email = $"{id:N}@test.invalid", DateOfJoining = new DateOnly(2026, 9, 1) });
-        await context.SaveChangesAsync();
-        await using var reader = _fixture.CreateContext(new TestTenantContext(Tenant));
-        Assert.NotNull(await reader.Employees.SingleAsync(e => e.Id == id));
-        context.Employees.Remove(await context.Employees.SingleAsync(e => e.Id == id));
-        await context.SaveChangesAsync();
-        Assert.Null(await reader.Employees.SingleOrDefaultAsync(e => e.Id == id));
+        try
+        {
+            context.Employees.Add(new Employee { Id = id, TenantId = tenantId, FirstName = "Integration", LastName = "Smoke", Email = $"{id:N}@test.invalid", DateOfJoining = new DateOnly(2026, 9, 1) });
+            await context.SaveChangesAsync();
+            await using var reader = _fixture.CreateContext(tenant);
+            Assert.NotNull(await reader.Employees.SingleAsync(e => e.Id == id));
+            context.Employees.Remove(await context.Employees.SingleAsync(e => e.Id == id));
+            await context.SaveChangesAsync();
+            Assert.Null(await reader.Employees.SingleOrDefaultAsync(e => e.Id == id));
+        }
+        finally
+        {
+            await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM [Employees] WHERE [TenantId] = {tenantId}");
+            await context.Database.ExecuteSqlInterpolatedAsync($"DELETE FROM [Tenants] WHERE [Id] = {tenantId}");
+        }
     }
 }
