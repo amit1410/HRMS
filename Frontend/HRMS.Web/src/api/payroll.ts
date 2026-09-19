@@ -164,3 +164,108 @@ export function setSalaryStructureActive(id: string, active: boolean, version: n
 export function getSalaryStructureHistory(id: string): Promise<SalaryStructureHistory[]> {
   return request<SalaryStructureHistory[]>(() => api.get<ApiResponse<SalaryStructureHistory[]>>(`/api/payroll/salary-structures/${id}/history`))
 }
+
+export type SalaryPayFrequency = 'Monthly' | 'BiWeekly' | 'Weekly' | 'Daily'
+export type EmployeeSalaryAssignmentStatus = 'Active' | 'Inactive'
+export type SalaryChangeReason = 'NewHire' | 'Confirmation' | 'Increment' | 'Promotion' | 'Demotion' | 'Transfer' | 'Correction' | 'ContractRevision' | 'Other'
+
+export interface EmployeeSalaryComponentOverride {
+  id: string
+  salaryStructureComponentId: string
+  salaryComponentId: string
+  salaryComponentCode: string
+  salaryComponentName: string
+  calculationType: SalaryStructureCalculationType
+  isEditableAtEmployeeLevel: boolean
+  overrideValue?: number | null
+  overridePercentage?: number | null
+  overrideFormula?: string | null
+  effectiveFrom: string
+  effectiveTo?: string | null
+  isActive: boolean
+  remarks?: string | null
+}
+
+export interface EmployeeSalaryAssignment {
+  id: string
+  employeeId: string
+  employeeCode: string
+  employeeName: string
+  salaryStructureId: string
+  salaryStructureCode: string
+  salaryStructureName: string
+  salaryStructureVersionId: string
+  effectiveFrom: string
+  effectiveTo?: string | null
+  annualCtc?: number | null
+  monthlyCtc?: number | null
+  currencyCode: string
+  payFrequency: SalaryPayFrequency
+  status: EmployeeSalaryAssignmentStatus
+  changeReason: SalaryChangeReason
+  remarks?: string | null
+  concurrencyVersion: number
+  components: EmployeeSalaryComponentOverride[]
+}
+
+export interface EmployeeSalaryComponentRequest {
+  salaryStructureComponentId: string
+  overrideValue?: number | null
+  overridePercentage?: number | null
+  overrideFormula?: string | null
+  effectiveFrom: string
+  effectiveTo?: string | null
+  isActive: boolean
+  remarks?: string | null
+}
+
+export interface EmployeeSalaryAssignmentRequest {
+  employeeId: string
+  salaryStructureId: string
+  effectiveFrom: string
+  effectiveTo?: string | null
+  annualCtc?: number | null
+  monthlyCtc?: number | null
+  currencyCode: string
+  payFrequency: SalaryPayFrequency
+  status: EmployeeSalaryAssignmentStatus
+  changeReason: SalaryChangeReason
+  remarks?: string | null
+  expectedConcurrencyVersion?: number
+  components: EmployeeSalaryComponentRequest[]
+}
+
+export interface EmployeeSalaryAssignmentHistory {
+  id: string
+  assignmentId: string
+  changeType: string
+  effectiveFrom: string
+  effectiveTo?: string | null
+  annualCtc?: number | null
+  monthlyCtc?: number | null
+  changeReason: SalaryChangeReason
+  componentsJson: string
+  changedAtUtc: string
+}
+
+export function listEmployeeSalaryAssignments(params: QueryParams = {}, signal?: AbortSignal): Promise<PagedResult<EmployeeSalaryAssignment>> {
+  return request<PagedResult<EmployeeSalaryAssignment>>(() => api.get<ApiResponse<PagedResult<EmployeeSalaryAssignment>>>('/api/payroll/employee-salary-assignments', { params: cleanParams(params), signal }))
+}
+export function listEmployeeSalaryAssignmentsForEmployee(employeeId: string, params: QueryParams = {}): Promise<PagedResult<EmployeeSalaryAssignment>> {
+  return request<PagedResult<EmployeeSalaryAssignment>>(() => api.get<ApiResponse<PagedResult<EmployeeSalaryAssignment>>>(`/api/payroll/employee-salary-assignments/by-employee/${employeeId}`, { params: cleanParams(params) }))
+}
+export function getEmployeeSalaryAssignment(id: string): Promise<EmployeeSalaryAssignment> {
+  return request<EmployeeSalaryAssignment>(() => api.get<ApiResponse<EmployeeSalaryAssignment>>(`/api/payroll/employee-salary-assignments/${id}`))
+}
+export function createEmployeeSalaryAssignment(body: EmployeeSalaryAssignmentRequest): Promise<EmployeeSalaryAssignment> {
+  return request<EmployeeSalaryAssignment>(() => api.post<ApiResponse<EmployeeSalaryAssignment>>('/api/payroll/employee-salary-assignments', body))
+}
+export function updateEmployeeSalaryAssignment(id: string, body: EmployeeSalaryAssignmentRequest): Promise<EmployeeSalaryAssignment> {
+  return request<EmployeeSalaryAssignment>(() => api.put<ApiResponse<EmployeeSalaryAssignment>>(`/api/payroll/employee-salary-assignments/${id}`, body))
+}
+export function setEmployeeSalaryAssignmentActive(id: string, active: boolean, version: number): Promise<EmployeeSalaryAssignment> {
+  return request<EmployeeSalaryAssignment>(() => api.post<ApiResponse<EmployeeSalaryAssignment>>(`/api/payroll/employee-salary-assignments/${id}/${active ? 'activate' : 'deactivate'}`, undefined, { params: { expectedConcurrencyVersion: version } }))
+}
+export function getEmployeeSalaryAssignmentHistory(id: string): Promise<EmployeeSalaryAssignmentHistory[]> {
+  return request<EmployeeSalaryAssignmentHistory[]>(() => api.get<ApiResponse<EmployeeSalaryAssignmentHistory[]>>(`/api/payroll/employee-salary-assignments/${id}/history`))
+}

@@ -58,3 +58,8 @@ public enum SalaryStructureChangeType
     Activated,
     Deactivated
 }
+
+public enum SalaryPayFrequency { Monthly, BiWeekly, Weekly, Daily }
+public enum EmployeeSalaryAssignmentStatus { Active, Inactive }
+public enum SalaryChangeReason { NewHire, Confirmation, Increment, Promotion, Demotion, Transfer, Correction, ContractRevision, Other }
+public enum EmployeeSalaryAssignmentChangeType { Created, Updated, OverrideAdded, OverrideChanged, OverrideRemoved, EndDated, Activated, Deactivated }

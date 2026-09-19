@@ -118,6 +118,9 @@ public static class Permissions
         public const string SalaryStructureView = "Payroll.SalaryStructure.View";
         public const string SalaryStructureManage = "Payroll.SalaryStructure.Manage";
         public const string SalaryStructureViewHistory = "Payroll.SalaryStructure.ViewHistory";
+        public const string EmployeeSalaryView = "Payroll.EmployeeSalary.View";
+        public const string EmployeeSalaryManage = "Payroll.EmployeeSalary.Manage";
+        public const string EmployeeSalaryViewHistory = "Payroll.EmployeeSalary.ViewHistory";
     }
     public static class Attendance
     {
@@ -159,6 +162,7 @@ public static class Permissions
         PageAccess.View, PageAccess.Manage,
         Payroll.SalaryComponentView, Payroll.SalaryComponentManage, Payroll.SalaryComponentViewHistory,
         Payroll.SalaryStructureView, Payroll.SalaryStructureManage, Payroll.SalaryStructureViewHistory,
+        Payroll.EmployeeSalaryView, Payroll.EmployeeSalaryManage, Payroll.EmployeeSalaryViewHistory,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

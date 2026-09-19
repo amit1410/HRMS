@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createSalaryComponent, createSalaryStructure, getSalaryComponentHistory, listSalaryComponents, listSalaryStructures, setSalaryComponentActive, setSalaryStructureActive, updateSalaryComponent, updateSalaryStructure } from './payroll.ts'
+import { createEmployeeSalaryAssignment, getEmployeeSalaryAssignmentHistory, listEmployeeSalaryAssignments, setEmployeeSalaryAssignmentActive, updateEmployeeSalaryAssignment, createSalaryComponent, createSalaryStructure, getSalaryComponentHistory, listSalaryComponents, listSalaryStructures, setSalaryComponentActive, setSalaryStructureActive, updateSalaryComponent, updateSalaryStructure } from './payroll.ts'
 import { installStubAdapter, ok, type StubAdapter } from '../test/stubAdapter.ts'
 import { paged } from '../test/fixtures.ts'
 
@@ -34,5 +34,16 @@ describe('salary component API client', () => {
     await listSalaryStructures({ search: 'staff', isActive: true, page: 2, pageSize: 20 }); await createSalaryStructure(request); await updateSalaryStructure('structure-1', { ...request, expectedConcurrencyVersion: 1 }); await setSalaryStructureActive('structure-1', false, 1)
     expect(stub.calls.map(call => `${call.method}:${call.url}`)).toEqual(['get:/api/payroll/salary-structures', 'post:/api/payroll/salary-structures', 'put:/api/payroll/salary-structures/structure-1', 'post:/api/payroll/salary-structures/structure-1/deactivate'])
     expect(stub.calls[0]?.params).toMatchObject({ search: 'staff', isActive: true, page: 2, pageSize: 20 })
+  })
+
+  it('supports employee salary assignment and history endpoints', async () => {
+    stub.on('get', '/api/payroll/employee-salary-assignments', () => ({ data: ok(paged([])) }))
+    stub.on('post', '/api/payroll/employee-salary-assignments', () => ({ data: ok({ id: 'assignment-1' }) }))
+    stub.on('put', '/api/payroll/employee-salary-assignments/assignment-1', () => ({ data: ok({ id: 'assignment-1' }) }))
+    stub.on('post', '/api/payroll/employee-salary-assignments/assignment-1/deactivate', () => ({ data: ok({ id: 'assignment-1' }) }))
+    stub.on('get', '/api/payroll/employee-salary-assignments/assignment-1/history', () => ({ data: ok([]) }))
+    const request = { employeeId: 'employee-1', salaryStructureId: 'structure-1', effectiveFrom: '2026-01-01', effectiveTo: null, annualCtc: 120000, monthlyCtc: 10000, currencyCode: 'INR', payFrequency: 'Monthly' as const, status: 'Active' as const, changeReason: 'NewHire' as const, remarks: '', components: [] }
+    await listEmployeeSalaryAssignments({ search: 'E001', page: 2, pageSize: 20 }); await createEmployeeSalaryAssignment(request); await updateEmployeeSalaryAssignment('assignment-1', { ...request, expectedConcurrencyVersion: 1 }); await setEmployeeSalaryAssignmentActive('assignment-1', false, 1); await getEmployeeSalaryAssignmentHistory('assignment-1')
+    expect(stub.calls.map(call => `${call.method}:${call.url}`)).toEqual(['get:/api/payroll/employee-salary-assignments', 'post:/api/payroll/employee-salary-assignments', 'put:/api/payroll/employee-salary-assignments/assignment-1', 'post:/api/payroll/employee-salary-assignments/assignment-1/deactivate', 'get:/api/payroll/employee-salary-assignments/assignment-1/history'])
   })
 })

@@ -52,6 +52,7 @@ import { PlatformAuthProvider, usePlatformAuth } from './auth/PlatformAuthProvid
 import { RequirePlatformAuth } from './auth/RequirePlatformAuth.tsx'
 import { SalaryComponentsPage } from './pages/payroll/SalaryComponentsPage.tsx'
 import { SalaryStructuresPage } from './pages/payroll/SalaryStructuresPage.tsx'
+import { EmployeeSalaryAssignmentsPage } from './pages/payroll/EmployeeSalaryAssignmentsPage.tsx'
 
 /**
  * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
@@ -128,6 +129,7 @@ function TenantApplication() {
                   <Route path="page-access-management" element={<RequirePermission permission={Permissions.pageAccess.view}><PageAccessManagementPage /></RequirePermission>} />
                   <Route path="payroll/salary-components" element={<RequirePermission permission={Permissions.payroll.salaryComponentView}><SalaryComponentsPage /></RequirePermission>} />
                   <Route path="payroll/salary-structures" element={<RequirePermission permission={Permissions.payroll.salaryStructureView}><SalaryStructuresPage /></RequirePermission>} />
+                  <Route path="payroll/employee-salary" element={<RequirePermission permission={Permissions.payroll.employeeSalaryView}><EmployeeSalaryAssignmentsPage /></RequirePermission>} />
                   <Route path="masters/:kind" element={<MasterRouteGuard />} />
                   <Route
                     path="configuration/employee-code"

@@ -103,6 +103,7 @@ public static class DependencyInjection
         services.AddScoped<IAttendanceReportService, AttendanceReportService>();
         services.AddScoped<ISalaryComponentService, SalaryComponentService>();
         services.AddScoped<ISalaryStructureService, SalaryStructureService>();
+        services.AddScoped<IEmployeeSalaryAssignmentService, EmployeeSalaryAssignmentService>();
 
         return services;
     }

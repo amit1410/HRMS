@@ -98,6 +98,9 @@ export const Permissions = {
     salaryStructureView: 'Payroll.SalaryStructure.View',
     salaryStructureManage: 'Payroll.SalaryStructure.Manage',
     salaryStructureViewHistory: 'Payroll.SalaryStructure.ViewHistory',
+    employeeSalaryView: 'Payroll.EmployeeSalary.View',
+    employeeSalaryManage: 'Payroll.EmployeeSalary.Manage',
+    employeeSalaryViewHistory: 'Payroll.EmployeeSalary.ViewHistory',
   },
   attendance: {
     view: 'Attendance.View',
