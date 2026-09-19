@@ -112,6 +112,11 @@ export const Permissions = {
     runCalculate: 'Payroll.Run.Calculate',
     runRecalculate: 'Payroll.Run.Recalculate',
     runViewResults: 'Payroll.Run.ViewResults',
+    statutoryView: 'Payroll.Statutory.View',
+    statutoryManage: 'Payroll.Statutory.Manage',
+    statutoryViewHistory: 'Payroll.Statutory.ViewHistory',
+    employeeStatutoryView: 'Payroll.EmployeeStatutory.View',
+    employeeStatutoryManage: 'Payroll.EmployeeStatutory.Manage',
   },
   attendance: {
     view: 'Attendance.View',

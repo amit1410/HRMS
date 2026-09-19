@@ -2936,6 +2936,112 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("EmployeeSalaryComponents", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeStatutoryProfile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("EsiApplicable")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("EsiNumber")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<bool>("IncomeTaxApplicable")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("JurisdictionCode")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("PfApplicable")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("ProfessionalTaxApplicable")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("StateCode")
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<string>("TaxRegime")
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Uan")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeId", "EffectiveFrom", "EffectiveTo");
+
+                    b.ToTable("EmployeeStatutoryProfiles", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeStatutoryProfileHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ChangeType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("ChangedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("EmployeeStatutoryProfileId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("SnapshotJson")
+                        .IsRequired()
+                        .HasMaxLength(20000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeStatutoryProfileId", "ChangedAtUtc");
+
+                    b.ToTable("EmployeeStatutoryProfileHistories", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeSupervisor", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5669,6 +5775,92 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("PayrollRunHistories", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryResult", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("AppliedCeiling")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal?>("AppliedRate")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal>("CalculationBasis")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<string>("CalculationMetadata")
+                        .IsRequired()
+                        .HasMaxLength(20000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("EmployeeAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("EmployerAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<string>("JurisdictionCode")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("PayrollResultId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("PayrollRunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("StatutoryConfigurationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("StatutoryConfigurationVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("StatutoryType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.HasIndex("TenantId", "StatutoryConfigurationId");
+
+                    b.HasIndex("TenantId", "StatutoryConfigurationVersionId");
+
+                    b.HasIndex("TenantId", "PayrollResultId", "StatutoryType")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "PayrollRunId", "EmployeeId");
+
+                    b.ToTable("PayrollStatutoryResults", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Permission", b =>
                 {
                     b.Property<int>("Id")
@@ -6798,6 +6990,231 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("States", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryComponentBasis", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("Include")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("SalaryComponentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("StatutoryConfigurationVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Weight")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "SalaryComponentId");
+
+                    b.HasIndex("TenantId", "StatutoryConfigurationVersionId", "SalaryComponentId")
+                        .IsUnique();
+
+                    b.ToTable("StatutoryComponentBasis", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryConfiguration", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("JurisdictionCode")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("StateCode")
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<int>("StatutoryType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "JurisdictionCode", "StateCode", "StatutoryType", "IsActive");
+
+                    b.ToTable("StatutoryConfigurations", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryConfigurationHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ChangeType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("ChangedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("SnapshotJson")
+                        .IsRequired()
+                        .HasMaxLength(20000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid>("StatutoryConfigurationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "StatutoryConfigurationId", "ChangedAtUtc");
+
+                    b.ToTable("StatutoryConfigurationHistories", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryConfigurationVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ConfigurationJson")
+                        .IsRequired()
+                        .HasMaxLength(20000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("StatutoryConfigurationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "CreatedByUserId");
+
+                    b.HasIndex("TenantId", "StatutoryConfigurationId", "EffectiveFrom", "EffectiveTo");
+
+                    b.ToTable("StatutoryConfigurationVersions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutorySlab", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("FixedAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal>("FromAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("OptionalMonth")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("Rate")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("StatutoryConfigurationVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("ToAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "StatutoryConfigurationVersionId", "Sequence")
+                        .IsUnique();
+
+                    b.ToTable("StatutorySlabs", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.SubDepartment", b =>
@@ -8445,6 +8862,46 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeStatutoryProfile", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeStatutoryProfileHistory", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeStatutoryProfile", "Profile")
+                        .WithMany("History")
+                        .HasForeignKey("TenantId", "EmployeeStatutoryProfileId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Profile");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeSupervisor", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -9532,6 +9989,62 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("PayrollRun");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryResult", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollResult", "PayrollResult")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollResultId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRun", "PayrollRun")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollRunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryConfiguration", "Configuration")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "StatutoryConfigurationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryConfigurationVersion", "ConfigurationVersion")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "StatutoryConfigurationVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Configuration");
+
+                    b.Navigation("ConfigurationVersion");
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("PayrollResult");
+
+                    b.Navigation("PayrollRun");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PositionChangeReason", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -9851,6 +10364,114 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Country");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryComponentBasis", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.SalaryComponent", "SalaryComponent")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SalaryComponentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryConfigurationVersion", "ConfigurationVersion")
+                        .WithMany("BasisMappings")
+                        .HasForeignKey("TenantId", "StatutoryConfigurationVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfigurationVersion");
+
+                    b.Navigation("SalaryComponent");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryConfiguration", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryConfigurationHistory", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryConfiguration", "Configuration")
+                        .WithMany("History")
+                        .HasForeignKey("TenantId", "StatutoryConfigurationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Configuration");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryConfigurationVersion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.User", "CreatedByUser")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CreatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryConfiguration", "Configuration")
+                        .WithMany("Versions")
+                        .HasForeignKey("TenantId", "StatutoryConfigurationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Configuration");
+
+                    b.Navigation("CreatedByUser");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutorySlab", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryConfigurationVersion", "ConfigurationVersion")
+                        .WithMany("Slabs")
+                        .HasForeignKey("TenantId", "StatutoryConfigurationVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfigurationVersion");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.SubDepartment", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -10134,6 +10755,11 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("History");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeStatutoryProfile", b =>
+                {
+                    b.Navigation("History");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveBalanceImportBatch", b =>
                 {
                     b.Navigation("Rows");
@@ -10250,6 +10876,20 @@ namespace HRMS.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("HRMS.Domain.Entities.State", b =>
                 {
                     b.Navigation("Cities");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryConfiguration", b =>
+                {
+                    b.Navigation("History");
+
+                    b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryConfigurationVersion", b =>
+                {
+                    b.Navigation("BasisMappings");
+
+                    b.Navigation("Slabs");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Tenant", b =>

@@ -51,6 +51,7 @@ import { PlatformLoginPage } from './pages/platform/PlatformLoginPage.tsx'
 import { PlatformAuthProvider, usePlatformAuth } from './auth/PlatformAuthProvider.tsx'
 import { RequirePlatformAuth } from './auth/RequirePlatformAuth.tsx'
 import { SalaryComponentsPage } from './pages/payroll/SalaryComponentsPage.tsx'
+import { StatutoryConfigurationsPage } from './pages/payroll/StatutoryConfigurationsPage.tsx'
 import { SalaryStructuresPage } from './pages/payroll/SalaryStructuresPage.tsx'
 import { EmployeeSalaryAssignmentsPage } from './pages/payroll/EmployeeSalaryAssignmentsPage.tsx'
 import { PayrollPeriodsRunsPage } from './pages/payroll/PayrollPeriodsRunsPage.tsx'
@@ -129,6 +130,7 @@ function TenantApplication() {
                   <Route path="role-management" element={<RequirePermission permission={Permissions.roleManagement.assignmentView}><RoleManagementPage /></RequirePermission>} />
                   <Route path="page-access-management" element={<RequirePermission permission={Permissions.pageAccess.view}><PageAccessManagementPage /></RequirePermission>} />
                   <Route path="payroll/salary-components" element={<RequirePermission permission={Permissions.payroll.salaryComponentView}><SalaryComponentsPage /></RequirePermission>} />
+                  <Route path="payroll/statutory" element={<RequirePermission permission={Permissions.payroll.statutoryView}><StatutoryConfigurationsPage /></RequirePermission>} />
                   <Route path="payroll/salary-structures" element={<RequirePermission permission={Permissions.payroll.salaryStructureView}><SalaryStructuresPage /></RequirePermission>} />
                   <Route path="payroll/employee-salary" element={<RequirePermission permission={Permissions.payroll.employeeSalaryView}><EmployeeSalaryAssignmentsPage /></RequirePermission>} />
                   <Route path="payroll/periods" element={<RequirePermission permission={Permissions.payroll.periodView}><PayrollPeriodsRunsPage mode="periods" /></RequirePermission>} />

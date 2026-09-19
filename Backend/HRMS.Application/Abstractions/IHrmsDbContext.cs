@@ -143,6 +143,14 @@ public interface IHrmsDbContext
     DbSet<PayrollResultComponent> PayrollResultComponents { get; }
     DbSet<PayrollCalculationError> PayrollCalculationErrors { get; }
     DbSet<PayrollCalculationHistory> PayrollCalculationHistories { get; }
+    DbSet<StatutoryConfiguration> StatutoryConfigurations { get; }
+    DbSet<StatutoryConfigurationVersion> StatutoryConfigurationVersions { get; }
+    DbSet<StatutoryComponentBasis> StatutoryComponentBasis { get; }
+    DbSet<StatutorySlab> StatutorySlabs { get; }
+    DbSet<EmployeeStatutoryProfile> EmployeeStatutoryProfiles { get; }
+    DbSet<EmployeeStatutoryProfileHistory> EmployeeStatutoryProfileHistories { get; }
+    DbSet<StatutoryConfigurationHistory> StatutoryConfigurationHistories { get; }
+    DbSet<PayrollStatutoryResult> PayrollStatutoryResults { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

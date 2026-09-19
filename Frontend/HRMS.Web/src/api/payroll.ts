@@ -7,6 +7,20 @@ export type SalaryCalculationType = 'FixedAmount' | 'Percentage' | 'Formula' | '
 export type SalaryStatutoryType = 'None' | 'ProvidentFund' | 'Esi' | 'ProfessionalTax' | 'LabourWelfareFund' | 'IncomeTax' | 'Gratuity' | 'Other'
 export type SalaryStructureCalculationType = 'FixedAmount' | 'Percentage' | 'Formula' | 'Manual'
 
+export type StatutoryType = 'ProvidentFund' | 'Esi' | 'ProfessionalTax' | 'IncomeTax'
+export type StatutoryConfigurationStatus = 'Draft' | 'Active' | 'Retired'
+export interface StatutoryConfigurationVersion { id: string; effectiveFrom: string; effectiveTo?: string | null; status: StatutoryConfigurationStatus; priority: number; configurationJson: string }
+export interface StatutoryConfiguration { id: string; jurisdictionCode: string; stateCode?: string | null; statutoryType: StatutoryType; code: string; name: string; isActive: boolean; concurrencyVersion: number; versions: StatutoryConfigurationVersion[] }
+export interface StatutoryConfigurationRequest { jurisdictionCode: string; stateCode?: string | null; statutoryType: StatutoryType; code: string; name: string; isActive: boolean }
+export interface EmployeeStatutoryProfile { id: string; employeeId: string; jurisdictionCode: string; stateCode?: string | null; pfApplicable: boolean; uan?: string | null; esiApplicable: boolean; esiNumber?: string | null; professionalTaxApplicable: boolean; incomeTaxApplicable: boolean; taxRegime?: string | null; effectiveFrom: string; effectiveTo?: string | null; isActive: boolean }
+export interface PayrollStatutoryResult { id: string; statutoryType: StatutoryType; jurisdictionCode: string; configurationId: string; configurationVersionId: string; calculationBasis: number; employeeAmount: number; employerAmount: number; totalAmount: number; appliedRate?: number | null; appliedCeiling?: number | null; calculationMetadata: string }
+
+export function listStatutoryConfigurations(params: QueryParams = {}, signal?: AbortSignal): Promise<PagedResult<StatutoryConfiguration>> { return request<PagedResult<StatutoryConfiguration>>(() => api.get<ApiResponse<PagedResult<StatutoryConfiguration>>>('/api/payroll/statutory-configurations', { params: cleanParams(params), signal })) }
+export function createStatutoryConfiguration(body: StatutoryConfigurationRequest): Promise<StatutoryConfiguration> { return request<StatutoryConfiguration>(() => api.post<ApiResponse<StatutoryConfiguration>>('/api/payroll/statutory-configurations', body)) }
+export function getEmployeeStatutoryProfile(employeeId: string): Promise<EmployeeStatutoryProfile> { return request<EmployeeStatutoryProfile>(() => api.get<ApiResponse<EmployeeStatutoryProfile>>(`/api/payroll/employees/${employeeId}/statutory-profile`)) }
+export function saveEmployeeStatutoryProfile(employeeId: string, body: Omit<EmployeeStatutoryProfile, 'id' | 'employeeId'>): Promise<EmployeeStatutoryProfile> { return request<EmployeeStatutoryProfile>(() => api.put<ApiResponse<EmployeeStatutoryProfile>>(`/api/payroll/employees/${employeeId}/statutory-profile`, body)) }
+export function getPayrollStatutoryResults(runId: string, employeeId: string): Promise<PayrollStatutoryResult[]> { return request<PayrollStatutoryResult[]>(() => api.get<ApiResponse<PayrollStatutoryResult[]>>(`/api/payroll/runs/${runId}/results/${employeeId}/statutory`)) }
+
 export interface SalaryComponent {
   id: string
   code: string

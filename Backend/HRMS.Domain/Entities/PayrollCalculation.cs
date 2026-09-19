@@ -103,3 +103,131 @@ public sealed class PayrollCalculationHistory : BaseEntity, ITenantEntity
     public Tenant? Tenant { get; set; }
     public PayrollRun? PayrollRun { get; set; }
 }
+
+public sealed class StatutoryConfiguration : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public string JurisdictionCode { get; set; } = "IN";
+    public string? StateCode { get; set; }
+    public StatutoryType StatutoryType { get; set; }
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public bool IsActive { get; set; } = true;
+    public int ConcurrencyVersion { get; set; } = 1;
+    public Tenant? Tenant { get; set; }
+    public ICollection<StatutoryConfigurationVersion> Versions { get; set; } = new List<StatutoryConfigurationVersion>();
+    public ICollection<StatutoryConfigurationHistory> History { get; set; } = new List<StatutoryConfigurationHistory>();
+}
+
+public sealed class StatutoryConfigurationVersion : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid StatutoryConfigurationId { get; set; }
+    public DateOnly EffectiveFrom { get; set; }
+    public DateOnly? EffectiveTo { get; set; }
+    public StatutoryConfigurationStatus Status { get; set; } = StatutoryConfigurationStatus.Active;
+    public int Priority { get; set; }
+    public string ConfigurationJson { get; set; } = "{}";
+    public Guid? CreatedByUserId { get; set; }
+    public Tenant? Tenant { get; set; }
+    public StatutoryConfiguration? Configuration { get; set; }
+    public User? CreatedByUser { get; set; }
+    public ICollection<StatutoryComponentBasis> BasisMappings { get; set; } = new List<StatutoryComponentBasis>();
+    public ICollection<StatutorySlab> Slabs { get; set; } = new List<StatutorySlab>();
+}
+
+public sealed class StatutoryComponentBasis : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid StatutoryConfigurationVersionId { get; set; }
+    public Guid SalaryComponentId { get; set; }
+    public bool Include { get; set; } = true;
+    public decimal Weight { get; set; } = 100m;
+    public Tenant? Tenant { get; set; }
+    public StatutoryConfigurationVersion? ConfigurationVersion { get; set; }
+    public SalaryComponent? SalaryComponent { get; set; }
+}
+
+public sealed class StatutorySlab : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid StatutoryConfigurationVersionId { get; set; }
+    public decimal FromAmount { get; set; }
+    public decimal? ToAmount { get; set; }
+    public decimal Rate { get; set; }
+    public decimal FixedAmount { get; set; }
+    public int Sequence { get; set; }
+    public int? OptionalMonth { get; set; }
+    public Tenant? Tenant { get; set; }
+    public StatutoryConfigurationVersion? ConfigurationVersion { get; set; }
+}
+
+public sealed class EmployeeStatutoryProfile : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid EmployeeId { get; set; }
+    public string JurisdictionCode { get; set; } = "IN";
+    public string? StateCode { get; set; }
+    public bool PfApplicable { get; set; }
+    public string? Uan { get; set; }
+    public bool EsiApplicable { get; set; }
+    public string? EsiNumber { get; set; }
+    public bool ProfessionalTaxApplicable { get; set; }
+    public bool IncomeTaxApplicable { get; set; }
+    public string? TaxRegime { get; set; }
+    public DateOnly EffectiveFrom { get; set; }
+    public DateOnly? EffectiveTo { get; set; }
+    public bool IsActive { get; set; } = true;
+    public Tenant? Tenant { get; set; }
+    public Employee? Employee { get; set; }
+    public ICollection<EmployeeStatutoryProfileHistory> History { get; set; } = new List<EmployeeStatutoryProfileHistory>();
+}
+
+public sealed class EmployeeStatutoryProfileHistory : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid EmployeeStatutoryProfileId { get; set; }
+    public Guid EmployeeId { get; set; }
+    public StatutoryProfileChangeType ChangeType { get; set; }
+    public DateTime ChangedAtUtc { get; set; }
+    public string SnapshotJson { get; set; } = "{}";
+    public Tenant? Tenant { get; set; }
+    public EmployeeStatutoryProfile? Profile { get; set; }
+}
+
+public sealed class StatutoryConfigurationHistory : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid StatutoryConfigurationId { get; set; }
+    public StatutoryConfigurationChangeType ChangeType { get; set; }
+    public DateTime ChangedAtUtc { get; set; }
+    public string SnapshotJson { get; set; } = "{}";
+    public Tenant? Tenant { get; set; }
+    public StatutoryConfiguration? Configuration { get; set; }
+}
+
+public sealed class PayrollStatutoryResult : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid PayrollResultId { get; set; }
+    public Guid PayrollRunId { get; set; }
+    public Guid EmployeeId { get; set; }
+    public StatutoryType StatutoryType { get; set; }
+    public string JurisdictionCode { get; set; } = "IN";
+    public Guid StatutoryConfigurationId { get; set; }
+    public Guid StatutoryConfigurationVersionId { get; set; }
+    public decimal CalculationBasis { get; set; }
+    public decimal EmployeeAmount { get; set; }
+    public decimal EmployerAmount { get; set; }
+    public decimal TotalAmount { get; set; }
+    public decimal? AppliedRate { get; set; }
+    public decimal? AppliedCeiling { get; set; }
+    public string CalculationMetadata { get; set; } = "{}";
+    public DateTime CreatedAtUtc { get; set; }
+    public Tenant? Tenant { get; set; }
+    public PayrollResult? PayrollResult { get; set; }
+    public PayrollRun? PayrollRun { get; set; }
+    public Employee? Employee { get; set; }
+    public StatutoryConfiguration? Configuration { get; set; }
+    public StatutoryConfigurationVersion? ConfigurationVersion { get; set; }
+}

@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
 
-public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock) : IPayrollCalculationEngine
+public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock, IStatutoryPayrollService? statutory = null) : IPayrollCalculationEngine
 {
     public async Task<Result<PayrollCalculationSummaryDto>> CalculateAsync(Guid payrollRunId, bool recalculate, CancellationToken ct = default)
     {
@@ -84,6 +84,15 @@ public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext t
         if (assignment.Employee?.DateOfLeaving is DateOnly leaving && leaving < payableTo) payableTo = leaving;
         var eligibleDays = Math.Max(0, payableTo.DayNumber - payableFrom.DayNumber + 1);
         var result = new PayrollResult { Id = Guid.NewGuid(), TenantId = run.TenantId, PayrollRunId = run.Id, PayrollRunEmployeeId = snapshot.Id, EmployeeId = snapshot.EmployeeId, EmployeeSalaryAssignmentId = assignmentId, SalaryStructureId = snapshot.SalaryStructureId ?? assignment.SalaryStructureId, SalaryStructureVersionId = versionId, CalculationAttemptId = attemptId, PeriodStartDate = run.PayrollPeriod.StartDate, PeriodEndDate = run.PayrollPeriod.EndDate, EmploymentSnapshotDate = run.PayrollPeriod.EndDate, CalendarDays = totalDays, EligibleDays = eligibleDays, ProrationFactor = totalDays == 0 ? 0 : (decimal)eligibleDays / totalDays, CalculationDateUtc = clock.GetUtcNow().UtcDateTime, CurrencyCode = assignment.CurrencyCode, GrossEarnings = gross, TotalDeductions = deductions, NetPay = net, EmployerContributions = resultComponents.Where(x => x.IsEmployerContribution).Sum(x => x.CalculatedAmount), CalculationVersion = calculationVersion, CalculatedAtUtc = clock.GetUtcNow().UtcDateTime, CalculatedByUserId = tenant.UserId, Components = resultComponents };
+        if (statutory is not null)
+        {
+            var statutoryResult = await statutory.CalculateAsync(result, resultComponents, ct);
+            if (!statutoryResult.Succeeded) return (null, Error(run, snapshot, PayrollCalculationErrorCode.StatutoryCalculationFailed, statutoryResult.Message));
+            result.TotalDeductions = PayrollRoundingPolicy.RoundMoney(result.TotalDeductions + statutoryResult.Value!.EmployeeAmount);
+            result.EmployerContributions = PayrollRoundingPolicy.RoundMoney(result.EmployerContributions + statutoryResult.Value.EmployerAmount);
+            result.NetPay = PayrollRoundingPolicy.RoundMoney(result.GrossEarnings - result.TotalDeductions);
+            if (result.NetPay < 0) return (null, Error(run, snapshot, PayrollCalculationErrorCode.NegativeNetPay, "Total deductions exceed gross earnings after statutory deductions."));
+        }
         return (result, null);
     }
 

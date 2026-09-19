@@ -71,5 +71,10 @@ public enum PayrollRunStatus { Draft, Prepared, Processing, Calculated, Approved
 public enum PayrollRunEmployeeStatus { Eligible, Excluded }
 public enum PayrollRunHistoryChangeType { Created, Prepared, PopulationGenerated, PopulationRebuilt, StatusChanged, Approved, Finalized, Cancelled }
 public enum PayrollResultStatus { Calculated, Failed }
-public enum PayrollCalculationErrorCode { NoSalaryAssignment, NoSalaryStructureVersion, MissingBaseComponent, CircularDependency, InvalidFormula, InvalidOverride, CurrencyMismatch, NegativeNetPay, CalculationFailed }
+public enum PayrollCalculationErrorCode { NoSalaryAssignment, NoSalaryStructureVersion, MissingBaseComponent, CircularDependency, InvalidFormula, InvalidOverride, CurrencyMismatch, NegativeNetPay, CalculationFailed, StatutoryConfigurationMissing, StatutoryConfigurationAmbiguous, InvalidStatutoryConfiguration, StatutoryBasisMissing, StatutoryCalculationFailed, JurisdictionUnsupported, EmployeeStatutoryProfileInvalid }
+public enum StatutoryType { ProvidentFund, Esi, ProfessionalTax, IncomeTax }
+public enum StatutoryConfigurationStatus { Draft, Active, Retired }
+public enum StatutoryProfileChangeType { Created, Updated, Activated, Deactivated }
+public enum StatutoryConfigurationChangeType { Created, VersionAdded, Activated, Deactivated }
+public enum StatutoryApplicabilityStatus { Applicable, NotApplicable, NotConfigured, ConfigurationAmbiguity }
 public enum PayrollCalculationHistoryChangeType { CalculationStarted, EmployeeCalculated, EmployeeCalculationFailed, CalculationCompleted, RecalculationRequested, RecalculationCompleted, ResultsReset }
