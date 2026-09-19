@@ -134,6 +134,11 @@ public interface IHrmsDbContext
     DbSet<EmployeeSalaryAssignment> EmployeeSalaryAssignments { get; }
     DbSet<EmployeeSalaryComponent> EmployeeSalaryComponents { get; }
     DbSet<EmployeeSalaryAssignmentHistory> EmployeeSalaryAssignmentHistories { get; }
+    DbSet<PayrollPeriod> PayrollPeriods { get; }
+    DbSet<PayrollPeriodHistory> PayrollPeriodHistories { get; }
+    DbSet<PayrollRun> PayrollRuns { get; }
+    DbSet<PayrollRunEmployee> PayrollRunEmployees { get; }
+    DbSet<PayrollRunHistory> PayrollRunHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

@@ -71,6 +71,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Salary Components', to: '/payroll/salary-components', permission: Permissions.payroll.salaryComponentView, available: true, group: 'administration' },
   { label: 'Salary Structures', to: '/payroll/salary-structures', permission: Permissions.payroll.salaryStructureView, available: true, group: 'administration' },
   { label: 'Employee Salary', to: '/payroll/employee-salary', permission: Permissions.payroll.employeeSalaryView, available: true, group: 'administration' },
+  { label: 'Payroll Periods', to: '/payroll/periods', permission: Permissions.payroll.periodView, available: true, group: 'administration' },
+  { label: 'Payroll Runs', to: '/payroll/runs', permission: Permissions.payroll.runView, available: true, group: 'administration' },
   { label: 'Leave Types', to: '/leave-management/types', permission: Permissions.leave.typeManage, available: true, group: 'leave' },
   { label: 'Leave Periods', to: '/leave-management/periods', permission: Permissions.leave.periodManage, available: true, group: 'leave' },
   { label: 'Leave Policies', to: '/leave-management/policies', permission: Permissions.leave.policyView, available: true, group: 'leave' },

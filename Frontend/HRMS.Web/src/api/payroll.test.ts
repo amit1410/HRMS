@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createEmployeeSalaryAssignment, getEmployeeSalaryAssignmentHistory, listEmployeeSalaryAssignments, setEmployeeSalaryAssignmentActive, updateEmployeeSalaryAssignment, createSalaryComponent, createSalaryStructure, getSalaryComponentHistory, listSalaryComponents, listSalaryStructures, setSalaryComponentActive, setSalaryStructureActive, updateSalaryComponent, updateSalaryStructure } from './payroll.ts'
+import { createEmployeeSalaryAssignment, getEmployeeSalaryAssignmentHistory, listEmployeeSalaryAssignments, setEmployeeSalaryAssignmentActive, updateEmployeeSalaryAssignment, createPayrollPeriod, createPayrollRun, listPayrollPeriods, listPayrollRuns, preparePayrollRun, transitionPayrollPeriod, transitionPayrollRun, createSalaryComponent, createSalaryStructure, getSalaryComponentHistory, listSalaryComponents, listSalaryStructures, setSalaryComponentActive, setSalaryStructureActive, updateSalaryComponent, updateSalaryStructure } from './payroll.ts'
 import { installStubAdapter, ok, type StubAdapter } from '../test/stubAdapter.ts'
 import { paged } from '../test/fixtures.ts'
 
@@ -45,5 +45,19 @@ describe('salary component API client', () => {
     const request = { employeeId: 'employee-1', salaryStructureId: 'structure-1', effectiveFrom: '2026-01-01', effectiveTo: null, annualCtc: 120000, monthlyCtc: 10000, currencyCode: 'INR', payFrequency: 'Monthly' as const, status: 'Active' as const, changeReason: 'NewHire' as const, remarks: '', components: [] }
     await listEmployeeSalaryAssignments({ search: 'E001', page: 2, pageSize: 20 }); await createEmployeeSalaryAssignment(request); await updateEmployeeSalaryAssignment('assignment-1', { ...request, expectedConcurrencyVersion: 1 }); await setEmployeeSalaryAssignmentActive('assignment-1', false, 1); await getEmployeeSalaryAssignmentHistory('assignment-1')
     expect(stub.calls.map(call => `${call.method}:${call.url}`)).toEqual(['get:/api/payroll/employee-salary-assignments', 'post:/api/payroll/employee-salary-assignments', 'put:/api/payroll/employee-salary-assignments/assignment-1', 'post:/api/payroll/employee-salary-assignments/assignment-1/deactivate', 'get:/api/payroll/employee-salary-assignments/assignment-1/history'])
+  })
+
+  it('supports payroll period and run setup endpoints', async () => {
+    stub.on('get', '/api/payroll/periods', () => ({ data: ok(paged([])) }))
+    stub.on('post', '/api/payroll/periods', () => ({ data: ok({ id: 'period-1' }) }))
+    stub.on('post', '/api/payroll/periods/period-1/open', () => ({ data: ok({ id: 'period-1' }) }))
+    stub.on('get', '/api/payroll/runs', () => ({ data: ok(paged([])) }))
+    stub.on('post', '/api/payroll/runs', () => ({ data: ok({ id: 'run-1' }) }))
+    stub.on('post', '/api/payroll/runs/run-1/prepare', () => ({ data: ok({ id: 'run-1' }) }))
+    stub.on('post', '/api/payroll/runs/run-1/transition', () => ({ data: ok({ id: 'run-1' }) }))
+    const period = { code: 'SEP-2026', name: 'September 2026', periodType: 'Monthly' as const, startDate: '2026-09-01', endDate: '2026-09-30', payDate: '2026-10-05', fiscalYear: 2026, periodNumber: 9, isActive: true }
+    await listPayrollPeriods({ status: 'Draft', page: 1, pageSize: 10 }); await createPayrollPeriod(period); await transitionPayrollPeriod('period-1', 'open', 1)
+    await listPayrollRuns({ payrollPeriodId: 'period-1' }); await createPayrollRun({ payrollPeriodId: 'period-1', runType: 'Regular' }); await preparePayrollRun('run-1'); await transitionPayrollRun('run-1', 'Processing')
+    expect(stub.calls.map(call => `${call.method}:${call.url}`)).toEqual(['get:/api/payroll/periods', 'post:/api/payroll/periods', 'post:/api/payroll/periods/period-1/open', 'get:/api/payroll/runs', 'post:/api/payroll/runs', 'post:/api/payroll/runs/run-1/prepare', 'post:/api/payroll/runs/run-1/transition'])
   })
 })

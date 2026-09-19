@@ -269,3 +269,20 @@ export function setEmployeeSalaryAssignmentActive(id: string, active: boolean, v
 export function getEmployeeSalaryAssignmentHistory(id: string): Promise<EmployeeSalaryAssignmentHistory[]> {
   return request<EmployeeSalaryAssignmentHistory[]>(() => api.get<ApiResponse<EmployeeSalaryAssignmentHistory[]>>(`/api/payroll/employee-salary-assignments/${id}/history`))
 }
+
+export type PayrollPeriodType = 'Monthly' | 'BiWeekly' | 'Weekly' | 'SemiMonthly' | 'Custom'
+export type PayrollPeriodStatus = 'Draft' | 'Open' | 'Closed' | 'Locked'
+export type PayrollRunType = 'Regular' | 'Supplementary' | 'OffCycle'
+export type PayrollRunStatus = 'Draft' | 'Prepared' | 'Processing' | 'Calculated' | 'Approved' | 'Finalized' | 'Cancelled'
+export interface PayrollPeriod { id: string; code: string; name: string; periodType: PayrollPeriodType; startDate: string; endDate: string; payDate: string; fiscalYear: number; periodNumber: number; status: PayrollPeriodStatus; isActive: boolean; runCount: number; concurrencyVersion: number }
+export interface PayrollPeriodRequest { code: string; name: string; periodType: PayrollPeriodType; startDate: string; endDate: string; payDate: string; fiscalYear: number; periodNumber: number; isActive: boolean; expectedConcurrencyVersion?: number }
+export interface PayrollRun { id: string; payrollPeriodId: string; payrollPeriodCode: string; runNumber: string; runType: PayrollRunType; status: PayrollRunStatus; startedAtUtc?: string | null; startedByUserId?: string | null; employeeCount: number; eligibleCount: number; excludedCount: number; notes?: string | null; concurrencyVersion: number }
+export interface PayrollRunEmployee { id: string; employeeId: string; employeeCode: string; employeeName: string; employeeSalaryAssignmentId?: string | null; salaryStructureId?: string | null; salaryStructureVersionId?: string | null; employmentSnapshotDate: string; isEligible: boolean; exclusionReason?: string | null; status: string }
+export interface PayrollRunRequest { payrollPeriodId: string; runType: PayrollRunType; notes?: string | null }
+export function listPayrollPeriods(params: QueryParams = {}): Promise<PagedResult<PayrollPeriod>> { return request<PagedResult<PayrollPeriod>>(() => api.get<ApiResponse<PagedResult<PayrollPeriod>>>('/api/payroll/periods', { params: cleanParams(params) })) }
+export function createPayrollPeriod(body: PayrollPeriodRequest): Promise<PayrollPeriod> { return request<PayrollPeriod>(() => api.post<ApiResponse<PayrollPeriod>>('/api/payroll/periods', body)) }
+export function transitionPayrollPeriod(id: string, action: string, version: number): Promise<PayrollPeriod> { return request<PayrollPeriod>(() => api.post<ApiResponse<PayrollPeriod>>(`/api/payroll/periods/${id}/${action}`, undefined, { params: { expectedConcurrencyVersion: version } })) }
+export function listPayrollRuns(params: QueryParams = {}): Promise<PagedResult<PayrollRun>> { return request<PagedResult<PayrollRun>>(() => api.get<ApiResponse<PagedResult<PayrollRun>>>('/api/payroll/runs', { params: cleanParams(params) })) }
+export function createPayrollRun(body: PayrollRunRequest): Promise<PayrollRun> { return request<PayrollRun>(() => api.post<ApiResponse<PayrollRun>>('/api/payroll/runs', body)) }
+export function preparePayrollRun(id: string, rebuild = false): Promise<PayrollRun> { return request<PayrollRun>(() => api.post<ApiResponse<PayrollRun>>(`/api/payroll/runs/${id}/prepare`, undefined, { params: { rebuild } })) }
+export function transitionPayrollRun(id: string, target: PayrollRunStatus): Promise<PayrollRun> { return request<PayrollRun>(() => api.post<ApiResponse<PayrollRun>>(`/api/payroll/runs/${id}/transition`, undefined, { params: { target } })) }

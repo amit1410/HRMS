@@ -63,3 +63,10 @@ public enum SalaryPayFrequency { Monthly, BiWeekly, Weekly, Daily }
 public enum EmployeeSalaryAssignmentStatus { Active, Inactive }
 public enum SalaryChangeReason { NewHire, Confirmation, Increment, Promotion, Demotion, Transfer, Correction, ContractRevision, Other }
 public enum EmployeeSalaryAssignmentChangeType { Created, Updated, OverrideAdded, OverrideChanged, OverrideRemoved, EndDated, Activated, Deactivated }
+
+public enum PayrollPeriodType { Monthly, BiWeekly, Weekly, SemiMonthly, Custom }
+public enum PayrollPeriodStatus { Draft, Open, Closed, Locked }
+public enum PayrollRunType { Regular, Supplementary, OffCycle }
+public enum PayrollRunStatus { Draft, Prepared, Processing, Calculated, Approved, Finalized, Cancelled }
+public enum PayrollRunEmployeeStatus { Eligible, Excluded }
+public enum PayrollRunHistoryChangeType { Created, Prepared, PopulationGenerated, PopulationRebuilt, StatusChanged, Approved, Finalized, Cancelled }
