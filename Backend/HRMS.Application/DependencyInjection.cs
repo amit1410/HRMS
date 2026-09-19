@@ -109,6 +109,7 @@ public static class DependencyInjection
         services.AddScoped<IPayrollCalculationEngine, PayrollCalculationEngine>();
         services.AddScoped<IPayrollCalculationService, PayrollCalculationService>();
         services.AddScoped<IStatutoryPayrollService, StatutoryPayrollService>();
+        services.AddScoped<IPayrollOutputService, PayrollOutputService>();
 
         return services;
     }

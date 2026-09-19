@@ -55,6 +55,7 @@ import { StatutoryConfigurationsPage } from './pages/payroll/StatutoryConfigurat
 import { SalaryStructuresPage } from './pages/payroll/SalaryStructuresPage.tsx'
 import { EmployeeSalaryAssignmentsPage } from './pages/payroll/EmployeeSalaryAssignmentsPage.tsx'
 import { PayrollPeriodsRunsPage } from './pages/payroll/PayrollPeriodsRunsPage.tsx'
+import { MyPayslipsPage } from './pages/payroll/MyPayslipsPage.tsx'
 
 /**
  * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
@@ -135,6 +136,7 @@ function TenantApplication() {
                   <Route path="payroll/employee-salary" element={<RequirePermission permission={Permissions.payroll.employeeSalaryView}><EmployeeSalaryAssignmentsPage /></RequirePermission>} />
                   <Route path="payroll/periods" element={<RequirePermission permission={Permissions.payroll.periodView}><PayrollPeriodsRunsPage mode="periods" /></RequirePermission>} />
                   <Route path="payroll/runs" element={<RequirePermission permission={Permissions.payroll.runView}><PayrollPeriodsRunsPage mode="runs" /></RequirePermission>} />
+                  <Route path="payroll/my-payslips" element={<RequirePermission permission={Permissions.payroll.payslipViewOwn}><RequireEmployeeIdentity><MyPayslipsPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="masters/:kind" element={<MasterRouteGuard />} />
                   <Route
                     path="configuration/employee-code"

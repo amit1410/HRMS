@@ -71,6 +71,8 @@ public enum PayrollRunStatus { Draft, Prepared, Processing, Calculated, Approved
 public enum PayrollRunEmployeeStatus { Eligible, Excluded }
 public enum PayrollRunHistoryChangeType { Created, Prepared, PopulationGenerated, PopulationRebuilt, StatusChanged, Approved, Finalized, Cancelled }
 public enum PayrollResultStatus { Calculated, Failed }
+public enum PayslipStatus { Generated, Published, Superseded, Void }
+public enum PayslipHistoryChangeType { Generated, Regenerated, Published, Downloaded, Superseded, Voided }
 public enum PayrollCalculationErrorCode { NoSalaryAssignment, NoSalaryStructureVersion, MissingBaseComponent, CircularDependency, InvalidFormula, InvalidOverride, CurrencyMismatch, NegativeNetPay, CalculationFailed, StatutoryConfigurationMissing, StatutoryConfigurationAmbiguous, InvalidStatutoryConfiguration, StatutoryBasisMissing, StatutoryCalculationFailed, JurisdictionUnsupported, EmployeeStatutoryProfileInvalid }
 public enum StatutoryType { ProvidentFund, Esi, ProfessionalTax, IncomeTax }
 public enum StatutoryConfigurationStatus { Draft, Active, Retired }

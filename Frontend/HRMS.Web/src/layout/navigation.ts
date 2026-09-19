@@ -73,6 +73,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Employee Salary', to: '/payroll/employee-salary', permission: Permissions.payroll.employeeSalaryView, available: true, group: 'administration' },
   { label: 'Payroll Periods', to: '/payroll/periods', permission: Permissions.payroll.periodView, available: true, group: 'administration' },
   { label: 'Payroll Runs', to: '/payroll/runs', permission: Permissions.payroll.runView, available: true, group: 'administration' },
+  { label: 'My Payslips', to: '/payroll/my-payslips', permission: Permissions.payroll.payslipViewOwn, available: true, requiresEmployeeIdentity: true, group: 'profile' },
   { label: 'Leave Types', to: '/leave-management/types', permission: Permissions.leave.typeManage, available: true, group: 'leave' },
   { label: 'Leave Periods', to: '/leave-management/periods', permission: Permissions.leave.periodManage, available: true, group: 'leave' },
   { label: 'Leave Policies', to: '/leave-management/policies', permission: Permissions.leave.policyView, available: true, group: 'leave' },

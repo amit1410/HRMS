@@ -137,6 +137,13 @@ public static class Permissions
         public const string StatutoryViewHistory = "Payroll.Statutory.ViewHistory";
         public const string EmployeeStatutoryView = "Payroll.EmployeeStatutory.View";
         public const string EmployeeStatutoryManage = "Payroll.EmployeeStatutory.Manage";
+        public const string PayslipViewAll = "Payroll.Payslip.ViewAll";
+        public const string PayslipGenerate = "Payroll.Payslip.Generate";
+        public const string PayslipPublish = "Payroll.Payslip.Publish";
+        public const string PayslipViewHistory = "Payroll.Payslip.ViewHistory";
+        public const string RegisterView = "Payroll.Register.View";
+        public const string RegisterExport = "Payroll.Register.Export";
+        public const string PayslipViewOwn = "Payroll.Payslip.ViewOwn";
     }
     public static class Attendance
     {
@@ -181,6 +188,7 @@ public static class Permissions
         Payroll.EmployeeSalaryView, Payroll.EmployeeSalaryManage, Payroll.EmployeeSalaryViewHistory,
         Payroll.PeriodView, Payroll.PeriodManage, Payroll.RunView, Payroll.RunManage, Payroll.RunPrepare, Payroll.RunApprove, Payroll.RunFinalize, Payroll.RunViewHistory, Payroll.RunCalculate, Payroll.RunRecalculate, Payroll.RunViewResults,
         Payroll.StatutoryView, Payroll.StatutoryManage, Payroll.StatutoryViewHistory, Payroll.EmployeeStatutoryView, Payroll.EmployeeStatutoryManage,
+        Payroll.PayslipViewAll, Payroll.PayslipGenerate, Payroll.PayslipPublish, Payroll.PayslipViewHistory, Payroll.RegisterView, Payroll.RegisterExport, Payroll.PayslipViewOwn,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

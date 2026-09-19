@@ -151,6 +151,9 @@ public interface IHrmsDbContext
     DbSet<EmployeeStatutoryProfileHistory> EmployeeStatutoryProfileHistories { get; }
     DbSet<StatutoryConfigurationHistory> StatutoryConfigurationHistories { get; }
     DbSet<PayrollStatutoryResult> PayrollStatutoryResults { get; }
+    DbSet<Payslip> Payslips { get; }
+    DbSet<PayslipLine> PayslipLines { get; }
+    DbSet<PayslipHistory> PayslipHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

@@ -117,6 +117,13 @@ export const Permissions = {
     statutoryViewHistory: 'Payroll.Statutory.ViewHistory',
     employeeStatutoryView: 'Payroll.EmployeeStatutory.View',
     employeeStatutoryManage: 'Payroll.EmployeeStatutory.Manage',
+    payslipViewAll: 'Payroll.Payslip.ViewAll',
+    payslipGenerate: 'Payroll.Payslip.Generate',
+    payslipPublish: 'Payroll.Payslip.Publish',
+    payslipViewHistory: 'Payroll.Payslip.ViewHistory',
+    registerView: 'Payroll.Register.View',
+    registerExport: 'Payroll.Register.Export',
+    payslipViewOwn: 'Payroll.Payslip.ViewOwn',
   },
   attendance: {
     view: 'Attendance.View',
