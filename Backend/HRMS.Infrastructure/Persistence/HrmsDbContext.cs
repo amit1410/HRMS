@@ -143,6 +143,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<EmployeeAttendanceMonthlySummary> EmployeeAttendanceMonthlySummaries => Set<EmployeeAttendanceMonthlySummary>();
     public DbSet<SalaryComponent> SalaryComponents => Set<SalaryComponent>();
     public DbSet<SalaryComponentHistory> SalaryComponentHistories => Set<SalaryComponentHistory>();
+    public DbSet<SalaryStructure> SalaryStructures => Set<SalaryStructure>();
+    public DbSet<SalaryStructureVersion> SalaryStructureVersions => Set<SalaryStructureVersion>();
+    public DbSet<SalaryStructureComponent> SalaryStructureComponents => Set<SalaryStructureComponent>();
+    public DbSet<SalaryStructureHistory> SalaryStructureHistories => Set<SalaryStructureHistory>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
@@ -385,6 +389,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<EmployeeAttendanceMonthlySummary>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<SalaryComponent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<SalaryComponentHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SalaryStructure>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SalaryStructureVersion>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SalaryStructureComponent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SalaryStructureHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
 
         // Organizational hierarchy master query filters
         modelBuilder.Entity<HoldingCompany>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

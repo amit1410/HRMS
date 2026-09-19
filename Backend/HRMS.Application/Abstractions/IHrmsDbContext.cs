@@ -127,6 +127,10 @@ public interface IHrmsDbContext
     DbSet<EmployeeAttendanceMonthlySummary> EmployeeAttendanceMonthlySummaries { get; }
     DbSet<SalaryComponent> SalaryComponents { get; }
     DbSet<SalaryComponentHistory> SalaryComponentHistories { get; }
+    DbSet<SalaryStructure> SalaryStructures { get; }
+    DbSet<SalaryStructureVersion> SalaryStructureVersions { get; }
+    DbSet<SalaryStructureComponent> SalaryStructureComponents { get; }
+    DbSet<SalaryStructureHistory> SalaryStructureHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

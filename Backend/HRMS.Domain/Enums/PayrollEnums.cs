@@ -39,3 +39,22 @@ public enum SalaryComponentChangeType
     Activated,
     Deactivated
 }
+
+public enum SalaryStructureCalculationType
+{
+    FixedAmount,
+    Percentage,
+    Formula,
+    Manual
+}
+
+public enum SalaryStructureChangeType
+{
+    Created,
+    Updated,
+    ComponentAdded,
+    ComponentChanged,
+    ComponentRemoved,
+    Activated,
+    Deactivated
+}

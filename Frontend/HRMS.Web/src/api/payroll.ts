@@ -5,6 +5,7 @@ import type { QueryParams } from './client.ts'
 export type SalaryComponentType = 'Earning' | 'Deduction' | 'EmployerContribution' | 'Reimbursement' | 'Information'
 export type SalaryCalculationType = 'FixedAmount' | 'Percentage' | 'Formula' | 'ManualInput' | 'AttendanceBased' | 'LeaveBased' | 'Statutory'
 export type SalaryStatutoryType = 'None' | 'ProvidentFund' | 'Esi' | 'ProfessionalTax' | 'LabourWelfareFund' | 'IncomeTax' | 'Gratuity' | 'Other'
+export type SalaryStructureCalculationType = 'FixedAmount' | 'Percentage' | 'Formula' | 'Manual'
 
 export interface SalaryComponent {
   id: string
@@ -66,4 +67,100 @@ export interface SalaryComponentHistory {
   isActive: boolean
   actorUserId?: string | null
   changedAtUtc: string
+}
+
+export interface SalaryStructureComponent {
+  id: string
+  salaryComponentId: string
+  salaryComponentCode: string
+  salaryComponentName: string
+  componentType: SalaryComponentType
+  sequence: number
+  calculationType: SalaryStructureCalculationType
+  value?: number | null
+  percentageOfComponentId?: string | null
+  formula?: string | null
+  isProratable: boolean
+  isEditableAtEmployeeLevel: boolean
+  minimumAmount?: number | null
+  maximumAmount?: number | null
+  isActive: boolean
+  effectiveFrom: string
+  effectiveTo?: string | null
+}
+
+export interface SalaryStructure {
+  id: string
+  versionId: string
+  code: string
+  name: string
+  description?: string | null
+  effectiveFrom: string
+  effectiveTo?: string | null
+  isActive: boolean
+  componentCount: number
+  concurrencyVersion: number
+  components: SalaryStructureComponent[]
+}
+
+export interface SalaryStructureComponentRequest {
+  salaryComponentId: string
+  sequence: number
+  calculationType: SalaryStructureCalculationType
+  value?: number | null
+  percentageOfComponentId?: string | null
+  formula?: string | null
+  isProratable: boolean
+  isEditableAtEmployeeLevel: boolean
+  minimumAmount?: number | null
+  maximumAmount?: number | null
+  isActive: boolean
+  effectiveFrom?: string | null
+  effectiveTo?: string | null
+}
+
+export interface SalaryStructureRequest {
+  code: string
+  name: string
+  description?: string | null
+  effectiveFrom: string
+  effectiveTo?: string | null
+  isActive: boolean
+  components: SalaryStructureComponentRequest[]
+  expectedConcurrencyVersion?: number
+}
+
+export interface SalaryStructureHistory {
+  id: string
+  salaryStructureId: string
+  salaryStructureVersionId?: string | null
+  changeType: string
+  code: string
+  name: string
+  description?: string | null
+  effectiveFrom?: string | null
+  effectiveTo?: string | null
+  isActive: boolean
+  componentsJson: string
+  actorUserId?: string | null
+  changedAtUtc: string
+}
+
+export function listSalaryStructures(params: QueryParams = {}, signal?: AbortSignal): Promise<PagedResult<SalaryStructure>> {
+  return request<PagedResult<SalaryStructure>>(() => api.get<ApiResponse<PagedResult<SalaryStructure>>>('/api/payroll/salary-structures', { params: cleanParams(params), signal }))
+}
+export function getSalaryStructure(id: string): Promise<SalaryStructure> {
+  return request<SalaryStructure>(() => api.get<ApiResponse<SalaryStructure>>(`/api/payroll/salary-structures/${id}`))
+}
+export function createSalaryStructure(body: SalaryStructureRequest): Promise<SalaryStructure> {
+  return request<SalaryStructure>(() => api.post<ApiResponse<SalaryStructure>>('/api/payroll/salary-structures', body))
+}
+export function updateSalaryStructure(id: string, body: SalaryStructureRequest): Promise<SalaryStructure> {
+  return request<SalaryStructure>(() => api.put<ApiResponse<SalaryStructure>>(`/api/payroll/salary-structures/${id}`, body))
+}
+export function setSalaryStructureActive(id: string, active: boolean, version: number): Promise<SalaryStructure> {
+  return request<SalaryStructure>(() => api.post<ApiResponse<SalaryStructure>>(`/api/payroll/salary-structures/${id}/${active ? 'activate' : 'deactivate'}`, undefined, { params: { expectedConcurrencyVersion: version } }))
+}
+export function getSalaryStructureHistory(id: string): Promise<SalaryStructureHistory[]> {
+  return request<SalaryStructureHistory[]>(() => api.get<ApiResponse<SalaryStructureHistory[]>>(`/api/payroll/salary-structures/${id}/history`))
 }

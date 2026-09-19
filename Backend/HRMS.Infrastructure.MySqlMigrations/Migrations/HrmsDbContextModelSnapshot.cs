@@ -5244,6 +5244,241 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("SalaryComponentHistories", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.SalaryStructure", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "IsActive");
+
+                    b.ToTable("SalaryStructures", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.SalaryStructureComponent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("CalculationType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Formula")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsEditableAtEmployeeLevel")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsProratable")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<decimal?>("MaximumAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal?>("MinimumAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("PercentageOfComponentId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("SalaryComponentId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("SalaryStructureVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal?>("Value")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "PercentageOfComponentId");
+
+                    b.HasIndex("TenantId", "SalaryComponentId");
+
+                    b.HasIndex("TenantId", "SalaryStructureVersionId", "SalaryComponentId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "SalaryStructureVersionId", "Sequence")
+                        .HasDatabaseName("IX_SalaryStructureComponents_TenantId_SalaryStructureVersionId~1");
+
+                    b.ToTable("SalaryStructureComponents", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.SalaryStructureHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ChangeType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("ChangedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<string>("ComponentsJson")
+                        .IsRequired()
+                        .HasMaxLength(20000)
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<DateTime?>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<Guid>("SalaryStructureId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SalaryStructureVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ActorUserId");
+
+                    b.HasIndex("TenantId", "SalaryStructureVersionId");
+
+                    b.HasIndex("TenantId", "SalaryStructureId", "ChangedAtUtc");
+
+                    b.ToTable("SalaryStructureHistories", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.SalaryStructureVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("SalaryStructureId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EffectiveFrom", "EffectiveTo");
+
+                    b.HasIndex("TenantId", "SalaryStructureId", "EffectiveFrom")
+                        .IsUnique();
+
+                    b.ToTable("SalaryStructureVersions", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Section", b =>
                 {
                     b.Property<Guid>("Id")
@@ -8219,6 +8454,112 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.SalaryStructure", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.SalaryStructureComponent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.SalaryComponent", "PercentageOfComponent")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PercentageOfComponentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("FK_SalaryStructureComponents_PercentageBase");
+
+                    b.HasOne("HRMS.Domain.Entities.SalaryComponent", "SalaryComponent")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SalaryComponentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("FK_SalaryStructureComponents_SalaryComponent");
+
+                    b.HasOne("HRMS.Domain.Entities.SalaryStructureVersion", "SalaryStructureVersion")
+                        .WithMany("Components")
+                        .HasForeignKey("TenantId", "SalaryStructureVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("PercentageOfComponent");
+
+                    b.Navigation("SalaryComponent");
+
+                    b.Navigation("SalaryStructureVersion");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.SalaryStructureHistory", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.User", "ActorUser")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ActorUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.SalaryStructure", "SalaryStructure")
+                        .WithMany("History")
+                        .HasForeignKey("TenantId", "SalaryStructureId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.SalaryStructureVersion", "SalaryStructureVersion")
+                        .WithMany("History")
+                        .HasForeignKey("TenantId", "SalaryStructureVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ActorUser");
+
+                    b.Navigation("SalaryStructure");
+
+                    b.Navigation("SalaryStructureVersion");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.SalaryStructureVersion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.SalaryStructure", "SalaryStructure")
+                        .WithMany("Versions")
+                        .HasForeignKey("TenantId", "SalaryStructureId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("SalaryStructure");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Section", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.SubDepartment", "SubDepartment")
@@ -8668,6 +9009,20 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
             modelBuilder.Entity("HRMS.Domain.Entities.SalaryComponent", b =>
                 {
+                    b.Navigation("History");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.SalaryStructure", b =>
+                {
+                    b.Navigation("History");
+
+                    b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.SalaryStructureVersion", b =>
+                {
+                    b.Navigation("Components");
+
                     b.Navigation("History");
                 });
 
