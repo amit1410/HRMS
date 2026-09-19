@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace HRMS.API.Controllers;
 
 [ApiController, Route("api/payroll/runs")]
-public sealed class PayrollRunsController(IPayrollRunService service) : ControllerBase
+public sealed class PayrollRunsController(IPayrollRunService service, IPayrollCalculationService calculation) : ControllerBase
 {
     [HttpGet, HasPermission(Permissions.Payroll.RunView)] public async Task<ActionResult<ApiResponse<PagedResult<PayrollRunDto>>>> Get([FromQuery] PayrollRunQuery query, CancellationToken ct) => (await service.GetAsync(query, ct)).ToActionResult();
     [HttpGet("{id:guid}"), HasPermission(Permissions.Payroll.RunView)] public async Task<ActionResult<ApiResponse<PayrollRunDto>>> GetById(Guid id, CancellationToken ct) => (await service.GetByIdAsync(id, ct)).ToActionResult();
@@ -19,4 +19,9 @@ public sealed class PayrollRunsController(IPayrollRunService service) : Controll
     [HttpGet("{id:guid}/employees"), HasPermission(Permissions.Payroll.RunView)] public async Task<ActionResult<ApiResponse<PagedResult<PayrollRunEmployeeDto>>>> Employees(Guid id, [FromQuery] PagedQuery query, CancellationToken ct) => (await service.GetEmployeesAsync(id, query, ct)).ToActionResult();
     [HttpPost("{id:guid}/transition"), HasPermission(Permissions.Payroll.RunManage)] public async Task<ActionResult<ApiResponse<PayrollRunDto>>> Transition(Guid id, [FromQuery] PayrollRunStatus target, CancellationToken ct) => (await service.TransitionAsync(id, target, ct)).ToActionResult();
     [HttpGet("{id:guid}/history"), HasPermission(Permissions.Payroll.RunViewHistory)] public async Task<ActionResult<ApiResponse<IReadOnlyList<PayrollRunHistoryDto>>>> History(Guid id, CancellationToken ct) => (await service.GetHistoryAsync(id, ct)).ToActionResult();
+    [HttpPost("{id:guid}/calculate"), HasPermission(Permissions.Payroll.RunCalculate)] public async Task<ActionResult<ApiResponse<PayrollCalculationSummaryDto>>> Calculate(Guid id, CancellationToken ct) => (await calculation.CalculateAsync(id, ct)).ToActionResult();
+    [HttpPost("{id:guid}/recalculate"), HasPermission(Permissions.Payroll.RunRecalculate)] public async Task<ActionResult<ApiResponse<PayrollCalculationSummaryDto>>> Recalculate(Guid id, CancellationToken ct) => (await calculation.RecalculateAsync(id, ct)).ToActionResult();
+    [HttpGet("{id:guid}/results"), HasPermission(Permissions.Payroll.RunViewResults)] public async Task<ActionResult<ApiResponse<PagedResult<PayrollResultDto>>>> Results(Guid id, [FromQuery] PayrollResultQuery query, CancellationToken ct) => (await calculation.GetResultsAsync(id, query, ct)).ToActionResult();
+    [HttpGet("{id:guid}/results/{employeeId:guid}"), HasPermission(Permissions.Payroll.RunViewResults)] public async Task<ActionResult<ApiResponse<PayrollResultDto>>> Result(Guid id, Guid employeeId, CancellationToken ct) => (await calculation.GetResultAsync(id, employeeId, ct)).ToActionResult();
+    [HttpGet("{id:guid}/calculation-errors"), HasPermission(Permissions.Payroll.RunViewResults)] public async Task<ActionResult<ApiResponse<IReadOnlyList<PayrollCalculationErrorDto>>>> Errors(Guid id, CancellationToken ct) => (await calculation.GetErrorsAsync(id, ct)).ToActionResult();
 }

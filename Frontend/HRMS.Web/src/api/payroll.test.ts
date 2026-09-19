@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createEmployeeSalaryAssignment, getEmployeeSalaryAssignmentHistory, listEmployeeSalaryAssignments, setEmployeeSalaryAssignmentActive, updateEmployeeSalaryAssignment, createPayrollPeriod, createPayrollRun, listPayrollPeriods, listPayrollRuns, preparePayrollRun, transitionPayrollPeriod, transitionPayrollRun, createSalaryComponent, createSalaryStructure, getSalaryComponentHistory, listSalaryComponents, listSalaryStructures, setSalaryComponentActive, setSalaryStructureActive, updateSalaryComponent, updateSalaryStructure } from './payroll.ts'
+import { calculatePayrollRun, createEmployeeSalaryAssignment, getEmployeeSalaryAssignmentHistory, listEmployeeSalaryAssignments, setEmployeeSalaryAssignmentActive, updateEmployeeSalaryAssignment, createPayrollPeriod, createPayrollRun, listPayrollPeriods, listPayrollRuns, listPayrollCalculationErrors, listPayrollResults, preparePayrollRun, transitionPayrollPeriod, transitionPayrollRun, createSalaryComponent, createSalaryStructure, getSalaryComponentHistory, listSalaryComponents, listSalaryStructures, setSalaryComponentActive, setSalaryStructureActive, updateSalaryComponent, updateSalaryStructure } from './payroll.ts'
 import { installStubAdapter, ok, type StubAdapter } from '../test/stubAdapter.ts'
 import { paged } from '../test/fixtures.ts'
 
@@ -59,5 +59,13 @@ describe('salary component API client', () => {
     await listPayrollPeriods({ status: 'Draft', page: 1, pageSize: 10 }); await createPayrollPeriod(period); await transitionPayrollPeriod('period-1', 'open', 1)
     await listPayrollRuns({ payrollPeriodId: 'period-1' }); await createPayrollRun({ payrollPeriodId: 'period-1', runType: 'Regular' }); await preparePayrollRun('run-1'); await transitionPayrollRun('run-1', 'Processing')
     expect(stub.calls.map(call => `${call.method}:${call.url}`)).toEqual(['get:/api/payroll/periods', 'post:/api/payroll/periods', 'post:/api/payroll/periods/period-1/open', 'get:/api/payroll/runs', 'post:/api/payroll/runs', 'post:/api/payroll/runs/run-1/prepare', 'post:/api/payroll/runs/run-1/transition'])
+  })
+
+  it('supports payroll calculation and result endpoints', async () => {
+    stub.on('post', '/api/payroll/runs/run-1/calculate', () => ({ data: ok({ payrollRunId: 'run-1', status: 'Calculated' }) }))
+    stub.on('get', '/api/payroll/runs/run-1/results', () => ({ data: ok(paged([])) }))
+    stub.on('get', '/api/payroll/runs/run-1/calculation-errors', () => ({ data: ok([]) }))
+    await calculatePayrollRun('run-1'); await listPayrollResults('run-1', { page: 1, pageSize: 10 }); await listPayrollCalculationErrors('run-1')
+    expect(stub.calls.map(call => `${call.method}:${call.url}`)).toEqual(['post:/api/payroll/runs/run-1/calculate', 'get:/api/payroll/runs/run-1/results', 'get:/api/payroll/runs/run-1/calculation-errors'])
   })
 })

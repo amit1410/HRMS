@@ -41,7 +41,7 @@ try {
     else {
         $sqlServerExitCode = Invoke-PayrollProviderTest `
             -Provider 'SQL Server' `
-            -Filter 'FullyQualifiedName~HRMS.Tests.SqlServerSalaryComponentIntegrationTests|FullyQualifiedName~HRMS.Tests.SqlServerSalaryStructureIntegrationTests|FullyQualifiedName~HRMS.Tests.SqlServerEmployeeSalaryAssignmentIntegrationTests|FullyQualifiedName~HRMS.Tests.SqlServerPayrollPeriodRunIntegrationTests'
+            -Filter 'FullyQualifiedName~HRMS.Tests.SqlServerSalaryComponentIntegrationTests|FullyQualifiedName~HRMS.Tests.SqlServerSalaryStructureIntegrationTests|FullyQualifiedName~HRMS.Tests.SqlServerEmployeeSalaryAssignmentIntegrationTests|FullyQualifiedName~HRMS.Tests.SqlServerPayrollPeriodRunIntegrationTests|FullyQualifiedName~HRMS.Tests.SqlServerPayrollCalculationIntegrationTests'
         $sqlServerStatus = if ($sqlServerExitCode -eq 0) { 'PASS' } else { 'FAIL' }
     }
 
@@ -51,7 +51,7 @@ try {
     else {
         $mySqlExitCode = Invoke-PayrollProviderTest `
             -Provider 'MySQL' `
-            -Filter 'FullyQualifiedName~HRMS.Tests.MySqlSalaryComponentIntegrationTests|FullyQualifiedName~HRMS.Tests.MySqlSalaryStructureIntegrationTests|FullyQualifiedName~HRMS.Tests.MySqlEmployeeSalaryAssignmentIntegrationTests|FullyQualifiedName~HRMS.Tests.MySqlPayrollPeriodRunIntegrationTests'
+            -Filter 'FullyQualifiedName~HRMS.Tests.MySqlSalaryComponentIntegrationTests|FullyQualifiedName~HRMS.Tests.MySqlSalaryStructureIntegrationTests|FullyQualifiedName~HRMS.Tests.MySqlEmployeeSalaryAssignmentIntegrationTests|FullyQualifiedName~HRMS.Tests.MySqlPayrollPeriodRunIntegrationTests|FullyQualifiedName~HRMS.Tests.MySqlPayrollCalculationIntegrationTests'
         $mySqlStatus = if ($mySqlExitCode -eq 0) { 'PASS' } else { 'FAIL' }
     }
 }

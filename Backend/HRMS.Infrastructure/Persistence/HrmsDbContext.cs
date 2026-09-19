@@ -155,6 +155,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<PayrollRun> PayrollRuns => Set<PayrollRun>();
     public DbSet<PayrollRunEmployee> PayrollRunEmployees => Set<PayrollRunEmployee>();
     public DbSet<PayrollRunHistory> PayrollRunHistories => Set<PayrollRunHistory>();
+    public DbSet<PayrollResult> PayrollResults => Set<PayrollResult>();
+    public DbSet<PayrollResultComponent> PayrollResultComponents => Set<PayrollResultComponent>();
+    public DbSet<PayrollCalculationError> PayrollCalculationErrors => Set<PayrollCalculationError>();
+    public DbSet<PayrollCalculationHistory> PayrollCalculationHistories => Set<PayrollCalculationHistory>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
@@ -409,6 +413,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<PayrollRun>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollRunEmployee>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollRunHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollResult>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollResultComponent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollCalculationError>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollCalculationHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
 
         // Organizational hierarchy master query filters
         modelBuilder.Entity<HoldingCompany>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

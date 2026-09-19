@@ -139,6 +139,10 @@ public interface IHrmsDbContext
     DbSet<PayrollRun> PayrollRuns { get; }
     DbSet<PayrollRunEmployee> PayrollRunEmployees { get; }
     DbSet<PayrollRunHistory> PayrollRunHistories { get; }
+    DbSet<PayrollResult> PayrollResults { get; }
+    DbSet<PayrollResultComponent> PayrollResultComponents { get; }
+    DbSet<PayrollCalculationError> PayrollCalculationErrors { get; }
+    DbSet<PayrollCalculationHistory> PayrollCalculationHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

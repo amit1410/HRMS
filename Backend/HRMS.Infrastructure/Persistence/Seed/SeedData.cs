@@ -167,6 +167,9 @@ public static class SeedData
             [DomainPermissions.Payroll.RunApprove] = 89,
             [DomainPermissions.Payroll.RunFinalize] = 90,
             [DomainPermissions.Payroll.RunViewHistory] = 91,
+            [DomainPermissions.Payroll.RunCalculate] = 92,
+            [DomainPermissions.Payroll.RunRecalculate] = 93,
+            [DomainPermissions.Payroll.RunViewResults] = 94,
             [DomainPermissions.Leave.TypeManage] = 30,
             [DomainPermissions.Leave.PeriodManage] = 31,
             [DomainPermissions.Leave.PolicyView] = 32,
@@ -290,7 +293,7 @@ public static class SeedData
             , DomainPermissions.Payroll.SalaryComponentView, DomainPermissions.Payroll.SalaryComponentManage, DomainPermissions.Payroll.SalaryComponentViewHistory
             , DomainPermissions.Payroll.SalaryStructureView, DomainPermissions.Payroll.SalaryStructureManage, DomainPermissions.Payroll.SalaryStructureViewHistory
             , DomainPermissions.Payroll.EmployeeSalaryView, DomainPermissions.Payroll.EmployeeSalaryManage, DomainPermissions.Payroll.EmployeeSalaryViewHistory
-            , DomainPermissions.Payroll.PeriodView, DomainPermissions.Payroll.PeriodManage, DomainPermissions.Payroll.RunView, DomainPermissions.Payroll.RunManage, DomainPermissions.Payroll.RunPrepare, DomainPermissions.Payroll.RunApprove, DomainPermissions.Payroll.RunFinalize, DomainPermissions.Payroll.RunViewHistory
+            , DomainPermissions.Payroll.PeriodView, DomainPermissions.Payroll.PeriodManage, DomainPermissions.Payroll.RunView, DomainPermissions.Payroll.RunManage, DomainPermissions.Payroll.RunPrepare, DomainPermissions.Payroll.RunApprove, DomainPermissions.Payroll.RunFinalize, DomainPermissions.Payroll.RunViewHistory, DomainPermissions.Payroll.RunCalculate, DomainPermissions.Payroll.RunRecalculate, DomainPermissions.Payroll.RunViewResults
         },
         [RoleNames.HRManager] = new[]
         {
@@ -327,7 +330,7 @@ public static class SeedData
         ,[RoleNames.TimeManager] = new[] { DomainPermissions.Employee.View, DomainPermissions.Attendance.View }
         ,[RoleNames.IT] = new[] { DomainPermissions.User.View, DomainPermissions.User.Edit, DomainPermissions.AccountEmployeeLink.View }
         ,[RoleNames.Accounts] = new[] { DomainPermissions.Employee.View }
-        ,[RoleNames.SuperHR] = new[] { DomainPermissions.Employee.View, DomainPermissions.Employee.Edit, DomainPermissions.EmploymentHistory.View, DomainPermissions.EmploymentHistory.Change, DomainPermissions.Leave.Approve, DomainPermissions.RoleManagement.View, DomainPermissions.RoleManagement.AssignmentView, DomainPermissions.PageAccess.View, DomainPermissions.PageAccess.Manage, DomainPermissions.Payroll.SalaryComponentView, DomainPermissions.Payroll.SalaryComponentManage, DomainPermissions.Payroll.SalaryComponentViewHistory, DomainPermissions.Payroll.SalaryStructureView, DomainPermissions.Payroll.SalaryStructureManage, DomainPermissions.Payroll.SalaryStructureViewHistory, DomainPermissions.Payroll.EmployeeSalaryView, DomainPermissions.Payroll.EmployeeSalaryManage, DomainPermissions.Payroll.EmployeeSalaryViewHistory, DomainPermissions.Payroll.PeriodView, DomainPermissions.Payroll.PeriodManage, DomainPermissions.Payroll.RunView, DomainPermissions.Payroll.RunManage, DomainPermissions.Payroll.RunPrepare, DomainPermissions.Payroll.RunApprove, DomainPermissions.Payroll.RunFinalize, DomainPermissions.Payroll.RunViewHistory }
+        ,[RoleNames.SuperHR] = new[] { DomainPermissions.Employee.View, DomainPermissions.Employee.Edit, DomainPermissions.EmploymentHistory.View, DomainPermissions.EmploymentHistory.Change, DomainPermissions.Leave.Approve, DomainPermissions.RoleManagement.View, DomainPermissions.RoleManagement.AssignmentView, DomainPermissions.PageAccess.View, DomainPermissions.PageAccess.Manage, DomainPermissions.Payroll.SalaryComponentView, DomainPermissions.Payroll.SalaryComponentManage, DomainPermissions.Payroll.SalaryComponentViewHistory, DomainPermissions.Payroll.SalaryStructureView, DomainPermissions.Payroll.SalaryStructureManage, DomainPermissions.Payroll.SalaryStructureViewHistory, DomainPermissions.Payroll.EmployeeSalaryView, DomainPermissions.Payroll.EmployeeSalaryManage, DomainPermissions.Payroll.EmployeeSalaryViewHistory, DomainPermissions.Payroll.PeriodView, DomainPermissions.Payroll.PeriodManage, DomainPermissions.Payroll.RunView, DomainPermissions.Payroll.RunManage, DomainPermissions.Payroll.RunPrepare, DomainPermissions.Payroll.RunApprove, DomainPermissions.Payroll.RunFinalize, DomainPermissions.Payroll.RunViewHistory, DomainPermissions.Payroll.RunCalculate, DomainPermissions.Payroll.RunRecalculate, DomainPermissions.Payroll.RunViewResults }
     };
 
     /// <summary>

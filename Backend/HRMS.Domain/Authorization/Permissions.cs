@@ -129,6 +129,9 @@ public static class Permissions
         public const string RunApprove = "Payroll.Run.Approve";
         public const string RunFinalize = "Payroll.Run.Finalize";
         public const string RunViewHistory = "Payroll.Run.ViewHistory";
+        public const string RunCalculate = "Payroll.Run.Calculate";
+        public const string RunRecalculate = "Payroll.Run.Recalculate";
+        public const string RunViewResults = "Payroll.Run.ViewResults";
     }
     public static class Attendance
     {
@@ -171,7 +174,7 @@ public static class Permissions
         Payroll.SalaryComponentView, Payroll.SalaryComponentManage, Payroll.SalaryComponentViewHistory,
         Payroll.SalaryStructureView, Payroll.SalaryStructureManage, Payroll.SalaryStructureViewHistory,
         Payroll.EmployeeSalaryView, Payroll.EmployeeSalaryManage, Payroll.EmployeeSalaryViewHistory,
-        Payroll.PeriodView, Payroll.PeriodManage, Payroll.RunView, Payroll.RunManage, Payroll.RunPrepare, Payroll.RunApprove, Payroll.RunFinalize, Payroll.RunViewHistory,
+        Payroll.PeriodView, Payroll.PeriodManage, Payroll.RunView, Payroll.RunManage, Payroll.RunPrepare, Payroll.RunApprove, Payroll.RunFinalize, Payroll.RunViewHistory, Payroll.RunCalculate, Payroll.RunRecalculate, Payroll.RunViewResults,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

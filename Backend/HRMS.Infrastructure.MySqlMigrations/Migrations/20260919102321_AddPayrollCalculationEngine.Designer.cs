@@ -3,6 +3,7 @@ using System;
 using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 {
     [DbContext(typeof(HrmsDbContext))]
-    partial class HrmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260919102321_AddPayrollCalculationEngine")]
+    partial class AddPayrollCalculationEngine
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -5052,9 +5055,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("char(36)");
 
-                    b.Property<Guid>("CalculationAttemptId")
-                        .HasColumnType("char(36)");
-
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime(6)");
 
@@ -5066,9 +5066,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.Property<int>("ErrorCode")
                         .HasColumnType("int");
-
-                    b.Property<bool>("IsCurrent")
-                        .HasColumnType("tinyint(1)");
 
                     b.Property<string>("Message")
                         .IsRequired()
@@ -5100,8 +5097,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.HasIndex("TenantId", "SalaryComponentId");
 
-                    b.HasIndex("TenantId", "PayrollRunId", "CalculationAttemptId", "IsCurrent");
-
                     b.ToTable("PayrollCalculationErrors", (string)null);
                 });
 
@@ -5112,9 +5107,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasColumnType("char(36)");
 
                     b.Property<Guid?>("ActorUserId")
-                        .HasColumnType("char(36)");
-
-                    b.Property<Guid>("CalculationAttemptId")
                         .HasColumnType("char(36)");
 
                     b.Property<int>("ChangeType")
@@ -5146,8 +5138,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasColumnType("char(36)");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("TenantId", "PayrollRunId", "CalculationAttemptId");
 
                     b.HasIndex("TenantId", "PayrollRunId", "ChangedAtUtc");
 
@@ -5278,16 +5268,10 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid?>("CalculatedByUserId")
                         .HasColumnType("char(36)");
 
-                    b.Property<Guid>("CalculationAttemptId")
-                        .HasColumnType("char(36)");
-
                     b.Property<DateTime>("CalculationDateUtc")
                         .HasColumnType("datetime(6)");
 
                     b.Property<int>("CalculationVersion")
-                        .HasColumnType("int");
-
-                    b.Property<int>("CalendarDays")
                         .HasColumnType("int");
 
                     b.Property<int>("ConcurrencyVersion")
@@ -5304,28 +5288,15 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasMaxLength(3)
                         .HasColumnType("varchar(3)");
 
-                    b.Property<int>("EligibleDays")
-                        .HasColumnType("int");
-
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("char(36)");
 
                     b.Property<Guid>("EmployeeSalaryAssignmentId")
                         .HasColumnType("char(36)");
 
-                    b.Property<decimal>("EmployerContributions")
-                        .HasPrecision(18, 6)
-                        .HasColumnType("decimal(18,6)");
-
-                    b.Property<DateTime>("EmploymentSnapshotDate")
-                        .HasColumnType("date");
-
                     b.Property<decimal>("GrossEarnings")
                         .HasPrecision(18, 6)
                         .HasColumnType("decimal(18,6)");
-
-                    b.Property<bool>("IsCurrent")
-                        .HasColumnType("tinyint(1)");
 
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime(6)");
@@ -5345,10 +5316,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.Property<DateTime>("PeriodStartDate")
                         .HasColumnType("date");
-
-                    b.Property<decimal>("ProrationFactor")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("decimal(18,8)");
 
                     b.Property<Guid>("SalaryStructureId")
                         .HasColumnType("char(36)");
@@ -5376,10 +5343,8 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.HasIndex("TenantId", "PayrollRunId");
 
-                    b.HasIndex("TenantId", "PayrollRunId", "EmployeeId", "CalculationAttemptId")
+                    b.HasIndex("TenantId", "PayrollRunId", "EmployeeId")
                         .IsUnique();
-
-                    b.HasIndex("TenantId", "PayrollRunId", "EmployeeId", "IsCurrent");
 
                     b.ToTable("PayrollResults", (string)null);
                 });
@@ -5397,9 +5362,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<decimal>("CalculatedAmount")
                         .HasPrecision(18, 6)
                         .HasColumnType("decimal(18,6)");
-
-                    b.Property<Guid>("CalculationAttemptId")
-                        .HasColumnType("char(36)");
 
                     b.Property<string>("CalculationMetadata")
                         .HasMaxLength(4000)
@@ -5432,10 +5394,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<string>("FormulaSnapshot")
-                        .HasMaxLength(2000)
-                        .HasColumnType("varchar(2000)");
-
                     b.Property<bool>("IsDeduction")
                         .HasColumnType("tinyint(1)");
 
@@ -5457,10 +5415,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid>("PayrollResultId")
                         .HasColumnType("char(36)");
 
-                    b.Property<decimal>("ProrationFactor")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("decimal(18,8)");
-
                     b.Property<decimal?>("Quantity")
                         .HasPrecision(18, 6)
                         .HasColumnType("decimal(18,6)");
@@ -5478,13 +5432,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("char(36)");
 
-                    b.Property<decimal>("UnproratedAmount")
-                        .HasPrecision(18, 6)
-                        .HasColumnType("decimal(18,6)");
-
                     b.HasKey("Id");
-
-                    b.HasIndex("TenantId", "CalculationAttemptId");
 
                     b.HasIndex("TenantId", "PayrollResultId");
 

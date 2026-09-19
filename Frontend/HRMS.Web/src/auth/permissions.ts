@@ -109,6 +109,9 @@ export const Permissions = {
     runApprove: 'Payroll.Run.Approve',
     runFinalize: 'Payroll.Run.Finalize',
     runViewHistory: 'Payroll.Run.ViewHistory',
+    runCalculate: 'Payroll.Run.Calculate',
+    runRecalculate: 'Payroll.Run.Recalculate',
+    runViewResults: 'Payroll.Run.ViewResults',
   },
   attendance: {
     view: 'Attendance.View',

@@ -5051,6 +5051,114 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("PasswordResetOtps", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollCalculationError", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("CalculationAttemptId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ErrorCode")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsCurrent")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("PayrollRunEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("PayrollRunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SalaryComponentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.HasIndex("TenantId", "PayrollRunEmployeeId");
+
+                    b.HasIndex("TenantId", "PayrollRunId");
+
+                    b.HasIndex("TenantId", "SalaryComponentId");
+
+                    b.HasIndex("TenantId", "PayrollRunId", "CalculationAttemptId", "IsCurrent");
+
+                    b.ToTable("PayrollCalculationErrors", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollCalculationHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("CalculationAttemptId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ChangeType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("ChangedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Message")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("PayrollRunEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("PayrollRunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "PayrollRunId", "CalculationAttemptId");
+
+                    b.HasIndex("TenantId", "PayrollRunId", "ChangedAtUtc");
+
+                    b.ToTable("PayrollCalculationHistories", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollPeriod", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5161,6 +5269,233 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.HasIndex("TenantId", "PayrollPeriodId", "ChangedAtUtc");
 
                     b.ToTable("PayrollPeriodHistories", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollResult", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CalculatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("CalculatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("CalculationAttemptId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CalculationDateUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("CalculationVersion")
+                        .HasColumnType("int");
+
+                    b.Property<int>("CalendarDays")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CurrencyCode")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("nvarchar(3)");
+
+                    b.Property<int>("EligibleDays")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("EmployeeSalaryAssignmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("EmployerContributions")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<DateOnly>("EmploymentSnapshotDate")
+                        .HasColumnType("date");
+
+                    b.Property<decimal>("GrossEarnings")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<bool>("IsCurrent")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("NetPay")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("PayrollRunEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("PayrollRunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateOnly>("PeriodEndDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly>("PeriodStartDate")
+                        .HasColumnType("date");
+
+                    b.Property<decimal>("ProrationFactor")
+                        .HasPrecision(18, 8)
+                        .HasColumnType("decimal(18,8)");
+
+                    b.Property<Guid>("SalaryStructureId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("SalaryStructureVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("TotalDeductions")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.HasIndex("TenantId", "EmployeeSalaryAssignmentId");
+
+                    b.HasIndex("TenantId", "PayrollRunEmployeeId");
+
+                    b.HasIndex("TenantId", "PayrollRunId");
+
+                    b.HasIndex("TenantId", "PayrollRunId", "EmployeeId", "CalculationAttemptId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "PayrollRunId", "EmployeeId", "IsCurrent");
+
+                    b.ToTable("PayrollResults", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollResultComponent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("BaseAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal>("CalculatedAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("CalculationAttemptId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CalculationMetadata")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<int>("CalculationSequence")
+                        .HasColumnType("int");
+
+                    b.Property<string>("CalculationSource")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<int>("CalculationType")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ComponentCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("ComponentName")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<int>("ComponentType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("FormulaSnapshot")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<bool>("IsDeduction")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsEarning")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsEmployerContribution")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsProrated")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsTaxable")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("PayrollResultId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("ProrationFactor")
+                        .HasPrecision(18, 8)
+                        .HasColumnType("decimal(18,8)");
+
+                    b.Property<decimal?>("Quantity")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal?>("Rate")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("SalaryComponentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SalaryStructureComponentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("UnproratedAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "CalculationAttemptId");
+
+                    b.HasIndex("TenantId", "PayrollResultId");
+
+                    b.HasIndex("TenantId", "SalaryComponentId");
+
+                    b.ToTable("PayrollResultComponents", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollRun", b =>
@@ -8955,6 +9290,72 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollCalculationError", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRunEmployee", "PayrollRunEmployee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollRunEmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRun", "PayrollRun")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollRunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.SalaryComponent", "SalaryComponent")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SalaryComponentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("PayrollRun");
+
+                    b.Navigation("PayrollRunEmployee");
+
+                    b.Navigation("SalaryComponent");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollCalculationHistory", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRun", "PayrollRun")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollRunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("PayrollRun");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollPeriod", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -8984,6 +9385,82 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("ActorUser");
 
                     b.Navigation("PayrollPeriod");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollResult", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeSalaryAssignment", "EmployeeSalaryAssignment")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeSalaryAssignmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRunEmployee", "PayrollRunEmployee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollRunEmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRun", "PayrollRun")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollRunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("EmployeeSalaryAssignment");
+
+                    b.Navigation("PayrollRun");
+
+                    b.Navigation("PayrollRunEmployee");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollResultComponent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollResult", "PayrollResult")
+                        .WithMany("Components")
+                        .HasForeignKey("TenantId", "PayrollResultId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.SalaryComponent", "SalaryComponent")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SalaryComponentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("PayrollResult");
+
+                    b.Navigation("SalaryComponent");
+
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollRun", b =>
@@ -9710,6 +10187,11 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("History");
 
                     b.Navigation("Runs");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollResult", b =>
+                {
+                    b.Navigation("Components");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollRun", b =>
