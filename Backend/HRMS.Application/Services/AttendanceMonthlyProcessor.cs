@@ -222,14 +222,39 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
             if (!scope.Succeeded || scope.Value is null) return [];
             employeesQuery = employeesQuery.Where(scope.Value);
         }
-        var employees = await employeesQuery.ToListAsync(ct); var result = new List<AttendanceExceptionDto>();
-        foreach (var employee in employees)
+        var employeeIds = await employeesQuery.Select(x => x.Id).ToListAsync(ct);
+        if (employeeIds.Count == 0) return [];
+
+        var histories = await db.EmployeeEmploymentHistory.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && employeeIds.Contains(x.EmployeeId) && !x.IsSuperseded && x.EffectiveFrom <= period.EndDate && (x.EffectiveTo == null || x.EffectiveTo >= period.StartDate))
+            .ToListAsync(ct);
+        var days = await db.EmployeeAttendanceDays.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && employeeIds.Contains(x.EmployeeId) && x.BusinessDate >= period.StartDate && x.BusinessDate <= period.EndDate)
+            .ToListAsync(ct);
+        var regs = await db.AttendanceRegularizationRequests.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && employeeIds.Contains(x.EmployeeId) && x.BusinessDate >= period.StartDate && x.BusinessDate <= period.EndDate && x.Status == AttendanceRequestStatus.Pending)
+            .ToListAsync(ct);
+        var ods = await db.AttendanceOnDutyRequests.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && employeeIds.Contains(x.EmployeeId) && x.StartDate <= period.EndDate && x.EndDate >= period.StartDate && x.Status == AttendanceRequestStatus.Pending)
+            .ToListAsync(ct);
+
+        var historiesByEmployee = histories.GroupBy(x => x.EmployeeId).ToDictionary(x => x.Key, x => x.ToList());
+        var daysByEmployee = days.GroupBy(x => x.EmployeeId).ToDictionary(x => x.Key, x => x.ToDictionary(x => x.BusinessDate));
+        var result = new List<AttendanceExceptionDto>();
+        foreach (var employeeId in employeeIds)
         {
-                var histories = await db.EmployeeEmploymentHistory.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employee.Id && !x.IsSuperseded && x.EffectiveFrom <= period.EndDate && (x.EffectiveTo == null || x.EffectiveTo >= period.StartDate)).ToListAsync(ct);
-            var days = await db.EmployeeAttendanceDays.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employee.Id && x.BusinessDate >= period.StartDate && x.BusinessDate <= period.EndDate).ToDictionaryAsync(x => x.BusinessDate, ct);
-            for (var date = period.StartDate; date <= period.EndDate; date = date.AddDays(1)) if (histories.Any(h => h.EffectiveFrom <= date && (h.EffectiveTo == null || h.EffectiveTo >= date))) { days.TryGetValue(date, out var day); AddExceptions(result, day, period.Id, employee.Id, date); }
-            var regs = await db.AttendanceRegularizationRequests.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employee.Id && x.BusinessDate >= period.StartDate && x.BusinessDate <= period.EndDate && x.Status == AttendanceRequestStatus.Pending).ToListAsync(ct); result.AddRange(regs.Select(x => Exception(period.Id, employee.Id, x.BusinessDate, AttendanceExceptionType.PendingRegularization, true, x.Id, "Pending Regularization blocks monthly processing.")));
-            var ods = await db.AttendanceOnDutyRequests.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employee.Id && x.StartDate <= period.EndDate && x.EndDate >= period.StartDate && x.Status == AttendanceRequestStatus.Pending).ToListAsync(ct); result.AddRange(ods.Select(x => Exception(period.Id, employee.Id, x.StartDate < period.StartDate ? period.StartDate : x.StartDate, AttendanceExceptionType.PendingOnDuty, true, x.Id, "Pending On Duty blocks monthly processing.")));
+            historiesByEmployee.TryGetValue(employeeId, out var employeeHistories);
+            daysByEmployee.TryGetValue(employeeId, out var employeeDays);
+            for (var date = period.StartDate; date <= period.EndDate; date = date.AddDays(1))
+                if (employeeHistories?.Any(h => h.EffectiveFrom <= date && (h.EffectiveTo == null || h.EffectiveTo >= date)) == true)
+                {
+                    EmployeeAttendanceDay? day = null;
+                    employeeDays?.TryGetValue(date, out day);
+                    AddExceptions(result, day, period.Id, employeeId, date);
+                }
+
+            result.AddRange(regs.Where(x => x.EmployeeId == employeeId).Select(x => Exception(period.Id, employeeId, x.BusinessDate, AttendanceExceptionType.PendingRegularization, true, x.Id, "Pending Regularization blocks monthly processing.")));
+            result.AddRange(ods.Where(x => x.EmployeeId == employeeId).Select(x => Exception(period.Id, employeeId, x.StartDate < period.StartDate ? period.StartDate : x.StartDate, AttendanceExceptionType.PendingOnDuty, true, x.Id, "Pending On Duty blocks monthly processing.")));
         }
         return result;
     }

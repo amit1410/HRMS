@@ -38,25 +38,32 @@ public sealed class AttendanceWorkflowService(
     public async Task<Result<PagedResult<RegularizationDto>>> GetManagerRegularizationsAsync(PagedQuery query, CancellationToken ct = default)
     {
         var s = await Subject(ct); if (!s.Succeeded) return Fail<PagedResult<RegularizationDto>>(s);
-        var allowed = new List<RegularizationDto>();
         var dates = await db.AttendanceRegularizationRequests.AsNoTracking().Where(x => x.TenantId == s.Value!.TenantId && x.Status == AttendanceRequestStatus.Pending).Select(x => x.BusinessDate).Distinct().ToListAsync(ct);
-        foreach (var date in dates)
+        if (authorization is not null)
         {
-            var source = db.AttendanceRegularizationRequests.Include(x => x.Events).Where(x => x.TenantId == s.Value!.TenantId && x.Status == AttendanceRequestStatus.Pending && x.BusinessDate == date);
-            if (authorization is not null)
+            IQueryable<AttendanceRegularizationRequest>? scoped = null;
+            foreach (var date in dates)
             {
                 var predicate = await authorization.BuildEmployeePredicateAsync(Permissions.Attendance.RegularizationApprove, false, true, true, date, ct);
                 if (!predicate.Succeeded || predicate.Value is null) return Result<PagedResult<RegularizationDto>>.Failure(predicate.Status, predicate.Message, predicate.Errors);
-                source = source.Where(x => db.Employees.Where(predicate.Value).Any(e => e.Id == x.EmployeeId));
-                allowed.AddRange((await source.OrderBy(x => x.SubmittedAtUtc).ToListAsync(ct)).Select(Map));
+                var candidate = db.AttendanceRegularizationRequests
+                    .AsNoTracking()
+                    .Where(x => x.TenantId == s.Value!.TenantId && x.Status == AttendanceRequestStatus.Pending && x.BusinessDate == date)
+                    .Where(x => db.Employees.Where(predicate.Value).Any(e => e.Id == x.EmployeeId));
+                scoped = scoped is null ? candidate : scoped.Concat(candidate);
             }
-            else
+
+            return Result<PagedResult<RegularizationDto>>.Success(await PageManagerRegularizationsAsync(scoped ?? db.AttendanceRegularizationRequests.Where(_ => false), query, ct));
+        }
+
+        var allowed = new List<RegularizationDto>();
+        foreach (var date in dates)
+        {
+            var source = db.AttendanceRegularizationRequests.Include(x => x.Events).Where(x => x.TenantId == s.Value!.TenantId && x.Status == AttendanceRequestStatus.Pending && x.BusinessDate == date);
+            foreach (var item in await source.OrderBy(x => x.SubmittedAtUtc).ToListAsync(ct))
             {
-                foreach (var item in await source.OrderBy(x => x.SubmittedAtUtc).ToListAsync(ct))
-                {
-                    var manager = await managers.ResolveAsync(item.EmployeeId, date, ct);
-                    if (manager.Value?.ManagerId == s.Value!.EmployeeId) allowed.Add(Map(item));
-                }
+                var manager = await managers.ResolveAsync(item.EmployeeId, date, ct);
+                if (manager.Value?.ManagerId == s.Value!.EmployeeId) allowed.Add(Map(item));
             }
         }
         return Result<PagedResult<RegularizationDto>>.Success(Page(allowed.OrderBy(x => x.SubmittedAtUtc).ToList(), query));
@@ -78,25 +85,32 @@ public sealed class AttendanceWorkflowService(
     public async Task<Result<PagedResult<OnDutyDto>>> GetManagerOnDutyAsync(PagedQuery query, CancellationToken ct = default)
     {
         var s = await Subject(ct); if (!s.Succeeded) return Fail<PagedResult<OnDutyDto>>(s);
-        var allowed = new List<OnDutyDto>();
         var dates = await db.AttendanceOnDutyRequests.AsNoTracking().Where(x => x.TenantId == s.Value!.TenantId && x.Status == AttendanceRequestStatus.Pending).Select(x => x.StartDate).Distinct().ToListAsync(ct);
-        foreach (var date in dates)
+        if (authorization is not null)
         {
-            var source = db.AttendanceOnDutyRequests.Include(x => x.Events).Where(x => x.TenantId == s.Value!.TenantId && x.Status == AttendanceRequestStatus.Pending && x.StartDate == date);
-            if (authorization is not null)
+            IQueryable<AttendanceOnDutyRequest>? scoped = null;
+            foreach (var date in dates)
             {
                 var predicate = await authorization.BuildEmployeePredicateAsync(Permissions.Attendance.OnDutyApprove, false, true, true, date, ct);
                 if (!predicate.Succeeded || predicate.Value is null) return Result<PagedResult<OnDutyDto>>.Failure(predicate.Status, predicate.Message, predicate.Errors);
-                source = source.Where(x => db.Employees.Where(predicate.Value).Any(e => e.Id == x.EmployeeId));
-                allowed.AddRange((await source.OrderBy(x => x.SubmittedAtUtc).ToListAsync(ct)).Select(Map));
+                var candidate = db.AttendanceOnDutyRequests
+                    .AsNoTracking()
+                    .Where(x => x.TenantId == s.Value!.TenantId && x.Status == AttendanceRequestStatus.Pending && x.StartDate == date)
+                    .Where(x => db.Employees.Where(predicate.Value).Any(e => e.Id == x.EmployeeId));
+                scoped = scoped is null ? candidate : scoped.Concat(candidate);
             }
-            else
+
+            return Result<PagedResult<OnDutyDto>>.Success(await PageManagerOnDutyAsync(scoped ?? db.AttendanceOnDutyRequests.Where(_ => false), query, ct));
+        }
+
+        var allowed = new List<OnDutyDto>();
+        foreach (var date in dates)
+        {
+            var source = db.AttendanceOnDutyRequests.Include(x => x.Events).Where(x => x.TenantId == s.Value!.TenantId && x.Status == AttendanceRequestStatus.Pending && x.StartDate == date);
+            foreach (var item in await source.OrderBy(x => x.SubmittedAtUtc).ToListAsync(ct))
             {
-                foreach (var item in await source.OrderBy(x => x.SubmittedAtUtc).ToListAsync(ct))
-                {
-                    var manager = await managers.ResolveAsync(item.EmployeeId, date, ct);
-                    if (manager.Value?.ManagerId == s.Value!.EmployeeId) allowed.Add(Map(item));
-                }
+                var manager = await managers.ResolveAsync(item.EmployeeId, date, ct);
+                if (manager.Value?.ManagerId == s.Value!.EmployeeId) allowed.Add(Map(item));
             }
         }
         return Result<PagedResult<OnDutyDto>>.Success(Page(allowed.OrderBy(x => x.SubmittedAtUtc).ToList(), query));
@@ -214,4 +228,30 @@ public sealed class AttendanceWorkflowService(
     private static PagedResult<RegularizationDto> Page(List<RegularizationDto> x, PagedQuery p) => new(x.Skip((p.Page - 1) * p.PageSize).Take(p.PageSize).ToList(), p.Page, p.PageSize, x.Count);
     private static async Task<PagedResult<OnDutyDto>> Page(IQueryable<AttendanceOnDutyRequest> q, PagedQuery p, CancellationToken ct) { var total = await q.CountAsync(ct); return new(await q.Skip((p.Page - 1) * p.PageSize).Take(p.PageSize).Select(x => new OnDutyDto(x.Id, x.EmployeeId, x.StartDate, x.EndDate, x.Reason, x.Purpose, x.Location, x.Status, x.SubmittedAtUtc, x.ReviewedAtUtc, x.ReviewerComments, new List<AttendanceWorkflowEventDto>())).ToListAsync(ct), p.Page, p.PageSize, total); }
     private static PagedResult<OnDutyDto> Page(List<OnDutyDto> x, PagedQuery p) => new(x.Skip((p.Page - 1) * p.PageSize).Take(p.PageSize).ToList(), p.Page, p.PageSize, x.Count);
+
+    private async Task<PagedResult<RegularizationDto>> PageManagerRegularizationsAsync(IQueryable<AttendanceRegularizationRequest> query, PagedQuery paging, CancellationToken ct)
+    {
+        var total = await query.CountAsync(ct);
+        var ids = await query.OrderBy(x => x.SubmittedAtUtc).ThenBy(x => x.Id)
+            .Skip((paging.Page - 1) * paging.PageSize).Take(paging.PageSize)
+            .Select(x => x.Id).ToListAsync(ct);
+        if (ids.Count == 0) return new([], paging.Page, paging.PageSize, total);
+        var items = await db.AttendanceRegularizationRequests.AsNoTracking().Include(x => x.Events)
+            .Where(x => ids.Contains(x.Id)).ToListAsync(ct);
+        var byId = items.ToDictionary(x => x.Id);
+        return new(ids.Where(byId.ContainsKey).Select(id => Map(byId[id])).ToList(), paging.Page, paging.PageSize, total);
+    }
+
+    private async Task<PagedResult<OnDutyDto>> PageManagerOnDutyAsync(IQueryable<AttendanceOnDutyRequest> query, PagedQuery paging, CancellationToken ct)
+    {
+        var total = await query.CountAsync(ct);
+        var ids = await query.OrderBy(x => x.SubmittedAtUtc).ThenBy(x => x.Id)
+            .Skip((paging.Page - 1) * paging.PageSize).Take(paging.PageSize)
+            .Select(x => x.Id).ToListAsync(ct);
+        if (ids.Count == 0) return new([], paging.Page, paging.PageSize, total);
+        var items = await db.AttendanceOnDutyRequests.AsNoTracking().Include(x => x.Events)
+            .Where(x => ids.Contains(x.Id)).ToListAsync(ct);
+        var byId = items.ToDictionary(x => x.Id);
+        return new(ids.Where(byId.ContainsKey).Select(id => Map(byId[id])).ToList(), paging.Page, paging.PageSize, total);
+    }
 }

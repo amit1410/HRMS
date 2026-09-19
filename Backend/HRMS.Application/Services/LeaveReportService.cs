@@ -49,25 +49,31 @@ public sealed class LeaveReportService : ILeaveReportService
         var validation = ValidatePaging<LeaveBalanceReportRow>(query);
         if (validation is not null) return Result<PagedResult<LeaveBalanceReportRow>>.Failure(validation.Status, validation.Message, validation.Errors);
         if (!Tenant(out var tenantId)) return Result<PagedResult<LeaveBalanceReportRow>>.Unauthorized("No authenticated tenant.");
-        var balances = await _db.EmployeeLeaveBalances.AsNoTracking()
-            .Where(x => x.TenantId == tenantId && _authorizedEmployeeIds!.Contains(x.EmployeeId) && (!query.EmployeeId.HasValue || x.EmployeeId == query.EmployeeId) && (!query.LeaveTypeId.HasValue || x.LeaveTypeId == query.LeaveTypeId) && (!query.LeavePeriodId.HasValue || x.LeavePeriodId == query.LeavePeriodId))
-            .Select(x => new BalanceRow(x.EmployeeId, x.Employee!.EmployeeCode ?? string.Empty, x.Employee.FirstName, x.Employee.MiddleName, x.Employee.LastName, x.LeaveType!.Name, x.LeaveTypeId, EntitlementMode.Allocated, x.GrantedQuantity, x.ReservedQuantity, x.ConsumedQuantity, x.GrantedQuantity - x.ReservedQuantity - x.ConsumedQuantity, x.LeavePeriodId))
-            .ToListAsync(cancellationToken);
         var today = Today();
-        var histories = await _db.EmployeeEmploymentHistory.AsNoTracking().Where(x => x.TenantId == tenantId && !x.IsSuperseded && x.EffectiveFrom <= today && (x.EffectiveTo == null || x.EffectiveTo >= today)).Select(x => new HistoryRow(x.EmployeeId, x.DepartmentId, x.Department != null ? x.Department.Name : x.DepartmentName, x.WorkLocationId, x.WorkLocation!.Name)).ToListAsync(cancellationToken);
-        var historyByEmployee = histories.GroupBy(x => x.EmployeeId).ToDictionary(x => x.Key, x => x.First());
-        var unlimitedIds = await (from rule in _db.LeavePolicyRules.AsNoTracking()
+        var currentHistory = _db.EmployeeEmploymentHistory.AsNoTracking().Where(x => x.TenantId == tenantId && !x.IsSuperseded && x.EffectiveFrom <= today && (x.EffectiveTo == null || x.EffectiveTo >= today));
+        var balances = _db.EmployeeLeaveBalances.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && _authorizedEmployeeIds!.Contains(x.EmployeeId) && (!query.EmployeeId.HasValue || x.EmployeeId == query.EmployeeId) && (!query.LeaveTypeId.HasValue || x.LeaveTypeId == query.LeaveTypeId) && (!query.LeavePeriodId.HasValue || x.LeavePeriodId == query.LeavePeriodId))
+            .Where(x => !query.DepartmentId.HasValue || currentHistory.Any(h => h.EmployeeId == x.EmployeeId && h.DepartmentId == query.DepartmentId))
+            .Where(x => !query.WorkLocationId.HasValue || currentHistory.Any(h => h.EmployeeId == x.EmployeeId && h.WorkLocationId == query.WorkLocationId))
+            .Select(x => new { x.EmployeeId, EmployeeCode = x.Employee!.EmployeeCode ?? string.Empty, x.Employee.FirstName, x.Employee.MiddleName, x.Employee.LastName, LeaveTypeName = x.LeaveType!.Name, x.LeaveTypeId, Mode = EntitlementMode.Allocated, Granted = x.GrantedQuantity, Reserved = x.ReservedQuantity, Consumed = x.ConsumedQuantity, Available = x.GrantedQuantity - x.ReservedQuantity - x.ConsumedQuantity, x.LeavePeriodId });
+        var unlimitedIds = from rule in _db.LeavePolicyRules.AsNoTracking()
                                   join version in _db.LeavePolicyVersions.AsNoTracking() on rule.LeavePolicyVersionId equals version.Id
                                   join entitlement in _db.LeavePolicyEntitlementRules.AsNoTracking() on rule.Id equals entitlement.LeavePolicyRuleId
                                   where rule.TenantId == tenantId && rule.IsActive && version.Status == LeavePolicyVersionStatus.Published && version.EffectiveFrom <= today && (version.EffectiveTo == null || version.EffectiveTo >= today) && entitlement.EntitlementMode == EntitlementMode.Unlimited
-                                  select rule.LeaveTypeId).Distinct().ToListAsync(cancellationToken);
-        var result = balances.Select(x => ToBalanceRow(x, historyByEmployee)).ToList();
-        var unlimitedTypes = await _db.LeaveTypes.AsNoTracking().Where(x => x.TenantId == tenantId && unlimitedIds.Contains(x.Id) && (!query.LeaveTypeId.HasValue || query.LeaveTypeId == x.Id)).ToListAsync(cancellationToken);
-        foreach (var type in unlimitedTypes.Where(x => result.All(r => r.LeaveType == x.Name)))
-            result.Add(new(Guid.Empty, string.Empty, string.Empty, null, null, type.Name, EntitlementMode.Unlimited, null, null, null, null, null, null));
-        result = result.Where(x => !query.DepartmentId.HasValue || histories.Any(h => h.EmployeeId == x.EmployeeId && h.DepartmentId == query.DepartmentId)).Where(x => !query.WorkLocationId.HasValue || histories.Any(h => h.EmployeeId == x.EmployeeId && h.WorkLocationId == query.WorkLocationId)).OrderBy(x => x.EmployeeCode).ThenBy(x => x.LeaveType).ToList();
-        var total = result.Count;
-        return Result<PagedResult<LeaveBalanceReportRow>>.Success(new(result.Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToList(), query.Page, query.PageSize, total));
+                                  select rule.LeaveTypeId;
+        var unlimited = _db.LeaveTypes.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && unlimitedIds.Contains(x.Id) && (!query.LeaveTypeId.HasValue || query.LeaveTypeId == x.Id) && !_db.EmployeeLeaveBalances.Any(b => b.TenantId == tenantId && _authorizedEmployeeIds!.Contains(b.EmployeeId) && b.LeaveTypeId == x.Id))
+            .Select(x => new { EmployeeId = Guid.Empty, EmployeeCode = string.Empty, FirstName = string.Empty, MiddleName = (string?)null, LastName = string.Empty, LeaveTypeName = x.Name, LeaveTypeId = x.Id, Mode = EntitlementMode.Unlimited, Granted = 0m, Reserved = 0m, Consumed = 0m, Available = 0m, LeavePeriodId = Guid.Empty });
+        var source = balances.Concat(unlimited);
+        var total = await source.CountAsync(cancellationToken);
+        var pageRows = await source.OrderBy(x => x.EmployeeCode).ThenBy(x => x.LeaveTypeName).ThenBy(x => x.EmployeeId).Skip((query.Page - 1) * query.PageSize).Take(query.PageSize)
+            .Select(x => new BalanceRow(x.EmployeeId, x.EmployeeCode, x.FirstName, x.MiddleName, x.LastName, x.LeaveTypeName, x.LeaveTypeId, x.Mode, x.Granted, x.Reserved, x.Consumed, x.Available, x.LeavePeriodId))
+            .ToListAsync(cancellationToken);
+        var employeeIds = pageRows.Where(x => x.EmployeeId != Guid.Empty).Select(x => x.EmployeeId).Distinct().ToList();
+        var histories = await currentHistory.Where(x => employeeIds.Contains(x.EmployeeId)).Select(x => new HistoryRow(x.EmployeeId, x.DepartmentId, x.Department != null ? x.Department.Name : x.DepartmentName, x.WorkLocationId, x.WorkLocation!.Name)).ToListAsync(cancellationToken);
+        var historyByEmployee = histories.GroupBy(x => x.EmployeeId).ToDictionary(x => x.Key, x => x.First());
+        var result = pageRows.Select(x => ToBalanceRow(x, historyByEmployee)).ToList();
+        return Result<PagedResult<LeaveBalanceReportRow>>.Success(new(result, query.Page, query.PageSize, total));
     }
 
     public async Task<Result<IReadOnlyList<LeaveUsageReportRow>>> GetUsageAsync(LeaveReportQuery query, CancellationToken cancellationToken = default)
@@ -108,11 +114,15 @@ public sealed class LeaveReportService : ILeaveReportService
         if (!access.Succeeded) return Result<PagedResult<PendingApprovalReportRow>>.Failure(access.Status, access.Message, access.Errors);
         var scope = await ResolveScopeAsync(query, cancellationToken);
         if (!scope.Succeeded) return Result<PagedResult<PendingApprovalReportRow>>.Failure(scope.Status, scope.Message, scope.Errors);
-        var rows = await ProjectRequests(ApplyRequestFilters(RequestSource(scope.Value!.From, scope.Value.To), query).Where(x => x.Status == LeaveRequestStatus.PendingApproval).OrderBy(x => x.SubmittedAtUtc)).ToListAsync(cancellationToken);
+        var source = ApplyRequestFilters(RequestSource(scope.Value!.From, scope.Value.To), query).Where(x => x.Status == LeaveRequestStatus.PendingApproval);
+        var total = await source.CountAsync(cancellationToken);
+        var rows = await ProjectRequests(source.OrderBy(x => x.SubmittedAtUtc).ThenBy(x => x.Id))
+            .Skip((scope.Value.Page - 1) * scope.Value.PageSize)
+            .Take(scope.Value.PageSize)
+            .ToListAsync(cancellationToken);
         var now = _clock.GetUtcNow().UtcDateTime.Date;
         var result = rows.Select(x => { var days = x.SubmittedAtUtc.HasValue ? Math.Max(0, (now - x.SubmittedAtUtc.Value.Date).Days) : 0; return new PendingApprovalReportRow(x.Id, x.EmployeeCode, x.EmployeeName, x.LeaveTypeName, x.StartDate, x.EndDate, x.Quantity, x.SubmittedAtUtc, days, x.ManagerName, x.DepartmentName, x.WorkLocationName, days <= 1 ? "0-1 day" : days <= 3 ? "2-3 days" : days <= 7 ? "4-7 days" : "8+ days"); }).ToList();
-        var total = result.Count;
-        return Result<PagedResult<PendingApprovalReportRow>>.Success(new(result.Skip((scope.Value.Page - 1) * scope.Value.PageSize).Take(scope.Value.PageSize).ToList(), scope.Value.Page, scope.Value.PageSize, total));
+        return Result<PagedResult<PendingApprovalReportRow>>.Success(new(result, scope.Value.Page, scope.Value.PageSize, total));
     }
 
     public async Task<Result<IReadOnlyList<LeaveOrganizationReportRow>>> GetOrganizationAsync(LeaveReportQuery query, CancellationToken cancellationToken = default)
