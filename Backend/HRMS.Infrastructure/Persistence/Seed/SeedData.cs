@@ -148,8 +148,11 @@ public static class SeedData
             [DomainPermissions.RoleManagement.AssignmentView] = 70,
             [DomainPermissions.RoleManagement.AssignmentManage] = 71,
             [DomainPermissions.RoleManagement.AssignmentViewHistory] = 72,
-            [DomainPermissions.PageAccess.View] = 73,
-            [DomainPermissions.PageAccess.Manage] = 74,
+        [DomainPermissions.PageAccess.View] = 73,
+        [DomainPermissions.PageAccess.Manage] = 74,
+            [DomainPermissions.Payroll.SalaryComponentView] = 75,
+            [DomainPermissions.Payroll.SalaryComponentManage] = 76,
+            [DomainPermissions.Payroll.SalaryComponentViewHistory] = 77,
             [DomainPermissions.Leave.TypeManage] = 30,
             [DomainPermissions.Leave.PeriodManage] = 31,
             [DomainPermissions.Leave.PolicyView] = 32,
@@ -270,6 +273,7 @@ public static class SeedData
             DomainPermissions.Attendance.MonthlyReopen, DomainPermissions.Attendance.ExceptionView
             , DomainPermissions.Attendance.ReportView, DomainPermissions.Attendance.ReportExport
             , DomainPermissions.PageAccess.View, DomainPermissions.PageAccess.Manage
+            , DomainPermissions.Payroll.SalaryComponentView, DomainPermissions.Payroll.SalaryComponentManage, DomainPermissions.Payroll.SalaryComponentViewHistory
         },
         [RoleNames.HRManager] = new[]
         {
@@ -306,7 +310,7 @@ public static class SeedData
         ,[RoleNames.TimeManager] = new[] { DomainPermissions.Employee.View, DomainPermissions.Attendance.View }
         ,[RoleNames.IT] = new[] { DomainPermissions.User.View, DomainPermissions.User.Edit, DomainPermissions.AccountEmployeeLink.View }
         ,[RoleNames.Accounts] = new[] { DomainPermissions.Employee.View }
-        ,[RoleNames.SuperHR] = new[] { DomainPermissions.Employee.View, DomainPermissions.Employee.Edit, DomainPermissions.EmploymentHistory.View, DomainPermissions.EmploymentHistory.Change, DomainPermissions.Leave.Approve, DomainPermissions.RoleManagement.View, DomainPermissions.RoleManagement.AssignmentView, DomainPermissions.PageAccess.View, DomainPermissions.PageAccess.Manage }
+        ,[RoleNames.SuperHR] = new[] { DomainPermissions.Employee.View, DomainPermissions.Employee.Edit, DomainPermissions.EmploymentHistory.View, DomainPermissions.EmploymentHistory.Change, DomainPermissions.Leave.Approve, DomainPermissions.RoleManagement.View, DomainPermissions.RoleManagement.AssignmentView, DomainPermissions.PageAccess.View, DomainPermissions.PageAccess.Manage, DomainPermissions.Payroll.SalaryComponentView, DomainPermissions.Payroll.SalaryComponentManage, DomainPermissions.Payroll.SalaryComponentViewHistory }
     };
 
     /// <summary>

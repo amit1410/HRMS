@@ -125,6 +125,8 @@ public interface IHrmsDbContext
     DbSet<AttendancePeriod> AttendancePeriods { get; }
     DbSet<AttendancePeriodEvent> AttendancePeriodEvents { get; }
     DbSet<EmployeeAttendanceMonthlySummary> EmployeeAttendanceMonthlySummaries { get; }
+    DbSet<SalaryComponent> SalaryComponents { get; }
+    DbSet<SalaryComponentHistory> SalaryComponentHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

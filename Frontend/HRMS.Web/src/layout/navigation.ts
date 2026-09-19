@@ -68,6 +68,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   },
   { label: 'Role Management', to: '/role-management', permission: Permissions.roleManagement.assignmentView, available: true, group: 'administration' },
   { label: 'Page Access Management', to: '/page-access-management', permission: Permissions.pageAccess.view, available: true, group: 'administration' },
+  { label: 'Salary Components', to: '/payroll/salary-components', permission: Permissions.payroll.salaryComponentView, available: true, group: 'administration' },
   { label: 'Leave Types', to: '/leave-management/types', permission: Permissions.leave.typeManage, available: true, group: 'leave' },
   { label: 'Leave Periods', to: '/leave-management/periods', permission: Permissions.leave.periodManage, available: true, group: 'leave' },
   { label: 'Leave Policies', to: '/leave-management/policies', permission: Permissions.leave.policyView, available: true, group: 'leave' },

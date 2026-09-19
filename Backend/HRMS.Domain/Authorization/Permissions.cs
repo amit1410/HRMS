@@ -110,6 +110,12 @@ public static class Permissions
         public const string View = "PageAccess.View";
         public const string Manage = "PageAccess.Manage";
     }
+    public static class Payroll
+    {
+        public const string SalaryComponentView = "Payroll.SalaryComponent.View";
+        public const string SalaryComponentManage = "Payroll.SalaryComponent.Manage";
+        public const string SalaryComponentViewHistory = "Payroll.SalaryComponent.ViewHistory";
+    }
     public static class Attendance
     {
         public const string View = "Attendance.View";
@@ -148,6 +154,7 @@ public static class Permissions
         RoleManagement.View, RoleManagement.Manage, RoleManagement.AssignmentView,
         RoleManagement.AssignmentManage, RoleManagement.AssignmentViewHistory,
         PageAccess.View, PageAccess.Manage,
+        Payroll.SalaryComponentView, Payroll.SalaryComponentManage, Payroll.SalaryComponentViewHistory,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

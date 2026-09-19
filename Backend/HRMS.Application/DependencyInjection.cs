@@ -101,6 +101,7 @@ public static class DependencyInjection
         services.AddScoped<IAttendancePeriodLockService, AttendancePeriodLockService>();
         services.AddScoped<IAttendanceAdminCorrectionService, AttendanceAdminCorrectionService>();
         services.AddScoped<IAttendanceReportService, AttendanceReportService>();
+        services.AddScoped<ISalaryComponentService, SalaryComponentService>();
 
         return services;
     }

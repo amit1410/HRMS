@@ -141,6 +141,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<AttendancePeriod> AttendancePeriods => Set<AttendancePeriod>();
     public DbSet<AttendancePeriodEvent> AttendancePeriodEvents => Set<AttendancePeriodEvent>();
     public DbSet<EmployeeAttendanceMonthlySummary> EmployeeAttendanceMonthlySummaries => Set<EmployeeAttendanceMonthlySummary>();
+    public DbSet<SalaryComponent> SalaryComponents => Set<SalaryComponent>();
+    public DbSet<SalaryComponentHistory> SalaryComponentHistories => Set<SalaryComponentHistory>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
@@ -381,6 +383,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<AttendancePeriod>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AttendancePeriodEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeAttendanceMonthlySummary>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SalaryComponent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SalaryComponentHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
 
         // Organizational hierarchy master query filters
         modelBuilder.Entity<HoldingCompany>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

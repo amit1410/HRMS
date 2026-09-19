@@ -91,6 +91,11 @@ export const Permissions = {
     view: 'PageAccess.View',
     manage: 'PageAccess.Manage',
   },
+  payroll: {
+    salaryComponentView: 'Payroll.SalaryComponent.View',
+    salaryComponentManage: 'Payroll.SalaryComponent.Manage',
+    salaryComponentViewHistory: 'Payroll.SalaryComponent.ViewHistory',
+  },
   attendance: {
     view: 'Attendance.View',
     shiftManage: 'Attendance.ShiftManage',
