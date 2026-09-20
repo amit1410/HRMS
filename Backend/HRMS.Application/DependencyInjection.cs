@@ -111,6 +111,7 @@ public static class DependencyInjection
         services.AddScoped<IStatutoryPayrollService, StatutoryPayrollService>();
         services.AddScoped<IPayrollOutputService, PayrollOutputService>();
         services.AddScoped<IBankAdviceService, BankAdviceService>();
+        services.AddScoped<IPayrollAccountingService, PayrollAccountingService>();
 
         return services;
     }

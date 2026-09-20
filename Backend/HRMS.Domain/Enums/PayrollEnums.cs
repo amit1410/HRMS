@@ -84,3 +84,9 @@ public enum StatutoryProfileChangeType { Created, Updated, Activated, Deactivate
 public enum StatutoryConfigurationChangeType { Created, VersionAdded, Activated, Deactivated }
 public enum StatutoryApplicabilityStatus { Applicable, NotApplicable, NotConfigured, ConfigurationAmbiguity }
 public enum PayrollCalculationHistoryChangeType { CalculationStarted, EmployeeCalculated, EmployeeCalculationFailed, CalculationCompleted, RecalculationRequested, RecalculationCompleted, ResultsReset }
+public enum PayrollGLAccountType { Expense, Liability, Asset, Clearing }
+public enum PayrollAccountingConfigurationVersionStatus { Draft, Active, Retired }
+public enum PayrollGLMappingType { Earnings, EmployeeDeduction, EmployerContribution, NetPayable, StatutoryLiability }
+public enum PayrollJournalAggregationMode { Account, AccountAndCostCenter, EmployeeDetail }
+public enum PayrollJournalStatus { Draft, Generated, Validated, Approved, Posted, Exported, Cancelled }
+public enum PayrollJournalHistoryChangeType { Generated, Validated, Approved, Posted, Exported, Cancelled, Reversed }

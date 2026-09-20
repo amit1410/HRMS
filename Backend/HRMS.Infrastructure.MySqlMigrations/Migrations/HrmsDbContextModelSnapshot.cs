@@ -5392,6 +5392,79 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("PasswordResetOtps", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAccountingConfiguration", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("PayrollAccountingConfigurations", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAccountingConfigurationVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("AggregationMode")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("PayrollAccountingConfigurationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "PayrollAccountingConfigurationId", "EffectiveFrom");
+
+                    b.ToTable("PayrollAccountingConfigurationVersions", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollCalculationError", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5498,6 +5571,367 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.HasIndex("TenantId", "PayrollRunId", "ChangedAtUtc");
 
                     b.ToTable("PayrollCalculationHistories", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollGLAccount", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("AccountType")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("ExternalCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("PayrollGLAccounts", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollGLMapping", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfigurationVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("CreditAccountId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("DebitAccountId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("EmployerContributionAccountId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("MappingType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("SalaryComponentId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int?>("StatutoryType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "CreditAccountId");
+
+                    b.HasIndex("TenantId", "DebitAccountId");
+
+                    b.HasIndex("TenantId", "EmployerContributionAccountId");
+
+                    b.HasIndex("TenantId", "SalaryComponentId");
+
+                    b.HasIndex("TenantId", "ConfigurationVersionId", "SalaryComponentId", "StatutoryType", "Priority");
+
+                    b.ToTable("PayrollGLMappings", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollJournalBatch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("AccountingConfigurationVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ApprovedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("CancelledAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("CancelledByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("CurrencyCode")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("varchar(10)");
+
+                    b.Property<DateTime?>("ExportedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ExportedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("GeneratedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("GeneratedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("JournalDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("JournalNumber")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("varchar(120)");
+
+                    b.Property<int>("LineCount")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("PayrollPeriodId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("PayrollRunId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("PostedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("PostedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("TotalCredit")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("TotalDebit")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "AccountingConfigurationVersionId");
+
+                    b.HasIndex("TenantId", "JournalNumber")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "PayrollPeriodId");
+
+                    b.HasIndex("TenantId", "PayrollRunId");
+
+                    b.HasIndex("TenantId", "Status");
+
+                    b.ToTable("PayrollJournalBatches", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollJournalHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ChangeType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("ChangedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Message")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("PayrollJournalBatchId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "PayrollJournalBatchId", "ChangedAtUtc");
+
+                    b.ToTable("PayrollJournalHistories", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollJournalLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("AccountCodeSnapshot")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<string>("AccountNameSnapshot")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<Guid?>("CostCenterId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<decimal>("Credit")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("CurrencyCode")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("varchar(10)");
+
+                    b.Property<decimal>("Debit")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<Guid?>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("PayrollGLAccountId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("PayrollJournalBatchId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SalaryComponentId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("SourceId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<int?>("StatutoryType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PayrollGLAccountId");
+
+                    b.HasIndex("TenantId", "PayrollGLAccountId");
+
+                    b.HasIndex("TenantId", "PayrollJournalBatchId");
+
+                    b.ToTable("PayrollJournalLines", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollJournalLineSource", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("PayrollJournalLineId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("SourceId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "PayrollJournalLineId");
+
+                    b.HasIndex("TenantId", "SourceType", "SourceId");
+
+                    b.ToTable("PayrollJournalLineSources", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollPeriod", b =>
@@ -10301,6 +10735,37 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAccountingConfiguration", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAccountingConfigurationVersion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollAccountingConfiguration", "Configuration")
+                        .WithMany("Versions")
+                        .HasForeignKey("TenantId", "PayrollAccountingConfigurationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Configuration");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollCalculationError", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -10363,6 +10828,176 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsRequired();
 
                     b.Navigation("PayrollRun");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollGLAccount", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollGLMapping", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollAccountingConfigurationVersion", "ConfigurationVersion")
+                        .WithMany("Mappings")
+                        .HasForeignKey("TenantId", "ConfigurationVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollGLAccount", "CreditAccount")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CreditAccountId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollGLAccount", "DebitAccount")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "DebitAccountId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollGLAccount", "EmployerContributionAccount")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployerContributionAccountId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.SalaryComponent", "SalaryComponent")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SalaryComponentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ConfigurationVersion");
+
+                    b.Navigation("CreditAccount");
+
+                    b.Navigation("DebitAccount");
+
+                    b.Navigation("EmployerContributionAccount");
+
+                    b.Navigation("SalaryComponent");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollJournalBatch", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollAccountingConfigurationVersion", "ConfigurationVersion")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "AccountingConfigurationVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollPeriod", "PayrollPeriod")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollPeriodId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRun", "PayrollRun")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollRunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ConfigurationVersion");
+
+                    b.Navigation("PayrollPeriod");
+
+                    b.Navigation("PayrollRun");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollJournalHistory", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollJournalBatch", "Batch")
+                        .WithMany("History")
+                        .HasForeignKey("TenantId", "PayrollJournalBatchId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Batch");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollJournalLine", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollGLAccount", "Account")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollGLAccountId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollJournalBatch", "Batch")
+                        .WithMany("Lines")
+                        .HasForeignKey("TenantId", "PayrollJournalBatchId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Account");
+
+                    b.Navigation("Batch");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollJournalLineSource", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollJournalLine", "JournalLine")
+                        .WithMany("Sources")
+                        .HasForeignKey("TenantId", "PayrollJournalLineId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("JournalLine");
 
                     b.Navigation("Tenant");
                 });
@@ -11462,6 +12097,28 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveType", b =>
                 {
                     b.Navigation("PolicyRules");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAccountingConfiguration", b =>
+                {
+                    b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAccountingConfigurationVersion", b =>
+                {
+                    b.Navigation("Mappings");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollJournalBatch", b =>
+                {
+                    b.Navigation("History");
+
+                    b.Navigation("Lines");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollJournalLine", b =>
+                {
+                    b.Navigation("Sources");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollPeriod", b =>

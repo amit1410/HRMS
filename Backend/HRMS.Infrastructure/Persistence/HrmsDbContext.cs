@@ -173,6 +173,14 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<BankAdviceBatch> BankAdviceBatches => Set<BankAdviceBatch>();
     public DbSet<BankAdvicePayment> BankAdvicePayments => Set<BankAdvicePayment>();
     public DbSet<BankAdviceHistory> BankAdviceHistories => Set<BankAdviceHistory>();
+    public DbSet<PayrollGLAccount> PayrollGLAccounts => Set<PayrollGLAccount>();
+    public DbSet<PayrollAccountingConfiguration> PayrollAccountingConfigurations => Set<PayrollAccountingConfiguration>();
+    public DbSet<PayrollAccountingConfigurationVersion> PayrollAccountingConfigurationVersions => Set<PayrollAccountingConfigurationVersion>();
+    public DbSet<PayrollGLMapping> PayrollGLMappings => Set<PayrollGLMapping>();
+    public DbSet<PayrollJournalBatch> PayrollJournalBatches => Set<PayrollJournalBatch>();
+    public DbSet<PayrollJournalLine> PayrollJournalLines => Set<PayrollJournalLine>();
+    public DbSet<PayrollJournalLineSource> PayrollJournalLineSources => Set<PayrollJournalLineSource>();
+    public DbSet<PayrollJournalHistory> PayrollJournalHistories => Set<PayrollJournalHistory>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>

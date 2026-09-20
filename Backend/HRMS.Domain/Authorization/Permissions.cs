@@ -151,6 +151,14 @@ public static class Permissions
         public const string BankAdviceExport = "Payroll.BankAdvice.Export";
         public const string BankAdviceCancel = "Payroll.BankAdvice.Cancel";
         public const string BankAdviceViewHistory = "Payroll.BankAdvice.ViewHistory";
+        public const string AccountingView = "Payroll.Accounting.View";
+        public const string AccountingGenerate = "Payroll.Accounting.Generate";
+        public const string AccountingValidate = "Payroll.Accounting.Validate";
+        public const string AccountingApprove = "Payroll.Accounting.Approve";
+        public const string AccountingPost = "Payroll.Accounting.Post";
+        public const string AccountingExport = "Payroll.Accounting.Export";
+        public const string AccountingViewHistory = "Payroll.Accounting.ViewHistory";
+        public const string AccountingManageConfiguration = "Payroll.Accounting.ManageConfiguration";
     }
     public static class Attendance
     {
@@ -197,6 +205,7 @@ public static class Permissions
         Payroll.StatutoryView, Payroll.StatutoryManage, Payroll.StatutoryViewHistory, Payroll.EmployeeStatutoryView, Payroll.EmployeeStatutoryManage,
         Payroll.PayslipViewAll, Payroll.PayslipGenerate, Payroll.PayslipPublish, Payroll.PayslipViewHistory, Payroll.RegisterView, Payroll.RegisterExport, Payroll.PayslipViewOwn,
         Payroll.BankAdviceView, Payroll.BankAdviceGenerate, Payroll.BankAdviceValidate, Payroll.BankAdviceApprove, Payroll.BankAdviceExport, Payroll.BankAdviceCancel, Payroll.BankAdviceViewHistory,
+        Payroll.AccountingView, Payroll.AccountingGenerate, Payroll.AccountingValidate, Payroll.AccountingApprove, Payroll.AccountingPost, Payroll.AccountingExport, Payroll.AccountingViewHistory, Payroll.AccountingManageConfiguration,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

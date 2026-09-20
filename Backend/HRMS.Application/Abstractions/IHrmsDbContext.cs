@@ -157,6 +157,14 @@ public interface IHrmsDbContext
     DbSet<BankAdviceBatch> BankAdviceBatches { get; }
     DbSet<BankAdvicePayment> BankAdvicePayments { get; }
     DbSet<BankAdviceHistory> BankAdviceHistories { get; }
+    DbSet<PayrollGLAccount> PayrollGLAccounts { get; }
+    DbSet<PayrollAccountingConfiguration> PayrollAccountingConfigurations { get; }
+    DbSet<PayrollAccountingConfigurationVersion> PayrollAccountingConfigurationVersions { get; }
+    DbSet<PayrollGLMapping> PayrollGLMappings { get; }
+    DbSet<PayrollJournalBatch> PayrollJournalBatches { get; }
+    DbSet<PayrollJournalLine> PayrollJournalLines { get; }
+    DbSet<PayrollJournalLineSource> PayrollJournalLineSources { get; }
+    DbSet<PayrollJournalHistory> PayrollJournalHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

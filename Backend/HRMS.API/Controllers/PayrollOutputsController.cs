@@ -55,6 +55,43 @@ public sealed class MyPayslipsController(IPayrollOutputService service) : Contro
     }
 }
 
+[ApiController, Route("api/payroll/accounting")]
+public sealed class PayrollAccountingController(IPayrollAccountingService service) : ControllerBase
+{
+    [HttpGet("accounts"), HasPermission(Permissions.Payroll.AccountingView)]
+    public async Task<ActionResult<ApiResponse<PagedResult<PayrollGLAccountDto>>>> Accounts([FromQuery] PagedQuery query, CancellationToken ct) => (await service.ListAccountsAsync(query, ct)).ToActionResult();
+    [HttpPost("accounts"), HasPermission(Permissions.Payroll.AccountingManageConfiguration)]
+    public async Task<ActionResult<ApiResponse<PayrollGLAccountDto>>> CreateAccount(PayrollGLAccountRequest request, CancellationToken ct) => (await service.CreateAccountAsync(request, ct)).ToActionResult();
+    [HttpPut("accounts/{id:guid}"), HasPermission(Permissions.Payroll.AccountingManageConfiguration)]
+    public async Task<ActionResult<ApiResponse<PayrollGLAccountDto>>> UpdateAccount(Guid id, PayrollGLAccountRequest request, CancellationToken ct) => (await service.UpdateAccountAsync(id, request, ct)).ToActionResult();
+    [HttpGet("configurations"), HasPermission(Permissions.Payroll.AccountingView)]
+    public async Task<ActionResult<ApiResponse<PagedResult<PayrollAccountingConfigurationDto>>>> Configurations([FromQuery] PagedQuery query, CancellationToken ct) => (await service.ListConfigurationsAsync(query, ct)).ToActionResult();
+    [HttpPost("configurations"), HasPermission(Permissions.Payroll.AccountingManageConfiguration)]
+    public async Task<ActionResult<ApiResponse<PayrollAccountingConfigurationDto>>> CreateConfiguration(PayrollAccountingConfigurationRequest request, CancellationToken ct) => (await service.CreateConfigurationAsync(request, ct)).ToActionResult();
+    [HttpPost("configurations/{id:guid}/versions"), HasPermission(Permissions.Payroll.AccountingManageConfiguration)]
+    public async Task<ActionResult<ApiResponse<PayrollAccountingConfigurationVersionDto>>> CreateVersion(Guid id, PayrollAccountingConfigurationVersionRequest request, CancellationToken ct) => (await service.CreateVersionAsync(id, request, ct)).ToActionResult();
+    [HttpPost("versions/{id:guid}/mappings"), HasPermission(Permissions.Payroll.AccountingManageConfiguration)]
+    public async Task<ActionResult<ApiResponse<PayrollGLMappingDto>>> CreateMapping(Guid id, PayrollGLMappingRequest request, CancellationToken ct) => (await service.CreateMappingAsync(id, request, ct)).ToActionResult();
+    [HttpPut("mappings/{id:guid}"), HasPermission(Permissions.Payroll.AccountingManageConfiguration)]
+    public async Task<ActionResult<ApiResponse<PayrollGLMappingDto>>> UpdateMapping(Guid id, PayrollGLMappingRequest request, CancellationToken ct) => (await service.UpdateMappingAsync(id, request, ct)).ToActionResult();
+    [HttpDelete("mappings/{id:guid}"), HasPermission(Permissions.Payroll.AccountingManageConfiguration)]
+    public async Task<ActionResult<ApiResponse<bool>>> DeactivateMapping(Guid id, CancellationToken ct) => (await service.DeactivateMappingAsync(id, ct)).ToActionResult();
+    [HttpPost("/api/payroll/runs/{runId:guid}/accounting/generate"), HasPermission(Permissions.Payroll.AccountingGenerate)]
+    public async Task<ActionResult<ApiResponse<PayrollJournalDto>>> Generate(Guid runId, CancellationToken ct) => (await service.GenerateAsync(runId, ct)).ToActionResult();
+    [HttpGet, HasPermission(Permissions.Payroll.AccountingView)]
+    public async Task<ActionResult<ApiResponse<PagedResult<PayrollJournalDto>>>> List([FromQuery] PagedQuery query, CancellationToken ct) => (await service.ListAsync(query, ct)).ToActionResult();
+    [HttpGet("{id:guid}"), HasPermission(Permissions.Payroll.AccountingView)]
+    public async Task<ActionResult<ApiResponse<PayrollJournalDto>>> Get(Guid id, CancellationToken ct) => (await service.GetAsync(id, ct)).ToActionResult();
+    [HttpPost("{id:guid}/validate"), HasPermission(Permissions.Payroll.AccountingValidate)]
+    public async Task<ActionResult<ApiResponse<PayrollJournalDto>>> Validate(Guid id, CancellationToken ct) => (await service.ValidateAsync(id, ct)).ToActionResult();
+    [HttpPost("{id:guid}/approve"), HasPermission(Permissions.Payroll.AccountingApprove)]
+    public async Task<ActionResult<ApiResponse<PayrollJournalDto>>> Approve(Guid id, CancellationToken ct) => (await service.ApproveAsync(id, ct)).ToActionResult();
+    [HttpPost("{id:guid}/post"), HasPermission(Permissions.Payroll.AccountingPost)]
+    public async Task<ActionResult<ApiResponse<PayrollJournalDto>>> Post(Guid id, CancellationToken ct) => (await service.PostAsync(id, ct)).ToActionResult();
+    [HttpGet("{id:guid}/export"), HasPermission(Permissions.Payroll.AccountingExport)]
+    public async Task<IActionResult> Export(Guid id, CancellationToken ct) { var result = await service.ExportAsync(id, ct); if (!result.Succeeded) return result.ToErrorResult(); return File(result.Value!.Content, result.Value.ContentType, result.Value.FileName); }
+}
+
 [ApiController, Route("api/payroll/bank-advice")]
 public sealed class BankAdviceController(IBankAdviceService service) : ControllerBase
 {
