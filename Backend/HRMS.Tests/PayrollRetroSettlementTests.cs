@@ -1,8 +1,10 @@
 using HRMS.Application.DTOs.Payroll;
+using HRMS.Application.Common;
 using HRMS.Application.Services;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using HRMS.Tests.TestSupport;
+using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Tests;
 
@@ -33,6 +35,113 @@ public sealed class PayrollRetroSettlementTests
     public async Task Settlement_duplicate_for_same_employee_and_separation_is_rejected()
     {
         using var database = new SqliteInMemoryDatabase(); var tenantId = Guid.NewGuid(); var employeeId = Guid.NewGuid(); await SeedAsync(database, tenantId, employeeId); await using var db = database.CreateContext(new TestTenantContext(tenantId)); var service = new PayrollRetroSettlementService(db, new TestTenantContext(tenantId), TimeProvider.System); var request = new FinalSettlementRequest { EmployeeId = employeeId, SeparationDate = new DateOnly(2026, 9, 30), LastWorkingDate = new DateOnly(2026, 9, 30), SettlementDate = new DateOnly(2026, 10, 5) }; Assert.True((await service.CreateSettlementAsync(request)).Succeeded); Assert.Equal(HRMS.Application.Common.ResultStatus.Conflict, (await service.CreateSettlementAsync(request)).Status);
+    }
+
+    [Fact]
+    public async Task Final_settlement_creator_is_persisted_and_cannot_self_approve_when_required()
+    {
+        using var database = new SqliteInMemoryDatabase();
+        var tenantId = Guid.NewGuid();
+        var employeeId = Guid.NewGuid();
+        var makerId = Guid.NewGuid();
+        var checkerId = Guid.NewGuid();
+        await SeedAsync(database, tenantId, employeeId);
+
+        await using (var setup = database.CreateContext(new TestTenantContext(tenantId, makerId)))
+        {
+            setup.PayrollControlConfigurations.Add(new PayrollControlConfiguration
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantId,
+                RequireMakerChecker = true,
+                PreventSelfApproval = true,
+                UpdatedAtUtc = DateTime.UtcNow
+            });
+            await setup.SaveChangesAsync();
+        }
+
+        Guid settlementId;
+        await using (var makerDb = database.CreateContext(new TestTenantContext(tenantId, makerId)))
+        {
+            var makerService = new PayrollRetroSettlementService(makerDb, new TestTenantContext(tenantId, makerId), TimeProvider.System);
+            var created = await makerService.CreateSettlementAsync(new FinalSettlementRequest
+            {
+                EmployeeId = employeeId,
+                SeparationDate = new DateOnly(2026, 9, 30),
+                LastWorkingDate = new DateOnly(2026, 9, 30),
+                SettlementDate = new DateOnly(2026, 10, 5)
+            });
+            Assert.True(created.Succeeded, created.Message);
+            settlementId = created.Value!.Id;
+            await makerService.AddSettlementLineAsync(settlementId, new FinalSettlementLineRequest
+            {
+                LineType = FinalSettlementLineType.UnpaidSalary,
+                ComponentCode = "SALARY",
+                Description = "Unpaid salary",
+                Amount = 100m,
+                IsEarning = true
+            });
+            await makerService.CalculateSettlementAsync(settlementId);
+            Assert.Equal(makerId, (await makerDb.FinalSettlementCases.SingleAsync(x => x.Id == settlementId)).CreatedByUserId);
+            Assert.Equal(ResultStatus.ValidationFailed, (await makerService.ApproveSettlementAsync(settlementId)).Status);
+        }
+
+        await using var checkerDb = database.CreateContext(new TestTenantContext(tenantId, checkerId));
+        var checkerService = new PayrollRetroSettlementService(checkerDb, new TestTenantContext(tenantId, checkerId), TimeProvider.System);
+        Assert.True((await checkerService.ApproveSettlementAsync(settlementId)).Succeeded);
+    }
+
+    [Fact]
+    public async Task Final_settlement_finalization_competing_transitions_have_one_winner()
+    {
+        using var database = new SqliteInMemoryDatabase();
+        var tenantId = Guid.NewGuid();
+        var employeeId = Guid.NewGuid();
+        await SeedAsync(database, tenantId, employeeId);
+
+        Guid settlementId;
+        await using (var setup = database.CreateContext(new TestTenantContext(tenantId)))
+        {
+            var service = new PayrollRetroSettlementService(setup, new TestTenantContext(tenantId), TimeProvider.System);
+            var created = await service.CreateSettlementAsync(new FinalSettlementRequest
+            {
+                EmployeeId = employeeId,
+                SeparationDate = new DateOnly(2026, 9, 30),
+                LastWorkingDate = new DateOnly(2026, 9, 30),
+                SettlementDate = new DateOnly(2026, 10, 5)
+            });
+            Assert.True(created.Succeeded, created.Message);
+            settlementId = created.Value!.Id;
+            Assert.True((await service.AddSettlementLineAsync(settlementId, new FinalSettlementLineRequest
+            {
+                LineType = FinalSettlementLineType.UnpaidSalary,
+                ComponentCode = "SALARY",
+                Description = "Unpaid salary",
+                Amount = 100m,
+                IsEarning = true
+            })).Succeeded);
+            Assert.True((await service.CalculateSettlementAsync(settlementId)).Succeeded);
+            Assert.True((await service.ApproveSettlementAsync(settlementId)).Succeeded);
+        }
+
+        async Task<Result<FinalSettlementDto>> FinalizeAsync(Guid userId)
+        {
+            await using var context = database.CreateContext(new TestTenantContext(tenantId, userId));
+            try
+            {
+                return await new PayrollRetroSettlementService(context, new TestTenantContext(tenantId, userId), TimeProvider.System).FinalizeSettlementAsync(settlementId);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                return Result<FinalSettlementDto>.Conflict("Concurrent finalization lost.");
+            }
+        }
+
+        var outcomes = await Task.WhenAll(FinalizeAsync(Guid.NewGuid()), FinalizeAsync(Guid.NewGuid()));
+        Assert.Equal(1, outcomes.Count(x => x.Succeeded));
+        await using var verify = database.CreateContext(new TestTenantContext(tenantId));
+        Assert.Equal(FinalSettlementStatus.Finalized, (await verify.FinalSettlementCases.SingleAsync(x => x.Id == settlementId)).Status);
+        Assert.Equal(1, await verify.FinalSettlementHistories.CountAsync(x => x.FinalSettlementCaseId == settlementId && x.ChangeType == FinalSettlementHistoryChangeType.Finalized));
     }
 
     [Fact]

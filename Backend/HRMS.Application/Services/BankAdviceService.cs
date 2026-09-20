@@ -10,7 +10,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
 
-public sealed class BankAdviceService(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock) : IBankAdviceService
+public sealed class BankAdviceService(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock, IPayrollApprovalGuard? approvalGuard = null) : IBankAdviceService
 {
     public async Task<Result<BankAdviceBatchDto>> GenerateAsync(Guid payrollRunId, CancellationToken ct = default)
     {
@@ -52,6 +52,7 @@ public sealed class BankAdviceService(IHrmsDbContext db, ITenantContext tenant, 
     {
         var result = await Load(batchId, ct); if (!result.Succeeded) return Result<BankAdviceBatchDto>.Failure(result.Status, result.Message);
         var batch = result.Value!;
+        var guard = await (approvalGuard ?? new PayrollApprovalGuard(db, tenant)).ValidateAsync(batch.GeneratedByUserId, "approve", ct: ct); if (!guard.Succeeded) return Result<BankAdviceBatchDto>.Failure(guard.Status, guard.Message, guard.Errors);
         if (batch.Status != BankAdviceStatus.Prepared) return Result<BankAdviceBatchDto>.Conflict("Only a prepared bank advice batch can be approved.");
         if (batch.Payments.Any(x => x.ValidationStatus != BankAdviceValidationStatus.Valid)) return Result<BankAdviceBatchDto>.Conflict("All payment instructions must pass validation before approval.");
         Recalculate(batch); if (batch.TotalAmount != batch.Payments.Sum(x => x.NetPay)) return Result<BankAdviceBatchDto>.Conflict("Bank advice total does not reconcile with its payment instructions.");
@@ -60,13 +61,13 @@ public sealed class BankAdviceService(IHrmsDbContext db, ITenantContext tenant, 
         db.ClearChangeTracker(); var refreshed = await Load(batchId, ct); if (!refreshed.Succeeded) return Result<BankAdviceBatchDto>.Failure(refreshed.Status, refreshed.Message); batch = refreshed.Value!; db.BankAdviceHistories.Add(History(batch, BankAdviceHistoryChangeType.Approved, "Bank advice approved.")); await db.SaveChangesAsync(ct); return Result<BankAdviceBatchDto>.Success(ToDto(batch), "Bank advice approved.");
     }
 
-    public async Task<Result<BankAdviceBatchDto>> CancelAsync(Guid batchId, CancellationToken ct = default)
+    public async Task<Result<BankAdviceBatchDto>> CancelAsync(Guid batchId, CancellationToken ct = default, string? reason = null)
     {
         var result = await Load(batchId, ct); if (!result.Succeeded) return Result<BankAdviceBatchDto>.Failure(result.Status, result.Message);
-        var batch = result.Value!; if (batch.Status is BankAdviceStatus.Exported or BankAdviceStatus.Cancelled) return Result<BankAdviceBatchDto>.Conflict("This bank advice batch cannot be cancelled.");
+        var batch = result.Value!; if (batch.Status is BankAdviceStatus.Exported or BankAdviceStatus.Cancelled) return Result<BankAdviceBatchDto>.Conflict("This bank advice batch cannot be cancelled."); var guard = await (approvalGuard ?? new PayrollApprovalGuard(db, tenant)).ValidateAsync(batch.GeneratedByUserId, "cancel", reason, ct); if (!guard.Succeeded) return Result<BankAdviceBatchDto>.Failure(guard.Status, guard.Message, guard.Errors);
         var cancelledAt = clock.GetUtcNow().UtcDateTime; var changed = await db.BankAdviceBatches.Where(x => x.TenantId == batch.TenantId && x.Id == batch.Id && x.Status != BankAdviceStatus.Exported && x.Status != BankAdviceStatus.Cancelled && x.ConcurrencyVersion == batch.ConcurrencyVersion).ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Status, BankAdviceStatus.Cancelled).SetProperty(x => x.CancelledAtUtc, cancelledAt).SetProperty(x => x.CancelledByUserId, tenant.UserId).SetProperty(x => x.ConcurrencyVersion, x => x.ConcurrencyVersion + 1), ct);
         if (changed != 1) return Result<BankAdviceBatchDto>.Conflict("Bank advice was changed by another operation.");
-        db.ClearChangeTracker(); var refreshed = await Load(batchId, ct); if (!refreshed.Succeeded) return Result<BankAdviceBatchDto>.Failure(refreshed.Status, refreshed.Message); batch = refreshed.Value!; db.BankAdviceHistories.Add(History(batch, BankAdviceHistoryChangeType.Cancelled, "Bank advice cancelled.")); await db.SaveChangesAsync(ct); return Result<BankAdviceBatchDto>.Success(ToDto(batch), "Bank advice cancelled.");
+        db.ClearChangeTracker(); var refreshed = await Load(batchId, ct); if (!refreshed.Succeeded) return Result<BankAdviceBatchDto>.Failure(refreshed.Status, refreshed.Message); batch = refreshed.Value!; db.BankAdviceHistories.Add(History(batch, BankAdviceHistoryChangeType.Cancelled, string.IsNullOrWhiteSpace(reason) ? "Bank advice cancelled." : $"Bank advice cancelled: {reason.Trim()}")); await db.SaveChangesAsync(ct); return Result<BankAdviceBatchDto>.Success(ToDto(batch), "Bank advice cancelled.");
     }
 
     public async Task<Result<PagedResult<BankAdviceBatchDto>>> GetAsync(BankAdviceQuery query, CancellationToken ct = default)

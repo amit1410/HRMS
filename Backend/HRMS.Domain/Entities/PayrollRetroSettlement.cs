@@ -124,6 +124,7 @@ public sealed class FinalSettlementCase : BaseEntity, ITenantEntity
     public DateOnly? DateOfJoiningSnapshot { get; set; }
     public DateTime? ApprovedAtUtc { get; set; }
     public Guid? ApprovedByUserId { get; set; }
+    public Guid? CreatedByUserId { get; set; }
     public DateTime? FinalizedAtUtc { get; set; }
     public Guid? FinalizedByUserId { get; set; }
     public int ConcurrencyVersion { get; set; } = 1;

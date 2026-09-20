@@ -17,6 +17,12 @@ public sealed class PayrollPeriod : BaseEntity, ITenantEntity
     public PayrollPeriodStatus Status { get; set; } = PayrollPeriodStatus.Draft;
     public bool IsActive { get; set; } = true;
     public int ConcurrencyVersion { get; set; } = 1;
+    public DateTime? LockedAtUtc { get; set; }
+    public Guid? LockedByUserId { get; set; }
+    public string? LockReason { get; set; }
+    public DateTime? UnlockedAtUtc { get; set; }
+    public Guid? UnlockedByUserId { get; set; }
+    public string? UnlockReason { get; set; }
     public Tenant? Tenant { get; set; }
     public ICollection<PayrollRun> Runs { get; set; } = new List<PayrollRun>();
     public ICollection<PayrollPeriodHistory> History { get; set; } = new List<PayrollPeriodHistory>();

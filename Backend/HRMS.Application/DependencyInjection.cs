@@ -105,6 +105,10 @@ public static class DependencyInjection
         services.AddScoped<ISalaryStructureService, SalaryStructureService>();
         services.AddScoped<IEmployeeSalaryAssignmentService, EmployeeSalaryAssignmentService>();
         services.AddScoped<IPayrollPeriodService, PayrollPeriodService>();
+        services.AddScoped<IPayrollReadinessService, PayrollReadinessService>();
+        services.AddScoped<IPayrollControlService, PayrollControlService>();
+        services.AddScoped<IPayrollOperationsService, PayrollOperationsService>();
+        services.AddScoped<IPayrollApprovalGuard, PayrollApprovalGuard>();
         services.AddScoped<IPayrollRunService, PayrollRunService>();
         services.AddScoped<IPayrollCalculationEngine, PayrollCalculationEngine>();
         services.AddScoped<IPayrollCalculationService, PayrollCalculationService>();

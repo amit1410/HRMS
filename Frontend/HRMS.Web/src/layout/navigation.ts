@@ -80,6 +80,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Retro / Arrears', to: '/payroll/retro', permission: Permissions.payroll.retroView, available: true, group: 'administration' },
   { label: 'Final Settlement', to: '/payroll/final-settlements', permission: Permissions.payroll.finalSettlementView, available: true, group: 'administration' },
   { label: 'Statutory Compliance', to: '/payroll/statutory-compliance', permission: Permissions.payroll.statutoryComplianceView, available: true, group: 'administration' },
+  { label: 'Payroll Operations', to: '/payroll/operations', permission: Permissions.payroll.runView, available: true, group: 'administration' },
+  { label: 'Configuration Health', to: '/payroll/configuration-health', permission: Permissions.payroll.controlsView, available: true, group: 'administration' },
   { label: 'Leave Types', to: '/leave-management/types', permission: Permissions.leave.typeManage, available: true, group: 'leave' },
   { label: 'Leave Periods', to: '/leave-management/periods', permission: Permissions.leave.periodManage, available: true, group: 'leave' },
   { label: 'Leave Policies', to: '/leave-management/policies', permission: Permissions.leave.policyView, available: true, group: 'leave' },

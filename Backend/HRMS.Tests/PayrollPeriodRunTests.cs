@@ -19,7 +19,7 @@ public sealed class PayrollPeriodRunTests
         Assert.Equal(ResultStatus.Conflict, (await service.CreateAsync(Period("OVERLAP", new DateOnly(2026, 9, 15), new DateOnly(2026, 10, 15)))).Status);
         var opened = await service.TransitionAsync(created.Value!.Id, "open", created.Value.ConcurrencyVersion); Assert.True(opened.Succeeded);
         var closed = await service.TransitionAsync(created.Value.Id, "close", opened.Value!.ConcurrencyVersion); Assert.True(closed.Succeeded);
-        var locked = await service.TransitionAsync(created.Value.Id, "lock", closed.Value!.ConcurrencyVersion); Assert.True(locked.Succeeded);
+        var locked = await service.TransitionAsync(created.Value.Id, "lock", closed.Value!.ConcurrencyVersion, "period close review"); Assert.True(locked.Succeeded);
         Assert.Equal(ResultStatus.Conflict, (await service.UpdateAsync(created.Value.Id, request)).Status);
         await using var otherDb = database.CreateContext(new TestTenantContext(other)); var otherService = new PayrollPeriodService(otherDb, new TestTenantContext(other), TimeProvider.System); Assert.Equal(ResultStatus.NotFound, (await otherService.GetByIdAsync(created.Value.Id)).Status);
     }

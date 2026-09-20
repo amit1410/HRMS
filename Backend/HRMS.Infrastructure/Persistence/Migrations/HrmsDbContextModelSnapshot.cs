@@ -3458,7 +3458,11 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("ApprovedByUserId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
                         .HasDefaultValue(1);
@@ -5893,6 +5897,47 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("PayrollCompliancePeriods", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollControlConfiguration", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("PreventSelfApproval")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("RequireMakerChecker")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("RequireReasonForCancellation")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("RequireReasonForReopen")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId")
+                        .IsUnique();
+
+                    b.ToTable("PayrollControlConfigurations", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollGLAccount", b =>
                 {
                     b.Property<Guid>("Id")
@@ -6266,6 +6311,7 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(50)");
 
                     b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
                         .HasDefaultValue(1);
@@ -6281,6 +6327,16 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
+
+                    b.Property<string>("LockReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("LockedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("LockedByUserId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime2");
@@ -6306,6 +6362,16 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("int");
 
                     b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("UnlockReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("UnlockedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("UnlockedByUserId")
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
@@ -6856,6 +6922,7 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
                         .HasDefaultValue(1);
@@ -7206,6 +7273,7 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("int");
 
                     b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
                         .HasDefaultValue(1);
@@ -11837,6 +11905,17 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollCompliancePeriod", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollControlConfiguration", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
                         .WithMany()

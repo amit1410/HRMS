@@ -15,6 +15,12 @@ public sealed class PayrollPeriodsController(IPayrollPeriodService service) : Co
     [HttpGet("{id:guid}"), HasPermission(Permissions.Payroll.PeriodView)] public async Task<ActionResult<ApiResponse<PayrollPeriodDto>>> GetById(Guid id, CancellationToken ct) => (await service.GetByIdAsync(id, ct)).ToActionResult();
     [HttpPost, HasPermission(Permissions.Payroll.PeriodManage)] public async Task<ActionResult<ApiResponse<PayrollPeriodDto>>> Create(PayrollPeriodRequest request, CancellationToken ct) => (await service.CreateAsync(request, ct)).ToCreatedResult(nameof(GetById), x => new { id = x.Id });
     [HttpPut("{id:guid}"), HasPermission(Permissions.Payroll.PeriodManage)] public async Task<ActionResult<ApiResponse<PayrollPeriodDto>>> Update(Guid id, PayrollPeriodRequest request, CancellationToken ct) => (await service.UpdateAsync(id, request, ct)).ToActionResult();
-    [HttpPost("{id:guid}/{actionName}"), HasPermission(Permissions.Payroll.PeriodManage)] public async Task<ActionResult<ApiResponse<PayrollPeriodDto>>> Transition(Guid id, string actionName, [FromQuery] int? expectedConcurrencyVersion, CancellationToken ct) => (await service.TransitionAsync(id, actionName, expectedConcurrencyVersion, ct)).ToActionResult();
+    [HttpPost("{id:guid}/{actionName}"), HasPermission(Permissions.Payroll.PeriodManage)] public async Task<ActionResult<ApiResponse<PayrollPeriodDto>>> Transition(Guid id, string actionName, [FromQuery] int? expectedConcurrencyVersion, [FromQuery] string? reason, CancellationToken ct)
+    {
+        if (string.Equals(actionName, "unlock", StringComparison.OrdinalIgnoreCase)) return Forbid();
+        return (await service.TransitionAsync(id, actionName, expectedConcurrencyVersion, reason, ct)).ToActionResult();
+    }
+
+    [HttpPost("{id:guid}/unlock"), HasPermission(Permissions.Payroll.PeriodUnlock)] public async Task<ActionResult<ApiResponse<PayrollPeriodDto>>> Unlock(Guid id, [FromQuery] int? expectedConcurrencyVersion, [FromQuery] string? reason, CancellationToken ct) => (await service.TransitionAsync(id, "unlock", expectedConcurrencyVersion, reason, ct)).ToActionResult();
     [HttpGet("{id:guid}/history"), HasPermission(Permissions.Payroll.PeriodManage)] public async Task<ActionResult<ApiResponse<IReadOnlyList<PayrollPeriodHistoryDto>>>> History(Guid id, CancellationToken ct) => (await service.GetHistoryAsync(id, ct)).ToActionResult();
 }

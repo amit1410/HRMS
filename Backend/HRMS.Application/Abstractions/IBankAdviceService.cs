@@ -9,7 +9,7 @@ public interface IBankAdviceService
     Task<Result<BankAdviceBatchDto>> ValidateAsync(Guid batchId, CancellationToken ct = default);
     Task<Result<BankAdviceBatchDto>> PrepareAsync(Guid batchId, CancellationToken ct = default);
     Task<Result<BankAdviceBatchDto>> ApproveAsync(Guid batchId, CancellationToken ct = default);
-    Task<Result<BankAdviceBatchDto>> CancelAsync(Guid batchId, CancellationToken ct = default);
+    Task<Result<BankAdviceBatchDto>> CancelAsync(Guid batchId, CancellationToken ct = default, string? reason = null);
     Task<Result<PagedResult<BankAdviceBatchDto>>> GetAsync(BankAdviceQuery query, CancellationToken ct = default);
     Task<Result<BankAdviceBatchDto>> GetByIdAsync(Guid batchId, CancellationToken ct = default);
     Task<Result<PayrollOutputFile>> ExportAsync(Guid batchId, CancellationToken ct = default);

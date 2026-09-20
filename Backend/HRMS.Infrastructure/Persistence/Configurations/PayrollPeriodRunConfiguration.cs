@@ -8,7 +8,7 @@ public sealed class PayrollPeriodConfiguration : IEntityTypeConfiguration<Payrol
 {
     public void Configure(EntityTypeBuilder<PayrollPeriod> b)
     {
-        b.ToTable("PayrollPeriods"); b.HasKey(x => x.Id); b.Property(x => x.Code).HasMaxLength(50).IsRequired(); b.Property(x => x.Name).HasMaxLength(150).IsRequired(); b.Property(x => x.PeriodType).HasConversion<int>(); b.Property(x => x.Status).HasConversion<int>(); b.HasIndex(x => new { x.TenantId, x.Code }).IsUnique(); b.HasIndex(x => new { x.TenantId, x.StartDate, x.EndDate }); b.HasIndex(x => new { x.TenantId, x.Status }); b.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict); b.Property(x => x.ConcurrencyVersion).HasDefaultValue(1);
+        b.ToTable("PayrollPeriods"); b.HasKey(x => x.Id); b.Property(x => x.Code).HasMaxLength(50).IsRequired(); b.Property(x => x.Name).HasMaxLength(150).IsRequired(); b.Property(x => x.PeriodType).HasConversion<int>(); b.Property(x => x.Status).HasConversion<int>(); b.Property(x => x.LockReason).HasMaxLength(500); b.Property(x => x.UnlockReason).HasMaxLength(500); b.HasIndex(x => new { x.TenantId, x.Code }).IsUnique(); b.HasIndex(x => new { x.TenantId, x.StartDate, x.EndDate }); b.HasIndex(x => new { x.TenantId, x.Status }); b.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict); b.Property(x => x.ConcurrencyVersion).HasDefaultValue(1).IsConcurrencyToken();
     }
 }
 
@@ -24,7 +24,7 @@ public sealed class PayrollRunConfiguration : IEntityTypeConfiguration<PayrollRu
 {
     public void Configure(EntityTypeBuilder<PayrollRun> b)
     {
-        b.ToTable("PayrollRuns"); b.HasKey(x => x.Id); b.Property(x => x.RunNumber).HasMaxLength(60).IsRequired(); b.Property(x => x.RunType).HasConversion<int>(); b.Property(x => x.Status).HasConversion<int>(); b.Property(x => x.Notes).HasMaxLength(1000); b.HasIndex(x => new { x.TenantId, x.RunNumber }).IsUnique(); b.HasIndex(x => new { x.TenantId, x.PayrollPeriodId }); b.HasIndex(x => new { x.TenantId, x.Status }); b.HasOne(x => x.PayrollPeriod).WithMany(x => x.Runs).HasForeignKey(new[] { "TenantId", "PayrollPeriodId" }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict); b.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict); b.Property(x => x.ConcurrencyVersion).HasDefaultValue(1);
+        b.ToTable("PayrollRuns"); b.HasKey(x => x.Id); b.Property(x => x.RunNumber).HasMaxLength(60).IsRequired(); b.Property(x => x.RunType).HasConversion<int>(); b.Property(x => x.Status).HasConversion<int>(); b.Property(x => x.Notes).HasMaxLength(1000); b.HasIndex(x => new { x.TenantId, x.RunNumber }).IsUnique(); b.HasIndex(x => new { x.TenantId, x.PayrollPeriodId }); b.HasIndex(x => new { x.TenantId, x.Status }); b.HasOne(x => x.PayrollPeriod).WithMany(x => x.Runs).HasForeignKey(new[] { "TenantId", "PayrollPeriodId" }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict); b.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict); b.Property(x => x.ConcurrencyVersion).HasDefaultValue(1).IsConcurrencyToken();
     }
 }
 

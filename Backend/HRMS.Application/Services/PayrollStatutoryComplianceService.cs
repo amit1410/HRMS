@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
 
-public sealed class PayrollStatutoryComplianceService(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock) : IPayrollStatutoryComplianceService
+public sealed class PayrollStatutoryComplianceService(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock, IPayrollApprovalGuard? approvalGuard = null) : IPayrollStatutoryComplianceService
 {
     public async Task<Result<PayrollCompliancePeriodDto>> CreatePeriodAsync(PayrollCompliancePeriodRequest request, CancellationToken ct = default)
     {
@@ -44,10 +44,35 @@ public sealed class PayrollStatutoryComplianceService(IHrmsDbContext db, ITenant
     }
 
     public async Task<Result<PayrollStatutoryReturnDto>> ValidateAsync(Guid batchId, CancellationToken ct = default)
-    { var batch = await LoadAsync(batchId, ct); if (batch is null) return Result<PayrollStatutoryReturnDto>.NotFound("Statutory return not found."); if (batch.Status is not PayrollStatutoryReturnStatus.Generated and not PayrollStatutoryReturnStatus.Validated) return Result<PayrollStatutoryReturnDto>.Conflict("Return cannot be validated in its current state."); Reconcile(batch); if (batch.Employees.Any(x => x.ValidationStatus == PayrollComplianceValidationStatus.Invalid)) return Result<PayrollStatutoryReturnDto>.Conflict("Return contains validation errors."); batch.Status = PayrollStatutoryReturnStatus.Validated; batch.ValidatedAtUtc = clock.GetUtcNow().UtcDateTime; batch.ValidatedByUserId = tenant.UserId; AddHistory(batch, PayrollStatutoryComplianceHistoryChangeType.Validated, "Return totals reconciled."); await db.SaveChangesAsync(ct); return Result<PayrollStatutoryReturnDto>.Success(ToDto(batch)); }
-    public async Task<Result<PayrollStatutoryReturnDto>> ApproveAsync(Guid batchId, CancellationToken ct = default) => await TransitionAsync(batchId, PayrollStatutoryReturnStatus.Approved, PayrollStatutoryReturnStatus.Validated, PayrollStatutoryComplianceHistoryChangeType.Approved, ct);
+    {
+        var batch = await LoadAsync(batchId, ct);
+        if (batch is null) return Result<PayrollStatutoryReturnDto>.NotFound("Statutory return not found.");
+        if (batch.Status is not PayrollStatutoryReturnStatus.Generated and not PayrollStatutoryReturnStatus.Validated) return Result<PayrollStatutoryReturnDto>.Conflict("Return cannot be validated in its current state.");
+        if (batch.Status == PayrollStatutoryReturnStatus.Validated) return Result<PayrollStatutoryReturnDto>.Success(ToDto(batch), "Return was already validated.");
+        Reconcile(batch);
+        if (batch.Employees.Any(x => x.ValidationStatus == PayrollComplianceValidationStatus.Invalid)) return Result<PayrollStatutoryReturnDto>.Conflict("Return contains validation errors.");
+        var validatedAt = clock.GetUtcNow().UtcDateTime;
+        var changed = await db.PayrollStatutoryReturnBatches.Where(x => x.TenantId == batch.TenantId && x.Id == batchId && x.Status == batch.Status && x.ConcurrencyVersion == batch.ConcurrencyVersion).ExecuteUpdateAsync(setters => setters
+            .SetProperty(x => x.Status, PayrollStatutoryReturnStatus.Validated)
+            .SetProperty(x => x.ConcurrencyVersion, x => x.ConcurrencyVersion + 1)
+            .SetProperty(x => x.ValidatedAtUtc, validatedAt)
+            .SetProperty(x => x.ValidatedByUserId, tenant.UserId)
+            .SetProperty(x => x.EmployeeCount, batch.EmployeeCount)
+            .SetProperty(x => x.GrossRelevantWages, batch.GrossRelevantWages)
+            .SetProperty(x => x.EmployeeContribution, batch.EmployeeContribution)
+            .SetProperty(x => x.EmployerContribution, batch.EmployerContribution)
+            .SetProperty(x => x.TotalDeduction, batch.TotalDeduction)
+            .SetProperty(x => x.TotalPayable, batch.TotalPayable), ct);
+        if (changed != 1) return Result<PayrollStatutoryReturnDto>.Conflict("Return was changed by another operation.");
+        db.ClearChangeTracker();
+        var refreshed = await LoadAsync(batchId, ct);
+        AddHistory(refreshed!, PayrollStatutoryComplianceHistoryChangeType.Validated, "Return totals reconciled.");
+        await db.SaveChangesAsync(ct);
+        return Result<PayrollStatutoryReturnDto>.Success(ToDto(refreshed!));
+    }
+    public async Task<Result<PayrollStatutoryReturnDto>> ApproveAsync(Guid batchId, CancellationToken ct = default) { var batch = await LoadAsync(batchId, ct); if (batch is null) return Result<PayrollStatutoryReturnDto>.NotFound("Statutory return not found."); var guard = await (approvalGuard ?? new PayrollApprovalGuard(db, tenant)).ValidateAsync(batch.GeneratedByUserId, "approve", ct: ct); if (!guard.Succeeded) return Result<PayrollStatutoryReturnDto>.Failure(guard.Status, guard.Message, guard.Errors); return await TransitionAsync(batchId, PayrollStatutoryReturnStatus.Approved, PayrollStatutoryReturnStatus.Validated, PayrollStatutoryComplianceHistoryChangeType.Approved, ct); }
     public async Task<Result<PayrollStatutoryReturnDto>> MarkFiledAsync(Guid batchId, string? externalReference, CancellationToken ct = default)
-    { var batch = await LoadAsync(batchId, ct); if (batch is null) return Result<PayrollStatutoryReturnDto>.NotFound("Statutory return not found."); if (batch.Status is not PayrollStatutoryReturnStatus.Approved and not PayrollStatutoryReturnStatus.Exported) return Result<PayrollStatutoryReturnDto>.Conflict("Only approved or exported returns can be marked filed."); batch.Status = PayrollStatutoryReturnStatus.Filed; batch.ExternalReference = externalReference?.Trim(); batch.FiledAtUtc = clock.GetUtcNow().UtcDateTime; batch.FiledByUserId = tenant.UserId; AddHistory(batch, PayrollStatutoryComplianceHistoryChangeType.Filed, "Filed status recorded manually; no portal submission was performed."); await db.SaveChangesAsync(ct); return Result<PayrollStatutoryReturnDto>.Success(ToDto(batch)); }
+    { var batch = await LoadAsync(batchId, ct); if (batch is null) return Result<PayrollStatutoryReturnDto>.NotFound("Statutory return not found."); if (batch.Status is not PayrollStatutoryReturnStatus.Approved and not PayrollStatutoryReturnStatus.Exported) return Result<PayrollStatutoryReturnDto>.Conflict("Only approved or exported returns can be marked filed."); var guard = await (approvalGuard ?? new PayrollApprovalGuard(db, tenant)).ValidateAsync(batch.GeneratedByUserId, "file", ct: ct); if (!guard.Succeeded) return Result<PayrollStatutoryReturnDto>.Failure(guard.Status, guard.Message, guard.Errors); batch.Status = PayrollStatutoryReturnStatus.Filed; batch.ExternalReference = externalReference?.Trim(); batch.FiledAtUtc = clock.GetUtcNow().UtcDateTime; batch.FiledByUserId = tenant.UserId; AddHistory(batch, PayrollStatutoryComplianceHistoryChangeType.Filed, "Filed status recorded manually; no portal submission was performed."); await db.SaveChangesAsync(ct); return Result<PayrollStatutoryReturnDto>.Success(ToDto(batch)); }
     public async Task<Result<PayrollStatutoryReturnDto>> GetAsync(Guid batchId, CancellationToken ct = default) { var batch = await LoadAsync(batchId, ct); return batch is null ? Result<PayrollStatutoryReturnDto>.NotFound("Statutory return not found.") : Result<PayrollStatutoryReturnDto>.Success(ToDto(batch)); }
     public async Task<Result<PayrollOutputFile>> ExportAsync(Guid batchId, CancellationToken ct = default)
     {
@@ -63,7 +88,7 @@ public sealed class PayrollStatutoryComplianceService(IHrmsDbContext db, ITenant
         return Result<PayrollOutputFile>.Success(new PayrollOutputFile($"statutory-return-{batch.BatchNumber.Replace('/', '-')}.csv", "text/csv; charset=utf-8", Encoding.UTF8.GetBytes(sb.ToString())));
     }
 
-    private async Task<Result<PayrollStatutoryReturnDto>> TransitionAsync(Guid id, PayrollStatutoryReturnStatus next, PayrollStatutoryReturnStatus required, PayrollStatutoryComplianceHistoryChangeType change, CancellationToken ct) { var batch = await LoadAsync(id, ct); if (batch is null) return Result<PayrollStatutoryReturnDto>.NotFound("Statutory return not found."); if (batch.Status != required) return Result<PayrollStatutoryReturnDto>.Conflict($"Return must be {required}."); batch.Status = next; batch.ApprovedAtUtc = clock.GetUtcNow().UtcDateTime; batch.ApprovedByUserId = tenant.UserId; AddHistory(batch, change, "Return approved after validation."); await db.SaveChangesAsync(ct); return Result<PayrollStatutoryReturnDto>.Success(ToDto(batch)); }
+    private async Task<Result<PayrollStatutoryReturnDto>> TransitionAsync(Guid id, PayrollStatutoryReturnStatus next, PayrollStatutoryReturnStatus required, PayrollStatutoryComplianceHistoryChangeType change, CancellationToken ct) { var batch = await LoadAsync(id, ct); if (batch is null) return Result<PayrollStatutoryReturnDto>.NotFound("Statutory return not found."); if (batch.Status != required) return Result<PayrollStatutoryReturnDto>.Conflict($"Return must be {required}."); batch.Status = next; batch.ConcurrencyVersion++; batch.ApprovedAtUtc = clock.GetUtcNow().UtcDateTime; batch.ApprovedByUserId = tenant.UserId; AddHistory(batch, change, "Return approved after validation."); await db.SaveChangesAsync(ct); return Result<PayrollStatutoryReturnDto>.Success(ToDto(batch)); }
     private async Task<PayrollStatutoryReturnBatch?> LoadAsync(Guid id, CancellationToken ct) => await db.PayrollStatutoryReturnBatches.Include(x => x.Employees).FirstOrDefaultAsync(x => x.TenantId == tenant.TenantId && x.Id == id, ct);
     private void AddHistory(PayrollStatutoryReturnBatch batch, PayrollStatutoryComplianceHistoryChangeType change, string message) => db.PayrollStatutoryComplianceHistories.Add(new PayrollStatutoryComplianceHistory { Id = Guid.NewGuid(), TenantId = batch.TenantId, PayrollStatutoryReturnBatchId = batch.Id, ChangeType = change, ChangedAtUtc = clock.GetUtcNow().UtcDateTime, ActorUserId = tenant.UserId, Message = message });
     private static void Reconcile(PayrollStatutoryReturnBatch batch) { batch.EmployeeCount = batch.Employees.Count; batch.GrossRelevantWages = Round(batch.Employees.Sum(x => x.GrossWages)); batch.EmployeeContribution = Round(batch.Employees.Sum(x => x.EmployeeContribution)); batch.EmployerContribution = Round(batch.Employees.Sum(x => x.EmployerContribution)); batch.TotalDeduction = Round(batch.Employees.Sum(x => x.DeductionAmount)); batch.TotalPayable = Round(batch.Employees.Sum(x => x.PayableAmount)); }

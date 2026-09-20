@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace HRMS.API.Controllers;
 
 [ApiController, Route("api/payroll/runs")]
-public sealed class PayrollRunsController(IPayrollRunService service, IPayrollCalculationService calculation) : ControllerBase
+public sealed class PayrollRunsController(IPayrollRunService service, IPayrollCalculationService calculation, IPayrollReadinessService readiness) : ControllerBase
 {
     [HttpGet, HasPermission(Permissions.Payroll.RunView)] public async Task<ActionResult<ApiResponse<PagedResult<PayrollRunDto>>>> Get([FromQuery] PayrollRunQuery query, CancellationToken ct) => (await service.GetAsync(query, ct)).ToActionResult();
     [HttpGet("{id:guid}"), HasPermission(Permissions.Payroll.RunView)] public async Task<ActionResult<ApiResponse<PayrollRunDto>>> GetById(Guid id, CancellationToken ct) => (await service.GetByIdAsync(id, ct)).ToActionResult();
@@ -24,4 +24,5 @@ public sealed class PayrollRunsController(IPayrollRunService service, IPayrollCa
     [HttpGet("{id:guid}/results"), HasPermission(Permissions.Payroll.RunViewResults)] public async Task<ActionResult<ApiResponse<PagedResult<PayrollResultDto>>>> Results(Guid id, [FromQuery] PayrollResultQuery query, CancellationToken ct) => (await calculation.GetResultsAsync(id, query, ct)).ToActionResult();
     [HttpGet("{id:guid}/results/{employeeId:guid}"), HasPermission(Permissions.Payroll.RunViewResults)] public async Task<ActionResult<ApiResponse<PayrollResultDto>>> Result(Guid id, Guid employeeId, CancellationToken ct) => (await calculation.GetResultAsync(id, employeeId, ct)).ToActionResult();
     [HttpGet("{id:guid}/calculation-errors"), HasPermission(Permissions.Payroll.RunViewResults)] public async Task<ActionResult<ApiResponse<IReadOnlyList<PayrollCalculationErrorDto>>>> Errors(Guid id, CancellationToken ct) => (await calculation.GetErrorsAsync(id, ct)).ToActionResult();
+    [HttpGet("{id:guid}/readiness"), HasPermission(Permissions.Payroll.RunView)] public async Task<ActionResult<ApiResponse<PayrollReadinessDto>>> Readiness(Guid id, CancellationToken ct) => (await readiness.CheckAsync(id, ct)).ToActionResult();
 }

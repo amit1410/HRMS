@@ -134,7 +134,7 @@ public sealed class BankAdviceController(IBankAdviceService service) : Controlle
     }
 
     [HttpPost("{id:guid}/cancel"), HasPermission(Permissions.Payroll.BankAdviceCancel)]
-    public async Task<ActionResult<ApiResponse<BankAdviceBatchDto>>> Cancel(Guid id, CancellationToken ct) => (await service.CancelAsync(id, ct)).ToActionResult();
+    public async Task<ActionResult<ApiResponse<BankAdviceBatchDto>>> Cancel(Guid id, [FromBody] PayrollCancellationRequest? request, CancellationToken ct) => (await service.CancelAsync(id, ct, request?.Reason)).ToActionResult();
 }
 
 [ApiController, Route("api/payroll/statutory-compliance")]

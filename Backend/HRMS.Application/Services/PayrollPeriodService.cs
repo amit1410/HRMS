@@ -57,14 +57,27 @@ public sealed class PayrollPeriodService(IHrmsDbContext db, ITenantContext tenan
         await db.SaveChangesAsync(ct); return Result<PayrollPeriodDto>.Success(ToDto(row), "Payroll period updated.");
     }
 
-    public async Task<Result<PayrollPeriodDto>> TransitionAsync(Guid id, string action, int? expectedVersion, CancellationToken ct = default)
+    public async Task<Result<PayrollPeriodDto>> TransitionAsync(Guid id, string action, int? expectedVersion, string? reason = null, CancellationToken ct = default)
     {
         if (tenant.TenantId is not Guid tenantId) return Result<PayrollPeriodDto>.Unauthorized("No authenticated tenant.");
         var row = await db.PayrollPeriods.Include(x => x.Runs).FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == id, ct);
         if (row is null) return Result<PayrollPeriodDto>.NotFound("Payroll period not found.");
         if (expectedVersion is { } expected && expected != row.ConcurrencyVersion) return Result<PayrollPeriodDto>.Conflict("The payroll period was changed by another user.");
-        var target = action.ToLowerInvariant() switch { "open" => PayrollPeriodStatus.Open, "close" => PayrollPeriodStatus.Closed, "lock" => PayrollPeriodStatus.Locked, _ => (PayrollPeriodStatus?)null };
+        var normalizedAction = action.ToLowerInvariant();
+        if (normalizedAction == "unlock")
+        {
+            if (row.Status != PayrollPeriodStatus.Locked) return Result<PayrollPeriodDto>.Conflict("Only locked payroll periods can be unlocked.");
+            if (string.IsNullOrWhiteSpace(reason)) return Result<PayrollPeriodDto>.Invalid("reason", "An unlock reason is required.");
+            if (row.Runs.Any(x => x.Status is PayrollRunStatus.Approved or PayrollRunStatus.Finalized)) return Result<PayrollPeriodDto>.Conflict("A period with approved or finalized payroll cannot be unlocked.");
+            row.Status = PayrollPeriodStatus.Closed; row.UnlockedAtUtc = clock.GetUtcNow().UtcDateTime; row.UnlockedByUserId = tenant.UserId; row.UnlockReason = reason.Trim(); row.ConcurrencyVersion++; AddHistory(row, "Unlocked"); await db.SaveChangesAsync(ct); return Result<PayrollPeriodDto>.Success(ToDto(row), "Payroll period unlocked.");
+        }
+        var target = normalizedAction switch { "open" => PayrollPeriodStatus.Open, "close" => PayrollPeriodStatus.Closed, "lock" => PayrollPeriodStatus.Locked, _ => (PayrollPeriodStatus?)null };
         if (target is null || !ValidTransition(row.Status, target.Value)) return Result<PayrollPeriodDto>.Conflict("The payroll period transition is not allowed.");
+        if (target == PayrollPeriodStatus.Locked)
+        {
+            if (string.IsNullOrWhiteSpace(reason)) return Result<PayrollPeriodDto>.Invalid("reason", "A lock reason is required.");
+            row.LockedAtUtc = clock.GetUtcNow().UtcDateTime; row.LockedByUserId = tenant.UserId; row.LockReason = reason.Trim();
+        }
         row.Status = target.Value; row.ConcurrencyVersion++; AddHistory(row, target.Value.ToString()); await db.SaveChangesAsync(ct);
         return Result<PayrollPeriodDto>.Success(ToDto(row), $"Payroll period {target.Value.ToString().ToLowerInvariant()}.");
     }

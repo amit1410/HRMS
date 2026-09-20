@@ -10,7 +10,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
 
-public sealed class PayrollAccountingService(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock) : IPayrollAccountingService
+public sealed class PayrollAccountingService(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock, IPayrollApprovalGuard? approvalGuard = null) : IPayrollAccountingService
 {
     public async Task<Result<PagedResult<PayrollGLAccountDto>>> ListAccountsAsync(PagedQuery query, CancellationToken ct = default)
     { if (tenant.TenantId is not Guid id) return Result<PagedResult<PayrollGLAccountDto>>.Unauthorized("No authenticated tenant."); var page = await db.PayrollGLAccounts.AsNoTracking().Where(x => x.TenantId == id).OrderBy(x => x.Code).Select(x => new PayrollGLAccountDto(x.Id, x.Code, x.Name, x.AccountType, x.ExternalCode, x.IsActive)).ToPagedResultAsync(query, ct); return Result<PagedResult<PayrollGLAccountDto>>.Success(page); }
@@ -92,7 +92,7 @@ public sealed class PayrollAccountingService(IHrmsDbContext db, ITenantContext t
 
     private async Task<Result<PayrollJournalDto>> TransitionAsync(Guid id, PayrollJournalStatus next, PayrollJournalHistoryChangeType change, string message, PayrollJournalStatus expected, CancellationToken ct)
     {
-        if (tenant.TenantId is not Guid tenantId) return Result<PayrollJournalDto>.Unauthorized("No authenticated tenant."); var row = await db.PayrollJournalBatches.Include(x => x.Lines).FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == id, ct); if (row is null) return Result<PayrollJournalDto>.NotFound("Payroll journal not found."); if (row.Status != expected) return Result<PayrollJournalDto>.Conflict($"Invalid journal transition from {row.Status} to {next}."); if (next is PayrollJournalStatus.Approved or PayrollJournalStatus.Posted && row.TotalDebit != row.TotalCredit) return Result<PayrollJournalDto>.Conflict("Unbalanced journals cannot be approved or posted.");
+        if (tenant.TenantId is not Guid tenantId) return Result<PayrollJournalDto>.Unauthorized("No authenticated tenant."); var row = await db.PayrollJournalBatches.Include(x => x.Lines).FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == id, ct); if (row is null) return Result<PayrollJournalDto>.NotFound("Payroll journal not found."); if (row.Status != expected) return Result<PayrollJournalDto>.Conflict($"Invalid journal transition from {row.Status} to {next}."); if (next is PayrollJournalStatus.Approved or PayrollJournalStatus.Posted && row.TotalDebit != row.TotalCredit) return Result<PayrollJournalDto>.Conflict("Unbalanced journals cannot be approved or posted."); if (next is PayrollJournalStatus.Approved or PayrollJournalStatus.Posted) { var guard = await (approvalGuard ?? new PayrollApprovalGuard(db, tenant)).ValidateAsync(row.GeneratedByUserId, next == PayrollJournalStatus.Approved ? "approve" : "post", ct: ct); if (!guard.Succeeded) return Result<PayrollJournalDto>.Failure(guard.Status, guard.Message, guard.Errors); }
         var changedAt = clock.GetUtcNow().UtcDateTime; var update = db.PayrollJournalBatches.Where(x => x.TenantId == tenantId && x.Id == id && x.Status == expected && x.ConcurrencyVersion == row.ConcurrencyVersion);
         var changed = next == PayrollJournalStatus.Approved
             ? await update.ExecuteUpdateAsync(setters => setters.SetProperty(x => x.Status, next).SetProperty(x => x.ApprovedAtUtc, changedAt).SetProperty(x => x.ConcurrencyVersion, x => x.ConcurrencyVersion + 1), ct)

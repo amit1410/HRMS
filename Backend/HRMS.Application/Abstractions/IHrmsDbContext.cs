@@ -135,6 +135,7 @@ public interface IHrmsDbContext
     DbSet<EmployeeSalaryComponent> EmployeeSalaryComponents { get; }
     DbSet<EmployeeSalaryAssignmentHistory> EmployeeSalaryAssignmentHistories { get; }
     DbSet<PayrollPeriod> PayrollPeriods { get; }
+    DbSet<PayrollControlConfiguration> PayrollControlConfigurations { get; }
     DbSet<PayrollPeriodHistory> PayrollPeriodHistories { get; }
     DbSet<PayrollRun> PayrollRuns { get; }
     DbSet<PayrollRunEmployee> PayrollRunEmployees { get; }

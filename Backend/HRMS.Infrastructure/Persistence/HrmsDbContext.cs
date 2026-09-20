@@ -151,6 +151,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<EmployeeSalaryComponent> EmployeeSalaryComponents => Set<EmployeeSalaryComponent>();
     public DbSet<EmployeeSalaryAssignmentHistory> EmployeeSalaryAssignmentHistories => Set<EmployeeSalaryAssignmentHistory>();
     public DbSet<PayrollPeriod> PayrollPeriods => Set<PayrollPeriod>();
+    public DbSet<PayrollControlConfiguration> PayrollControlConfigurations => Set<PayrollControlConfiguration>();
     public DbSet<PayrollPeriodHistory> PayrollPeriodHistories => Set<PayrollPeriodHistory>();
     public DbSet<PayrollRun> PayrollRuns => Set<PayrollRun>();
     public DbSet<PayrollRunEmployee> PayrollRunEmployees => Set<PayrollRunEmployee>();

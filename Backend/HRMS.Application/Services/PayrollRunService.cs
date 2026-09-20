@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
 
-public sealed class PayrollRunService(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock) : IPayrollRunService
+public sealed class PayrollRunService(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock, IPayrollApprovalGuard? approvalGuard = null) : IPayrollRunService
 {
     public async Task<Result<PagedResult<PayrollRunDto>>> GetAsync(PayrollRunQuery query, CancellationToken ct = default)
     {
@@ -66,6 +66,11 @@ public sealed class PayrollRunService(IHrmsDbContext db, ITenantContext tenant, 
         var loaded = await LoadAsync(id, ct); if (!loaded.ok) return Result<PayrollRunDto>.Failure(loaded.status, loaded.message);
         var row = loaded.row!;
         if (!ValidTransition(row.Status, target)) return Result<PayrollRunDto>.Conflict("The payroll run transition is not allowed.");
+        if (target is PayrollRunStatus.Approved or PayrollRunStatus.Finalized)
+        {
+            var guard = await (approvalGuard ?? new PayrollApprovalGuard(db, tenant)).ValidateAsync(row.StartedByUserId, target == PayrollRunStatus.Approved ? "approve" : "finalize", ct: ct);
+            if (!guard.Succeeded) return Result<PayrollRunDto>.Failure(guard.Status, guard.Message, guard.Errors);
+        }
         row.Status = target; row.ConcurrencyVersion++; if (target == PayrollRunStatus.Processing) { row.LockedAtUtc = clock.GetUtcNow().UtcDateTime; row.LockedByUserId = tenant.UserId; } if (target is PayrollRunStatus.Finalized or PayrollRunStatus.Cancelled) row.CompletedAtUtc = clock.GetUtcNow().UtcDateTime; row.CompletedByUserId = tenant.UserId; AddHistory(row, target == PayrollRunStatus.Approved ? PayrollRunHistoryChangeType.Approved : target == PayrollRunStatus.Finalized ? PayrollRunHistoryChangeType.Finalized : target == PayrollRunStatus.Cancelled ? PayrollRunHistoryChangeType.Cancelled : PayrollRunHistoryChangeType.StatusChanged, null); await db.SaveChangesAsync(ct); return Result<PayrollRunDto>.Success(ToDto(row, row.Employees), $"Payroll run moved to {target}.");
     }
 

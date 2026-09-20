@@ -123,6 +123,9 @@ public static class Permissions
         public const string EmployeeSalaryViewHistory = "Payroll.EmployeeSalary.ViewHistory";
         public const string PeriodView = "Payroll.Period.View";
         public const string PeriodManage = "Payroll.Period.Manage";
+        public const string PeriodUnlock = "Payroll.Period.Unlock";
+        public const string ControlsView = "Payroll.Controls.View";
+        public const string ControlsManage = "Payroll.Controls.Manage";
         public const string RunView = "Payroll.Run.View";
         public const string RunManage = "Payroll.Run.Manage";
         public const string RunPrepare = "Payroll.Run.Prepare";
@@ -221,7 +224,7 @@ public static class Permissions
         Payroll.SalaryComponentView, Payroll.SalaryComponentManage, Payroll.SalaryComponentViewHistory,
         Payroll.SalaryStructureView, Payroll.SalaryStructureManage, Payroll.SalaryStructureViewHistory,
         Payroll.EmployeeSalaryView, Payroll.EmployeeSalaryManage, Payroll.EmployeeSalaryViewHistory,
-        Payroll.PeriodView, Payroll.PeriodManage, Payroll.RunView, Payroll.RunManage, Payroll.RunPrepare, Payroll.RunApprove, Payroll.RunFinalize, Payroll.RunViewHistory, Payroll.RunCalculate, Payroll.RunRecalculate, Payroll.RunViewResults,
+        Payroll.PeriodView, Payroll.PeriodManage, Payroll.PeriodUnlock, Payroll.ControlsView, Payroll.ControlsManage, Payroll.RunView, Payroll.RunManage, Payroll.RunPrepare, Payroll.RunApprove, Payroll.RunFinalize, Payroll.RunViewHistory, Payroll.RunCalculate, Payroll.RunRecalculate, Payroll.RunViewResults,
         Payroll.StatutoryView, Payroll.StatutoryManage, Payroll.StatutoryViewHistory, Payroll.EmployeeStatutoryView, Payroll.EmployeeStatutoryManage,
         Payroll.PayslipViewAll, Payroll.PayslipGenerate, Payroll.PayslipPublish, Payroll.PayslipViewHistory, Payroll.RegisterView, Payroll.RegisterExport, Payroll.PayslipViewOwn,
         Payroll.BankAdviceView, Payroll.BankAdviceGenerate, Payroll.BankAdviceValidate, Payroll.BankAdviceApprove, Payroll.BankAdviceExport, Payroll.BankAdviceCancel, Payroll.BankAdviceViewHistory,

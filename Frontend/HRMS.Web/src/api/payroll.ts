@@ -21,6 +21,28 @@ export function getEmployeeStatutoryProfile(employeeId: string): Promise<Employe
 export function saveEmployeeStatutoryProfile(employeeId: string, body: Omit<EmployeeStatutoryProfile, 'id' | 'employeeId'>): Promise<EmployeeStatutoryProfile> { return request<EmployeeStatutoryProfile>(() => api.put<ApiResponse<EmployeeStatutoryProfile>>(`/api/payroll/employees/${employeeId}/statutory-profile`, body)) }
 export function getPayrollStatutoryResults(runId: string, employeeId: string): Promise<PayrollStatutoryResult[]> { return request<PayrollStatutoryResult[]>(() => api.get<ApiResponse<PayrollStatutoryResult[]>>(`/api/payroll/runs/${runId}/results/${employeeId}/statutory`)) }
 
+export interface PayrollHealthIssue { code: string; severity: string; message: string; employeeId?: string | null; entityType?: string | null; entityId?: string | null; navigationHint?: string | null }
+export interface PayrollHealthCategory { category: string; status: string; issueCount: number; blockingCount: number; issues: PayrollHealthIssue[] }
+export interface PayrollConfigurationHealth { categories: PayrollHealthCategory[] }
+export interface PayrollOperationsDashboard {
+  openPeriods: number
+  lockedPeriods: number
+  runsWithReadinessErrors: number
+  runsAwaitingCalculation: number
+  runsAwaitingApproval: number
+  unpublishedPayslips: number
+  bankAdviceAwaitingApproval: number
+  bankAdviceAwaitingExport: number
+  accountingAwaitingApproval: number
+  accountingAwaitingPosting: number
+  statutoryReturnsAwaitingValidation: number
+  statutoryReturnsAwaitingFiling: number
+  retroCasesPending: number
+  finalSettlementsPending: number
+}
+export function getPayrollConfigurationHealth(signal?: AbortSignal): Promise<PayrollConfigurationHealth> { return request<PayrollConfigurationHealth>(() => api.get<ApiResponse<PayrollConfigurationHealth>>('/api/payroll/configuration-health', { signal })) }
+export function getPayrollOperationsDashboard(signal?: AbortSignal): Promise<PayrollOperationsDashboard> { return request<PayrollOperationsDashboard>(() => api.get<ApiResponse<PayrollOperationsDashboard>>('/api/payroll/dashboard/operations', { signal })) }
+
 export interface SalaryComponent {
   id: string
   code: string
@@ -299,7 +321,7 @@ export interface PayrollResult { id: string; payrollRunId: string; employeeId: s
 export interface PayrollCalculationError { id: string; payrollRunId: string; payrollRunEmployeeId: string; employeeId: string; employeeCode: string; errorCode: string; message: string; salaryComponentId?: string | null; createdAtUtc: string }
 export function listPayrollPeriods(params: QueryParams = {}): Promise<PagedResult<PayrollPeriod>> { return request<PagedResult<PayrollPeriod>>(() => api.get<ApiResponse<PagedResult<PayrollPeriod>>>('/api/payroll/periods', { params: cleanParams(params) })) }
 export function createPayrollPeriod(body: PayrollPeriodRequest): Promise<PayrollPeriod> { return request<PayrollPeriod>(() => api.post<ApiResponse<PayrollPeriod>>('/api/payroll/periods', body)) }
-export function transitionPayrollPeriod(id: string, action: string, version: number): Promise<PayrollPeriod> { return request<PayrollPeriod>(() => api.post<ApiResponse<PayrollPeriod>>(`/api/payroll/periods/${id}/${action}`, undefined, { params: { expectedConcurrencyVersion: version } })) }
+export function transitionPayrollPeriod(id: string, action: string, version: number, reason?: string): Promise<PayrollPeriod> { return request<PayrollPeriod>(() => api.post<ApiResponse<PayrollPeriod>>(`/api/payroll/periods/${id}/${action}`, undefined, { params: { expectedConcurrencyVersion: version, ...(reason ? { reason } : {}) } })) }
 export function listPayrollRuns(params: QueryParams = {}): Promise<PagedResult<PayrollRun>> { return request<PagedResult<PayrollRun>>(() => api.get<ApiResponse<PagedResult<PayrollRun>>>('/api/payroll/runs', { params: cleanParams(params) })) }
 export function createPayrollRun(body: PayrollRunRequest): Promise<PayrollRun> { return request<PayrollRun>(() => api.post<ApiResponse<PayrollRun>>('/api/payroll/runs', body)) }
 export function preparePayrollRun(id: string, rebuild = false): Promise<PayrollRun> { return request<PayrollRun>(() => api.post<ApiResponse<PayrollRun>>(`/api/payroll/runs/${id}/prepare`, undefined, { params: { rebuild } })) }
