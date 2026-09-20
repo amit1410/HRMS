@@ -11,4 +11,5 @@ vi.mock('../../api/payroll.ts', () => ({
 describe('Payroll controls pages', () => {
   it('renders configuration health categories', async () => { render(<PayrollConfigurationHealthPage />); expect(await screen.findByText('Payroll Configuration Health')).toBeInTheDocument(); expect(await screen.findByText('Controls')).toBeInTheDocument() })
   it('renders operational lifecycle counts', async () => { render(<PayrollOperationsDashboardPage />); expect(await screen.findByText('Payroll Operations')).toBeInTheDocument(); expect(await screen.findByText('2')).toBeInTheDocument() })
+  it('renders the UAT control surfaces without exposing admin actions to the page body', async () => { render(<PayrollConfigurationHealthPage />); expect(await screen.findByText('Payroll Configuration Health')).toBeInTheDocument(); expect(screen.queryByText('Submit Payment')).not.toBeInTheDocument() })
 })
