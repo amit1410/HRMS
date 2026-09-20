@@ -136,3 +136,22 @@ public sealed class BankAdviceController(IBankAdviceService service) : Controlle
     [HttpPost("{id:guid}/cancel"), HasPermission(Permissions.Payroll.BankAdviceCancel)]
     public async Task<ActionResult<ApiResponse<BankAdviceBatchDto>>> Cancel(Guid id, CancellationToken ct) => (await service.CancelAsync(id, ct)).ToActionResult();
 }
+
+[ApiController, Route("api/payroll/statutory-compliance")]
+public sealed class PayrollStatutoryComplianceController(IPayrollStatutoryComplianceService service) : ControllerBase
+{
+    [HttpPost("periods"), HasPermission(Permissions.Payroll.StatutoryComplianceManagePeriods)]
+    public async Task<ActionResult<ApiResponse<PayrollCompliancePeriodDto>>> CreatePeriod(PayrollCompliancePeriodRequest request, CancellationToken ct) => (await service.CreatePeriodAsync(request, ct)).ToActionResult();
+    [HttpPost("periods/{id:guid}/returns"), HasPermission(Permissions.Payroll.StatutoryComplianceGenerate)]
+    public async Task<ActionResult<ApiResponse<PayrollStatutoryReturnDto>>> Generate(Guid id, CancellationToken ct) => (await service.GenerateAsync(id, ct)).ToActionResult();
+    [HttpGet("returns/{id:guid}"), HasPermission(Permissions.Payroll.StatutoryComplianceView)]
+    public async Task<ActionResult<ApiResponse<PayrollStatutoryReturnDto>>> Get(Guid id, CancellationToken ct) => (await service.GetAsync(id, ct)).ToActionResult();
+    [HttpPost("returns/{id:guid}/validate"), HasPermission(Permissions.Payroll.StatutoryComplianceValidate)]
+    public async Task<ActionResult<ApiResponse<PayrollStatutoryReturnDto>>> Validate(Guid id, CancellationToken ct) => (await service.ValidateAsync(id, ct)).ToActionResult();
+    [HttpPost("returns/{id:guid}/approve"), HasPermission(Permissions.Payroll.StatutoryComplianceApprove)]
+    public async Task<ActionResult<ApiResponse<PayrollStatutoryReturnDto>>> Approve(Guid id, CancellationToken ct) => (await service.ApproveAsync(id, ct)).ToActionResult();
+    [HttpPost("returns/{id:guid}/mark-filed"), HasPermission(Permissions.Payroll.StatutoryComplianceMarkFiled)]
+    public async Task<ActionResult<ApiResponse<PayrollStatutoryReturnDto>>> MarkFiled(Guid id, [FromBody] string? externalReference, CancellationToken ct) => (await service.MarkFiledAsync(id, externalReference, ct)).ToActionResult();
+    [HttpGet("returns/{id:guid}/export"), HasPermission(Permissions.Payroll.StatutoryComplianceExport)]
+    public async Task<IActionResult> Export(Guid id, CancellationToken ct) { var result = await service.ExportAsync(id, ct); if (!result.Succeeded) return result.ToErrorResult(); return File(result.Value!.Content, result.Value.ContentType, result.Value.FileName); }
+}

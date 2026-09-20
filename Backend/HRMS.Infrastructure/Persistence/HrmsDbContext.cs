@@ -167,6 +167,12 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<EmployeeStatutoryProfileHistory> EmployeeStatutoryProfileHistories => Set<EmployeeStatutoryProfileHistory>();
     public DbSet<StatutoryConfigurationHistory> StatutoryConfigurationHistories => Set<StatutoryConfigurationHistory>();
     public DbSet<PayrollStatutoryResult> PayrollStatutoryResults => Set<PayrollStatutoryResult>();
+    public DbSet<PayrollCompliancePeriod> PayrollCompliancePeriods => Set<PayrollCompliancePeriod>();
+    public DbSet<PayrollStatutoryReturnBatch> PayrollStatutoryReturnBatches => Set<PayrollStatutoryReturnBatch>();
+    public DbSet<PayrollStatutoryReturnEmployee> PayrollStatutoryReturnEmployees => Set<PayrollStatutoryReturnEmployee>();
+    public DbSet<PayrollStatutoryReturnSource> PayrollStatutoryReturnSources => Set<PayrollStatutoryReturnSource>();
+    public DbSet<PayrollStatutoryComplianceHistory> PayrollStatutoryComplianceHistories => Set<PayrollStatutoryComplianceHistory>();
+    public DbSet<PayrollStatutoryChallan> PayrollStatutoryChallans => Set<PayrollStatutoryChallan>();
     public DbSet<Payslip> Payslips => Set<Payslip>();
     public DbSet<PayslipLine> PayslipLines => Set<PayslipLine>();
     public DbSet<PayslipHistory> PayslipHistories => Set<PayslipHistory>();
@@ -466,6 +472,12 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<FinalSettlementCase>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<FinalSettlementLine>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<FinalSettlementHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollCompliancePeriod>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollStatutoryReturnBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollStatutoryReturnEmployee>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollStatutoryReturnSource>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollStatutoryComplianceHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollStatutoryChallan>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
 
         // Organizational hierarchy master query filters
         modelBuilder.Entity<HoldingCompany>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

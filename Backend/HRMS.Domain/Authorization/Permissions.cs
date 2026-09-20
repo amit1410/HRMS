@@ -170,6 +170,15 @@ public static class Permissions
         public const string AccountingExport = "Payroll.Accounting.Export";
         public const string AccountingViewHistory = "Payroll.Accounting.ViewHistory";
         public const string AccountingManageConfiguration = "Payroll.Accounting.ManageConfiguration";
+        public const string StatutoryComplianceView = "Payroll.StatutoryCompliance.View";
+        public const string StatutoryComplianceGenerate = "Payroll.StatutoryCompliance.Generate";
+        public const string StatutoryComplianceValidate = "Payroll.StatutoryCompliance.Validate";
+        public const string StatutoryComplianceApprove = "Payroll.StatutoryCompliance.Approve";
+        public const string StatutoryComplianceExport = "Payroll.StatutoryCompliance.Export";
+        public const string StatutoryComplianceMarkFiled = "Payroll.StatutoryCompliance.MarkFiled";
+        public const string StatutoryComplianceCancel = "Payroll.StatutoryCompliance.Cancel";
+        public const string StatutoryComplianceViewHistory = "Payroll.StatutoryCompliance.ViewHistory";
+        public const string StatutoryComplianceManagePeriods = "Payroll.StatutoryCompliance.ManagePeriods";
     }
     public static class Attendance
     {
@@ -219,6 +228,7 @@ public static class Permissions
         Payroll.AccountingView, Payroll.AccountingGenerate, Payroll.AccountingValidate, Payroll.AccountingApprove, Payroll.AccountingPost, Payroll.AccountingExport, Payroll.AccountingViewHistory, Payroll.AccountingManageConfiguration,
         Payroll.RetroView, Payroll.RetroEvaluate, Payroll.RetroApprove, Payroll.RetroApply, Payroll.RetroCancel,
         Payroll.FinalSettlementView, Payroll.FinalSettlementManage, Payroll.FinalSettlementCalculate, Payroll.FinalSettlementApprove, Payroll.FinalSettlementFinalize, Payroll.FinalSettlementCancel,
+        Payroll.StatutoryComplianceView, Payroll.StatutoryComplianceGenerate, Payroll.StatutoryComplianceValidate, Payroll.StatutoryComplianceApprove, Payroll.StatutoryComplianceExport, Payroll.StatutoryComplianceMarkFiled, Payroll.StatutoryComplianceCancel, Payroll.StatutoryComplianceViewHistory, Payroll.StatutoryComplianceManagePeriods,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

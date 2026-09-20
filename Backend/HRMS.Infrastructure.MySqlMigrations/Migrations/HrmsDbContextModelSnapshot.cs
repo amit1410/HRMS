@@ -5845,6 +5845,49 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("PayrollCalculationHistories", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollCompliancePeriod", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ComplianceType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("DueDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("JurisdictionCode")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("PeriodEnd")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime>("PeriodStart")
+                        .HasColumnType("date");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "JurisdictionCode", "ComplianceType", "PeriodStart", "PeriodEnd")
+                        .IsUnique();
+
+                    b.ToTable("PayrollCompliancePeriods", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollGLAccount", b =>
                 {
                     b.Property<Guid>("Id")
@@ -6966,6 +7009,91 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("PayrollRunHistories", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryChallan", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("BankReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<string>("ChallanNumber")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("ExternalReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("PaymentDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("PayrollStatutoryReturnBatchId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "PayrollStatutoryReturnBatchId");
+
+                    b.ToTable("PayrollStatutoryChallans", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryComplianceHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ChangeType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("ChangedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Message")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("PayrollStatutoryReturnBatchId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "PayrollStatutoryReturnBatchId", "ChangedAtUtc");
+
+                    b.ToTable("PayrollStatutoryComplianceHistories", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryResult", b =>
                 {
                     b.Property<Guid>("Id")
@@ -7050,6 +7178,255 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.HasIndex("TenantId", "PayrollRunId", "EmployeeId");
 
                     b.ToTable("PayrollStatutoryResults", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryReturnBatch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ApprovedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("BatchNumber")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<int>("ComplianceType")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<decimal>("EmployeeContribution")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("EmployeeCount")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("EmployerContribution")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("ExportedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ExportedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("ExternalReference")
+                        .HasColumnType("longtext");
+
+                    b.Property<DateTime?>("FiledAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("FiledByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("GeneratedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("GeneratedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("GrossRelevantWages")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("JurisdictionCode")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("PayrollCompliancePeriodId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("TotalDeduction")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("TotalPayable")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("ValidatedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ValidatedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "BatchNumber")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "PayrollCompliancePeriodId");
+
+                    b.HasIndex("TenantId", "Status");
+
+                    b.ToTable("PayrollStatutoryReturnBatches", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryReturnEmployee", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<decimal>("DeductionAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("EmployeeCodeSnapshot")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<decimal>("EmployeeContribution")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("EmployeeNameSnapshot")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<decimal>("EmployerContribution")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("EsicNumber")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<decimal>("GrossWages")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Pan")
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<decimal>("PayableAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid>("PayrollStatutoryReturnBatchId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("PtRegistrationReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("StatutoryWages")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Uan")
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<string>("ValidationMessage")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<int>("ValidationStatus")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.HasIndex("TenantId", "PayrollStatutoryReturnBatchId", "Sequence");
+
+                    b.ToTable("PayrollStatutoryReturnEmployees", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryReturnSource", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("PayrollResultId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("PayrollRunId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("PayrollStatutoryResultId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("PayrollStatutoryReturnBatchId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("PayrollStatutoryReturnEmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "PayrollStatutoryResultId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "PayrollStatutoryReturnBatchId");
+
+                    b.HasIndex("TenantId", "PayrollStatutoryReturnEmployeeId")
+                        .HasDatabaseName("IX_PayrollStatutoryReturnSources_TenantId_PayrollStatutoryRetu~1");
+
+                    b.ToTable("PayrollStatutoryReturnSources", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Payslip", b =>
@@ -11459,6 +11836,17 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollCompliancePeriod", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollGLAccount", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -11920,6 +12308,46 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("PayrollRun");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryChallan", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollStatutoryReturnBatch", "ReturnBatch")
+                        .WithMany("Challans")
+                        .HasForeignKey("TenantId", "PayrollStatutoryReturnBatchId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ReturnBatch");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryComplianceHistory", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollStatutoryReturnBatch", "ReturnBatch")
+                        .WithMany("History")
+                        .HasForeignKey("TenantId", "PayrollStatutoryReturnBatchId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ReturnBatch");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryResult", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -11972,6 +12400,84 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("PayrollResult");
 
                     b.Navigation("PayrollRun");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryReturnBatch", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollCompliancePeriod", "CompliancePeriod")
+                        .WithMany("ReturnBatches")
+                        .HasForeignKey("TenantId", "PayrollCompliancePeriodId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("CompliancePeriod");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryReturnEmployee", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollStatutoryReturnBatch", "ReturnBatch")
+                        .WithMany("Employees")
+                        .HasForeignKey("TenantId", "PayrollStatutoryReturnBatchId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("ReturnBatch");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryReturnSource", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollStatutoryReturnBatch", "ReturnBatch")
+                        .WithMany("Sources")
+                        .HasForeignKey("TenantId", "PayrollStatutoryReturnBatchId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollStatutoryReturnEmployee", "ReturnEmployee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollStatutoryReturnEmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ReturnBatch");
+
+                    b.Navigation("ReturnEmployee");
 
                     b.Navigation("Tenant");
                 });
@@ -12858,6 +13364,11 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Mappings");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollCompliancePeriod", b =>
+                {
+                    b.Navigation("ReturnBatches");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollJournalBatch", b =>
                 {
                     b.Navigation("History");
@@ -12901,6 +13412,17 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Employees");
 
                     b.Navigation("History");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollStatutoryReturnBatch", b =>
+                {
+                    b.Navigation("Challans");
+
+                    b.Navigation("Employees");
+
+                    b.Navigation("History");
+
+                    b.Navigation("Sources");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Payslip", b =>

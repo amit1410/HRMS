@@ -79,6 +79,13 @@ public enum BankAdviceValidationStatus { Pending, Valid, Invalid }
 public enum BankAdviceHistoryChangeType { Generated, ValidationFailed, Prepared, Approved, Exported, Cancelled }
 public enum PayrollCalculationErrorCode { NoSalaryAssignment, NoSalaryStructureVersion, MissingBaseComponent, CircularDependency, InvalidFormula, InvalidOverride, CurrencyMismatch, NegativeNetPay, CalculationFailed, StatutoryConfigurationMissing, StatutoryConfigurationAmbiguous, InvalidStatutoryConfiguration, StatutoryBasisMissing, StatutoryCalculationFailed, JurisdictionUnsupported, EmployeeStatutoryProfileInvalid }
 public enum StatutoryType { ProvidentFund, Esi, ProfessionalTax, IncomeTax }
+
+public enum PayrollComplianceType { ProvidentFund, Esi, ProfessionalTax, IncomeTaxTds }
+public enum PayrollCompliancePeriodStatus { Open, Closed, Cancelled }
+public enum PayrollStatutoryReturnStatus { Draft, Generated, Validated, Approved, Exported, Filed, Cancelled }
+public enum PayrollComplianceValidationStatus { Valid, Invalid, Warning }
+public enum PayrollStatutoryChallanStatus { Pending, Prepared, Paid, Cancelled }
+public enum PayrollStatutoryComplianceHistoryChangeType { Created, Generated, Validated, Approved, Exported, Filed, Cancelled }
 public enum StatutoryConfigurationStatus { Draft, Active, Retired }
 public enum StatutoryProfileChangeType { Created, Updated, Activated, Deactivated }
 public enum StatutoryConfigurationChangeType { Created, VersionAdded, Activated, Deactivated }

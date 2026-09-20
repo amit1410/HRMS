@@ -151,6 +151,12 @@ public interface IHrmsDbContext
     DbSet<EmployeeStatutoryProfileHistory> EmployeeStatutoryProfileHistories { get; }
     DbSet<StatutoryConfigurationHistory> StatutoryConfigurationHistories { get; }
     DbSet<PayrollStatutoryResult> PayrollStatutoryResults { get; }
+    DbSet<PayrollCompliancePeriod> PayrollCompliancePeriods { get; }
+    DbSet<PayrollStatutoryReturnBatch> PayrollStatutoryReturnBatches { get; }
+    DbSet<PayrollStatutoryReturnEmployee> PayrollStatutoryReturnEmployees { get; }
+    DbSet<PayrollStatutoryReturnSource> PayrollStatutoryReturnSources { get; }
+    DbSet<PayrollStatutoryComplianceHistory> PayrollStatutoryComplianceHistories { get; }
+    DbSet<PayrollStatutoryChallan> PayrollStatutoryChallans { get; }
     DbSet<Payslip> Payslips { get; }
     DbSet<PayslipLine> PayslipLines { get; }
     DbSet<PayslipHistory> PayslipHistories { get; }
