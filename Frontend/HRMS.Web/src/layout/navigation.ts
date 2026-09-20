@@ -77,6 +77,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Bank Advice', to: '/payroll/bank-advice', permission: Permissions.payroll.bankAdviceView, available: true, group: 'administration' },
   { label: 'Payroll Accounting', to: '/payroll/accounting', permission: Permissions.payroll.accountingView, available: true, group: 'administration' },
   { label: 'Accounting Configuration', to: '/payroll/accounting/configuration', permission: Permissions.payroll.accountingManageConfiguration, available: true, group: 'administration' },
+  { label: 'Retro / Arrears', to: '/payroll/retro', permission: Permissions.payroll.retroView, available: true, group: 'administration' },
+  { label: 'Final Settlement', to: '/payroll/final-settlements', permission: Permissions.payroll.finalSettlementView, available: true, group: 'administration' },
   { label: 'Leave Types', to: '/leave-management/types', permission: Permissions.leave.typeManage, available: true, group: 'leave' },
   { label: 'Leave Periods', to: '/leave-management/periods', permission: Permissions.leave.periodManage, available: true, group: 'leave' },
   { label: 'Leave Policies', to: '/leave-management/policies', permission: Permissions.leave.policyView, available: true, group: 'leave' },

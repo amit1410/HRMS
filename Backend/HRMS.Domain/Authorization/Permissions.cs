@@ -151,6 +151,17 @@ public static class Permissions
         public const string BankAdviceExport = "Payroll.BankAdvice.Export";
         public const string BankAdviceCancel = "Payroll.BankAdvice.Cancel";
         public const string BankAdviceViewHistory = "Payroll.BankAdvice.ViewHistory";
+        public const string RetroView = "Payroll.Retro.View";
+        public const string RetroEvaluate = "Payroll.Retro.Evaluate";
+        public const string RetroApprove = "Payroll.Retro.Approve";
+        public const string RetroApply = "Payroll.Retro.Apply";
+        public const string RetroCancel = "Payroll.Retro.Cancel";
+        public const string FinalSettlementView = "Payroll.FinalSettlement.View";
+        public const string FinalSettlementManage = "Payroll.FinalSettlement.Manage";
+        public const string FinalSettlementCalculate = "Payroll.FinalSettlement.Calculate";
+        public const string FinalSettlementApprove = "Payroll.FinalSettlement.Approve";
+        public const string FinalSettlementFinalize = "Payroll.FinalSettlement.Finalize";
+        public const string FinalSettlementCancel = "Payroll.FinalSettlement.Cancel";
         public const string AccountingView = "Payroll.Accounting.View";
         public const string AccountingGenerate = "Payroll.Accounting.Generate";
         public const string AccountingValidate = "Payroll.Accounting.Validate";
@@ -206,6 +217,8 @@ public static class Permissions
         Payroll.PayslipViewAll, Payroll.PayslipGenerate, Payroll.PayslipPublish, Payroll.PayslipViewHistory, Payroll.RegisterView, Payroll.RegisterExport, Payroll.PayslipViewOwn,
         Payroll.BankAdviceView, Payroll.BankAdviceGenerate, Payroll.BankAdviceValidate, Payroll.BankAdviceApprove, Payroll.BankAdviceExport, Payroll.BankAdviceCancel, Payroll.BankAdviceViewHistory,
         Payroll.AccountingView, Payroll.AccountingGenerate, Payroll.AccountingValidate, Payroll.AccountingApprove, Payroll.AccountingPost, Payroll.AccountingExport, Payroll.AccountingViewHistory, Payroll.AccountingManageConfiguration,
+        Payroll.RetroView, Payroll.RetroEvaluate, Payroll.RetroApprove, Payroll.RetroApply, Payroll.RetroCancel,
+        Payroll.FinalSettlementView, Payroll.FinalSettlementManage, Payroll.FinalSettlementCalculate, Payroll.FinalSettlementApprove, Payroll.FinalSettlementFinalize, Payroll.FinalSettlementCancel,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

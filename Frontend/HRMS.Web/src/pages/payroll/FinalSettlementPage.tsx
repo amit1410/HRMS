@@ -1,0 +1,10 @@
+import { useState } from 'react'
+import { addFinalSettlementLine, calculateFinalSettlement, createFinalSettlement, type FinalSettlement } from '../../api/payroll.ts'
+
+export function FinalSettlementPage() {
+  const [employeeId, setEmployeeId] = useState(''); const [settlement, setSettlement] = useState<FinalSettlement | null>(null); const [error, setError] = useState<string | null>(null)
+  const create = async () => { const date = new Date().toISOString().slice(0, 10); try { setSettlement(await createFinalSettlement({ employeeId, separationDate: date, lastWorkingDate: date, settlementDate: date, currencyCode: 'INR' })) } catch (e) { setError(e instanceof Error ? e.message : 'Unable to create final settlement.') } }
+  const addLine = async () => { if (!settlement) return; try { setSettlement(await addFinalSettlementLine(settlement.id, { lineType: 'UnpaidSalary', componentCode: 'SALARY', description: 'Unpaid salary', amount: 0, isEarning: true, isDeduction: false })) } catch (e) { setError(e instanceof Error ? e.message : 'Unable to add settlement line.') } }
+  const calculate = async () => { if (!settlement) return; try { setSettlement(await calculateFinalSettlement(settlement.id)) } catch (e) { setError(e instanceof Error ? e.message : 'Unable to calculate settlement.') } }
+  return <section className="page-shell"><div className="page-heading"><div><p className="eyebrow">Payroll</p><h1>Final Settlement</h1><p>Prepare an auditable exit settlement from explicit payable and recovery lines.</p></div></div>{error && <p role="alert">{error}</p>}<div className="card"><label>Employee ID<input value={employeeId} onChange={event => setEmployeeId(event.target.value)} /></label><div className="button-row"><button type="button" onClick={() => void create()} disabled={!employeeId}>Create settlement</button>{settlement && <><button type="button" onClick={() => void addLine()}>Add line</button><button type="button" onClick={() => void calculate()}>Calculate</button></>}</div>{settlement && <p role="status">{settlement.status} · Net {settlement.netSettlement.toFixed(2)} {settlement.currencyCode}</p>}</div></section>
+}

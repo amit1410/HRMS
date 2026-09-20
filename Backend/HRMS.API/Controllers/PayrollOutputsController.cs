@@ -92,6 +92,20 @@ public sealed class PayrollAccountingController(IPayrollAccountingService servic
     public async Task<IActionResult> Export(Guid id, CancellationToken ct) { var result = await service.ExportAsync(id, ct); if (!result.Succeeded) return result.ToErrorResult(); return File(result.Value!.Content, result.Value.ContentType, result.Value.FileName); }
 }
 
+[ApiController]
+public sealed class PayrollRetroSettlementController(IPayrollRetroSettlementService service) : ControllerBase
+{
+    [HttpPost("/api/payroll/retro/cases"), HasPermission(Permissions.Payroll.RetroEvaluate)] public async Task<ActionResult<ApiResponse<PayrollRetroCaseDto>>> CreateRetro(PayrollRetroCaseRequest request, CancellationToken ct) => (await service.CreateRetroCaseAsync(request, ct)).ToActionResult();
+    [HttpPost("/api/payroll/retro/cases/{id:guid}/evaluate"), HasPermission(Permissions.Payroll.RetroEvaluate)] public async Task<ActionResult<ApiResponse<PayrollRetroCaseDto>>> Evaluate(Guid id, CancellationToken ct) => (await service.EvaluateRetroAsync(id, ct)).ToActionResult();
+    [HttpPost("/api/payroll/retro/cases/{id:guid}/approve"), HasPermission(Permissions.Payroll.RetroApprove)] public async Task<ActionResult<ApiResponse<PayrollRetroCaseDto>>> ApproveRetro(Guid id, CancellationToken ct) => (await service.ApproveRetroAsync(id, ct)).ToActionResult();
+    [HttpPost("/api/payroll/retro/cases/{id:guid}/apply/{targetPayrollRunId:guid}"), HasPermission(Permissions.Payroll.RetroApply)] public async Task<ActionResult<ApiResponse<PayrollRetroCaseDto>>> Apply(Guid id, Guid targetPayrollRunId, CancellationToken ct) => (await service.ApplyRetroAsync(id, targetPayrollRunId, ct)).ToActionResult();
+    [HttpPost("/api/payroll/final-settlements"), HasPermission(Permissions.Payroll.FinalSettlementManage)] public async Task<ActionResult<ApiResponse<FinalSettlementDto>>> CreateSettlement(FinalSettlementRequest request, CancellationToken ct) => (await service.CreateSettlementAsync(request, ct)).ToActionResult();
+    [HttpPost("/api/payroll/final-settlements/{id:guid}/lines"), HasPermission(Permissions.Payroll.FinalSettlementManage)] public async Task<ActionResult<ApiResponse<FinalSettlementDto>>> AddLine(Guid id, FinalSettlementLineRequest request, CancellationToken ct) => (await service.AddSettlementLineAsync(id, request, ct)).ToActionResult();
+    [HttpPost("/api/payroll/final-settlements/{id:guid}/calculate"), HasPermission(Permissions.Payroll.FinalSettlementCalculate)] public async Task<ActionResult<ApiResponse<FinalSettlementDto>>> CalculateSettlement(Guid id, CancellationToken ct) => (await service.CalculateSettlementAsync(id, ct)).ToActionResult();
+    [HttpPost("/api/payroll/final-settlements/{id:guid}/approve"), HasPermission(Permissions.Payroll.FinalSettlementApprove)] public async Task<ActionResult<ApiResponse<FinalSettlementDto>>> ApproveSettlement(Guid id, CancellationToken ct) => (await service.ApproveSettlementAsync(id, ct)).ToActionResult();
+    [HttpPost("/api/payroll/final-settlements/{id:guid}/finalize"), HasPermission(Permissions.Payroll.FinalSettlementFinalize)] public async Task<ActionResult<ApiResponse<FinalSettlementDto>>> FinalizeSettlement(Guid id, CancellationToken ct) => (await service.FinalizeSettlementAsync(id, ct)).ToActionResult();
+}
+
 [ApiController, Route("api/payroll/bank-advice")]
 public sealed class BankAdviceController(IBankAdviceService service) : ControllerBase
 {

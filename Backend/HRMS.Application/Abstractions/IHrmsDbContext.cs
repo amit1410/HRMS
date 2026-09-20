@@ -165,6 +165,14 @@ public interface IHrmsDbContext
     DbSet<PayrollJournalLine> PayrollJournalLines { get; }
     DbSet<PayrollJournalLineSource> PayrollJournalLineSources { get; }
     DbSet<PayrollJournalHistory> PayrollJournalHistories { get; }
+    DbSet<PayrollRetroCase> PayrollRetroCases { get; }
+    DbSet<PayrollRetroResult> PayrollRetroResults { get; }
+    DbSet<PayrollRetroComponent> PayrollRetroComponents { get; }
+    DbSet<PayrollAdjustment> PayrollAdjustments { get; }
+    DbSet<PayrollRetroHistory> PayrollRetroHistories { get; }
+    DbSet<FinalSettlementCase> FinalSettlementCases { get; }
+    DbSet<FinalSettlementLine> FinalSettlementLines { get; }
+    DbSet<FinalSettlementHistory> FinalSettlementHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

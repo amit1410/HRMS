@@ -90,3 +90,11 @@ public enum PayrollGLMappingType { Earnings, EmployeeDeduction, EmployerContribu
 public enum PayrollJournalAggregationMode { Account, AccountAndCostCenter, EmployeeDetail }
 public enum PayrollJournalStatus { Draft, Generated, Validated, Approved, Posted, Exported, Cancelled }
 public enum PayrollJournalHistoryChangeType { Generated, Validated, Approved, Posted, Exported, Cancelled, Reversed }
+public enum PayrollRetroTriggerType { SalaryAssignmentChange, SalaryStructureChange, ComponentChange, EmploymentChange, ManualCorrection }
+public enum PayrollRetroStatus { Detected, Evaluated, Approved, Applied, Cancelled, NoImpact }
+public enum PayrollAdjustmentType { ArrearEarning, ArrearDeduction, Recovery, StatutoryAdjustment, FinalSettlementAdjustment }
+public enum PayrollAdjustmentStatus { Unapplied, Applied, Cancelled }
+public enum FinalSettlementStatus { Draft, Calculated, Reviewed, Approved, Finalized, Cancelled }
+public enum FinalSettlementLineType { UnpaidSalary, Arrear, LeaveEncashment, Bonus, Reimbursement, NoticeRecovery, Recovery, StatutoryAdjustment, Other }
+public enum PayrollRetroHistoryChangeType { Created, Evaluated, Approved, Applied, Cancelled, NoImpact }
+public enum FinalSettlementHistoryChangeType { Created, Calculated, Reviewed, Approved, Finalized, Cancelled }
