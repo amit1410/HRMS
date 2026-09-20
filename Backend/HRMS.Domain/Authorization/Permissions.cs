@@ -144,6 +144,13 @@ public static class Permissions
         public const string RegisterView = "Payroll.Register.View";
         public const string RegisterExport = "Payroll.Register.Export";
         public const string PayslipViewOwn = "Payroll.Payslip.ViewOwn";
+        public const string BankAdviceView = "Payroll.BankAdvice.View";
+        public const string BankAdviceGenerate = "Payroll.BankAdvice.Generate";
+        public const string BankAdviceValidate = "Payroll.BankAdvice.Validate";
+        public const string BankAdviceApprove = "Payroll.BankAdvice.Approve";
+        public const string BankAdviceExport = "Payroll.BankAdvice.Export";
+        public const string BankAdviceCancel = "Payroll.BankAdvice.Cancel";
+        public const string BankAdviceViewHistory = "Payroll.BankAdvice.ViewHistory";
     }
     public static class Attendance
     {
@@ -189,6 +196,7 @@ public static class Permissions
         Payroll.PeriodView, Payroll.PeriodManage, Payroll.RunView, Payroll.RunManage, Payroll.RunPrepare, Payroll.RunApprove, Payroll.RunFinalize, Payroll.RunViewHistory, Payroll.RunCalculate, Payroll.RunRecalculate, Payroll.RunViewResults,
         Payroll.StatutoryView, Payroll.StatutoryManage, Payroll.StatutoryViewHistory, Payroll.EmployeeStatutoryView, Payroll.EmployeeStatutoryManage,
         Payroll.PayslipViewAll, Payroll.PayslipGenerate, Payroll.PayslipPublish, Payroll.PayslipViewHistory, Payroll.RegisterView, Payroll.RegisterExport, Payroll.PayslipViewOwn,
+        Payroll.BankAdviceView, Payroll.BankAdviceGenerate, Payroll.BankAdviceValidate, Payroll.BankAdviceApprove, Payroll.BankAdviceExport, Payroll.BankAdviceCancel, Payroll.BankAdviceViewHistory,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

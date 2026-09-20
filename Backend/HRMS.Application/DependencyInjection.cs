@@ -110,6 +110,7 @@ public static class DependencyInjection
         services.AddScoped<IPayrollCalculationService, PayrollCalculationService>();
         services.AddScoped<IStatutoryPayrollService, StatutoryPayrollService>();
         services.AddScoped<IPayrollOutputService, PayrollOutputService>();
+        services.AddScoped<IBankAdviceService, BankAdviceService>();
 
         return services;
     }

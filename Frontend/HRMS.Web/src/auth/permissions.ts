@@ -124,6 +124,13 @@ export const Permissions = {
     registerView: 'Payroll.Register.View',
     registerExport: 'Payroll.Register.Export',
     payslipViewOwn: 'Payroll.Payslip.ViewOwn',
+    bankAdviceView: 'Payroll.BankAdvice.View',
+    bankAdviceGenerate: 'Payroll.BankAdvice.Generate',
+    bankAdviceValidate: 'Payroll.BankAdvice.Validate',
+    bankAdviceApprove: 'Payroll.BankAdvice.Approve',
+    bankAdviceExport: 'Payroll.BankAdvice.Export',
+    bankAdviceCancel: 'Payroll.BankAdvice.Cancel',
+    bankAdviceViewHistory: 'Payroll.BankAdvice.ViewHistory',
   },
   attendance: {
     view: 'Attendance.View',

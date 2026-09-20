@@ -73,6 +73,10 @@ public enum PayrollRunHistoryChangeType { Created, Prepared, PopulationGenerated
 public enum PayrollResultStatus { Calculated, Failed }
 public enum PayslipStatus { Generated, Published, Superseded, Void }
 public enum PayslipHistoryChangeType { Generated, Regenerated, Published, Downloaded, Superseded, Voided }
+public enum BankAdviceStatus { Draft, Prepared, Approved, Exported, Cancelled }
+public enum BankAdvicePaymentStatus { Pending, Ready, Exported, Processed, Failed, Cancelled }
+public enum BankAdviceValidationStatus { Pending, Valid, Invalid }
+public enum BankAdviceHistoryChangeType { Generated, ValidationFailed, Prepared, Approved, Exported, Cancelled }
 public enum PayrollCalculationErrorCode { NoSalaryAssignment, NoSalaryStructureVersion, MissingBaseComponent, CircularDependency, InvalidFormula, InvalidOverride, CurrencyMismatch, NegativeNetPay, CalculationFailed, StatutoryConfigurationMissing, StatutoryConfigurationAmbiguous, InvalidStatutoryConfiguration, StatutoryBasisMissing, StatutoryCalculationFailed, JurisdictionUnsupported, EmployeeStatutoryProfileInvalid }
 public enum StatutoryType { ProvidentFund, Esi, ProfessionalTax, IncomeTax }
 public enum StatutoryConfigurationStatus { Draft, Active, Retired }

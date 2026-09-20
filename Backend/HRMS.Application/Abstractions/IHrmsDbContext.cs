@@ -154,6 +154,9 @@ public interface IHrmsDbContext
     DbSet<Payslip> Payslips { get; }
     DbSet<PayslipLine> PayslipLines { get; }
     DbSet<PayslipHistory> PayslipHistories { get; }
+    DbSet<BankAdviceBatch> BankAdviceBatches { get; }
+    DbSet<BankAdvicePayment> BankAdvicePayments { get; }
+    DbSet<BankAdviceHistory> BankAdviceHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

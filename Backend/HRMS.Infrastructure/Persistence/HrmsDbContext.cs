@@ -170,6 +170,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<Payslip> Payslips => Set<Payslip>();
     public DbSet<PayslipLine> PayslipLines => Set<PayslipLine>();
     public DbSet<PayslipHistory> PayslipHistories => Set<PayslipHistory>();
+    public DbSet<BankAdviceBatch> BankAdviceBatches => Set<BankAdviceBatch>();
+    public DbSet<BankAdvicePayment> BankAdvicePayments => Set<BankAdvicePayment>();
+    public DbSet<BankAdviceHistory> BankAdviceHistories => Set<BankAdviceHistory>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>

@@ -54,3 +54,34 @@ public sealed class MyPayslipsController(IPayrollOutputService service) : Contro
         var result = await service.GetDocumentAsync(id, true, ct); if (!result.Succeeded) return result.ToErrorResult(); return Content(result.Value!, "text/html; charset=utf-8");
     }
 }
+
+[ApiController, Route("api/payroll/bank-advice")]
+public sealed class BankAdviceController(IBankAdviceService service) : ControllerBase
+{
+    [HttpPost("/api/payroll/runs/{runId:guid}/bank-advice"), HasPermission(Permissions.Payroll.BankAdviceGenerate)]
+    public async Task<ActionResult<ApiResponse<BankAdviceBatchDto>>> Generate(Guid runId, CancellationToken ct) => (await service.GenerateAsync(runId, ct)).ToActionResult();
+
+    [HttpGet, HasPermission(Permissions.Payroll.BankAdviceView)]
+    public async Task<ActionResult<ApiResponse<PagedResult<BankAdviceBatchDto>>>> List([FromQuery] BankAdviceQuery query, CancellationToken ct) => (await service.GetAsync(query, ct)).ToActionResult();
+
+    [HttpGet("{id:guid}"), HasPermission(Permissions.Payroll.BankAdviceView)]
+    public async Task<ActionResult<ApiResponse<BankAdviceBatchDto>>> Get(Guid id, CancellationToken ct) => (await service.GetByIdAsync(id, ct)).ToActionResult();
+
+    [HttpPost("{id:guid}/validate"), HasPermission(Permissions.Payroll.BankAdviceValidate)]
+    public async Task<ActionResult<ApiResponse<BankAdviceBatchDto>>> Validate(Guid id, CancellationToken ct) => (await service.ValidateAsync(id, ct)).ToActionResult();
+
+    [HttpPost("{id:guid}/prepare"), HasPermission(Permissions.Payroll.BankAdviceValidate)]
+    public async Task<ActionResult<ApiResponse<BankAdviceBatchDto>>> Prepare(Guid id, CancellationToken ct) => (await service.PrepareAsync(id, ct)).ToActionResult();
+
+    [HttpPost("{id:guid}/approve"), HasPermission(Permissions.Payroll.BankAdviceApprove)]
+    public async Task<ActionResult<ApiResponse<BankAdviceBatchDto>>> Approve(Guid id, CancellationToken ct) => (await service.ApproveAsync(id, ct)).ToActionResult();
+
+    [HttpGet("{id:guid}/export"), HasPermission(Permissions.Payroll.BankAdviceExport)]
+    public async Task<IActionResult> Export(Guid id, CancellationToken ct)
+    {
+        var result = await service.ExportAsync(id, ct); if (!result.Succeeded) return result.ToErrorResult(); return File(result.Value!.Content, result.Value.ContentType, result.Value.FileName);
+    }
+
+    [HttpPost("{id:guid}/cancel"), HasPermission(Permissions.Payroll.BankAdviceCancel)]
+    public async Task<ActionResult<ApiResponse<BankAdviceBatchDto>>> Cancel(Guid id, CancellationToken ct) => (await service.CancelAsync(id, ct)).ToActionResult();
+}
