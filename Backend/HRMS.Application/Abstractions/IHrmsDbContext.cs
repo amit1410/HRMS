@@ -193,6 +193,13 @@ public interface IHrmsDbContext
     DbSet<ReimbursementAttachment> ReimbursementAttachments { get; }
     DbSet<ReimbursementSettlement> ReimbursementSettlements { get; }
     DbSet<ReimbursementHistory> ReimbursementHistories { get; }
+    DbSet<GratuityPolicy> GratuityPolicies { get; }
+    DbSet<GratuityPolicyVersion> GratuityPolicyVersions { get; }
+    DbSet<GratuityCalculation> GratuityCalculations { get; }
+    DbSet<GratuityOverride> GratuityOverrides { get; }
+    DbSet<LeaveEncashmentCalculation> LeaveEncashmentCalculations { get; }
+    DbSet<NoticeSettlementCalculation> NoticeSettlementCalculations { get; }
+    DbSet<SeparationBenefitHistory> SeparationBenefitHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

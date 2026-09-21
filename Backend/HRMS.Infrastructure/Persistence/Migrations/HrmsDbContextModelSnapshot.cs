@@ -3662,6 +3662,9 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateOnly>("SeparationDate")
                         .HasColumnType("date");
 
+                    b.Property<int>("SeparationReason")
+                        .HasColumnType("int");
+
                     b.Property<DateOnly>("SettlementDate")
                         .HasColumnType("date");
 
@@ -3877,6 +3880,373 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("Grades", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.GratuityCalculation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AppliedRoundingRule")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<Guid?>("CalculatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CalculationDateUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal?>("CapAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<bool>("CapApplied")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CurrencyCode")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<decimal?>("DenominatorDays")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal>("EligibleServiceUnits")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("FinalGratuityAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid?>("FinalSettlementId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("GratuityPolicyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("GratuityPolicyVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("GrossCalculatedAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("NonTaxableAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal?>("NumeratorDays")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("SeparationReason")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("ServiceEndDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly>("ServiceStartDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("TaxableAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("TotalServiceDays")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("TotalServiceMonths")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal>("WageBasisAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("WageBasisType")
+                        .HasColumnType("int");
+
+                    b.Property<string>("WageSnapshotJson")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "FinalSettlementId")
+                        .IsUnique()
+                        .HasFilter("[FinalSettlementId] IS NOT NULL");
+
+                    b.HasIndex("TenantId", "GratuityPolicyId");
+
+                    b.HasIndex("TenantId", "GratuityPolicyVersionId");
+
+                    b.HasIndex("TenantId", "EmployeeId", "ServiceEndDate");
+
+                    b.ToTable("GratuityCalculations", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.GratuityOverride", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ApprovedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("GratuityCalculationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("OriginalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("OverrideAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<Guid?>("RequestedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "GratuityCalculationId", "ApprovedAtUtc");
+
+                    b.ToTable("GratuityOverrides", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.GratuityPolicy", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CurrencyCode")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("GratuityPolicies", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.GratuityPolicyVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("AllowMinimumServiceOverrideForDeath")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("AllowMinimumServiceOverrideForDisability")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal?>("DenominatorDays")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<decimal?>("FixedAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("FormulaType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("GratuityPolicyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("IncludeNoticePeriodInService")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsDeathEligible")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsDisabilityEligible")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsRedundancyEligible")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsResignationEligible")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsRetirementEligible")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsTerminationEligible")
+                        .HasColumnType("bit");
+
+                    b.Property<decimal?>("LeaveEncashmentDivisor")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<bool>("LeaveEncashmentEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("LeaveEncashmentTaxTreatment")
+                        .HasColumnType("int");
+
+                    b.Property<string>("LeaveTypeIdsJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<decimal?>("MaximumBenefit")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal?>("MaximumLeaveEncashmentDays")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal?>("MinimumBenefit")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("MinimumServiceMonths")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("MonetaryRoundingMethod")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("NoticeDivisor")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("NoticeSettlementType")
+                        .HasColumnType("int");
+
+                    b.Property<int>("NoticeWageBasisType")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("NumeratorDays")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("RoundingPrecision")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SelectedSalaryComponentIdsJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("ServiceRoundingMethod")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("ServiceRoundingThresholdMonths")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<int>("TaxTreatment")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("TaxablePercentage")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("WageBasisType")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "GratuityPolicyId", "EffectiveFrom");
+
+                    b.ToTable("GratuityPolicyVersions", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.HoldingCompany", b =>
@@ -4444,6 +4814,78 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         {
                             t.HasCheckConstraint("CK_LeaveBalanceTransactions_PositiveQuantity", "[Quantity] > 0");
                         });
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveEncashmentCalculation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CalculationDateUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("Divisor")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal>("EligibleDays")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("EncashableDays")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("FinalSettlementId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("GrossAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("LeaveTypeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("NonTaxableAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<string>("SourceBalanceReference")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<decimal>("TaxableAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("WageBasisAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.HasIndex("TenantId", "LeaveTypeId");
+
+                    b.HasIndex("TenantId", "FinalSettlementId", "LeaveTypeId")
+                        .IsUnique();
+
+                    b.ToTable("LeaveEncashmentCalculations", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveEntitlementGrant", b =>
@@ -5966,6 +6408,75 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("LinesOfBusiness", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.NoticeSettlementCalculation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<DateTime>("CalculationDateUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("DifferenceDays")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal>("Divisor")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("FinalSettlementId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("NonTaxableAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal>("RequiredDays")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal>("ServedDays")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<decimal>("TaxableAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("WageBasisAmount")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("decimal(18,6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.HasIndex("TenantId", "FinalSettlementId")
+                        .IsUnique();
+
+                    b.ToTable("NoticeSettlementCalculations", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Organisation", b =>
@@ -9471,6 +9982,79 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("Sections", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.SeparationBenefitHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("EventType")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("FinalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid?>("FinalSettlementId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("GratuityPolicyId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("GratuityPolicyVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal?>("OriginalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("SnapshotJson")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<Guid?>("SourceId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("SourceType")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "FinalSettlementId");
+
+                    b.HasIndex("TenantId", "GratuityPolicyId");
+
+                    b.HasIndex("TenantId", "GratuityPolicyVersionId");
+
+                    b.HasIndex("TenantId", "EmployeeId", "OccurredAtUtc");
+
+                    b.ToTable("SeparationBenefitHistories", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Shift", b =>
                 {
                     b.Property<Guid>("Id")
@@ -12056,6 +12640,103 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.GratuityCalculation", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.FinalSettlementCase", "FinalSettlement")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "FinalSettlementId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.GratuityPolicy", "GratuityPolicy")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "GratuityPolicyId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.GratuityPolicyVersion", "GratuityPolicyVersion")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "GratuityPolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("FinalSettlement");
+
+                    b.Navigation("GratuityPolicy");
+
+                    b.Navigation("GratuityPolicyVersion");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.GratuityOverride", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.GratuityCalculation", "GratuityCalculation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "GratuityCalculationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("GratuityCalculation");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.GratuityPolicy", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.GratuityPolicyVersion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.GratuityPolicy", "GratuityPolicy")
+                        .WithMany("Versions")
+                        .HasForeignKey("TenantId", "GratuityPolicyId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("GratuityPolicy");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.HoldingCompany", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -12330,6 +13011,44 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("LeavePolicyVersion");
 
                     b.Navigation("LeaveRequest");
+
+                    b.Navigation("LeaveType");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeaveEncashmentCalculation", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.FinalSettlementCase", "FinalSettlement")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "FinalSettlementId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeaveType", "LeaveType")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeaveTypeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("FinalSettlement");
 
                     b.Navigation("LeaveType");
 
@@ -12930,6 +13649,35 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("HoldingCompany");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.NoticeSettlementCalculation", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.FinalSettlementCase", "FinalSettlement")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "FinalSettlementId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("FinalSettlement");
 
                     b.Navigation("Tenant");
                 });
@@ -14265,6 +15013,49 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.SeparationBenefitHistory", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.FinalSettlementCase", "FinalSettlement")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "FinalSettlementId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.GratuityPolicy", "GratuityPolicy")
+                        .WithMany("History")
+                        .HasForeignKey("TenantId", "GratuityPolicyId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.GratuityPolicyVersion", "GratuityPolicyVersion")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "GratuityPolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("FinalSettlement");
+
+                    b.Navigation("GratuityPolicy");
+
+                    b.Navigation("GratuityPolicyVersion");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Shift", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", null)
@@ -14770,6 +15561,13 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("History");
 
                     b.Navigation("Lines");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.GratuityPolicy", b =>
+                {
+                    b.Navigation("History");
+
+                    b.Navigation("Versions");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveBalanceImportBatch", b =>

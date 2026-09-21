@@ -124,6 +124,7 @@ public static class DependencyInjection
         services.AddScoped<IReimbursementPayrollResolver, ReimbursementPayrollResolver>();
         services.AddScoped<IReimbursementPolicyResolver, ReimbursementPolicyResolver>();
         services.AddScoped<IReimbursementEligibilityService, ReimbursementEligibilityService>();
+        services.AddScoped<ISeparationBenefitsService, SeparationBenefitsService>();
 
         return services;
     }

@@ -180,6 +180,12 @@ export const Permissions = {
     reimbursementsCancel: 'Payroll.Reimbursements.Cancel',
     reimbursementsViewHistory: 'Payroll.Reimbursements.ViewHistory',
     reimbursementsManageCategories: 'Payroll.Reimbursements.ManageCategories',
+    separationBenefitsView: 'Payroll.SeparationBenefits.View',
+    separationBenefitsCalculate: 'Payroll.SeparationBenefits.Calculate',
+    separationBenefitsManagePolicies: 'Payroll.SeparationBenefits.ManagePolicies',
+    separationBenefitsOverride: 'Payroll.SeparationBenefits.Override',
+    separationBenefitsApprove: 'Payroll.SeparationBenefits.Approve',
+    separationBenefitsViewHistory: 'Payroll.SeparationBenefits.ViewHistory',
   },
   attendance: {
     view: 'Attendance.View',

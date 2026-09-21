@@ -1,0 +1,17 @@
+import { api } from './client.ts'
+
+export type SeparationReason = 'Resignation' | 'Retirement' | 'Termination' | 'Redundancy' | 'Death' | 'Disability' | 'ContractEnd' | 'Other'
+export type GratuityPolicy = { id: string; code: string; name: string; isActive: boolean; currencyCode: string; versions: GratuityPolicyVersion[] }
+export type GratuityPolicyVersion = { id: string; effectiveFrom: string; effectiveTo?: string; status: string; minimumServiceMonths: number; serviceRoundingMethod: string; formulaType: string; numeratorDays?: number; denominatorDays?: number; wageBasisType: string; maximumBenefit?: number; minimumBenefit?: number; taxTreatment: string; leaveEncashmentEnabled: boolean; noticeSettlementType: string }
+export type SeparationBenefits = { employeeId: string; finalSettlementId?: string; gratuity?: { finalGratuityAmount: number; taxableAmount: number; nonTaxableAmount: number; wageBasisAmount: number; serviceLength: { totalServiceDays: number; totalServiceMonths: number; eligibleServiceUnits: number } }; leaveEncashment: { grossAmount: number }[]; notice?: { type: string; amount: number }; finalSettlementStatus?: string }
+export type RegisterRow = { employeeId: string; finalSettlementId?: string; employeeCode: string; employeeName: string; serviceEndDate: string; separationReason: SeparationReason; totalServiceMonths: number; gratuityAmount: number; leaveEncashmentAmount: number; noticePayAmount: number; noticeRecoveryAmount: number; taxableAmount: number; nonTaxableAmount: number; netBenefit: number; finalSettlementStatus?: string }
+export type SeparationBenefitPage = { items: RegisterRow[]; page: number; pageSize: number; totalCount: number }
+export type SeparationBenefitHistory = { id: string; eventType: string; occurredAtUtc: string; actorUserId?: string; sourceType?: string; sourceId?: string; originalAmount?: number; finalAmount?: number; reason?: string }
+export const listGratuityPolicies = (signal?: AbortSignal) => api.get<GratuityPolicy[]>('/api/payroll/gratuity-policies', { signal }).then(r => r.data)
+export const createGratuityPolicy = (body: unknown) => api.post<GratuityPolicy>('/api/payroll/gratuity-policies', body).then(r => r.data)
+export const addGratuityPolicyVersion = (id: string, body: unknown) => api.post<GratuityPolicy>(`/api/payroll/gratuity-policies/${id}/versions`, body).then(r => r.data)
+export const listSeparationBenefitRegister = (params: Record<string, unknown>, signal?: AbortSignal) => api.get<SeparationBenefitPage>('/api/payroll/separation-benefits/register', { params, signal }).then(r => r.data)
+export const getMySeparationBenefits = (signal?: AbortSignal) => api.get<SeparationBenefits>('/api/me/separation-benefits', { signal }).then(r => r.data)
+export const getSeparationBenefits = (employeeId: string, finalSettlementId?: string, signal?: AbortSignal) => api.get<SeparationBenefits>(`/api/payroll/separation-benefits/${employeeId}`, { params: { finalSettlementId }, signal }).then(r => r.data)
+export const getSeparationBenefitHistory = (employeeId: string, finalSettlementId?: string, signal?: AbortSignal) => api.get<SeparationBenefitHistory[]>(`/api/payroll/separation-benefits/${employeeId}/history`, { params: { finalSettlementId }, signal }).then(r => r.data)
+export const getMySeparationBenefitHistory = (signal?: AbortSignal) => api.get<SeparationBenefitHistory[]>('/api/me/separation-benefits/history', { signal }).then(r => r.data)

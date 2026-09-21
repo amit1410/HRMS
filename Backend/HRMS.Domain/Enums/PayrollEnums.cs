@@ -111,6 +111,13 @@ public enum PayrollGLMappingType
     ManualReimbursementSettlement,
     PayrollReimbursementSettlement,
     FinalSettlementReimbursement
+    ,GratuityExpense
+    ,GratuityPayable
+    ,LeaveEncashmentExpense
+    ,NoticePayExpense
+    ,NoticeRecoveryReceivable
+    ,SeparationBenefitExpense
+    ,FinalSettlementBenefitPayable
 }
 public enum PayrollJournalAggregationMode { Account, AccountAndCostCenter, EmployeeDetail }
 public enum PayrollJournalStatus { Draft, Generated, Validated, Approved, Posted, Exported, Cancelled }
@@ -120,6 +127,6 @@ public enum PayrollRetroStatus { Detected, Evaluated, Approved, Applied, Cancell
 public enum PayrollAdjustmentType { ArrearEarning, ArrearDeduction, Recovery, StatutoryAdjustment, FinalSettlementAdjustment }
 public enum PayrollAdjustmentStatus { Unapplied, Applied, Cancelled }
 public enum FinalSettlementStatus { Draft, Calculated, Reviewed, Approved, Finalized, Cancelled }
-public enum FinalSettlementLineType { UnpaidSalary, Arrear, LeaveEncashment, Bonus, Reimbursement, NoticeRecovery, Recovery, StatutoryAdjustment, Other }
+public enum FinalSettlementLineType { UnpaidSalary, Arrear, LeaveEncashment, Bonus, Reimbursement, NoticePay, NoticeRecovery, Gratuity, Recovery, StatutoryAdjustment, Other }
 public enum PayrollRetroHistoryChangeType { Created, Evaluated, Approved, Applied, Cancelled, NoImpact }
 public enum FinalSettlementHistoryChangeType { Created, Calculated, Reviewed, Approved, Finalized, Cancelled }

@@ -110,6 +110,7 @@ public sealed class FinalSettlementCase : BaseEntity, ITenantEntity
     public DateOnly SeparationDate { get; set; }
     public DateOnly LastWorkingDate { get; set; }
     public DateOnly SettlementDate { get; set; }
+    public SeparationReason SeparationReason { get; set; } = SeparationReason.Other;
     public Guid? PayrollRunId { get; set; }
     public FinalSettlementStatus Status { get; set; } = FinalSettlementStatus.Draft;
     public string CurrencyCode { get; set; } = "INR";

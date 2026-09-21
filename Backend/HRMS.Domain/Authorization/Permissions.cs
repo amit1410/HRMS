@@ -200,6 +200,12 @@ public static class Permissions
         public const string ReimbursementsCancel = "Payroll.Reimbursements.Cancel";
         public const string ReimbursementsViewHistory = "Payroll.Reimbursements.ViewHistory";
         public const string ReimbursementsManageCategories = "Payroll.Reimbursements.ManageCategories";
+        public const string SeparationBenefitsView = "Payroll.SeparationBenefits.View";
+        public const string SeparationBenefitsCalculate = "Payroll.SeparationBenefits.Calculate";
+        public const string SeparationBenefitsManagePolicies = "Payroll.SeparationBenefits.ManagePolicies";
+        public const string SeparationBenefitsOverride = "Payroll.SeparationBenefits.Override";
+        public const string SeparationBenefitsApprove = "Payroll.SeparationBenefits.Approve";
+        public const string SeparationBenefitsViewHistory = "Payroll.SeparationBenefits.ViewHistory";
     }
     public static class Attendance
     {
@@ -252,6 +258,7 @@ public static class Permissions
         Payroll.StatutoryComplianceView, Payroll.StatutoryComplianceGenerate, Payroll.StatutoryComplianceValidate, Payroll.StatutoryComplianceApprove, Payroll.StatutoryComplianceExport, Payroll.StatutoryComplianceMarkFiled, Payroll.StatutoryComplianceCancel, Payroll.StatutoryComplianceViewHistory, Payroll.StatutoryComplianceManagePeriods,
         Payroll.LoansView, Payroll.LoansRequest, Payroll.LoansManage, Payroll.LoansApprove, Payroll.LoansDisburse, Payroll.LoansRecover, Payroll.LoansClose, Payroll.LoansCancel, Payroll.LoansViewHistory, Payroll.LoansManageProducts,
         Payroll.ReimbursementsView, Payroll.ReimbursementsRequest, Payroll.ReimbursementsManage, Payroll.ReimbursementsApprove, Payroll.ReimbursementsSettle, Payroll.ReimbursementsCancel, Payroll.ReimbursementsViewHistory, Payroll.ReimbursementsManageCategories,
+        Payroll.SeparationBenefitsView, Payroll.SeparationBenefitsCalculate, Payroll.SeparationBenefitsManagePolicies, Payroll.SeparationBenefitsOverride, Payroll.SeparationBenefitsApprove, Payroll.SeparationBenefitsViewHistory,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,
