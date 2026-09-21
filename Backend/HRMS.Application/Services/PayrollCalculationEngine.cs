@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
 
-public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock, IStatutoryPayrollService? statutory = null, ILoanPayrollRecoveryResolver? loanRecovery = null) : IPayrollCalculationEngine
+public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock, IStatutoryPayrollService? statutory = null, ILoanPayrollRecoveryResolver? loanRecovery = null, IReimbursementPayrollResolver? reimbursementResolver = null) : IPayrollCalculationEngine
 {
     public async Task<Result<PayrollCalculationSummaryDto>> CalculateAsync(Guid payrollRunId, bool recalculate, CancellationToken ct = default)
     {
@@ -43,7 +43,7 @@ public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext t
             }
         }
         if (errors.Count > 0) db.PayrollCalculationErrors.AddRange(errors);
-        if (errors.Count == 0) foreach (var pending in pendingResults) await PersistLoanRecoveriesAsync(pending, ct);
+        if (errors.Count == 0) foreach (var pending in pendingResults) { await PersistLoanRecoveriesAsync(pending, ct); await PersistReimbursementSettlementsAsync(pending, ct); }
         var failed = errors.Count; var allEligible = run.Employees.Count(x => x.IsEligible);
         if (failed == 0) { foreach (var old in priorResults) old.IsCurrent = false; run.Status = PayrollRunStatus.Calculated; run.CompletedAtUtc = clock.GetUtcNow().UtcDateTime; run.CompletedByUserId = tenant.UserId; db.PayrollCalculationHistories.Add(Event(run, attemptId, PayrollCalculationHistoryChangeType.CalculationCompleted, null, recalculate ? "Payroll recalculation completed." : "Payroll calculation completed.")); if (recalculate) db.PayrollCalculationHistories.Add(Event(run, attemptId, PayrollCalculationHistoryChangeType.RecalculationCompleted, null, "Payroll recalculation completed.")); }
         else run.Status = PayrollRunStatus.Prepared;
@@ -111,8 +111,23 @@ public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext t
                 result.TotalDeductions = PayrollRoundingPolicy.RoundMoney(result.TotalDeductions + amount); result.NetPay = PayrollRoundingPolicy.RoundMoney(result.NetPay - amount);
             }
         }
+        if (reimbursementResolver is not null)
+        {
+            var recoveries = await reimbursementResolver.ResolveAsync(snapshot.EmployeeId, run.PayrollPeriod.PayDate, ct);
+            foreach (var recovery in recoveries)
+            {
+                var amount = PayrollRoundingPolicy.RoundMoney(recovery.ApprovedAmount);
+                if (amount <= 0) continue;
+                if (recovery.TaxableAmount > 0) result.Components.Add(ReimbursementComponent(run, attemptId, recovery, recovery.TaxableAmount, true));
+                if (recovery.NonTaxableAmount > 0) result.Components.Add(ReimbursementComponent(run, attemptId, recovery, recovery.NonTaxableAmount, false));
+                result.GrossEarnings = PayrollRoundingPolicy.RoundMoney(result.GrossEarnings + amount);
+                result.NetPay = PayrollRoundingPolicy.RoundMoney(result.NetPay + amount);
+            }
+        }
         return (result, null);
     }
+
+    private static PayrollResultComponent ReimbursementComponent(PayrollRun run, Guid attemptId, ReimbursementPayrollRecovery recovery, decimal amount, bool taxable) => new() { Id = Guid.NewGuid(), TenantId = run.TenantId, CalculationAttemptId = attemptId, ComponentCode = $"REIMB-{(taxable ? "TAX" : "NONTAX")}-{recovery.ClaimLineId:N}"[..50], ComponentName = $"{(taxable ? "Taxable" : "Non-taxable")} reimbursement {recovery.ClaimNumber}", ComponentType = SalaryComponentType.Reimbursement, CalculationType = SalaryStructureCalculationType.Manual, UnproratedAmount = amount, ProrationFactor = 1m, CalculatedAmount = amount, IsEarning = true, IsTaxable = taxable, CalculationSequence = 910000, CalculationSource = taxable ? "TaxableReimbursement" : "NonTaxableReimbursement", CalculationMetadata = JsonSerializer.Serialize(new { recovery.ClaimId, recovery.ClaimLineId, recovery.CategoryCode, recovery.SettlementMethod }), ReimbursementClaimId = recovery.ClaimId, ReimbursementClaimLineId = recovery.ClaimLineId };
 
     private async Task PersistLoanRecoveriesAsync(PayrollResult result, CancellationToken ct)
     {
@@ -126,6 +141,20 @@ public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext t
             installment.RecoveredAmount = PayrollRoundingPolicy.RoundMoney(installment.RecoveredAmount + component.CalculatedAmount); installment.PayrollRunId = result.PayrollRunId; installment.PayrollResultId = result.Id; installment.RecoveredAtUtc = clock.GetUtcNow().UtcDateTime; installment.Status = installment.RecoveredAmount >= installment.InstallmentAmount ? LoanInstallmentStatus.Recovered : LoanInstallmentStatus.PartiallyRecovered;
             loan.OutstandingPrincipal = Math.Max(0m, loan.OutstandingPrincipal - principal); loan.OutstandingInterest = Math.Max(0m, loan.OutstandingInterest - interest); loan.OutstandingTotal = PayrollRoundingPolicy.RoundMoney(loan.OutstandingPrincipal + loan.OutstandingInterest); loan.ConcurrencyVersion++;
             db.LoanHistories.Add(new LoanHistory { Id = Guid.NewGuid(), TenantId = result.TenantId, EmployeeLoanId = loan.Id, EventType = LoanHistoryEventType.PayrollRecovery, PreviousStatus = loan.Status, NewStatus = loan.Status, Amount = component.CalculatedAmount, SourceType = "PayrollResult", SourceId = result.Id, ActorUserId = tenant.UserId, OccurredAtUtc = clock.GetUtcNow().UtcDateTime });
+        }
+    }
+
+    private async Task PersistReimbursementSettlementsAsync(PayrollResult result, CancellationToken ct)
+    {
+        if (reimbursementResolver is null) return;
+        foreach (var component in result.Components.Where(x => x.ReimbursementClaimLineId.HasValue && x.CalculatedAmount > 0).GroupBy(x => x.ReimbursementClaimLineId!.Value).Select(x => x.First()))
+        {
+            var line = await db.ReimbursementClaimLines.Include(x => x.Claim).FirstOrDefaultAsync(x => x.TenantId == result.TenantId && x.Id == component.ReimbursementClaimLineId.Value, ct);
+            if (line?.Claim is null || await db.ReimbursementSettlements.AnyAsync(x => x.TenantId == result.TenantId && x.ReimbursementClaimLineId == line.Id && x.PayrollResultId == result.Id, ct)) continue;
+            var amount = result.Components.Where(x => x.ReimbursementClaimLineId == line.Id).Sum(x => x.CalculatedAmount);
+            var taxable = result.Components.Where(x => x.ReimbursementClaimLineId == line.Id && x.IsTaxable).Sum(x => x.CalculatedAmount);
+            db.ReimbursementSettlements.Add(new ReimbursementSettlement { Id = Guid.NewGuid(), TenantId = result.TenantId, ReimbursementClaimId = line.ReimbursementClaimId, ReimbursementClaimLineId = line.Id, EmployeeId = line.Claim.EmployeeId, SettlementType = ReimbursementSettlementType.Payroll, Amount = amount, TaxableAmount = taxable, NonTaxableAmount = amount - taxable, SettlementDate = result.PeriodEndDate, PayrollRunId = result.PayrollRunId, PayrollResultId = result.Id, CreatedByUserId = tenant.UserId });
+            line.Claim.SettledAmount = PayrollRoundingPolicy.RoundMoney(line.Claim.SettledAmount + amount); if (line.Claim.SettledAmount >= line.Claim.TotalApprovedAmount) { line.Claim.SettledAmount = line.Claim.TotalApprovedAmount; line.Claim.Status = ReimbursementClaimStatus.Settled; line.Claim.SettledAtUtc = clock.GetUtcNow().UtcDateTime; line.Claim.SettledByUserId = tenant.UserId; } line.Status = ReimbursementClaimLineStatus.Settled;
         }
     }
 

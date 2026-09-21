@@ -192,6 +192,14 @@ public static class Permissions
         public const string LoansCancel = "Payroll.Loans.Cancel";
         public const string LoansViewHistory = "Payroll.Loans.ViewHistory";
         public const string LoansManageProducts = "Payroll.Loans.ManageProducts";
+        public const string ReimbursementsView = "Payroll.Reimbursements.View";
+        public const string ReimbursementsRequest = "Payroll.Reimbursements.Request";
+        public const string ReimbursementsManage = "Payroll.Reimbursements.Manage";
+        public const string ReimbursementsApprove = "Payroll.Reimbursements.Approve";
+        public const string ReimbursementsSettle = "Payroll.Reimbursements.Settle";
+        public const string ReimbursementsCancel = "Payroll.Reimbursements.Cancel";
+        public const string ReimbursementsViewHistory = "Payroll.Reimbursements.ViewHistory";
+        public const string ReimbursementsManageCategories = "Payroll.Reimbursements.ManageCategories";
     }
     public static class Attendance
     {
@@ -243,6 +251,7 @@ public static class Permissions
         Payroll.FinalSettlementView, Payroll.FinalSettlementManage, Payroll.FinalSettlementCalculate, Payroll.FinalSettlementApprove, Payroll.FinalSettlementFinalize, Payroll.FinalSettlementCancel,
         Payroll.StatutoryComplianceView, Payroll.StatutoryComplianceGenerate, Payroll.StatutoryComplianceValidate, Payroll.StatutoryComplianceApprove, Payroll.StatutoryComplianceExport, Payroll.StatutoryComplianceMarkFiled, Payroll.StatutoryComplianceCancel, Payroll.StatutoryComplianceViewHistory, Payroll.StatutoryComplianceManagePeriods,
         Payroll.LoansView, Payroll.LoansRequest, Payroll.LoansManage, Payroll.LoansApprove, Payroll.LoansDisburse, Payroll.LoansRecover, Payroll.LoansClose, Payroll.LoansCancel, Payroll.LoansViewHistory, Payroll.LoansManageProducts,
+        Payroll.ReimbursementsView, Payroll.ReimbursementsRequest, Payroll.ReimbursementsManage, Payroll.ReimbursementsApprove, Payroll.ReimbursementsSettle, Payroll.ReimbursementsCancel, Payroll.ReimbursementsViewHistory, Payroll.ReimbursementsManageCategories,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

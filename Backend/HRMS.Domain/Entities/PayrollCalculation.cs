@@ -67,6 +67,8 @@ public sealed class PayrollResultComponent : BaseEntity, ITenantEntity
     public string? CalculationMetadata { get; set; }
     public Guid? EmployeeLoanId { get; set; }
     public Guid? LoanInstallmentId { get; set; }
+    public Guid? ReimbursementClaimId { get; set; }
+    public Guid? ReimbursementClaimLineId { get; set; }
     public Tenant? Tenant { get; set; }
     public PayrollResult? PayrollResult { get; set; }
     public SalaryComponent? SalaryComponent { get; set; }

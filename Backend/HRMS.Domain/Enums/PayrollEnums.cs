@@ -104,7 +104,13 @@ public enum PayrollGLMappingType
     SalaryAdvanceDisbursementReceivable,
     LoanPayrollRecovery,
     LoanInterestRecovery,
-    LoanFinalSettlementRecovery
+    LoanFinalSettlementRecovery,
+    ReimbursementExpense,
+    ReimbursementPayable,
+    TaxableReimbursementExpense,
+    ManualReimbursementSettlement,
+    PayrollReimbursementSettlement,
+    FinalSettlementReimbursement
 }
 public enum PayrollJournalAggregationMode { Account, AccountAndCostCenter, EmployeeDetail }
 public enum PayrollJournalStatus { Draft, Generated, Validated, Approved, Posted, Exported, Cancelled }

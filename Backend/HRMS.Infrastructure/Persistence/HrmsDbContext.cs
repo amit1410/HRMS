@@ -202,6 +202,13 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<LoanInstallment> LoanInstallments => Set<LoanInstallment>();
     public DbSet<LoanRepayment> LoanRepayments => Set<LoanRepayment>();
     public DbSet<LoanHistory> LoanHistories => Set<LoanHistory>();
+    public DbSet<ReimbursementCategory> ReimbursementCategories => Set<ReimbursementCategory>();
+    public DbSet<ReimbursementPolicyVersion> ReimbursementPolicyVersions => Set<ReimbursementPolicyVersion>();
+    public DbSet<ReimbursementClaim> ReimbursementClaims => Set<ReimbursementClaim>();
+    public DbSet<ReimbursementClaimLine> ReimbursementClaimLines => Set<ReimbursementClaimLine>();
+    public DbSet<ReimbursementAttachment> ReimbursementAttachments => Set<ReimbursementAttachment>();
+    public DbSet<ReimbursementSettlement> ReimbursementSettlements => Set<ReimbursementSettlement>();
+    public DbSet<ReimbursementHistory> ReimbursementHistories => Set<ReimbursementHistory>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
@@ -485,6 +492,13 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<LoanInstallment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LoanRepayment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LoanHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ReimbursementCategory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ReimbursementPolicyVersion>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ReimbursementClaim>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ReimbursementClaimLine>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ReimbursementAttachment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ReimbursementSettlement>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ReimbursementHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollCompliancePeriod>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollStatutoryReturnBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollStatutoryReturnEmployee>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

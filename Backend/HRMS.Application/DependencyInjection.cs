@@ -120,6 +120,10 @@ public static class DependencyInjection
         services.AddScoped<IPayrollStatutoryComplianceService, PayrollStatutoryComplianceService>();
         services.AddScoped<IPayrollLoanService, PayrollLoanService>();
         services.AddScoped<ILoanPayrollRecoveryResolver, LoanPayrollRecoveryResolver>();
+        services.AddScoped<IReimbursementService, ReimbursementService>();
+        services.AddScoped<IReimbursementPayrollResolver, ReimbursementPayrollResolver>();
+        services.AddScoped<IReimbursementPolicyResolver, ReimbursementPolicyResolver>();
+        services.AddScoped<IReimbursementEligibilityService, ReimbursementEligibilityService>();
 
         return services;
     }

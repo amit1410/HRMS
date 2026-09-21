@@ -65,6 +65,8 @@ import { StatutoryCompliancePage } from './pages/payroll/StatutoryCompliancePage
 import { PayrollConfigurationHealthPage } from './pages/payroll/PayrollConfigurationHealthPage.tsx'
 import { PayrollOperationsDashboardPage } from './pages/payroll/PayrollOperationsDashboardPage.tsx'
 import { MyLoansPage, PayrollLoansPage } from './pages/payroll/PayrollLoansPage.tsx'
+import { ReimbursementsPage } from './pages/payroll/ReimbursementsPage.tsx'
+import { MyReimbursementsPage } from './pages/payroll/MyReimbursementsPage.tsx'
 
 /**
  * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
@@ -157,6 +159,8 @@ function TenantApplication() {
                   <Route path="payroll/loans" element={<RequirePermission permission={Permissions.payroll.loansView}><PayrollLoansPage /></RequirePermission>} />
                   <Route path="payroll/loan-products" element={<RequirePermission permission={Permissions.payroll.loansManageProducts}><PayrollLoansPage /></RequirePermission>} />
                   <Route path="payroll/my-loans" element={<RequirePermission permission={Permissions.payroll.loansRequest}><RequireEmployeeIdentity><MyLoansPage /></RequireEmployeeIdentity></RequirePermission>} />
+                  <Route path="payroll/reimbursements" element={<RequirePermission permission={Permissions.payroll.reimbursementsView}><ReimbursementsPage /></RequirePermission>} />
+                  <Route path="payroll/my-reimbursements" element={<RequirePermission permission={Permissions.payroll.reimbursementsRequest}><RequireEmployeeIdentity><MyReimbursementsPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="masters/:kind" element={<MasterRouteGuard />} />
                   <Route
                     path="configuration/employee-code"

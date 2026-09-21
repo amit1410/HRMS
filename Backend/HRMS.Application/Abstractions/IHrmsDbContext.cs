@@ -186,6 +186,13 @@ public interface IHrmsDbContext
     DbSet<LoanInstallment> LoanInstallments { get; }
     DbSet<LoanRepayment> LoanRepayments { get; }
     DbSet<LoanHistory> LoanHistories { get; }
+    DbSet<ReimbursementCategory> ReimbursementCategories { get; }
+    DbSet<ReimbursementPolicyVersion> ReimbursementPolicyVersions { get; }
+    DbSet<ReimbursementClaim> ReimbursementClaims { get; }
+    DbSet<ReimbursementClaimLine> ReimbursementClaimLines { get; }
+    DbSet<ReimbursementAttachment> ReimbursementAttachments { get; }
+    DbSet<ReimbursementSettlement> ReimbursementSettlements { get; }
+    DbSet<ReimbursementHistory> ReimbursementHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);
