@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
 
-public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock, IStatutoryPayrollService? statutory = null) : IPayrollCalculationEngine
+public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock, IStatutoryPayrollService? statutory = null, ILoanPayrollRecoveryResolver? loanRecovery = null) : IPayrollCalculationEngine
 {
     public async Task<Result<PayrollCalculationSummaryDto>> CalculateAsync(Guid payrollRunId, bool recalculate, CancellationToken ct = default)
     {
@@ -29,7 +29,7 @@ public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext t
         db.PayrollCalculationHistories.Add(Event(run, attemptId, PayrollCalculationHistoryChangeType.CalculationStarted, null, "Payroll calculation started."));
         await db.SaveChangesAsync(ct);
 
-        var errors = new List<PayrollCalculationError>(); var calculated = 0;
+        var errors = new List<PayrollCalculationError>(); var calculated = 0; var pendingResults = new List<PayrollResult>();
         foreach (var snapshot in run.Employees.Where(x => x.IsEligible))
         {
             var outcome = await CalculateEmployeeAsync(run, snapshot, attemptId, calculationVersion, ct);
@@ -39,10 +39,11 @@ public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext t
             }
             else
             {
-                db.PayrollResults.Add(outcome.Result!); calculated++; db.PayrollCalculationHistories.Add(Event(run, attemptId, PayrollCalculationHistoryChangeType.EmployeeCalculated, snapshot, "Employee payroll calculated."));
+                db.PayrollResults.Add(outcome.Result!); pendingResults.Add(outcome.Result!); calculated++; db.PayrollCalculationHistories.Add(Event(run, attemptId, PayrollCalculationHistoryChangeType.EmployeeCalculated, snapshot, "Employee payroll calculated."));
             }
         }
         if (errors.Count > 0) db.PayrollCalculationErrors.AddRange(errors);
+        if (errors.Count == 0) foreach (var pending in pendingResults) await PersistLoanRecoveriesAsync(pending, ct);
         var failed = errors.Count; var allEligible = run.Employees.Count(x => x.IsEligible);
         if (failed == 0) { foreach (var old in priorResults) old.IsCurrent = false; run.Status = PayrollRunStatus.Calculated; run.CompletedAtUtc = clock.GetUtcNow().UtcDateTime; run.CompletedByUserId = tenant.UserId; db.PayrollCalculationHistories.Add(Event(run, attemptId, PayrollCalculationHistoryChangeType.CalculationCompleted, null, recalculate ? "Payroll recalculation completed." : "Payroll calculation completed.")); if (recalculate) db.PayrollCalculationHistories.Add(Event(run, attemptId, PayrollCalculationHistoryChangeType.RecalculationCompleted, null, "Payroll recalculation completed.")); }
         else run.Status = PayrollRunStatus.Prepared;
@@ -93,7 +94,39 @@ public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext t
             result.NetPay = PayrollRoundingPolicy.RoundMoney(result.GrossEarnings - result.TotalDeductions);
             if (result.NetPay < 0) return (null, Error(run, snapshot, PayrollCalculationErrorCode.NegativeNetPay, "Total deductions exceed gross earnings after statutory deductions."));
         }
+        if (loanRecovery is not null)
+        {
+            var recoveries = await loanRecovery.ResolveAsync(snapshot.EmployeeId, run.PayrollPeriod.PayDate, ct);
+            foreach (var recovery in recoveries)
+            {
+                if (recovery.RecoveryPolicy == LoanRecoveryPolicy.DeferInstallment) continue;
+                var amount = recovery.TotalDue;
+                if (amount > result.NetPay)
+                {
+                    if (recovery.RecoveryPolicy == LoanRecoveryPolicy.RecoverFullOrFail) return (null, Error(run, snapshot, PayrollCalculationErrorCode.CalculationFailed, $"Loan recovery {recovery.LoanNumber} exceeds available net pay."));
+                    amount = PayrollRoundingPolicy.RoundMoney(Math.Max(0m, result.NetPay));
+                }
+                if (amount <= 0) continue;
+                result.Components.Add(new PayrollResultComponent { Id = Guid.NewGuid(), TenantId = run.TenantId, SalaryComponentId = null, SalaryStructureComponentId = null, CalculationAttemptId = attemptId, ComponentCode = $"LOAN-{recovery.LoanNumber}", ComponentName = $"Loan recovery {recovery.LoanNumber} installment {recovery.InstallmentNumber}", ComponentType = SalaryComponentType.Deduction, CalculationType = SalaryStructureCalculationType.Manual, UnproratedAmount = amount, ProrationFactor = 1m, CalculatedAmount = amount, IsDeduction = true, CalculationSequence = 900000 + recovery.InstallmentNumber, CalculationSource = "LoanRecovery", CalculationMetadata = JsonSerializer.Serialize(new { recovery.EmployeeLoanId, recovery.LoanInstallmentId, recovery.PrincipalDue, recovery.InterestDue, recovery.TotalDue, recovery.RecoveryPolicy }) , EmployeeLoanId = recovery.EmployeeLoanId, LoanInstallmentId = recovery.LoanInstallmentId });
+                result.TotalDeductions = PayrollRoundingPolicy.RoundMoney(result.TotalDeductions + amount); result.NetPay = PayrollRoundingPolicy.RoundMoney(result.NetPay - amount);
+            }
+        }
         return (result, null);
+    }
+
+    private async Task PersistLoanRecoveriesAsync(PayrollResult result, CancellationToken ct)
+    {
+        foreach (var component in result.Components.Where(x => x.LoanInstallmentId.HasValue && x.EmployeeLoanId.HasValue && x.CalculatedAmount > 0))
+        {
+            var installment = await db.LoanInstallments.FirstOrDefaultAsync(x => x.TenantId == result.TenantId && x.Id == component.LoanInstallmentId.Value, ct);
+            var loan = await db.EmployeeLoans.FirstOrDefaultAsync(x => x.TenantId == result.TenantId && x.Id == component.EmployeeLoanId.Value, ct);
+            if (installment is null || loan is null || await db.LoanRepayments.AnyAsync(x => x.TenantId == result.TenantId && x.LoanInstallmentId == installment.Id && x.PayrollResultId == result.Id, ct)) continue;
+            var remainingPrincipal = Math.Max(0m, installment.PrincipalAmount - Math.Min(installment.RecoveredAmount, installment.PrincipalAmount)); var remainingInterest = Math.Max(0m, installment.InterestAmount - Math.Max(0m, installment.RecoveredAmount - installment.PrincipalAmount)); var interest = Math.Min(component.CalculatedAmount, remainingInterest); var principal = component.CalculatedAmount - interest;
+            db.LoanRepayments.Add(new LoanRepayment { Id = Guid.NewGuid(), TenantId = result.TenantId, EmployeeLoanId = loan.Id, LoanInstallmentId = installment.Id, Amount = component.CalculatedAmount, PrincipalAmount = principal, InterestAmount = interest, RepaymentType = LoanRepaymentType.Payroll, PaymentDate = result.PeriodEndDate, SourceType = "PayrollResult", PayrollRunId = result.PayrollRunId, PayrollResultId = result.Id, CreatedByUserId = tenant.UserId ?? Guid.Empty });
+            installment.RecoveredAmount = PayrollRoundingPolicy.RoundMoney(installment.RecoveredAmount + component.CalculatedAmount); installment.PayrollRunId = result.PayrollRunId; installment.PayrollResultId = result.Id; installment.RecoveredAtUtc = clock.GetUtcNow().UtcDateTime; installment.Status = installment.RecoveredAmount >= installment.InstallmentAmount ? LoanInstallmentStatus.Recovered : LoanInstallmentStatus.PartiallyRecovered;
+            loan.OutstandingPrincipal = Math.Max(0m, loan.OutstandingPrincipal - principal); loan.OutstandingInterest = Math.Max(0m, loan.OutstandingInterest - interest); loan.OutstandingTotal = PayrollRoundingPolicy.RoundMoney(loan.OutstandingPrincipal + loan.OutstandingInterest); loan.ConcurrencyVersion++;
+            db.LoanHistories.Add(new LoanHistory { Id = Guid.NewGuid(), TenantId = result.TenantId, EmployeeLoanId = loan.Id, EventType = LoanHistoryEventType.PayrollRecovery, PreviousStatus = loan.Status, NewStatus = loan.Status, Amount = component.CalculatedAmount, SourceType = "PayrollResult", SourceId = result.Id, ActorUserId = tenant.UserId, OccurredAtUtc = clock.GetUtcNow().UtcDateTime });
+        }
     }
 
     private static (decimal Value, decimal? Base, decimal? Rate, bool Prorated, string Source, decimal ProrationFactor, (PayrollCalculationErrorCode Code, string Message)? Error) CalculateValue(SalaryStructureComponent definition, SalaryComponent component, EmployeeSalaryComponent? overrideRow, IReadOnlyDictionary<Guid, decimal> values, IReadOnlyList<PayrollResultComponent> prior, PayrollPeriod period, EmployeeSalaryAssignment assignment)

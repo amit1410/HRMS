@@ -2754,6 +2754,139 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         });
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeLoan", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal?>("ApprovedAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("ApprovedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int?>("ApprovedTenureMonths")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ClosedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ClosedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("ClosureReason")
+                        .HasColumnType("longtext");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("CurrencyCode")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("varchar(10)");
+
+                    b.Property<decimal?>("DisbursedAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("DisbursedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("FirstRecoveryDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("InterestMethod")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("InterestRate")
+                        .HasPrecision(9, 4)
+                        .HasColumnType("decimal(9,4)");
+
+                    b.Property<string>("LoanNumber")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<Guid>("LoanProductId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("LoanProductVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<decimal>("OutstandingInterest")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("OutstandingPrincipal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("OutstandingTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("RecoveryPolicy")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("RejectedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("RejectedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("RejectionReason")
+                        .HasColumnType("longtext");
+
+                    b.Property<decimal>("RequestedAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("RequestedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("RequestedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("RequestedTenureMonths")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "LoanNumber")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "LoanProductId");
+
+                    b.HasIndex("TenantId", "LoanProductVersionId");
+
+                    b.HasIndex("TenantId", "EmployeeId", "Status");
+
+                    b.ToTable("EmployeeLoans", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeePreviousEmployment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3454,14 +3587,14 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid?>("ApprovedByUserId")
                         .HasColumnType("char(36)");
 
-                    b.Property<Guid?>("CreatedByUserId")
-                        .HasColumnType("char(36)");
-
                     b.Property<int>("ConcurrencyVersion")
                         .IsConcurrencyToken()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
                         .HasDefaultValue(1);
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
 
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
@@ -5423,6 +5556,363 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("LeaveTypes", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal?>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("EmployeeLoanId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("EventType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("NewStatus")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("PreviousStatus")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<Guid?>("SourceId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("SourceType")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeLoanId", "OccurredAtUtc");
+
+                    b.ToTable("LoanHistories", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanInstallment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("ClosingPrincipal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("DueDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("EmployeeLoanId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("InstallmentAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("InstallmentNumber")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("InterestAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<decimal>("OpeningPrincipal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid?>("PayrollResultId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("PayrollRunId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("PrincipalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("RecoveredAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("RecoveredAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "PayrollResultId");
+
+                    b.HasIndex("TenantId", "PayrollRunId");
+
+                    b.HasIndex("TenantId", "EmployeeLoanId", "InstallmentNumber")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "Status", "DueDate");
+
+                    b.ToTable("LoanInstallments", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanProduct", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<bool>("AllowEarlyClosure")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("AllowPartialPrepayment")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("AllowTopUp")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("AllowZeroInterest")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("CurrencyCode")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("varchar(10)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<int>("InterestMethod")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("InterestRate")
+                        .HasPrecision(9, 4)
+                        .HasColumnType("decimal(9,4)");
+
+                    b.Property<int>("InterestRateType")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<decimal?>("MaxAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int?>("MaxConcurrentLoans")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("MaxTenureMonths")
+                        .HasColumnType("int");
+
+                    b.Property<decimal?>("MinAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int?>("MinTenureMonths")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<int>("ProductType")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RecoveryPolicy")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RecoveryPriority")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("RequiresApproval")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("LoanProducts", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanProductVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<bool>("AllowEarlyClosure")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("AllowPartialPrepayment")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<int>("InterestMethod")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("InterestRate")
+                        .HasPrecision(9, 4)
+                        .HasColumnType("decimal(9,4)");
+
+                    b.Property<Guid>("LoanProductId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("MaxAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("MaxTenureMonths")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("MinAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("MinTenureMonths")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("RecoveryPolicy")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "LoanProductId", "EffectiveFrom");
+
+                    b.ToTable("LoanProductVersions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanRepayment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("EmployeeLoanId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("InterestAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid?>("LoanInstallmentId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("PaymentDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid?>("PayrollResultId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("PayrollRunId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("PrincipalAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("Reference")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<int>("RepaymentType")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "LoanInstallmentId")
+                        .IsUnique()
+                        .HasFilter("[LoanInstallmentId] IS NOT NULL");
+
+                    b.HasIndex("TenantId", "EmployeeLoanId", "RepaymentType");
+
+                    b.ToTable("LoanRepayments", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Lob", b =>
                 {
                     b.Property<Guid>("Id")
@@ -6072,6 +6562,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid?>("ExportedByUserId")
                         .HasColumnType("char(36)");
 
+                    b.Property<Guid?>("FinalSettlementCaseId")
+                        .HasColumnType("char(36)");
+
                     b.Property<DateTime?>("GeneratedAtUtc")
                         .HasColumnType("datetime(6)");
 
@@ -6092,10 +6585,10 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<Guid>("PayrollPeriodId")
+                    b.Property<Guid?>("PayrollPeriodId")
                         .HasColumnType("char(36)");
 
-                    b.Property<Guid>("PayrollRunId")
+                    b.Property<Guid?>("PayrollRunId")
                         .HasColumnType("char(36)");
 
                     b.Property<DateTime?>("PostedAtUtc")
@@ -6121,6 +6614,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("TenantId", "AccountingConfigurationVersionId");
+
+                    b.HasIndex("TenantId", "FinalSettlementCaseId")
+                        .IsUnique();
 
                     b.HasIndex("TenantId", "JournalNumber")
                         .IsUnique();
@@ -6306,6 +6802,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasColumnType("varchar(50)");
 
                     b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
                         .HasDefaultValue(1);
@@ -6592,6 +7089,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
+                    b.Property<Guid?>("EmployeeLoanId")
+                        .HasColumnType("char(36)");
+
                     b.Property<string>("FormulaSnapshot")
                         .HasMaxLength(2000)
                         .HasColumnType("varchar(2000)");
@@ -6611,6 +7111,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<bool>("IsTaxable")
                         .HasColumnType("tinyint(1)");
 
+                    b.Property<Guid?>("LoanInstallmentId")
+                        .HasColumnType("char(36)");
+
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime(6)");
 
@@ -6629,7 +7132,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasPrecision(18, 6)
                         .HasColumnType("decimal(18,6)");
 
-                    b.Property<Guid>("SalaryComponentId")
+                    b.Property<Guid?>("SalaryComponentId")
                         .HasColumnType("char(36)");
 
                     b.Property<Guid?>("SalaryStructureComponentId")
@@ -6646,9 +7149,13 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.HasIndex("TenantId", "CalculationAttemptId");
 
+                    b.HasIndex("TenantId", "LoanInstallmentId");
+
                     b.HasIndex("TenantId", "PayrollResultId");
 
                     b.HasIndex("TenantId", "SalaryComponentId");
+
+                    b.HasIndex("TenantId", "EmployeeLoanId", "LoanInstallmentId");
 
                     b.ToTable("PayrollResultComponents", (string)null);
                 });
@@ -6916,6 +7423,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasColumnType("char(36)");
 
                     b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
                         .HasDefaultValue(1);
@@ -7266,6 +7774,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasColumnType("int");
 
                     b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
                         .HasDefaultValue(1);
@@ -10658,6 +11167,44 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeLoan", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LoanProduct", "LoanProduct")
+                        .WithMany("Loans")
+                        .HasForeignKey("TenantId", "LoanProductId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LoanProductVersion", "LoanProductVersion")
+                        .WithMany("Loans")
+                        .HasForeignKey("TenantId", "LoanProductVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("LoanProduct");
+
+                    b.Navigation("LoanProductVersion");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeePreviousEmployment", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -11720,6 +12267,121 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanHistory", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeLoan", "EmployeeLoan")
+                        .WithMany("History")
+                        .HasForeignKey("TenantId", "EmployeeLoanId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("EmployeeLoan");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanInstallment", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeLoan", "EmployeeLoan")
+                        .WithMany("Installments")
+                        .HasForeignKey("TenantId", "EmployeeLoanId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollResult", "PayrollResult")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollResultId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRun", "PayrollRun")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollRunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("EmployeeLoan");
+
+                    b.Navigation("PayrollResult");
+
+                    b.Navigation("PayrollRun");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanProduct", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanProductVersion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LoanProduct", "LoanProduct")
+                        .WithMany("Versions")
+                        .HasForeignKey("TenantId", "LoanProductId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("LoanProduct");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanRepayment", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeLoan", "EmployeeLoan")
+                        .WithMany("Repayments")
+                        .HasForeignKey("TenantId", "EmployeeLoanId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LoanInstallment", "LoanInstallment")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LoanInstallmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("EmployeeLoan");
+
+                    b.Navigation("LoanInstallment");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Lob", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.HoldingCompany", "HoldingCompany")
@@ -12001,21 +12663,27 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("HRMS.Domain.Entities.FinalSettlementCase", "FinalSettlementCase")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "FinalSettlementCaseId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("HRMS.Domain.Entities.PayrollPeriod", "PayrollPeriod")
                         .WithMany()
                         .HasForeignKey("TenantId", "PayrollPeriodId")
                         .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("HRMS.Domain.Entities.PayrollRun", "PayrollRun")
                         .WithMany()
                         .HasForeignKey("TenantId", "PayrollRunId")
                         .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("ConfigurationVersion");
+
+                    b.Navigation("FinalSettlementCase");
 
                     b.Navigation("PayrollPeriod");
 
@@ -12179,6 +12847,18 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("HRMS.Domain.Entities.EmployeeLoan", "EmployeeLoan")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeLoanId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.LoanInstallment", "LoanInstallment")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LoanInstallmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("HRMS.Domain.Entities.PayrollResult", "PayrollResult")
                         .WithMany("Components")
                         .HasForeignKey("TenantId", "PayrollResultId")
@@ -12190,8 +12870,11 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .WithMany()
                         .HasForeignKey("TenantId", "SalaryComponentId")
                         .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("EmployeeLoan");
+
+                    b.Navigation("LoanInstallment");
 
                     b.Navigation("PayrollResult");
 
@@ -13358,6 +14041,15 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Transactions");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeLoan", b =>
+                {
+                    b.Navigation("History");
+
+                    b.Navigation("Installments");
+
+                    b.Navigation("Repayments");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeePreviousEmployment", b =>
                 {
                     b.Navigation("SupportingDocuments");
@@ -13428,6 +14120,18 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveType", b =>
                 {
                     b.Navigation("PolicyRules");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanProduct", b =>
+                {
+                    b.Navigation("Loans");
+
+                    b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LoanProductVersion", b =>
+                {
+                    b.Navigation("Loans");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollAccountingConfiguration", b =>

@@ -4,6 +4,7 @@ using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HRMS.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(HrmsDbContext))]
-    partial class HrmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260920150812_AddLoanRepaymentInstallmentLinkSql")]
+    partial class AddLoanRepaymentInstallmentLinkSql
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -6567,9 +6570,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("ExportedByUserId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<Guid?>("FinalSettlementCaseId")
-                        .HasColumnType("uniqueidentifier");
-
                     b.Property<DateTime?>("GeneratedAtUtc")
                         .HasColumnType("datetime2");
 
@@ -6590,10 +6590,10 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime2");
 
-                    b.Property<Guid?>("PayrollPeriodId")
+                    b.Property<Guid>("PayrollPeriodId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<Guid?>("PayrollRunId")
+                    b.Property<Guid>("PayrollRunId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime?>("PostedAtUtc")
@@ -6619,10 +6619,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("TenantId", "AccountingConfigurationVersionId");
-
-                    b.HasIndex("TenantId", "FinalSettlementCaseId")
-                        .IsUnique()
-                        .HasFilter("[FinalSettlementCaseId] IS NOT NULL");
 
                     b.HasIndex("TenantId", "JournalNumber")
                         .IsUnique();
@@ -7095,9 +7091,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime2");
 
-                    b.Property<Guid?>("EmployeeLoanId")
-                        .HasColumnType("uniqueidentifier");
-
                     b.Property<string>("FormulaSnapshot")
                         .HasMaxLength(2000)
                         .HasColumnType("nvarchar(2000)");
@@ -7117,9 +7110,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsTaxable")
                         .HasColumnType("bit");
 
-                    b.Property<Guid?>("LoanInstallmentId")
-                        .HasColumnType("uniqueidentifier");
-
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime2");
 
@@ -7138,7 +7128,7 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasPrecision(18, 6)
                         .HasColumnType("decimal(18,6)");
 
-                    b.Property<Guid?>("SalaryComponentId")
+                    b.Property<Guid>("SalaryComponentId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid?>("SalaryStructureComponentId")
@@ -7155,13 +7145,9 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("TenantId", "CalculationAttemptId");
 
-                    b.HasIndex("TenantId", "LoanInstallmentId");
-
                     b.HasIndex("TenantId", "PayrollResultId");
 
                     b.HasIndex("TenantId", "SalaryComponentId");
-
-                    b.HasIndex("TenantId", "EmployeeLoanId", "LoanInstallmentId");
 
                     b.ToTable("PayrollResultComponents", (string)null);
                 });
@@ -12664,27 +12650,21 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("HRMS.Domain.Entities.FinalSettlementCase", "FinalSettlementCase")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "FinalSettlementCaseId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.HasOne("HRMS.Domain.Entities.PayrollPeriod", "PayrollPeriod")
                         .WithMany()
                         .HasForeignKey("TenantId", "PayrollPeriodId")
                         .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.HasOne("HRMS.Domain.Entities.PayrollRun", "PayrollRun")
                         .WithMany()
                         .HasForeignKey("TenantId", "PayrollRunId")
                         .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("ConfigurationVersion");
-
-                    b.Navigation("FinalSettlementCase");
 
                     b.Navigation("PayrollPeriod");
 
@@ -12848,18 +12828,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("HRMS.Domain.Entities.EmployeeLoan", "EmployeeLoan")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "EmployeeLoanId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.HasOne("HRMS.Domain.Entities.LoanInstallment", "LoanInstallment")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "LoanInstallmentId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.HasOne("HRMS.Domain.Entities.PayrollResult", "PayrollResult")
                         .WithMany("Components")
                         .HasForeignKey("TenantId", "PayrollResultId")
@@ -12871,11 +12839,8 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("TenantId", "SalaryComponentId")
                         .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.Navigation("EmployeeLoan");
-
-                    b.Navigation("LoanInstallment");
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("PayrollResult");
 

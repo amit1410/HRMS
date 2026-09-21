@@ -60,8 +60,9 @@ public sealed class PayrollGLMapping : BaseEntity, ITenantEntity
 public sealed class PayrollJournalBatch : BaseEntity, ITenantEntity
 {
     public Guid TenantId { get; set; }
-    public Guid PayrollRunId { get; set; }
-    public Guid PayrollPeriodId { get; set; }
+    public Guid? PayrollRunId { get; set; }
+    public Guid? PayrollPeriodId { get; set; }
+    public Guid? FinalSettlementCaseId { get; set; }
     public string JournalNumber { get; set; } = string.Empty;
     public DateOnly JournalDate { get; set; }
     public string CurrencyCode { get; set; } = "INR";
@@ -84,6 +85,7 @@ public sealed class PayrollJournalBatch : BaseEntity, ITenantEntity
     public Tenant? Tenant { get; set; }
     public PayrollRun? PayrollRun { get; set; }
     public PayrollPeriod? PayrollPeriod { get; set; }
+    public FinalSettlementCase? FinalSettlementCase { get; set; }
     public PayrollAccountingConfigurationVersion? ConfigurationVersion { get; set; }
     public ICollection<PayrollJournalLine> Lines { get; set; } = new List<PayrollJournalLine>();
     public ICollection<PayrollJournalHistory> History { get; set; } = new List<PayrollJournalHistory>();

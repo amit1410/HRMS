@@ -182,6 +182,16 @@ public static class Permissions
         public const string StatutoryComplianceCancel = "Payroll.StatutoryCompliance.Cancel";
         public const string StatutoryComplianceViewHistory = "Payroll.StatutoryCompliance.ViewHistory";
         public const string StatutoryComplianceManagePeriods = "Payroll.StatutoryCompliance.ManagePeriods";
+        public const string LoansView = "Payroll.Loans.View";
+        public const string LoansRequest = "Payroll.Loans.Request";
+        public const string LoansManage = "Payroll.Loans.Manage";
+        public const string LoansApprove = "Payroll.Loans.Approve";
+        public const string LoansDisburse = "Payroll.Loans.Disburse";
+        public const string LoansRecover = "Payroll.Loans.Recover";
+        public const string LoansClose = "Payroll.Loans.Close";
+        public const string LoansCancel = "Payroll.Loans.Cancel";
+        public const string LoansViewHistory = "Payroll.Loans.ViewHistory";
+        public const string LoansManageProducts = "Payroll.Loans.ManageProducts";
     }
     public static class Attendance
     {
@@ -232,6 +242,7 @@ public static class Permissions
         Payroll.RetroView, Payroll.RetroEvaluate, Payroll.RetroApprove, Payroll.RetroApply, Payroll.RetroCancel,
         Payroll.FinalSettlementView, Payroll.FinalSettlementManage, Payroll.FinalSettlementCalculate, Payroll.FinalSettlementApprove, Payroll.FinalSettlementFinalize, Payroll.FinalSettlementCancel,
         Payroll.StatutoryComplianceView, Payroll.StatutoryComplianceGenerate, Payroll.StatutoryComplianceValidate, Payroll.StatutoryComplianceApprove, Payroll.StatutoryComplianceExport, Payroll.StatutoryComplianceMarkFiled, Payroll.StatutoryComplianceCancel, Payroll.StatutoryComplianceViewHistory, Payroll.StatutoryComplianceManagePeriods,
+        Payroll.LoansView, Payroll.LoansRequest, Payroll.LoansManage, Payroll.LoansApprove, Payroll.LoansDisburse, Payroll.LoansRecover, Payroll.LoansClose, Payroll.LoansCancel, Payroll.LoansViewHistory, Payroll.LoansManageProducts,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

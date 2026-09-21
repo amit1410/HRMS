@@ -15,6 +15,7 @@ public interface IPayrollAccountingService
     Task<Result<PayrollGLMappingDto>> UpdateMappingAsync(Guid id, PayrollGLMappingRequest request, CancellationToken ct = default);
     Task<Result<bool>> DeactivateMappingAsync(Guid id, CancellationToken ct = default);
     Task<Result<PayrollJournalDto>> GenerateAsync(Guid payrollRunId, CancellationToken ct = default);
+    Task<Result<PayrollJournalDto>> GenerateFinalSettlementAsync(Guid finalSettlementId, CancellationToken ct = default);
     Task<Result<PayrollJournalDto>> ValidateAsync(Guid journalId, CancellationToken ct = default);
     Task<Result<PayrollJournalDto>> ApproveAsync(Guid journalId, CancellationToken ct = default);
     Task<Result<PayrollJournalDto>> PostAsync(Guid journalId, CancellationToken ct = default);

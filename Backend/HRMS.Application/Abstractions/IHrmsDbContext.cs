@@ -180,6 +180,12 @@ public interface IHrmsDbContext
     DbSet<FinalSettlementCase> FinalSettlementCases { get; }
     DbSet<FinalSettlementLine> FinalSettlementLines { get; }
     DbSet<FinalSettlementHistory> FinalSettlementHistories { get; }
+    DbSet<LoanProduct> LoanProducts { get; }
+    DbSet<LoanProductVersion> LoanProductVersions { get; }
+    DbSet<EmployeeLoan> EmployeeLoans { get; }
+    DbSet<LoanInstallment> LoanInstallments { get; }
+    DbSet<LoanRepayment> LoanRepayments { get; }
+    DbSet<LoanHistory> LoanHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

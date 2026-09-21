@@ -43,7 +43,7 @@ public sealed class PayrollResultComponent : BaseEntity, ITenantEntity
 {
     public Guid TenantId { get; set; }
     public Guid PayrollResultId { get; set; }
-    public Guid SalaryComponentId { get; set; }
+    public Guid? SalaryComponentId { get; set; }
     public Guid? SalaryStructureComponentId { get; set; }
     public Guid CalculationAttemptId { get; set; }
     public string ComponentCode { get; set; } = string.Empty;
@@ -65,9 +65,13 @@ public sealed class PayrollResultComponent : BaseEntity, ITenantEntity
     public string CalculationSource { get; set; } = string.Empty;
     public string? FormulaSnapshot { get; set; }
     public string? CalculationMetadata { get; set; }
+    public Guid? EmployeeLoanId { get; set; }
+    public Guid? LoanInstallmentId { get; set; }
     public Tenant? Tenant { get; set; }
     public PayrollResult? PayrollResult { get; set; }
     public SalaryComponent? SalaryComponent { get; set; }
+    public EmployeeLoan? EmployeeLoan { get; set; }
+    public LoanInstallment? LoanInstallment { get; set; }
 }
 
 public sealed class PayrollCalculationError : BaseEntity, ITenantEntity

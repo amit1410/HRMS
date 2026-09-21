@@ -78,6 +78,8 @@ public sealed class PayrollAccountingController(IPayrollAccountingService servic
     public async Task<ActionResult<ApiResponse<bool>>> DeactivateMapping(Guid id, CancellationToken ct) => (await service.DeactivateMappingAsync(id, ct)).ToActionResult();
     [HttpPost("/api/payroll/runs/{runId:guid}/accounting/generate"), HasPermission(Permissions.Payroll.AccountingGenerate)]
     public async Task<ActionResult<ApiResponse<PayrollJournalDto>>> Generate(Guid runId, CancellationToken ct) => (await service.GenerateAsync(runId, ct)).ToActionResult();
+    [HttpPost("/api/payroll/final-settlements/{id:guid}/accounting/generate"), HasPermission(Permissions.Payroll.AccountingGenerate)]
+    public async Task<ActionResult<ApiResponse<PayrollJournalDto>>> GenerateFinalSettlement(Guid id, CancellationToken ct) => (await service.GenerateFinalSettlementAsync(id, ct)).ToActionResult();
     [HttpGet, HasPermission(Permissions.Payroll.AccountingView)]
     public async Task<ActionResult<ApiResponse<PagedResult<PayrollJournalDto>>>> List([FromQuery] PagedQuery query, CancellationToken ct) => (await service.ListAsync(query, ct)).ToActionResult();
     [HttpGet("{id:guid}"), HasPermission(Permissions.Payroll.AccountingView)]
