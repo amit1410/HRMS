@@ -176,7 +176,9 @@ public class SeedDataTests
             DomainPermissions.Leave.BalanceViewOwn,
             DomainPermissions.Leave.TypeViewAvailable,
             DomainPermissions.Payroll.AdjustmentsView,
-            DomainPermissions.Payroll.AdjustmentsViewHistory
+            DomainPermissions.Payroll.AdjustmentsViewHistory,
+            DomainPermissions.Payroll.TaxDeclarationViewOwn,
+            DomainPermissions.Payroll.TaxDeclarationManageOwn
         }, SeedData.RolePermissionMap[RoleNames.Employee]);
         Assert.DoesNotContain(DomainPermissions.Leave.PolicyView, SeedData.RolePermissionMap[RoleNames.Employee]);
         Assert.DoesNotContain(DomainPermissions.Leave.Approve, SeedData.RolePermissionMap[RoleNames.Employee]);

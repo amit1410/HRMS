@@ -1,0 +1,13 @@
+import { api, request } from './client.ts'
+import type { ApiResponse } from './types.ts'
+
+export interface TaxDeclarationProof { id: string; fileName: string; contentType: string; fileSize: number; documentType: string; status: string; uploadedAtUtc: string; reviewerComment?: string | null }
+export interface TaxDeclarationLine { id: string; categoryCode: string; itemCode: string; declaredAmount: number; approvedAmount?: number | null; referenceNumber?: string | null; declarationDate?: string | null; notes?: string | null; status: string; reviewerComment?: string | null; proofs: TaxDeclarationProof[] }
+export interface EmployeeTaxDeclaration { id: string; employeeId: string; cycleId: string; cycleCode: string; financialYear: number; status: string; version: number; submittedAtUtc?: string | null; reviewedAtUtc?: string | null; lines: TaxDeclarationLine[] }
+
+export function getMyTaxDeclaration(signal?: AbortSignal): Promise<EmployeeTaxDeclaration> { return request<EmployeeTaxDeclaration>(() => api.get<ApiResponse<EmployeeTaxDeclaration>>('/api/me/tax-declarations/current', { signal })) }
+export function submitMyTaxDeclaration(): Promise<EmployeeTaxDeclaration> { return request<EmployeeTaxDeclaration>(() => api.post<ApiResponse<EmployeeTaxDeclaration>>('/api/me/tax-declarations/submit')) }
+export function updateMyTaxDeclarationLine(declarationId: string, lineId: string, body: { declaredAmount: number; referenceNumber?: string; declarationDate?: string; notes?: string }): Promise<EmployeeTaxDeclaration> { return request<EmployeeTaxDeclaration>(() => api.put<ApiResponse<EmployeeTaxDeclaration>>(`/api/me/tax-declarations/${declarationId}/lines/${lineId}`, body)) }
+export function deleteMyTaxDeclarationLine(declarationId: string, lineId: string): Promise<EmployeeTaxDeclaration> { return request<EmployeeTaxDeclaration>(() => api.delete<ApiResponse<EmployeeTaxDeclaration>>(`/api/me/tax-declarations/${declarationId}/lines/${lineId}`)) }
+export function replaceMyTaxDeclarationProof(declarationId: string, lineId: string, proofId: string, body: { lineId: string; fileName: string; contentType: string; fileSize: number; storageReference: string; documentType?: string }): Promise<TaxDeclarationProof> { return request<TaxDeclarationProof>(() => api.post<ApiResponse<TaxDeclarationProof>>(`/api/me/tax-declarations/${declarationId}/lines/${lineId}/proofs/${proofId}/replace`, body)) }
+export function resubmitMyTaxDeclaration(declarationId: string): Promise<EmployeeTaxDeclaration> { return request<EmployeeTaxDeclaration>(() => api.post<ApiResponse<EmployeeTaxDeclaration>>(`/api/me/tax-declarations/${declarationId}/resubmit`)) }

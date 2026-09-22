@@ -75,6 +75,13 @@ public interface IHrmsDbContext
     DbSet<EmployeeSupervisor> EmployeeSupervisors { get; }
     DbSet<EmployeeAdditionalInfo> EmployeeAdditionalInfo { get; }
     DbSet<EmployeeAuditLog> EmployeeAuditLogs { get; }
+    DbSet<TaxDeclarationCycle> TaxDeclarationCycles { get; }
+    DbSet<TaxDeclarationCategory> TaxDeclarationCategories { get; }
+    DbSet<TaxDeclarationItem> TaxDeclarationItems { get; }
+    DbSet<EmployeeTaxDeclaration> EmployeeTaxDeclarations { get; }
+    DbSet<EmployeeTaxDeclarationLine> EmployeeTaxDeclarationLines { get; }
+    DbSet<TaxDeclarationProof> TaxDeclarationProofs { get; }
+    DbSet<TaxDeclarationAuditEvent> TaxDeclarationAuditEvents { get; }
     DbSet<EmployeeEmployment> EmployeeEmployments { get; }
     DbSet<ImportBatch> ImportBatches { get; }
     DbSet<LeaveType> LeaveTypes { get; }

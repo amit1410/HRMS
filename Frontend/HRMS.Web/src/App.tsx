@@ -71,6 +71,7 @@ import { MySeparationBenefitsPage, SeparationBenefitsPage } from './pages/payrol
 import { MyVariablePayPage, VariablePayPage } from './pages/payroll/VariablePayPage.tsx'
 import { PayrollAdjustmentsPage } from './pages/payroll/PayrollAdjustmentsPage.tsx'
 import { MyPayrollAdjustmentsPage } from './pages/payroll/MyPayrollAdjustmentsPage.tsx'
+import { MyTaxDeclarationsPage } from './pages/payroll/MyTaxDeclarationsPage.tsx'
 import { PayrollOffCyclePage } from './pages/payroll/PayrollOffCyclePage.tsx'
 import { PayrollAnalyticsPage } from './pages/payroll/PayrollAnalyticsPage.tsx'
 import { PayrollReportsPage } from './pages/payroll/PayrollReportsPage.tsx'
@@ -177,6 +178,7 @@ function TenantApplication() {
                   <Route path="payroll/analytics" element={<RequirePermission permission={Permissions.payroll.analyticsView}><PayrollAnalyticsPage /></RequirePermission>} />
                   <Route path="payroll/reports" element={<RequirePermission permission={Permissions.payroll.analyticsView}><PayrollReportsPage /></RequirePermission>} />
                   <Route path="payroll/my-adjustments" element={<RequirePermission permission={Permissions.payroll.adjustmentsView}><RequireEmployeeIdentity><MyPayrollAdjustmentsPage /></RequireEmployeeIdentity></RequirePermission>} />
+                  <Route path="payroll/my-tax-declarations" element={<RequirePermission permission={Permissions.payroll.taxDeclarationViewOwn}><RequireEmployeeIdentity><MyTaxDeclarationsPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="masters/:kind" element={<MasterRouteGuard />} />
                   <Route
                     path="configuration/employee-code"

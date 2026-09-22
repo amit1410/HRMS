@@ -215,6 +215,13 @@ export const Permissions = {
     reconciliationResolve: 'Payroll.Reconciliation.Resolve',
     exceptionsView: 'Payroll.Exceptions.View',
     exceptionsManage: 'Payroll.Exceptions.Manage',
+    taxDeclarationViewOwn: 'Payroll.TaxDeclaration.ViewOwn',
+    taxDeclarationManageOwn: 'Payroll.TaxDeclaration.ManageOwn',
+    taxDeclarationReview: 'Payroll.TaxDeclaration.Review',
+    taxDeclarationApprove: 'Payroll.TaxDeclaration.Approve',
+    taxDeclarationReopen: 'Payroll.TaxDeclaration.Reopen',
+    taxDeclarationConfigure: 'Payroll.TaxDeclaration.Configure',
+    taxDeclarationViewAudit: 'Payroll.TaxDeclaration.ViewAudit',
   },
   attendance: {
     view: 'Attendance.View',

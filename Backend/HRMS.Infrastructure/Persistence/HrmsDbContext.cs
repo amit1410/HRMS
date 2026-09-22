@@ -91,6 +91,13 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<EmployeeSupervisor> EmployeeSupervisors => Set<EmployeeSupervisor>();
     public DbSet<EmployeeAdditionalInfo> EmployeeAdditionalInfo => Set<EmployeeAdditionalInfo>();
     public DbSet<EmployeeAuditLog> EmployeeAuditLogs => Set<EmployeeAuditLog>();
+    public DbSet<TaxDeclarationCycle> TaxDeclarationCycles => Set<TaxDeclarationCycle>();
+    public DbSet<TaxDeclarationCategory> TaxDeclarationCategories => Set<TaxDeclarationCategory>();
+    public DbSet<TaxDeclarationItem> TaxDeclarationItems => Set<TaxDeclarationItem>();
+    public DbSet<EmployeeTaxDeclaration> EmployeeTaxDeclarations => Set<EmployeeTaxDeclaration>();
+    public DbSet<EmployeeTaxDeclarationLine> EmployeeTaxDeclarationLines => Set<EmployeeTaxDeclarationLine>();
+    public DbSet<TaxDeclarationProof> TaxDeclarationProofs => Set<TaxDeclarationProof>();
+    public DbSet<TaxDeclarationAuditEvent> TaxDeclarationAuditEvents => Set<TaxDeclarationAuditEvent>();
     public DbSet<EmployeeEmployment> EmployeeEmployments => Set<EmployeeEmployment>();
     public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
     public DbSet<LeaveType> LeaveTypes => Set<LeaveType>();
