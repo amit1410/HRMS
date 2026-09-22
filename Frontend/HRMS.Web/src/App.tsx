@@ -69,6 +69,9 @@ import { ReimbursementsPage } from './pages/payroll/ReimbursementsPage.tsx'
 import { MyReimbursementsPage } from './pages/payroll/MyReimbursementsPage.tsx'
 import { MySeparationBenefitsPage, SeparationBenefitsPage } from './pages/payroll/SeparationBenefitsPage.tsx'
 import { MyVariablePayPage, VariablePayPage } from './pages/payroll/VariablePayPage.tsx'
+import { PayrollAdjustmentsPage } from './pages/payroll/PayrollAdjustmentsPage.tsx'
+import { MyPayrollAdjustmentsPage } from './pages/payroll/MyPayrollAdjustmentsPage.tsx'
+import { PayrollOffCyclePage } from './pages/payroll/PayrollOffCyclePage.tsx'
 
 /**
  * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
@@ -167,6 +170,9 @@ function TenantApplication() {
                   <Route path="payroll/my-separation-benefits" element={<RequirePermission permission={Permissions.payroll.separationBenefitsView}><RequireEmployeeIdentity><MySeparationBenefitsPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="payroll/variable-pay" element={<RequirePermission permission={Permissions.payroll.variablePayView}><VariablePayPage /></RequirePermission>} />
                   <Route path="payroll/my-variable-pay" element={<RequirePermission permission={Permissions.payroll.variablePayView}><RequireEmployeeIdentity><MyVariablePayPage /></RequireEmployeeIdentity></RequirePermission>} />
+                  <Route path="payroll/adjustments" element={<RequirePermission permission={Permissions.payroll.adjustmentsView}><PayrollAdjustmentsPage /></RequirePermission>} />
+                  <Route path="payroll/off-cycle" element={<RequirePermission permission={Permissions.payroll.offCycleView}><PayrollOffCyclePage /></RequirePermission>} />
+                  <Route path="payroll/my-adjustments" element={<RequirePermission permission={Permissions.payroll.adjustmentsView}><RequireEmployeeIdentity><MyPayrollAdjustmentsPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="masters/:kind" element={<MasterRouteGuard />} />
                   <Route
                     path="configuration/employee-code"

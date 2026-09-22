@@ -124,8 +124,14 @@ public enum PayrollJournalStatus { Draft, Generated, Validated, Approved, Posted
 public enum PayrollJournalHistoryChangeType { Generated, Validated, Approved, Posted, Exported, Cancelled, Reversed }
 public enum PayrollRetroTriggerType { SalaryAssignmentChange, SalaryStructureChange, ComponentChange, EmploymentChange, ManualCorrection }
 public enum PayrollRetroStatus { Detected, Evaluated, Approved, Applied, Cancelled, NoImpact }
-public enum PayrollAdjustmentType { ArrearEarning, ArrearDeduction, Recovery, StatutoryAdjustment, FinalSettlementAdjustment }
-public enum PayrollAdjustmentStatus { Unapplied, Applied, Cancelled }
+public enum PayrollAdjustmentType { ArrearEarning, ArrearDeduction, Recovery, StatutoryAdjustment, FinalSettlementAdjustment, AdditionalEarning, AdditionalDeduction, PriorPeriodCorrection, TaxAdjustment, ReimbursementCorrection, LoanCorrection, VariablePayCorrection, SeparationCorrection, ManualPayrollCorrection, OtherConfigured }
+public enum PayrollAdjustmentStatus { Draft, Submitted, Approved, Rejected, Scheduled, Unapplied, Applied, PartiallyApplied, Cancelled, Reversed }
+public enum PayrollAdjustmentDirection { Earning, Deduction }
+public enum PayrollAdjustmentTaxTreatment { Taxable, NonTaxable, TaxAdjustmentOnly, RecalculateAccordingToPayrollRules }
+public enum PayrollAdjustmentStatutoryTreatment { IncludeInPf, IncludeInEsi, IncludeInPt, IncludeInIncomeTax, ExcludeFromStatutory, RecalculateConfiguredStatutory }
+public enum PayrollAdjustmentSettlementMethod { Payroll, FinalSettlement, ManualRecorded }
+public enum PayrollAdjustmentHistoryEventType { Created, Submitted, Approved, Rejected, Scheduled, Applied, PartialApplication, Cancelled, Reversed, CorrectionSnapshotCaptured, ReversalRequested, ReversalApproved, ReversalProcessed, ReissueGenerated }
+public enum PayrollReversalStatus { Requested, Approved, Processed, Rejected, Cancelled }
 public enum FinalSettlementStatus { Draft, Calculated, Reviewed, Approved, Finalized, Cancelled }
 public enum FinalSettlementLineType { UnpaidSalary, Arrear, LeaveEncashment, Bonus, Reimbursement, NoticePay, NoticeRecovery, Gratuity, Recovery, StatutoryAdjustment, Other }
 public enum PayrollRetroHistoryChangeType { Created, Evaluated, Approved, Applied, Cancelled, NoImpact }

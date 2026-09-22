@@ -192,6 +192,12 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<PayrollRetroResult> PayrollRetroResults => Set<PayrollRetroResult>();
     public DbSet<PayrollRetroComponent> PayrollRetroComponents => Set<PayrollRetroComponent>();
     public DbSet<PayrollAdjustment> PayrollAdjustments => Set<PayrollAdjustment>();
+    public DbSet<PayrollAdjustmentReason> PayrollAdjustmentReasons => Set<PayrollAdjustmentReason>();
+    public DbSet<PayrollAdjustmentApplication> PayrollAdjustmentApplications => Set<PayrollAdjustmentApplication>();
+    public DbSet<PayrollCorrectionSnapshot> PayrollCorrectionSnapshots => Set<PayrollCorrectionSnapshot>();
+    public DbSet<PayrollReversal> PayrollReversals => Set<PayrollReversal>();
+    public DbSet<PayrollAdjustmentHistory> PayrollAdjustmentHistories => Set<PayrollAdjustmentHistory>();
+    public DbSet<PayrollAdjustmentNumberSequence> PayrollAdjustmentNumberSequences => Set<PayrollAdjustmentNumberSequence>();
     public DbSet<PayrollRetroHistory> PayrollRetroHistories => Set<PayrollRetroHistory>();
     public DbSet<FinalSettlementCase> FinalSettlementCases => Set<FinalSettlementCase>();
     public DbSet<FinalSettlementLine> FinalSettlementLines => Set<FinalSettlementLine>();
@@ -495,6 +501,12 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<PayrollRetroResult>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollRetroComponent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollAdjustment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollAdjustmentReason>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollAdjustmentApplication>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollCorrectionSnapshot>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollReversal>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollAdjustmentHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollAdjustmentNumberSequence>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollRetroHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<FinalSettlementCase>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<FinalSettlementLine>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

@@ -3,6 +3,7 @@ using System;
 using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 {
     [DbContext(typeof(HrmsDbContext))]
-    partial class HrmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260922013323_AddPayrollAdjustmentsOffCyclePhase7R")]
+    partial class AddPayrollAdjustmentsOffCyclePhase7R
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -6844,19 +6847,16 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<Guid?>("FinalSettlementId")
-                        .HasColumnType("char(36)");
-
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime(6)");
 
                     b.Property<Guid>("PayrollAdjustmentId")
                         .HasColumnType("char(36)");
 
-                    b.Property<Guid?>("PayrollResultId")
+                    b.Property<Guid>("PayrollResultId")
                         .HasColumnType("char(36)");
 
-                    b.Property<Guid?>("PayrollRunId")
+                    b.Property<Guid>("PayrollRunId")
                         .HasColumnType("char(36)");
 
                     b.Property<Guid>("TenantId")
@@ -6864,14 +6864,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("TenantId", "FinalSettlementId");
-
                     b.HasIndex("TenantId", "PayrollResultId");
 
                     b.HasIndex("TenantId", "PayrollRunId");
-
-                    b.HasIndex("TenantId", "PayrollAdjustmentId", "FinalSettlementId")
-                        .IsUnique();
 
                     b.HasIndex("TenantId", "PayrollAdjustmentId", "PayrollRunId")
                         .IsUnique();
@@ -14670,12 +14665,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("HRMS.Domain.Entities.FinalSettlementCase", "FinalSettlement")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "FinalSettlementId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.HasOne("HRMS.Domain.Entities.PayrollAdjustment", "Adjustment")
                         .WithMany("Applications")
                         .HasForeignKey("TenantId", "PayrollAdjustmentId")
@@ -14687,17 +14676,17 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .WithMany()
                         .HasForeignKey("TenantId", "PayrollResultId")
                         .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.HasOne("HRMS.Domain.Entities.PayrollRun", "PayrollRun")
                         .WithMany()
                         .HasForeignKey("TenantId", "PayrollRunId")
                         .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("Adjustment");
-
-                    b.Navigation("FinalSettlement");
 
                     b.Navigation("PayrollResult");
 

@@ -6682,6 +6682,11 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("AdjustmentNumber")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("nvarchar(60)");
+
                     b.Property<int>("AdjustmentType")
                         .HasColumnType("int");
 
@@ -6689,13 +6694,35 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<decimal>("AppliedAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<DateTime?>("AppliedAtUtc")
                         .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ApprovedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("CancelledAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("CancelledByUserId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("ComponentCode")
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
 
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime2");
@@ -6710,13 +6737,53 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<int>("Direction")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("EffectiveDate")
+                        .HasColumnType("date");
+
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime2");
 
+                    b.Property<Guid?>("OriginalPayrollResultId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("OriginalPayrollRunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("PayrollPeriodId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<Guid?>("ReasonCodeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("RejectedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("RejectedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("RetroResultId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SalaryComponentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("SettlementMethod")
+                        .HasColumnType("int");
+
                     b.Property<Guid>("SourceId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SourceReferenceId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("SourceType")
@@ -6727,15 +6794,34 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
+                    b.Property<int>("StatutoryTreatment")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("SubmittedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("SubmittedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid?>("TargetPayrollRunId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("TaxTreatment")
+                        .HasColumnType("int");
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("TenantId", "SourceId");
+                    b.HasIndex("RetroResultId");
+
+                    b.HasIndex("TenantId", "AdjustmentNumber")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "PayrollPeriodId");
+
+                    b.HasIndex("TenantId", "ReasonCodeId");
 
                     b.HasIndex("TenantId", "TargetPayrollRunId");
 
@@ -6745,6 +6831,185 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("PayrollAdjustments", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAdjustmentApplication", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("AppliedAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateOnly>("AppliedDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("FinalSettlementId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("PayrollAdjustmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("PayrollResultId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("PayrollRunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "FinalSettlementId");
+
+                    b.HasIndex("TenantId", "PayrollResultId");
+
+                    b.HasIndex("TenantId", "PayrollRunId");
+
+                    b.HasIndex("TenantId", "PayrollAdjustmentId", "FinalSettlementId")
+                        .IsUnique()
+                        .HasFilter("[FinalSettlementId] IS NOT NULL");
+
+                    b.HasIndex("TenantId", "PayrollAdjustmentId", "PayrollRunId")
+                        .IsUnique()
+                        .HasFilter("[PayrollRunId] IS NOT NULL");
+
+                    b.ToTable("PayrollAdjustmentApplications", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAdjustmentHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("EventType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("NewStatus")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("PayrollAdjustmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("PreviousStatus")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "PayrollAdjustmentId", "OccurredAtUtc");
+
+                    b.ToTable("PayrollAdjustmentHistories", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAdjustmentNumberSequence", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("NextValue")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Year")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Year")
+                        .IsUnique();
+
+                    b.ToTable("PayrollAdjustmentNumberSequences", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAdjustmentReason", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AllowedAdjustmentTypes")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("nvarchar(60)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<bool>("RequiresComment")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("PayrollAdjustmentReasons", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollCalculationError", b =>
@@ -6937,6 +7202,81 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("PayrollControlConfigurations", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollCorrectionSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CapturedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("CorrectedDeduction")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("CorrectedGross")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("CorrectedNet")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("DeltaDeduction")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("DeltaGross")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("DeltaNet")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("OriginalDeduction")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("OriginalGross")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("OriginalNet")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid>("OriginalPayrollResultId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("OriginalPayrollRunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("PayrollAdjustmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "OriginalPayrollResultId");
+
+                    b.HasIndex("TenantId", "OriginalPayrollRunId");
+
+                    b.HasIndex("TenantId", "PayrollAdjustmentId")
+                        .IsUnique();
+
+                    b.ToTable("PayrollCorrectionSnapshots", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollGLAccount", b =>
@@ -7931,6 +8271,62 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.HasIndex("TenantId", "PayrollRetroCaseId");
 
                     b.ToTable("PayrollRetroResults", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollReversal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("FinalizedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("OriginalPayrollResultId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("OriginalPayrollRunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<Guid?>("ReasonCodeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("RequestedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ReversalRunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "OriginalPayrollResultId");
+
+                    b.HasIndex("TenantId", "OriginalPayrollRunId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "ReversalRunId");
+
+                    b.ToTable("PayrollReversals", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollRun", b =>
@@ -14222,6 +14618,10 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollAdjustment", b =>
                 {
+                    b.HasOne("HRMS.Domain.Entities.PayrollRetroResult", "RetroResult")
+                        .WithMany("Adjustments")
+                        .HasForeignKey("RetroResultId");
+
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
                         .WithMany()
                         .HasForeignKey("TenantId")
@@ -14235,12 +14635,17 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("HRMS.Domain.Entities.PayrollRetroResult", "RetroResult")
-                        .WithMany("Adjustments")
-                        .HasForeignKey("TenantId", "SourceId")
+                    b.HasOne("HRMS.Domain.Entities.PayrollPeriod", "PayrollPeriod")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollPeriodId")
                         .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollAdjustmentReason", "ReasonCode")
+                        .WithMany("Adjustments")
+                        .HasForeignKey("TenantId", "ReasonCodeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("HRMS.Domain.Entities.PayrollRun", "TargetPayrollRun")
                         .WithMany()
@@ -14250,9 +14655,99 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.Navigation("Employee");
 
+                    b.Navigation("PayrollPeriod");
+
+                    b.Navigation("ReasonCode");
+
                     b.Navigation("RetroResult");
 
                     b.Navigation("TargetPayrollRun");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAdjustmentApplication", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.FinalSettlementCase", "FinalSettlement")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "FinalSettlementId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollAdjustment", "Adjustment")
+                        .WithMany("Applications")
+                        .HasForeignKey("TenantId", "PayrollAdjustmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollResult", "PayrollResult")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollResultId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRun", "PayrollRun")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollRunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Adjustment");
+
+                    b.Navigation("FinalSettlement");
+
+                    b.Navigation("PayrollResult");
+
+                    b.Navigation("PayrollRun");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAdjustmentHistory", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollAdjustment", "Adjustment")
+                        .WithMany("History")
+                        .HasForeignKey("TenantId", "PayrollAdjustmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Adjustment");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAdjustmentNumberSequence", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAdjustmentReason", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("Tenant");
                 });
@@ -14341,6 +14836,44 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasForeignKey("TenantId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollCorrectionSnapshot", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollResult", "OriginalPayrollResult")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "OriginalPayrollResultId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRun", "OriginalPayrollRun")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "OriginalPayrollRunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollAdjustment", "Adjustment")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PayrollAdjustmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Adjustment");
+
+                    b.Navigation("OriginalPayrollResult");
+
+                    b.Navigation("OriginalPayrollRun");
 
                     b.Navigation("Tenant");
                 });
@@ -14754,6 +15287,42 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("OriginalPayrollRun");
 
                     b.Navigation("RetroCase");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollReversal", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollResult", "OriginalPayrollResult")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "OriginalPayrollResultId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRun", "OriginalPayrollRun")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "OriginalPayrollRunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.PayrollRun", "ReversalRun")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ReversalRunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("OriginalPayrollResult");
+
+                    b.Navigation("OriginalPayrollRun");
+
+                    b.Navigation("ReversalRun");
 
                     b.Navigation("Tenant");
                 });
@@ -16263,6 +16832,18 @@ namespace HRMS.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollAccountingConfigurationVersion", b =>
                 {
                     b.Navigation("Mappings");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAdjustment", b =>
+                {
+                    b.Navigation("Applications");
+
+                    b.Navigation("History");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAdjustmentReason", b =>
+                {
+                    b.Navigation("Adjustments");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollCompliancePeriod", b =>

@@ -176,6 +176,12 @@ public interface IHrmsDbContext
     DbSet<PayrollRetroResult> PayrollRetroResults { get; }
     DbSet<PayrollRetroComponent> PayrollRetroComponents { get; }
     DbSet<PayrollAdjustment> PayrollAdjustments { get; }
+    DbSet<PayrollAdjustmentReason> PayrollAdjustmentReasons { get; }
+    DbSet<PayrollAdjustmentApplication> PayrollAdjustmentApplications { get; }
+    DbSet<PayrollCorrectionSnapshot> PayrollCorrectionSnapshots { get; }
+    DbSet<PayrollReversal> PayrollReversals { get; }
+    DbSet<PayrollAdjustmentHistory> PayrollAdjustmentHistories { get; }
+    DbSet<PayrollAdjustmentNumberSequence> PayrollAdjustmentNumberSequences { get; }
     DbSet<PayrollRetroHistory> PayrollRetroHistories { get; }
     DbSet<FinalSettlementCase> FinalSettlementCases { get; }
     DbSet<FinalSettlementLine> FinalSettlementLines { get; }

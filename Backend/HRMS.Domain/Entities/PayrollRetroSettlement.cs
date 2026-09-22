@@ -83,12 +83,131 @@ public sealed class PayrollAdjustment : BaseEntity, ITenantEntity
     public decimal Amount { get; set; }
     public string CurrencyCode { get; set; } = "INR";
     public Guid? TargetPayrollRunId { get; set; }
-    public PayrollAdjustmentStatus Status { get; set; } = PayrollAdjustmentStatus.Unapplied;
+    public string AdjustmentNumber { get; set; } = string.Empty;
+    public Guid? SourceReferenceId { get; set; }
+    public DateOnly EffectiveDate { get; set; }
+    public Guid? PayrollPeriodId { get; set; }
+    public Guid? OriginalPayrollRunId { get; set; }
+    public Guid? OriginalPayrollResultId { get; set; }
+    public Guid? SalaryComponentId { get; set; }
+    public Guid? ReasonCodeId { get; set; }
+    public string? Reason { get; set; }
+    public PayrollAdjustmentDirection Direction { get; set; } = PayrollAdjustmentDirection.Earning;
+    public PayrollAdjustmentTaxTreatment TaxTreatment { get; set; } = PayrollAdjustmentTaxTreatment.Taxable;
+    public PayrollAdjustmentStatutoryTreatment StatutoryTreatment { get; set; } = PayrollAdjustmentStatutoryTreatment.RecalculateConfiguredStatutory;
+    public PayrollAdjustmentSettlementMethod SettlementMethod { get; set; } = PayrollAdjustmentSettlementMethod.Payroll;
+    public decimal AppliedAmount { get; set; }
+    public DateTime? SubmittedAtUtc { get; set; }
+    public Guid? SubmittedByUserId { get; set; }
+    public DateTime? ApprovedAtUtc { get; set; }
+    public Guid? ApprovedByUserId { get; set; }
+    public DateTime? RejectedAtUtc { get; set; }
+    public Guid? RejectedByUserId { get; set; }
+    public DateTime? CancelledAtUtc { get; set; }
+    public Guid? CancelledByUserId { get; set; }
+    public int ConcurrencyVersion { get; set; } = 1;
+    public PayrollAdjustmentStatus Status { get; set; } = PayrollAdjustmentStatus.Draft;
     public DateTime? AppliedAtUtc { get; set; }
     public Tenant? Tenant { get; set; }
     public Employee? Employee { get; set; }
     public PayrollRun? TargetPayrollRun { get; set; }
     public PayrollRetroResult? RetroResult { get; set; }
+    public PayrollPeriod? PayrollPeriod { get; set; }
+    public PayrollAdjustmentReason? ReasonCode { get; set; }
+    public ICollection<PayrollAdjustmentApplication> Applications { get; set; } = new List<PayrollAdjustmentApplication>();
+    public ICollection<PayrollAdjustmentHistory> History { get; set; } = new List<PayrollAdjustmentHistory>();
+}
+
+public sealed class PayrollAdjustmentReason : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public bool IsActive { get; set; } = true;
+    public bool RequiresComment { get; set; }
+    public string AllowedAdjustmentTypes { get; set; } = "[]";
+    public Tenant? Tenant { get; set; }
+    public ICollection<PayrollAdjustment> Adjustments { get; set; } = new List<PayrollAdjustment>();
+}
+
+public sealed class PayrollAdjustmentApplication : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid PayrollAdjustmentId { get; set; }
+    public Guid? PayrollRunId { get; set; }
+    public Guid? PayrollResultId { get; set; }
+    public Guid? FinalSettlementId { get; set; }
+    public decimal AppliedAmount { get; set; }
+    public DateOnly AppliedDate { get; set; }
+    public Tenant? Tenant { get; set; }
+    public PayrollAdjustment? Adjustment { get; set; }
+    public PayrollRun? PayrollRun { get; set; }
+    public PayrollResult? PayrollResult { get; set; }
+    public FinalSettlementCase? FinalSettlement { get; set; }
+}
+
+public sealed class PayrollCorrectionSnapshot : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid PayrollAdjustmentId { get; set; }
+    public Guid OriginalPayrollRunId { get; set; }
+    public Guid OriginalPayrollResultId { get; set; }
+    public decimal OriginalGross { get; set; }
+    public decimal OriginalDeduction { get; set; }
+    public decimal OriginalNet { get; set; }
+    public decimal CorrectedGross { get; set; }
+    public decimal CorrectedDeduction { get; set; }
+    public decimal CorrectedNet { get; set; }
+    public decimal DeltaGross { get; set; }
+    public decimal DeltaDeduction { get; set; }
+    public decimal DeltaNet { get; set; }
+    public DateTime CapturedAtUtc { get; set; }
+    public Tenant? Tenant { get; set; }
+    public PayrollAdjustment? Adjustment { get; set; }
+    public PayrollRun? OriginalPayrollRun { get; set; }
+    public PayrollResult? OriginalPayrollResult { get; set; }
+}
+
+public sealed class PayrollReversal : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid OriginalPayrollRunId { get; set; }
+    public Guid? OriginalPayrollResultId { get; set; }
+    public Guid? ReversalRunId { get; set; }
+    public Guid? ReasonCodeId { get; set; }
+    public string Reason { get; set; } = string.Empty;
+    public Guid RequestedByUserId { get; set; }
+    public Guid? ApprovedByUserId { get; set; }
+    public PayrollReversalStatus Status { get; set; } = PayrollReversalStatus.Requested;
+    public DateTime? FinalizedAtUtc { get; set; }
+    public Tenant? Tenant { get; set; }
+    public PayrollRun? OriginalPayrollRun { get; set; }
+    public PayrollRun? ReversalRun { get; set; }
+    public PayrollResult? OriginalPayrollResult { get; set; }
+}
+
+public sealed class PayrollAdjustmentHistory : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid PayrollAdjustmentId { get; set; }
+    public PayrollAdjustmentHistoryEventType EventType { get; set; }
+    public PayrollAdjustmentStatus? PreviousStatus { get; set; }
+    public PayrollAdjustmentStatus? NewStatus { get; set; }
+    public decimal? Amount { get; set; }
+    public string? Reason { get; set; }
+    public Guid? ActorUserId { get; set; }
+    public DateTime OccurredAtUtc { get; set; }
+    public Tenant? Tenant { get; set; }
+    public PayrollAdjustment? Adjustment { get; set; }
+}
+
+public sealed class PayrollAdjustmentNumberSequence : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public int Year { get; set; }
+    public int NextValue { get; set; } = 1;
+    public Tenant? Tenant { get; set; }
 }
 
 public sealed class PayrollRetroHistory : BaseEntity, ITenantEntity
