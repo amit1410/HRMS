@@ -67,6 +67,15 @@ public enum EmployeeSalaryAssignmentChangeType { Created, Updated, OverrideAdded
 public enum PayrollPeriodType { Monthly, BiWeekly, Weekly, SemiMonthly, Custom }
 public enum PayrollPeriodStatus { Draft, Open, Closed, Locked }
 public enum PayrollRunType { Regular, Supplementary, OffCycle }
+public enum PayrollAnalyticsSnapshotType { Run, Comparison, PrePayroll, PostPayroll }
+public enum PayrollControlScope { PayrollRun, Employee, Component, Department, CostCenter, Statutory, BankAdvice, Accounting }
+public enum PayrollControlMetric { GrossPay, NetPay, TotalDeduction, Tax, EmployeeCount, ComponentAmount, BankAdviceTotal, GLTotal, EmployerContribution }
+public enum PayrollFindingSeverity { Info, Warning, Critical }
+public enum PayrollControlAction { Informational, RequireAcknowledgement, BlockApproval, BlockFinalization }
+public enum PayrollReconciliationType { PrePayroll, PostPayroll }
+public enum PayrollReconciliationStatus { Generated, Acknowledged, Superseded }
+public enum PayrollFindingStatus { Open, Acknowledged, Resolved, AcceptedException, Superseded }
+public enum PayrollAnomalyType { HighGrossVariance, HighNetVariance, HighDeductionVariance, NegativeNetPay, ZeroNetPay, PopulationMismatch, BankMismatch, AccountingMismatch, StatutoryMismatch, DuplicateSettlement, MissingConfiguration, MissingSource, UnexpectedEmployee, MissingEmployee }
 public enum PayrollRunStatus { Draft, Prepared, Processing, Calculated, Approved, Finalized, Cancelled }
 public enum PayrollRunEmployeeStatus { Eligible, Excluded }
 public enum PayrollRunHistoryChangeType { Created, Prepared, PopulationGenerated, PopulationRebuilt, StatusChanged, Approved, Finalized, Cancelled }

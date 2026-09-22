@@ -227,6 +227,14 @@ public static class Permissions
         public const string OffCycleApprove = "Payroll.OffCycle.Approve";
         public const string OffCycleProcess = "Payroll.OffCycle.Process";
         public const string OffCycleCancel = "Payroll.OffCycle.Cancel";
+        public const string AnalyticsView = "Payroll.Analytics.View";
+        public const string AnalyticsConfigure = "Payroll.Analytics.Configure";
+        public const string ReconciliationView = "Payroll.Reconciliation.View";
+        public const string ReconciliationGenerate = "Payroll.Reconciliation.Generate";
+        public const string ReconciliationAcknowledge = "Payroll.Reconciliation.Acknowledge";
+        public const string ReconciliationResolve = "Payroll.Reconciliation.Resolve";
+        public const string ExceptionsView = "Payroll.Exceptions.View";
+        public const string ExceptionsManage = "Payroll.Exceptions.Manage";
     }
     public static class Attendance
     {
@@ -282,6 +290,7 @@ public static class Permissions
         Payroll.SeparationBenefitsView, Payroll.SeparationBenefitsCalculate, Payroll.SeparationBenefitsManagePolicies, Payroll.SeparationBenefitsOverride, Payroll.SeparationBenefitsApprove, Payroll.SeparationBenefitsViewHistory,
         Payroll.VariablePayView, Payroll.VariablePayManagePlans, Payroll.VariablePayCalculate, Payroll.VariablePayCreateAward, Payroll.VariablePaySubmit, Payroll.VariablePayApprove, Payroll.VariablePayOverride, Payroll.VariablePayCancel, Payroll.VariablePayViewHistory,
         Payroll.AdjustmentsView, Payroll.AdjustmentsCreate, Payroll.AdjustmentsSubmit, Payroll.AdjustmentsApprove, Payroll.AdjustmentsCancel, Payroll.AdjustmentsReverse, Payroll.AdjustmentsViewHistory, Payroll.OffCycleView, Payroll.OffCycleCreate, Payroll.OffCycleApprove, Payroll.OffCycleProcess, Payroll.OffCycleCancel,
+        Payroll.AnalyticsView, Payroll.AnalyticsConfigure, Payroll.ReconciliationView, Payroll.ReconciliationGenerate, Payroll.ReconciliationAcknowledge, Payroll.ReconciliationResolve, Payroll.ExceptionsView, Payroll.ExceptionsManage,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

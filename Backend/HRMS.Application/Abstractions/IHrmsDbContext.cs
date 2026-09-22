@@ -212,6 +212,11 @@ public interface IHrmsDbContext
     DbSet<VariablePaySettlement> VariablePaySettlements { get; }
     DbSet<VariablePayAwardHistory> VariablePayAwardHistories { get; }
     DbSet<VariablePayNumberSequence> VariablePayNumberSequences { get; }
+    DbSet<PayrollVarianceControl> PayrollVarianceControls { get; }
+    DbSet<PayrollAnalyticsSnapshot> PayrollAnalyticsSnapshots { get; }
+    DbSet<PayrollReconciliation> PayrollReconciliations { get; }
+    DbSet<PayrollReconciliationFinding> PayrollReconciliationFindings { get; }
+    DbSet<PayrollAnomalyFlag> PayrollAnomalyFlags { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

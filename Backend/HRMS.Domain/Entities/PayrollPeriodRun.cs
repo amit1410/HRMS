@@ -72,6 +72,8 @@ public sealed class PayrollRunEmployee : BaseEntity, ITenantEntity
     public Guid? SalaryStructureId { get; set; }
     public Guid? SalaryStructureVersionId { get; set; }
     public DateOnly EmploymentSnapshotDate { get; set; }
+    public Guid? DepartmentId { get; set; }
+    public Guid? CostCenterId { get; set; }
     public bool IsEligible { get; set; }
     public string? ExclusionReason { get; set; }
     public PayrollRunEmployeeStatus Status { get; set; }
