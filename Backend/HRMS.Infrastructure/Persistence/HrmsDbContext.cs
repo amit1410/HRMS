@@ -216,6 +216,12 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<LeaveEncashmentCalculation> LeaveEncashmentCalculations => Set<LeaveEncashmentCalculation>();
     public DbSet<NoticeSettlementCalculation> NoticeSettlementCalculations => Set<NoticeSettlementCalculation>();
     public DbSet<SeparationBenefitHistory> SeparationBenefitHistories => Set<SeparationBenefitHistory>();
+    public DbSet<VariablePayPlan> VariablePayPlans => Set<VariablePayPlan>();
+    public DbSet<VariablePayPlanVersion> VariablePayPlanVersions => Set<VariablePayPlanVersion>();
+    public DbSet<VariablePayAward> VariablePayAwards => Set<VariablePayAward>();
+    public DbSet<VariablePaySettlement> VariablePaySettlements => Set<VariablePaySettlement>();
+    public DbSet<VariablePayAwardHistory> VariablePayAwardHistories => Set<VariablePayAwardHistory>();
+    public DbSet<VariablePayNumberSequence> VariablePayNumberSequences => Set<VariablePayNumberSequence>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>

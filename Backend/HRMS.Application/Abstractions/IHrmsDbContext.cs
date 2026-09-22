@@ -200,6 +200,12 @@ public interface IHrmsDbContext
     DbSet<LeaveEncashmentCalculation> LeaveEncashmentCalculations { get; }
     DbSet<NoticeSettlementCalculation> NoticeSettlementCalculations { get; }
     DbSet<SeparationBenefitHistory> SeparationBenefitHistories { get; }
+    DbSet<VariablePayPlan> VariablePayPlans { get; }
+    DbSet<VariablePayPlanVersion> VariablePayPlanVersions { get; }
+    DbSet<VariablePayAward> VariablePayAwards { get; }
+    DbSet<VariablePaySettlement> VariablePaySettlements { get; }
+    DbSet<VariablePayAwardHistory> VariablePayAwardHistories { get; }
+    DbSet<VariablePayNumberSequence> VariablePayNumberSequences { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

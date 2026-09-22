@@ -206,6 +206,15 @@ public static class Permissions
         public const string SeparationBenefitsOverride = "Payroll.SeparationBenefits.Override";
         public const string SeparationBenefitsApprove = "Payroll.SeparationBenefits.Approve";
         public const string SeparationBenefitsViewHistory = "Payroll.SeparationBenefits.ViewHistory";
+        public const string VariablePayView = "Payroll.VariablePay.View";
+        public const string VariablePayManagePlans = "Payroll.VariablePay.ManagePlans";
+        public const string VariablePayCalculate = "Payroll.VariablePay.Calculate";
+        public const string VariablePayCreateAward = "Payroll.VariablePay.CreateAward";
+        public const string VariablePaySubmit = "Payroll.VariablePay.Submit";
+        public const string VariablePayApprove = "Payroll.VariablePay.Approve";
+        public const string VariablePayOverride = "Payroll.VariablePay.Override";
+        public const string VariablePayCancel = "Payroll.VariablePay.Cancel";
+        public const string VariablePayViewHistory = "Payroll.VariablePay.ViewHistory";
     }
     public static class Attendance
     {
@@ -259,6 +268,7 @@ public static class Permissions
         Payroll.LoansView, Payroll.LoansRequest, Payroll.LoansManage, Payroll.LoansApprove, Payroll.LoansDisburse, Payroll.LoansRecover, Payroll.LoansClose, Payroll.LoansCancel, Payroll.LoansViewHistory, Payroll.LoansManageProducts,
         Payroll.ReimbursementsView, Payroll.ReimbursementsRequest, Payroll.ReimbursementsManage, Payroll.ReimbursementsApprove, Payroll.ReimbursementsSettle, Payroll.ReimbursementsCancel, Payroll.ReimbursementsViewHistory, Payroll.ReimbursementsManageCategories,
         Payroll.SeparationBenefitsView, Payroll.SeparationBenefitsCalculate, Payroll.SeparationBenefitsManagePolicies, Payroll.SeparationBenefitsOverride, Payroll.SeparationBenefitsApprove, Payroll.SeparationBenefitsViewHistory,
+        Payroll.VariablePayView, Payroll.VariablePayManagePlans, Payroll.VariablePayCalculate, Payroll.VariablePayCreateAward, Payroll.VariablePaySubmit, Payroll.VariablePayApprove, Payroll.VariablePayOverride, Payroll.VariablePayCancel, Payroll.VariablePayViewHistory,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,
