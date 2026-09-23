@@ -79,6 +79,8 @@ import { PayrollReportsPage } from './pages/payroll/PayrollReportsPage.tsx'
 import { PayrollInputsPage } from './pages/payroll/PayrollInputsPage.tsx'
 import { YearEndTaxPage } from './pages/payroll/YearEndTaxPage.tsx'
 import { StatutoryFilingsPage } from './pages/payroll/StatutoryFilingsPage.tsx'
+import { MySeparationPage } from './pages/separation/MySeparationPage.tsx'
+import { SeparationInboxPage } from './pages/separation/SeparationInboxPage.tsx'
 
 /**
  * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
@@ -182,6 +184,9 @@ function TenantApplication() {
                   <Route path="payroll/inputs" element={<RequirePermission permission={Permissions.payroll.inputView}><PayrollInputsPage /></RequirePermission>} />
                   <Route path="payroll/year-end-tax" element={<RequirePermission permission={Permissions.payroll.yearEndTaxView}><YearEndTaxPage /></RequirePermission>} />
                   <Route path="payroll/statutory-filings" element={<RequirePermission permission={Permissions.payroll.statutoryFilingView}><StatutoryFilingsPage /></RequirePermission>} />
+                  <Route path="separation/my-request" element={<RequirePermission permission={Permissions.separation.viewSelf}><RequireEmployeeIdentity><MySeparationPage /></RequireEmployeeIdentity></RequirePermission>} />
+                  <Route path="separation/manager-inbox" element={<RequirePermission permission={Permissions.separation.managerReview}><SeparationInboxPage kind="manager" /></RequirePermission>} />
+                  <Route path="separation/hr-inbox" element={<RequirePermission permission={Permissions.separation.hrReview}><SeparationInboxPage kind="hr" /></RequirePermission>} />
                   <Route path="payroll/off-cycle" element={<RequirePermission permission={Permissions.payroll.offCycleView}><PayrollOffCyclePage /></RequirePermission>} />
                   <Route path="payroll/analytics" element={<RequirePermission permission={Permissions.payroll.analyticsView}><PayrollAnalyticsPage /></RequirePermission>} />
                   <Route path="payroll/reports" element={<RequirePermission permission={Permissions.payroll.analyticsView}><PayrollReportsPage /></RequirePermission>} />

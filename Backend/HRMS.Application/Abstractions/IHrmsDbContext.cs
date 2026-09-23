@@ -1,4 +1,5 @@
 using HRMS.Domain.Entities;
+using HRMS.Domain.Entities.Separation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using System.Data;
@@ -83,6 +84,9 @@ public interface IHrmsDbContext
     DbSet<TaxDeclarationProof> TaxDeclarationProofs { get; }
     DbSet<TaxDeclarationAuditEvent> TaxDeclarationAuditEvents { get; }
     DbSet<EmployeeEmployment> EmployeeEmployments { get; }
+    DbSet<SeparationReason> SeparationReasons { get; }
+    DbSet<EmployeeSeparation> EmployeeSeparations { get; }
+    DbSet<EmployeeSeparationEvent> EmployeeSeparationEvents { get; }
     DbSet<ImportBatch> ImportBatches { get; }
     DbSet<LeaveType> LeaveTypes { get; }
     DbSet<LeavePeriod> LeavePeriods { get; }

@@ -136,6 +136,7 @@ public static class DependencyInjection
         services.AddScoped<IStatutoryFilingConnector, ManualDownloadStatutoryFilingConnector>();
         services.AddScoped<IStatutoryFilingConnector, TestStatutoryFilingConnector>();
         services.AddScoped<IStatutoryFilingConnectorRegistry, StatutoryFilingConnectorRegistry>();
+        services.AddScoped<ISeparationService, SeparationService>();
 
         return services;
     }

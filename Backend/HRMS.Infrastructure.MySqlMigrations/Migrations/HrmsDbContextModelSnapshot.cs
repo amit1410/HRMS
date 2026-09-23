@@ -11341,6 +11341,221 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("Sections", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.EmployeeSeparation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActiveEmployeeKey")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ApprovedLastWorkingDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("EmployeeRemarks")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<string>("HrRemarks")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<int>("InitiatedBy")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("InitiatedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("ManagerRemarks")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("NoticeEndDate")
+                        .HasColumnType("date");
+
+                    b.Property<int?>("NoticePeriodDays")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("NoticeServedDays")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("NoticeShortfallDays")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("NoticeStartDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime>("ProposedLastWorkingDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("ReasonId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("RequestDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("SeparationNumber")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<int>("SeparationType")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ActiveEmployeeKey")
+                        .IsUnique()
+                        .HasFilter("[ActiveEmployeeKey] IS NOT NULL");
+
+                    b.HasIndex("TenantId", "ReasonId");
+
+                    b.HasIndex("TenantId", "SeparationNumber")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "EmployeeId", "Status");
+
+                    b.ToTable("EmployeeSeparations", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.EmployeeSeparationEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Comment")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("EmployeeSeparationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("EventType")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("FromStatus")
+                        .HasColumnType("int");
+
+                    b.Property<string>("MetadataJson")
+                        .HasMaxLength(8000)
+                        .HasColumnType("varchar(8000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int?>("ToStatus")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeSeparationId", "OccurredAtUtc");
+
+                    b.ToTable("EmployeeSeparationEvents", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationReason", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Category")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("EmployeeInitiatedAllowed")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("EmployerInitiatedAllowed")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("SeparationReasons", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.SeparationBenefitHistory", b =>
                 {
                     b.Property<Guid>("Id")
@@ -12374,12 +12589,12 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("TenantId", "RunId", "PackageHash")
-                        .IsUnique();
-
                     b.HasIndex("TenantId", "PreviousPackageId");
 
                     b.HasIndex("TenantId", "ResubmissionOfSubmissionId");
+
+                    b.HasIndex("TenantId", "RunId", "PackageHash")
+                        .IsUnique();
 
                     b.HasIndex("TenantId", "RunId", "Version")
                         .IsUnique();
@@ -18695,6 +18910,66 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.EmployeeSeparation", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationReason", "Reason")
+                        .WithMany("Separations")
+                        .HasForeignKey("TenantId", "ReasonId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("Reason");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.EmployeeSeparationEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.EmployeeSeparation", "Separation")
+                        .WithMany("Events")
+                        .HasForeignKey("TenantId", "EmployeeSeparationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Separation");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationReason", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.SeparationBenefitHistory", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -20174,6 +20449,16 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Components");
 
                     b.Navigation("History");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.EmployeeSeparation", b =>
+                {
+                    b.Navigation("Events");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationReason", b =>
+                {
+                    b.Navigation("Separations");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Shift", b =>

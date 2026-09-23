@@ -295,6 +295,25 @@ public static class Permissions
         public const string ReportExport = "Attendance.Report.Export";
     }
 
+    public static class Separation
+    {
+        public const string ViewSelf = "Separation.ViewSelf";
+        public const string ViewTeam = "Separation.ViewTeam";
+        public const string ViewAll = "Separation.ViewAll";
+        public const string CreateSelf = "Separation.CreateSelf";
+        public const string Initiate = "Separation.Initiate";
+        public const string Submit = "Separation.Submit";
+        public const string Withdraw = "Separation.Withdraw";
+        public const string Review = "Separation.Review";
+        public const string Manage = "Separation.Manage";
+        public const string ViewHistory = "Separation.ViewHistory";
+        public const string ManagerReview = "Separation.ManagerReview";
+        public const string HrReview = "Separation.HrReview";
+        public const string ReviseLastWorkingDate = "Separation.ReviseLastWorkingDate";
+        public const string Approve = "Separation.Approve";
+        public const string Reject = "Separation.Reject";
+    }
+
     /// <summary>Every permission the system knows about. Used by the seeder and SuperAdmin/TenantAdmin grants.</summary>
     public static readonly IReadOnlyList<string> All = new[]
     {
@@ -335,5 +354,6 @@ public static class Permissions
         , Attendance.View, Attendance.ShiftManage, Attendance.PatternManage, Attendance.RosterManage, Attendance.RosterUpload,
         Attendance.RegularizationRequest, Attendance.RegularizationApprove, Attendance.OnDutyRequest, Attendance.OnDutyApprove,
         Attendance.MonthlyViewSelf, Attendance.MonthlyViewTeam, Attendance.MonthlyViewAll, Attendance.MonthlyProcess, Attendance.MonthlyClose, Attendance.MonthlyReopen, Attendance.ExceptionView, Attendance.AdminCorrectionManage, Attendance.ReportView, Attendance.ReportExport
+        , Separation.ViewSelf, Separation.ViewTeam, Separation.ViewAll, Separation.CreateSelf, Separation.Initiate, Separation.Submit, Separation.Withdraw, Separation.Review, Separation.Manage, Separation.ViewHistory, Separation.ManagerReview, Separation.HrReview, Separation.ReviseLastWorkingDate, Separation.Approve, Separation.Reject
     };
 }

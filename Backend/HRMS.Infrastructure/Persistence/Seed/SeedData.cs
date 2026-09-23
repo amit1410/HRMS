@@ -341,6 +341,21 @@ public static class SeedData
         [DomainPermissions.Attendance.AdminCorrectionManage] = 59,
             [DomainPermissions.Attendance.ReportView] = 60,
             [DomainPermissions.Attendance.ReportExport] = 61,
+            [DomainPermissions.Separation.ViewSelf] = 234,
+            [DomainPermissions.Separation.ViewTeam] = 235,
+            [DomainPermissions.Separation.ViewAll] = 236,
+            [DomainPermissions.Separation.CreateSelf] = 237,
+            [DomainPermissions.Separation.Initiate] = 238,
+            [DomainPermissions.Separation.Submit] = 239,
+            [DomainPermissions.Separation.Withdraw] = 240,
+            [DomainPermissions.Separation.Review] = 241,
+            [DomainPermissions.Separation.Manage] = 242,
+            [DomainPermissions.Separation.ViewHistory] = 243,
+            [DomainPermissions.Separation.ManagerReview] = 244,
+            [DomainPermissions.Separation.HrReview] = 245,
+            [DomainPermissions.Separation.ReviseLastWorkingDate] = 246,
+            [DomainPermissions.Separation.Approve] = 247,
+            [DomainPermissions.Separation.Reject] = 248,
             [DomainPermissions.Leave.RequestCreate] = 62,
             [DomainPermissions.Leave.RequestViewOwn] = 63,
             [DomainPermissions.Leave.RequestWithdrawOwn] = 64,
@@ -434,6 +449,7 @@ public static class SeedData
             , DomainPermissions.Payroll.EmployeeSalaryView, DomainPermissions.Payroll.EmployeeSalaryManage, DomainPermissions.Payroll.EmployeeSalaryViewHistory
             , DomainPermissions.Payroll.PeriodView, DomainPermissions.Payroll.PeriodManage, DomainPermissions.Payroll.PeriodUnlock, DomainPermissions.Payroll.ControlsView, DomainPermissions.Payroll.ControlsManage, DomainPermissions.Payroll.RunView, DomainPermissions.Payroll.RunManage, DomainPermissions.Payroll.RunPrepare, DomainPermissions.Payroll.RunApprove, DomainPermissions.Payroll.RunFinalize, DomainPermissions.Payroll.RunViewHistory, DomainPermissions.Payroll.RunCalculate, DomainPermissions.Payroll.RunRecalculate, DomainPermissions.Payroll.RunViewResults
             , DomainPermissions.Payroll.TaxDeclarationViewOwn, DomainPermissions.Payroll.TaxDeclarationManageOwn, DomainPermissions.Payroll.TaxDeclarationReview, DomainPermissions.Payroll.TaxDeclarationApprove, DomainPermissions.Payroll.TaxDeclarationReopen, DomainPermissions.Payroll.TaxDeclarationConfigure, DomainPermissions.Payroll.TaxDeclarationViewAudit, DomainPermissions.Payroll.YearEndTaxView, DomainPermissions.Payroll.YearEndTaxManage, DomainPermissions.Payroll.YearEndTaxCalculate, DomainPermissions.Payroll.YearEndTaxSubmit, DomainPermissions.Payroll.YearEndTaxApprove, DomainPermissions.Payroll.YearEndTaxClose, DomainPermissions.Payroll.YearEndTaxViewHistory, DomainPermissions.Payroll.YearEndTaxExport
+            , DomainPermissions.Separation.ViewSelf, DomainPermissions.Separation.ViewTeam, DomainPermissions.Separation.ViewAll, DomainPermissions.Separation.CreateSelf, DomainPermissions.Separation.Initiate, DomainPermissions.Separation.Submit, DomainPermissions.Separation.Withdraw, DomainPermissions.Separation.Review, DomainPermissions.Separation.Manage, DomainPermissions.Separation.ViewHistory, DomainPermissions.Separation.ManagerReview, DomainPermissions.Separation.HrReview, DomainPermissions.Separation.ReviseLastWorkingDate, DomainPermissions.Separation.Approve, DomainPermissions.Separation.Reject
         },
         [RoleNames.HRManager] = new[]
         {
@@ -445,13 +461,15 @@ public static class SeedData
             DomainPermissions.Department.View, DomainPermissions.Designation.View,
             DomainPermissions.Attendance.ExceptionView, DomainPermissions.Attendance.ReportView,
             DomainPermissions.Attendance.ReportExport,
-            DomainPermissions.Payroll.TaxDeclarationReview, DomainPermissions.Payroll.TaxDeclarationViewAudit, DomainPermissions.Payroll.YearEndTaxView, DomainPermissions.Payroll.YearEndTaxViewHistory
+            DomainPermissions.Payroll.TaxDeclarationReview, DomainPermissions.Payroll.TaxDeclarationViewAudit, DomainPermissions.Payroll.YearEndTaxView, DomainPermissions.Payroll.YearEndTaxViewHistory,
+            DomainPermissions.Separation.ViewSelf, DomainPermissions.Separation.ViewTeam, DomainPermissions.Separation.Initiate, DomainPermissions.Separation.Submit, DomainPermissions.Separation.Review, DomainPermissions.Separation.ViewHistory, DomainPermissions.Separation.ManagerReview, DomainPermissions.Separation.HrReview, DomainPermissions.Separation.ReviseLastWorkingDate, DomainPermissions.Separation.Approve, DomainPermissions.Separation.Reject
         },
         [RoleNames.Manager] = new[]
         {
             DomainPermissions.Employee.View, DomainPermissions.Department.View, DomainPermissions.Designation.View,
             DomainPermissions.Geography.View, DomainPermissions.Attendance.MonthlyViewTeam,
-            DomainPermissions.Leave.Approve
+            DomainPermissions.Leave.Approve,
+            DomainPermissions.Separation.ViewSelf, DomainPermissions.Separation.ViewTeam, DomainPermissions.Separation.Review, DomainPermissions.Separation.ViewHistory, DomainPermissions.Separation.ManagerReview, DomainPermissions.Separation.Reject
         },
         [RoleNames.Employee] = new[]
         {
@@ -466,12 +484,13 @@ public static class SeedData
             DomainPermissions.Payroll.AdjustmentsView,
             DomainPermissions.Payroll.AdjustmentsViewHistory,
             DomainPermissions.Payroll.TaxDeclarationViewOwn,
-            DomainPermissions.Payroll.TaxDeclarationManageOwn
+            DomainPermissions.Payroll.TaxDeclarationManageOwn,
+            DomainPermissions.Separation.ViewSelf, DomainPermissions.Separation.CreateSelf, DomainPermissions.Separation.Submit, DomainPermissions.Separation.Withdraw, DomainPermissions.Separation.ViewHistory
         },
         [RoleNames.AccountLinkAdministrator] = new[] { DomainPermissions.AccountEmployeeLink.View, DomainPermissions.AccountEmployeeLink.Manage },
         [RoleNames.AccountLinkAuditor] = new[] { DomainPermissions.AccountEmployeeLink.View, DomainPermissions.AccountEmployeeLink.ViewHistory }
         ,[RoleNames.EmployeeRelationshipOfficer] = new[] { DomainPermissions.Employee.View, DomainPermissions.EmploymentHistory.View }
-        ,[RoleNames.HRBP] = new[] { DomainPermissions.Employee.View, DomainPermissions.EmploymentHistory.View, DomainPermissions.Leave.Approve }
+        ,[RoleNames.HRBP] = new[] { DomainPermissions.Employee.View, DomainPermissions.EmploymentHistory.View, DomainPermissions.Leave.Approve, DomainPermissions.Separation.ViewAll, DomainPermissions.Separation.HrReview, DomainPermissions.Separation.ReviseLastWorkingDate, DomainPermissions.Separation.Reject, DomainPermissions.Separation.ViewHistory }
         ,[RoleNames.TimeManager] = new[] { DomainPermissions.Employee.View, DomainPermissions.Attendance.View }
         ,[RoleNames.IT] = new[] { DomainPermissions.User.View, DomainPermissions.User.Edit, DomainPermissions.AccountEmployeeLink.View }
         ,[RoleNames.Accounts] = new[] { DomainPermissions.Employee.View }

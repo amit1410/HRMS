@@ -273,6 +273,23 @@ export const Permissions = {
     reportView: 'Attendance.Report.View',
     reportExport: 'Attendance.Report.Export',
   },
+  separation: {
+    viewSelf: 'Separation.ViewSelf',
+    viewTeam: 'Separation.ViewTeam',
+    viewAll: 'Separation.ViewAll',
+    createSelf: 'Separation.CreateSelf',
+    initiate: 'Separation.Initiate',
+    submit: 'Separation.Submit',
+    withdraw: 'Separation.Withdraw',
+    review: 'Separation.Review',
+    manage: 'Separation.Manage',
+    viewHistory: 'Separation.ViewHistory',
+    managerReview: 'Separation.ManagerReview',
+    hrReview: 'Separation.HrReview',
+    reviseLastWorkingDate: 'Separation.ReviseLastWorkingDate',
+    approve: 'Separation.Approve',
+    reject: 'Separation.Reject',
+  },
 } as const
 
 /** Every permission the system knows about — the counterpart of `Permissions.All` in C#. */

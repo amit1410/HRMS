@@ -1,6 +1,7 @@
 using HRMS.Application.Abstractions;
 using HRMS.Domain.Common;
 using HRMS.Domain.Entities;
+using HRMS.Domain.Entities.Separation;
 using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence.Conversions;
 using Microsoft.EntityFrameworkCore;
@@ -99,6 +100,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<TaxDeclarationProof> TaxDeclarationProofs => Set<TaxDeclarationProof>();
     public DbSet<TaxDeclarationAuditEvent> TaxDeclarationAuditEvents => Set<TaxDeclarationAuditEvent>();
     public DbSet<EmployeeEmployment> EmployeeEmployments => Set<EmployeeEmployment>();
+    public DbSet<HRMS.Domain.Entities.Separation.SeparationReason> SeparationReasons => Set<HRMS.Domain.Entities.Separation.SeparationReason>();
+    public DbSet<EmployeeSeparation> EmployeeSeparations => Set<EmployeeSeparation>();
+    public DbSet<EmployeeSeparationEvent> EmployeeSeparationEvents => Set<EmployeeSeparationEvent>();
     public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
     public DbSet<LeaveType> LeaveTypes => Set<LeaveType>();
     public DbSet<LeavePeriod> LeavePeriods => Set<LeavePeriod>();
@@ -285,6 +289,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         {
             modelBuilder.Entity<PayrollInputBatch>()
                 .HasIndex(x => new { x.TenantId, x.FileHash, x.TemplateId })
+                .HasFilter(null);
+            modelBuilder.Entity<EmployeeSeparation>()
+                .HasIndex(x => new { x.TenantId, x.ActiveEmployeeKey })
                 .HasFilter(null);
         }
 
