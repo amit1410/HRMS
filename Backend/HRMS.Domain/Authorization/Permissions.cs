@@ -222,6 +222,16 @@ public static class Permissions
         public const string AdjustmentsCancel = "Payroll.Adjustments.Cancel";
         public const string AdjustmentsReverse = "Payroll.Adjustments.Reverse";
         public const string AdjustmentsViewHistory = "Payroll.Adjustments.ViewHistory";
+        public const string InputView = "PayrollInput.View";
+        public const string InputCreate = "PayrollInput.Create";
+        public const string InputImport = "PayrollInput.Import";
+        public const string InputValidate = "PayrollInput.Validate";
+        public const string InputSubmit = "PayrollInput.Submit";
+        public const string InputApprove = "PayrollInput.Approve";
+        public const string InputPost = "PayrollInput.Post";
+        public const string InputCancel = "PayrollInput.Cancel";
+        public const string InputViewAudit = "PayrollInput.ViewAudit";
+        public const string InputConfigureTemplate = "PayrollInput.ConfigureTemplate";
         public const string OffCycleView = "Payroll.OffCycle.View";
         public const string OffCycleCreate = "Payroll.OffCycle.Create";
         public const string OffCycleApprove = "Payroll.OffCycle.Approve";
@@ -296,7 +306,7 @@ public static class Permissions
         Payroll.ReimbursementsView, Payroll.ReimbursementsRequest, Payroll.ReimbursementsManage, Payroll.ReimbursementsApprove, Payroll.ReimbursementsSettle, Payroll.ReimbursementsCancel, Payroll.ReimbursementsViewHistory, Payroll.ReimbursementsManageCategories,
         Payroll.SeparationBenefitsView, Payroll.SeparationBenefitsCalculate, Payroll.SeparationBenefitsManagePolicies, Payroll.SeparationBenefitsOverride, Payroll.SeparationBenefitsApprove, Payroll.SeparationBenefitsViewHistory,
         Payroll.VariablePayView, Payroll.VariablePayManagePlans, Payroll.VariablePayCalculate, Payroll.VariablePayCreateAward, Payroll.VariablePaySubmit, Payroll.VariablePayApprove, Payroll.VariablePayOverride, Payroll.VariablePayCancel, Payroll.VariablePayViewHistory,
-        Payroll.AdjustmentsView, Payroll.AdjustmentsCreate, Payroll.AdjustmentsSubmit, Payroll.AdjustmentsApprove, Payroll.AdjustmentsCancel, Payroll.AdjustmentsReverse, Payroll.AdjustmentsViewHistory, Payroll.OffCycleView, Payroll.OffCycleCreate, Payroll.OffCycleApprove, Payroll.OffCycleProcess, Payroll.OffCycleCancel,
+        Payroll.AdjustmentsView, Payroll.AdjustmentsCreate, Payroll.AdjustmentsSubmit, Payroll.AdjustmentsApprove, Payroll.AdjustmentsCancel, Payroll.AdjustmentsReverse, Payroll.AdjustmentsViewHistory, Payroll.InputView, Payroll.InputCreate, Payroll.InputImport, Payroll.InputValidate, Payroll.InputSubmit, Payroll.InputApprove, Payroll.InputPost, Payroll.InputCancel, Payroll.InputViewAudit, Payroll.InputConfigureTemplate, Payroll.OffCycleView, Payroll.OffCycleCreate, Payroll.OffCycleApprove, Payroll.OffCycleProcess, Payroll.OffCycleCancel,
         Payroll.AnalyticsView, Payroll.AnalyticsConfigure, Payroll.ReconciliationView, Payroll.ReconciliationGenerate, Payroll.ReconciliationAcknowledge, Payroll.ReconciliationResolve, Payroll.ExceptionsView, Payroll.ExceptionsManage, Payroll.TaxDeclarationViewOwn, Payroll.TaxDeclarationManageOwn, Payroll.TaxDeclarationReview, Payroll.TaxDeclarationApprove, Payroll.TaxDeclarationReopen, Payroll.TaxDeclarationConfigure, Payroll.TaxDeclarationViewAudit,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,

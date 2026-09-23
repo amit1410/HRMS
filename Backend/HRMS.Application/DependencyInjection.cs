@@ -127,6 +127,7 @@ public static class DependencyInjection
         services.AddScoped<ISeparationBenefitsService, SeparationBenefitsService>();
         services.AddScoped<IVariablePayService, VariablePayService>();
         services.AddScoped<IPayrollAdjustmentService, PayrollAdjustmentService>();
+        services.AddScoped<IPayrollInputService, PayrollInputService>();
         services.AddScoped<IPayrollAnalyticsService, PayrollAnalyticsService>();
         services.AddScoped<IPayrollReportsService, PayrollReportsService>();
         services.AddScoped<ITaxDeclarationService, TaxDeclarationService>();

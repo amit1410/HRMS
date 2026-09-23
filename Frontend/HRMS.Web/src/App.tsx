@@ -75,6 +75,7 @@ import { MyTaxDeclarationsPage } from './pages/payroll/MyTaxDeclarationsPage.tsx
 import { PayrollOffCyclePage } from './pages/payroll/PayrollOffCyclePage.tsx'
 import { PayrollAnalyticsPage } from './pages/payroll/PayrollAnalyticsPage.tsx'
 import { PayrollReportsPage } from './pages/payroll/PayrollReportsPage.tsx'
+import { PayrollInputsPage } from './pages/payroll/PayrollInputsPage.tsx'
 
 /**
  * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
@@ -174,6 +175,7 @@ function TenantApplication() {
                   <Route path="payroll/variable-pay" element={<RequirePermission permission={Permissions.payroll.variablePayView}><VariablePayPage /></RequirePermission>} />
                   <Route path="payroll/my-variable-pay" element={<RequirePermission permission={Permissions.payroll.variablePayView}><RequireEmployeeIdentity><MyVariablePayPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="payroll/adjustments" element={<RequirePermission permission={Permissions.payroll.adjustmentsView}><PayrollAdjustmentsPage /></RequirePermission>} />
+                  <Route path="payroll/inputs" element={<RequirePermission permission={Permissions.payroll.inputView}><PayrollInputsPage /></RequirePermission>} />
                   <Route path="payroll/off-cycle" element={<RequirePermission permission={Permissions.payroll.offCycleView}><PayrollOffCyclePage /></RequirePermission>} />
                   <Route path="payroll/analytics" element={<RequirePermission permission={Permissions.payroll.analyticsView}><PayrollAnalyticsPage /></RequirePermission>} />
                   <Route path="payroll/reports" element={<RequirePermission permission={Permissions.payroll.analyticsView}><PayrollReportsPage /></RequirePermission>} />

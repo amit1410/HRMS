@@ -205,6 +205,12 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<PayrollReversal> PayrollReversals => Set<PayrollReversal>();
     public DbSet<PayrollAdjustmentHistory> PayrollAdjustmentHistories => Set<PayrollAdjustmentHistory>();
     public DbSet<PayrollAdjustmentNumberSequence> PayrollAdjustmentNumberSequences => Set<PayrollAdjustmentNumberSequence>();
+    public DbSet<PayrollInputBatch> PayrollInputBatches => Set<PayrollInputBatch>();
+    public DbSet<PayrollInputLine> PayrollInputLines => Set<PayrollInputLine>();
+    public DbSet<PayrollInputTemplate> PayrollInputTemplates => Set<PayrollInputTemplate>();
+    public DbSet<PayrollInputTemplateColumn> PayrollInputTemplateColumns => Set<PayrollInputTemplateColumn>();
+    public DbSet<PayrollInputValidationIssue> PayrollInputValidationIssues => Set<PayrollInputValidationIssue>();
+    public DbSet<PayrollInputHistory> PayrollInputHistories => Set<PayrollInputHistory>();
     public DbSet<PayrollRetroHistory> PayrollRetroHistories => Set<PayrollRetroHistory>();
     public DbSet<FinalSettlementCase> FinalSettlementCases => Set<FinalSettlementCase>();
     public DbSet<FinalSettlementLine> FinalSettlementLines => Set<FinalSettlementLine>();
@@ -256,6 +262,13 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        if (Database.IsMySql())
+        {
+            modelBuilder.Entity<PayrollInputBatch>()
+                .HasIndex(x => new { x.TenantId, x.FileHash, x.TemplateId })
+                .HasFilter(null);
+        }
 
         // Every configuration in this assembly except the catalog's. ApplyConfigurationsFromAssembly scans
         // by type, not by namespace, so without the predicate it would find CatalogTenantBrandingConfiguration
@@ -519,6 +532,12 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<PayrollReversal>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollAdjustmentHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollAdjustmentNumberSequence>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollInputBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollInputLine>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollInputTemplate>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollInputTemplateColumn>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollInputValidationIssue>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollInputHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollRetroHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<FinalSettlementCase>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<FinalSettlementLine>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -620,6 +639,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
             if (entry.State is EntityState.Modified or EntityState.Deleted)
                 throw new InvalidOperationException("Leave request events are immutable.");
         }
+
         foreach (var entry in ChangeTracker.Entries<UserRoleAssignmentEvent>())
         {
             if (entry.State is EntityState.Modified or EntityState.Deleted)

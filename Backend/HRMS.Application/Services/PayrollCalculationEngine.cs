@@ -146,7 +146,7 @@ public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext t
 
     private async Task<string?> ApplyAdjustmentsAsync(PayrollRun run, PayrollResult result, Guid attemptId, CancellationToken ct)
     {
-        var adjustments = await db.PayrollAdjustments.AsNoTracking().Where(x => x.TenantId == run.TenantId && x.EmployeeId == result.EmployeeId && x.TargetPayrollRunId == run.Id && (x.Status == PayrollAdjustmentStatus.Approved || x.Status == PayrollAdjustmentStatus.Scheduled) && !db.PayrollAdjustmentApplications.Any(a => a.TenantId == run.TenantId && a.PayrollAdjustmentId == x.Id && a.PayrollRunId == run.Id)).OrderBy(x => x.CreatedDate).ToListAsync(ct);
+        var adjustments = await db.PayrollAdjustments.AsNoTracking().Where(x => x.TenantId == run.TenantId && x.EmployeeId == result.EmployeeId && (x.TargetPayrollRunId == run.Id || (x.TargetPayrollRunId == null && x.PayrollPeriodId == run.PayrollPeriodId)) && (x.Status == PayrollAdjustmentStatus.Approved || x.Status == PayrollAdjustmentStatus.Scheduled) && !db.PayrollAdjustmentApplications.Any(a => a.TenantId == run.TenantId && a.PayrollAdjustmentId == x.Id && a.PayrollRunId == run.Id)).OrderBy(x => x.CreatedDate).ToListAsync(ct);
         foreach (var adjustment in adjustments)
         {
             var amount = PayrollRoundingPolicy.RoundMoney(adjustment.Amount - adjustment.AppliedAmount); if (amount <= 0) continue;
