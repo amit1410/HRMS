@@ -230,6 +230,12 @@ public interface IHrmsDbContext
     DbSet<PayrollReconciliation> PayrollReconciliations { get; }
     DbSet<PayrollReconciliationFinding> PayrollReconciliationFindings { get; }
     DbSet<PayrollAnomalyFlag> PayrollAnomalyFlags { get; }
+    DbSet<YearEndTaxRun> YearEndTaxRuns { get; }
+    DbSet<YearEndTaxEmployee> YearEndTaxEmployees { get; }
+    DbSet<YearEndTaxPreviousEmployerInput> YearEndTaxPreviousEmployerInputs { get; }
+    DbSet<YearEndTaxAdjustment> YearEndTaxAdjustments { get; }
+    DbSet<YearEndTaxStatement> YearEndTaxStatements { get; }
+    DbSet<YearEndTaxHistory> YearEndTaxHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

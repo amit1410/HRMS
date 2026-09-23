@@ -252,6 +252,14 @@ public static class Permissions
         public const string TaxDeclarationReopen = "Payroll.TaxDeclaration.Reopen";
         public const string TaxDeclarationConfigure = "Payroll.TaxDeclaration.Configure";
         public const string TaxDeclarationViewAudit = "Payroll.TaxDeclaration.ViewAudit";
+        public const string YearEndTaxView = "Payroll.YearEndTax.View";
+        public const string YearEndTaxManage = "Payroll.YearEndTax.Manage";
+        public const string YearEndTaxCalculate = "Payroll.YearEndTax.Calculate";
+        public const string YearEndTaxSubmit = "Payroll.YearEndTax.Submit";
+        public const string YearEndTaxApprove = "Payroll.YearEndTax.Approve";
+        public const string YearEndTaxClose = "Payroll.YearEndTax.Close";
+        public const string YearEndTaxViewHistory = "Payroll.YearEndTax.ViewHistory";
+        public const string YearEndTaxExport = "Payroll.YearEndTax.Export";
     }
     public static class Attendance
     {
@@ -307,7 +315,7 @@ public static class Permissions
         Payroll.SeparationBenefitsView, Payroll.SeparationBenefitsCalculate, Payroll.SeparationBenefitsManagePolicies, Payroll.SeparationBenefitsOverride, Payroll.SeparationBenefitsApprove, Payroll.SeparationBenefitsViewHistory,
         Payroll.VariablePayView, Payroll.VariablePayManagePlans, Payroll.VariablePayCalculate, Payroll.VariablePayCreateAward, Payroll.VariablePaySubmit, Payroll.VariablePayApprove, Payroll.VariablePayOverride, Payroll.VariablePayCancel, Payroll.VariablePayViewHistory,
         Payroll.AdjustmentsView, Payroll.AdjustmentsCreate, Payroll.AdjustmentsSubmit, Payroll.AdjustmentsApprove, Payroll.AdjustmentsCancel, Payroll.AdjustmentsReverse, Payroll.AdjustmentsViewHistory, Payroll.InputView, Payroll.InputCreate, Payroll.InputImport, Payroll.InputValidate, Payroll.InputSubmit, Payroll.InputApprove, Payroll.InputPost, Payroll.InputCancel, Payroll.InputViewAudit, Payroll.InputConfigureTemplate, Payroll.OffCycleView, Payroll.OffCycleCreate, Payroll.OffCycleApprove, Payroll.OffCycleProcess, Payroll.OffCycleCancel,
-        Payroll.AnalyticsView, Payroll.AnalyticsConfigure, Payroll.ReconciliationView, Payroll.ReconciliationGenerate, Payroll.ReconciliationAcknowledge, Payroll.ReconciliationResolve, Payroll.ExceptionsView, Payroll.ExceptionsManage, Payroll.TaxDeclarationViewOwn, Payroll.TaxDeclarationManageOwn, Payroll.TaxDeclarationReview, Payroll.TaxDeclarationApprove, Payroll.TaxDeclarationReopen, Payroll.TaxDeclarationConfigure, Payroll.TaxDeclarationViewAudit,
+        Payroll.AnalyticsView, Payroll.AnalyticsConfigure, Payroll.ReconciliationView, Payroll.ReconciliationGenerate, Payroll.ReconciliationAcknowledge, Payroll.ReconciliationResolve, Payroll.ExceptionsView, Payroll.ExceptionsManage, Payroll.TaxDeclarationViewOwn, Payroll.TaxDeclarationManageOwn, Payroll.TaxDeclarationReview, Payroll.TaxDeclarationApprove, Payroll.TaxDeclarationReopen, Payroll.TaxDeclarationConfigure, Payroll.TaxDeclarationViewAudit, Payroll.YearEndTaxView, Payroll.YearEndTaxManage, Payroll.YearEndTaxCalculate, Payroll.YearEndTaxSubmit, Payroll.YearEndTaxApprove, Payroll.YearEndTaxClose, Payroll.YearEndTaxViewHistory, Payroll.YearEndTaxExport,
         Leave.DashboardViewAll, Leave.ReportsView, Leave.ReportsExport, Leave.TypeManage, Leave.PeriodManage, Leave.PolicyView, Leave.PolicyManage, Leave.PolicyPublish, Leave.Approve,
         Leave.BalanceView, Leave.BalanceAdjust, Leave.BalanceImport, Leave.BalanceViewImportHistory,
         Leave.RequestCreate, Leave.RequestViewOwn, Leave.RequestWithdrawOwn, Leave.RequestCancelOwn,

@@ -266,6 +266,14 @@ public static class SeedData
             [DomainPermissions.Payroll.TaxDeclarationReopen] = 202,
             [DomainPermissions.Payroll.TaxDeclarationConfigure] = 203,
             [DomainPermissions.Payroll.TaxDeclarationViewAudit] = 204,
+            [DomainPermissions.Payroll.YearEndTaxView] = 215,
+            [DomainPermissions.Payroll.YearEndTaxManage] = 216,
+            [DomainPermissions.Payroll.YearEndTaxCalculate] = 217,
+            [DomainPermissions.Payroll.YearEndTaxSubmit] = 218,
+            [DomainPermissions.Payroll.YearEndTaxApprove] = 219,
+            [DomainPermissions.Payroll.YearEndTaxClose] = 220,
+            [DomainPermissions.Payroll.YearEndTaxViewHistory] = 221,
+            [DomainPermissions.Payroll.YearEndTaxExport] = 222,
             [DomainPermissions.Payroll.InputView] = 205,
             [DomainPermissions.Payroll.InputCreate] = 206,
             [DomainPermissions.Payroll.InputImport] = 207,
@@ -414,7 +422,7 @@ public static class SeedData
             , DomainPermissions.Payroll.SalaryStructureView, DomainPermissions.Payroll.SalaryStructureManage, DomainPermissions.Payroll.SalaryStructureViewHistory
             , DomainPermissions.Payroll.EmployeeSalaryView, DomainPermissions.Payroll.EmployeeSalaryManage, DomainPermissions.Payroll.EmployeeSalaryViewHistory
             , DomainPermissions.Payroll.PeriodView, DomainPermissions.Payroll.PeriodManage, DomainPermissions.Payroll.PeriodUnlock, DomainPermissions.Payroll.ControlsView, DomainPermissions.Payroll.ControlsManage, DomainPermissions.Payroll.RunView, DomainPermissions.Payroll.RunManage, DomainPermissions.Payroll.RunPrepare, DomainPermissions.Payroll.RunApprove, DomainPermissions.Payroll.RunFinalize, DomainPermissions.Payroll.RunViewHistory, DomainPermissions.Payroll.RunCalculate, DomainPermissions.Payroll.RunRecalculate, DomainPermissions.Payroll.RunViewResults
-            , DomainPermissions.Payroll.TaxDeclarationViewOwn, DomainPermissions.Payroll.TaxDeclarationManageOwn, DomainPermissions.Payroll.TaxDeclarationReview, DomainPermissions.Payroll.TaxDeclarationApprove, DomainPermissions.Payroll.TaxDeclarationReopen, DomainPermissions.Payroll.TaxDeclarationConfigure, DomainPermissions.Payroll.TaxDeclarationViewAudit
+            , DomainPermissions.Payroll.TaxDeclarationViewOwn, DomainPermissions.Payroll.TaxDeclarationManageOwn, DomainPermissions.Payroll.TaxDeclarationReview, DomainPermissions.Payroll.TaxDeclarationApprove, DomainPermissions.Payroll.TaxDeclarationReopen, DomainPermissions.Payroll.TaxDeclarationConfigure, DomainPermissions.Payroll.TaxDeclarationViewAudit, DomainPermissions.Payroll.YearEndTaxView, DomainPermissions.Payroll.YearEndTaxManage, DomainPermissions.Payroll.YearEndTaxCalculate, DomainPermissions.Payroll.YearEndTaxSubmit, DomainPermissions.Payroll.YearEndTaxApprove, DomainPermissions.Payroll.YearEndTaxClose, DomainPermissions.Payroll.YearEndTaxViewHistory, DomainPermissions.Payroll.YearEndTaxExport
         },
         [RoleNames.HRManager] = new[]
         {
@@ -426,7 +434,7 @@ public static class SeedData
             DomainPermissions.Department.View, DomainPermissions.Designation.View,
             DomainPermissions.Attendance.ExceptionView, DomainPermissions.Attendance.ReportView,
             DomainPermissions.Attendance.ReportExport,
-            DomainPermissions.Payroll.TaxDeclarationReview, DomainPermissions.Payroll.TaxDeclarationViewAudit
+            DomainPermissions.Payroll.TaxDeclarationReview, DomainPermissions.Payroll.TaxDeclarationViewAudit, DomainPermissions.Payroll.YearEndTaxView, DomainPermissions.Payroll.YearEndTaxViewHistory
         },
         [RoleNames.Manager] = new[]
         {

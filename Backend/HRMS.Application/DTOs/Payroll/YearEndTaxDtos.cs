@@ -1,0 +1,17 @@
+using HRMS.Application.Common;
+using HRMS.Domain.Enums;
+
+namespace HRMS.Application.DTOs.Payroll;
+
+public sealed record YearEndTaxRunDto(Guid Id, int TaxYear, string TaxYearCode, DateOnly StartDate, DateOnly EndDate, YearEndTaxRunStatus Status, int EmployeeCount, int BlockingIssueCount, decimal TotalTaxDue, decimal TotalExcessTax, DateTime CreatedAtUtc, DateTime? SubmittedAtUtc, DateTime? ApprovedAtUtc, DateTime? ClosedAtUtc);
+public sealed record YearEndTaxEmployeeDto(Guid Id, Guid EmployeeId, string EmployeeCode, string EmployeeName, decimal YtdGross, decimal YtdTaxableIncome, decimal YtdTaxDeducted, decimal ApprovedDeclarationAmount, decimal ApprovedProofAmount, decimal PreviousEmployerTaxableIncome, decimal PreviousEmployerTaxDeducted, decimal ProjectedRemainingTaxableIncome, decimal ProjectedAnnualTaxableIncome, decimal ProjectedAnnualTax, decimal EstimatedTaxDue, decimal EstimatedExcessTax, decimal FinalTaxableIncome, decimal FinalTaxLiability, YearEndTaxEmployeeStatus Status, string? BlockingIssueCode, string? BlockingIssueMessage);
+public sealed record YearEndTaxPreviousEmployerDto(Guid Id, Guid RunId, Guid EmployeeId, string EmployerName, string? EmployerReference, decimal TaxableIncome, decimal TaxDeducted, decimal EligibleDeductionAmount, string? EvidenceReference, YearEndTaxPreviousEmployerStatus Status);
+public sealed record YearEndTaxAdjustmentDto(Guid Id, Guid RunId, Guid EmployeeId, decimal Amount, PayrollAdjustmentDirection Direction, YearEndTaxAdjustmentStatus Status, Guid? PayrollAdjustmentId, string Reason, string SourceCalculationReference);
+public sealed record YearEndTaxHistoryDto(Guid Id, YearEndTaxHistoryEvent Event, YearEndTaxRunStatus? PreviousStatus, YearEndTaxRunStatus? NewStatus, Guid? ActorUserId, DateTime OccurredAtUtc, string? Message);
+public sealed record YearEndTaxStatementDto(Guid Id, Guid RunId, Guid EmployeeId, string StatementReference, DateTime GeneratedAtUtc, YearEndTaxEmployeeDto Reconciliation);
+
+public sealed class YearEndTaxRunRequest { public int TaxYear { get; set; } public string TaxYearCode { get; set; } = string.Empty; public DateOnly StartDate { get; set; } public DateOnly EndDate { get; set; } }
+public sealed class YearEndTaxPreviousEmployerRequest { public Guid EmployeeId { get; set; } public string EmployerName { get; set; } = string.Empty; public string? EmployerReference { get; set; } public decimal TaxableIncome { get; set; } public decimal TaxDeducted { get; set; } public decimal EligibleDeductionAmount { get; set; } public string? EvidenceReference { get; set; } }
+public sealed class YearEndTaxPreviousEmployerUpdateRequest { public string EmployerName { get; set; } = string.Empty; public string? EmployerReference { get; set; } public decimal TaxableIncome { get; set; } public decimal TaxDeducted { get; set; } public decimal EligibleDeductionAmount { get; set; } public string? EvidenceReference { get; set; } }
+public sealed class YearEndTaxAdjustmentHandoffRequest { public Guid AdjustmentId { get; set; } public Guid? SalaryComponentId { get; set; } public string ComponentCode { get; set; } = string.Empty; public string? PayrollPeriodId { get; set; } }
+public sealed class YearEndTaxEmployeeQuery : PagedQuery { public Guid? EmployeeId { get; set; } public YearEndTaxEmployeeStatus? Status { get; set; } public bool? HasTaxDue { get; set; } public bool? HasBlockingIssue { get; set; } }

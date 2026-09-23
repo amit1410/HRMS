@@ -246,6 +246,12 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<PayrollReconciliation> PayrollReconciliations => Set<PayrollReconciliation>();
     public DbSet<PayrollReconciliationFinding> PayrollReconciliationFindings => Set<PayrollReconciliationFinding>();
     public DbSet<PayrollAnomalyFlag> PayrollAnomalyFlags => Set<PayrollAnomalyFlag>();
+    public DbSet<YearEndTaxRun> YearEndTaxRuns => Set<YearEndTaxRun>();
+    public DbSet<YearEndTaxEmployee> YearEndTaxEmployees => Set<YearEndTaxEmployee>();
+    public DbSet<YearEndTaxPreviousEmployerInput> YearEndTaxPreviousEmployerInputs => Set<YearEndTaxPreviousEmployerInput>();
+    public DbSet<YearEndTaxAdjustment> YearEndTaxAdjustments => Set<YearEndTaxAdjustment>();
+    public DbSet<YearEndTaxStatement> YearEndTaxStatements => Set<YearEndTaxStatement>();
+    public DbSet<YearEndTaxHistory> YearEndTaxHistories => Set<YearEndTaxHistory>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
@@ -537,6 +543,12 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<PayrollInputTemplate>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollInputTemplateColumn>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollInputValidationIssue>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<YearEndTaxRun>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<YearEndTaxEmployee>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<YearEndTaxPreviousEmployerInput>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<YearEndTaxAdjustment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<YearEndTaxStatement>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<YearEndTaxHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollInputHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollRetroHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<FinalSettlementCase>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
