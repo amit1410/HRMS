@@ -236,6 +236,18 @@ public interface IHrmsDbContext
     DbSet<YearEndTaxAdjustment> YearEndTaxAdjustments { get; }
     DbSet<YearEndTaxStatement> YearEndTaxStatements { get; }
     DbSet<YearEndTaxHistory> YearEndTaxHistories { get; }
+    DbSet<StatutoryFilingDefinition> StatutoryFilingDefinitions { get; }
+    DbSet<StatutoryFilingConnectionProfile> StatutoryFilingConnectionProfiles { get; }
+    DbSet<StatutoryFilingDefinitionVersion> StatutoryFilingDefinitionVersions { get; }
+    DbSet<StatutoryFilingFieldMapping> StatutoryFilingFieldMappings { get; }
+    DbSet<StatutoryFilingRun> StatutoryFilingRuns { get; }
+    DbSet<StatutoryFilingRunItem> StatutoryFilingRunItems { get; }
+    DbSet<StatutoryFilingValidationIssue> StatutoryFilingValidationIssues { get; }
+    DbSet<StatutoryFilingPackage> StatutoryFilingPackages { get; }
+    DbSet<StatutoryFilingSubmission> StatutoryFilingSubmissions { get; }
+    DbSet<StatutoryFilingSubmissionAttempt> StatutoryFilingSubmissionAttempts { get; }
+    DbSet<StatutoryFilingAcknowledgement> StatutoryFilingAcknowledgements { get; }
+    DbSet<StatutoryFilingHistory> StatutoryFilingHistories { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);

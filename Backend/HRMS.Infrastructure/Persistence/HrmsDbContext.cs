@@ -252,6 +252,18 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<YearEndTaxAdjustment> YearEndTaxAdjustments => Set<YearEndTaxAdjustment>();
     public DbSet<YearEndTaxStatement> YearEndTaxStatements => Set<YearEndTaxStatement>();
     public DbSet<YearEndTaxHistory> YearEndTaxHistories => Set<YearEndTaxHistory>();
+    public DbSet<StatutoryFilingDefinition> StatutoryFilingDefinitions => Set<StatutoryFilingDefinition>();
+    public DbSet<StatutoryFilingConnectionProfile> StatutoryFilingConnectionProfiles => Set<StatutoryFilingConnectionProfile>();
+    public DbSet<StatutoryFilingDefinitionVersion> StatutoryFilingDefinitionVersions => Set<StatutoryFilingDefinitionVersion>();
+    public DbSet<StatutoryFilingFieldMapping> StatutoryFilingFieldMappings => Set<StatutoryFilingFieldMapping>();
+    public DbSet<StatutoryFilingRun> StatutoryFilingRuns => Set<StatutoryFilingRun>();
+    public DbSet<StatutoryFilingRunItem> StatutoryFilingRunItems => Set<StatutoryFilingRunItem>();
+    public DbSet<StatutoryFilingValidationIssue> StatutoryFilingValidationIssues => Set<StatutoryFilingValidationIssue>();
+    public DbSet<StatutoryFilingPackage> StatutoryFilingPackages => Set<StatutoryFilingPackage>();
+    public DbSet<StatutoryFilingSubmission> StatutoryFilingSubmissions => Set<StatutoryFilingSubmission>();
+    public DbSet<StatutoryFilingSubmissionAttempt> StatutoryFilingSubmissionAttempts => Set<StatutoryFilingSubmissionAttempt>();
+    public DbSet<StatutoryFilingAcknowledgement> StatutoryFilingAcknowledgements => Set<StatutoryFilingAcknowledgement>();
+    public DbSet<StatutoryFilingHistory> StatutoryFilingHistories => Set<StatutoryFilingHistory>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
@@ -549,6 +561,18 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<YearEndTaxAdjustment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<YearEndTaxStatement>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<YearEndTaxHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingDefinition>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingConnectionProfile>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingDefinitionVersion>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingFieldMapping>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingRun>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingRunItem>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingValidationIssue>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingPackage>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingSubmission>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingSubmissionAttempt>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingAcknowledgement>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<StatutoryFilingHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollInputHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollRetroHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<FinalSettlementCase>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

@@ -132,6 +132,10 @@ public static class DependencyInjection
         services.AddScoped<IPayrollReportsService, PayrollReportsService>();
         services.AddScoped<ITaxDeclarationService, TaxDeclarationService>();
         services.AddScoped<IYearEndTaxService, YearEndTaxService>();
+        services.AddScoped<IStatutoryFilingService, StatutoryFilingService>();
+        services.AddScoped<IStatutoryFilingConnector, ManualDownloadStatutoryFilingConnector>();
+        services.AddScoped<IStatutoryFilingConnector, TestStatutoryFilingConnector>();
+        services.AddScoped<IStatutoryFilingConnectorRegistry, StatutoryFilingConnectorRegistry>();
 
         return services;
     }

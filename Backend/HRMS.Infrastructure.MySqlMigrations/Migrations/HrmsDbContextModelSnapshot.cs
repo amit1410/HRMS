@@ -12020,6 +12020,638 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("StatutoryConfigurationVersions", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingAcknowledgement", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("AcknowledgedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<string>("ReferenceNumber")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<Guid>("SubmissionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "SubmissionId", "ReferenceNumber")
+                        .IsUnique();
+
+                    b.ToTable("StatutoryFilingAcknowledgements", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingConnectionProfile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<int>("ConnectorType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Endpoint")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("LastValidatedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("LastValidationStatus")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("varchar(160)");
+
+                    b.Property<string>("NonSecretConfigurationJson")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<string>("SecretReference")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("StatutoryFilingConnectionProfiles", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingDefinition", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<Guid?>("ConnectionProfileId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DestinationType")
+                        .HasColumnType("int");
+
+                    b.Property<string>("FilingType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("JurisdictionCode")
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<bool>("RequiresApproval")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "ConnectionProfileId");
+
+                    b.ToTable("StatutoryFilingDefinitions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingDefinitionVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("DefinitionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("OutputFormat")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SourceType")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "DefinitionId", "Version")
+                        .IsUnique();
+
+                    b.ToTable("StatutoryFilingDefinitionVersions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingFieldMapping", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("DefaultValue")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<Guid>("DefinitionVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Format")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("OutputFieldName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<bool>("Required")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SourceField")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "DefinitionVersionId", "Sequence")
+                        .IsUnique();
+
+                    b.ToTable("StatutoryFilingFieldMappings", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingHistory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Event")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Message")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("NewStatus")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("PreviousStatus")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "RunId", "OccurredAtUtc");
+
+                    b.ToTable("StatutoryFilingHistories", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingPackage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<long>("ByteCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasMaxLength(2000000)
+                        .HasColumnType("longtext");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("FileCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)");
+
+                    b.Property<bool>("IsSubmitted")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("PackageHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<Guid?>("PreviousPackageId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ResubmissionOfSubmissionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("RowCount")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "RunId", "PackageHash")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "PreviousPackageId");
+
+                    b.HasIndex("TenantId", "ResubmissionOfSubmissionId");
+
+                    b.HasIndex("TenantId", "RunId", "Version")
+                        .IsUnique();
+
+                    b.ToTable("StatutoryFilingPackages", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ApprovedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("DefinitionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("DefinitionVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("FilingPeriod")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<DateTime?>("GeneratedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("GeneratedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("RowCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("SubmittedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("SubmittedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ValidationErrorCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ValidationWarningCount")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "DefinitionVersionId");
+
+                    b.HasIndex("TenantId", "DefinitionId", "FilingPeriod", "Status");
+
+                    b.ToTable("StatutoryFilingRuns", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingRunItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("PayrollStatutoryReturnEmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SourceReference")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<string>("SourceSnapshotJson")
+                        .IsRequired()
+                        .HasMaxLength(12000)
+                        .HasColumnType("varchar(12000)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "RunId", "SourceReference")
+                        .IsUnique();
+
+                    b.ToTable("StatutoryFilingRunItems", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingSubmission", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("AcknowledgedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("ExternalReference")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Outcome")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("PackageId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("ResponseCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<Guid?>("ResubmissionOfSubmissionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("SafeResponseSummary")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<DateTime?>("SubmittedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "PackageId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "ResubmissionOfSubmissionId");
+
+                    b.HasIndex("TenantId", "RunId");
+
+                    b.ToTable("StatutoryFilingSubmissions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingSubmissionAttempt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("AttemptNumber")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("AttemptedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("ExternalReference")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Outcome")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ResponseCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<string>("SafeResponseSummary")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<Guid>("SubmissionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "SubmissionId", "AttemptNumber")
+                        .IsUnique();
+
+                    b.ToTable("StatutoryFilingSubmissionAttempts", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingValidationIssue", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("RunItemId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Severity")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "RunItemId");
+
+                    b.HasIndex("TenantId", "RunId", "Code");
+
+                    b.ToTable("StatutoryFilingValidationIssues", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.StatutorySlab", b =>
                 {
                     b.Property<Guid>("Id")
@@ -18282,6 +18914,286 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingAcknowledgement", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingSubmission", "Submission")
+                        .WithMany("Acknowledgements")
+                        .HasForeignKey("TenantId", "SubmissionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Submission");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingConnectionProfile", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingDefinition", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingConnectionProfile", "ConnectionProfile")
+                        .WithMany("Definitions")
+                        .HasForeignKey("TenantId", "ConnectionProfileId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ConnectionProfile");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingDefinitionVersion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingDefinition", "Definition")
+                        .WithMany("Versions")
+                        .HasForeignKey("TenantId", "DefinitionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Definition");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingFieldMapping", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingDefinitionVersion", "DefinitionVersion")
+                        .WithMany("FieldMappings")
+                        .HasForeignKey("TenantId", "DefinitionVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("DefinitionVersion");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingHistory", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingRun", "Run")
+                        .WithMany("History")
+                        .HasForeignKey("TenantId", "RunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Run");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingPackage", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingPackage", "PreviousPackage")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "PreviousPackageId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingSubmission", "ResubmissionOfSubmission")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ResubmissionOfSubmissionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingRun", "Run")
+                        .WithMany("Packages")
+                        .HasForeignKey("TenantId", "RunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("PreviousPackage");
+
+                    b.Navigation("ResubmissionOfSubmission");
+
+                    b.Navigation("Run");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingRun", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingDefinition", "Definition")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "DefinitionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingDefinitionVersion", "DefinitionVersion")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "DefinitionVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Definition");
+
+                    b.Navigation("DefinitionVersion");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingRunItem", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingRun", "Run")
+                        .WithMany("Items")
+                        .HasForeignKey("TenantId", "RunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Run");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingSubmission", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingPackage", "Package")
+                        .WithMany("Submissions")
+                        .HasForeignKey("TenantId", "PackageId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingSubmission", "ResubmissionOfSubmission")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ResubmissionOfSubmissionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingRun", "Run")
+                        .WithMany("Submissions")
+                        .HasForeignKey("TenantId", "RunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Package");
+
+                    b.Navigation("ResubmissionOfSubmission");
+
+                    b.Navigation("Run");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingSubmissionAttempt", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingSubmission", "Submission")
+                        .WithMany("Attempts")
+                        .HasForeignKey("TenantId", "SubmissionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Submission");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingValidationIssue", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingRun", "Run")
+                        .WithMany("ValidationIssues")
+                        .HasForeignKey("TenantId", "RunId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingRunItem", "RunItem")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "RunItemId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.Navigation("Run");
+
+                    b.Navigation("RunItem");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.StatutorySlab", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -19291,6 +20203,46 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("BasisMappings");
 
                     b.Navigation("Slabs");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingConnectionProfile", b =>
+                {
+                    b.Navigation("Definitions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingDefinition", b =>
+                {
+                    b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingDefinitionVersion", b =>
+                {
+                    b.Navigation("FieldMappings");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingPackage", b =>
+                {
+                    b.Navigation("Submissions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingRun", b =>
+                {
+                    b.Navigation("History");
+
+                    b.Navigation("Items");
+
+                    b.Navigation("Packages");
+
+                    b.Navigation("Submissions");
+
+                    b.Navigation("ValidationIssues");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingSubmission", b =>
+                {
+                    b.Navigation("Acknowledgements");
+
+                    b.Navigation("Attempts");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.TaxDeclarationCategory", b =>

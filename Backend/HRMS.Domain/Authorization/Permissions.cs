@@ -182,6 +182,17 @@ public static class Permissions
         public const string StatutoryComplianceCancel = "Payroll.StatutoryCompliance.Cancel";
         public const string StatutoryComplianceViewHistory = "Payroll.StatutoryCompliance.ViewHistory";
         public const string StatutoryComplianceManagePeriods = "Payroll.StatutoryCompliance.ManagePeriods";
+        public const string StatutoryFilingView = "Payroll.StatutoryFiling.View";
+        public const string StatutoryFilingManage = "Payroll.StatutoryFiling.Manage";
+        public const string StatutoryFilingGenerate = "Payroll.StatutoryFiling.Generate";
+        public const string StatutoryFilingValidate = "Payroll.StatutoryFiling.Validate";
+        public const string StatutoryFilingSubmitForApproval = "Payroll.StatutoryFiling.SubmitForApproval";
+        public const string StatutoryFilingApprove = "Payroll.StatutoryFiling.Approve";
+        public const string StatutoryFilingSubmit = "Payroll.StatutoryFiling.Submit";
+        public const string StatutoryFilingCancel = "Payroll.StatutoryFiling.Cancel";
+        public const string StatutoryFilingExport = "Payroll.StatutoryFiling.Export";
+        public const string StatutoryFilingViewHistory = "Payroll.StatutoryFiling.ViewHistory";
+        public const string StatutoryFilingManageConnections = "Payroll.StatutoryFiling.ManageConnections";
         public const string LoansView = "Payroll.Loans.View";
         public const string LoansRequest = "Payroll.Loans.Request";
         public const string LoansManage = "Payroll.Loans.Manage";
@@ -310,6 +321,7 @@ public static class Permissions
         Payroll.RetroView, Payroll.RetroEvaluate, Payroll.RetroApprove, Payroll.RetroApply, Payroll.RetroCancel,
         Payroll.FinalSettlementView, Payroll.FinalSettlementManage, Payroll.FinalSettlementCalculate, Payroll.FinalSettlementApprove, Payroll.FinalSettlementFinalize, Payroll.FinalSettlementCancel,
         Payroll.StatutoryComplianceView, Payroll.StatutoryComplianceGenerate, Payroll.StatutoryComplianceValidate, Payroll.StatutoryComplianceApprove, Payroll.StatutoryComplianceExport, Payroll.StatutoryComplianceMarkFiled, Payroll.StatutoryComplianceCancel, Payroll.StatutoryComplianceViewHistory, Payroll.StatutoryComplianceManagePeriods,
+        Payroll.StatutoryFilingView, Payroll.StatutoryFilingManage, Payroll.StatutoryFilingGenerate, Payroll.StatutoryFilingValidate, Payroll.StatutoryFilingSubmitForApproval, Payroll.StatutoryFilingApprove, Payroll.StatutoryFilingSubmit, Payroll.StatutoryFilingCancel, Payroll.StatutoryFilingExport, Payroll.StatutoryFilingViewHistory, Payroll.StatutoryFilingManageConnections,
         Payroll.LoansView, Payroll.LoansRequest, Payroll.LoansManage, Payroll.LoansApprove, Payroll.LoansDisburse, Payroll.LoansRecover, Payroll.LoansClose, Payroll.LoansCancel, Payroll.LoansViewHistory, Payroll.LoansManageProducts,
         Payroll.ReimbursementsView, Payroll.ReimbursementsRequest, Payroll.ReimbursementsManage, Payroll.ReimbursementsApprove, Payroll.ReimbursementsSettle, Payroll.ReimbursementsCancel, Payroll.ReimbursementsViewHistory, Payroll.ReimbursementsManageCategories,
         Payroll.SeparationBenefitsView, Payroll.SeparationBenefitsCalculate, Payroll.SeparationBenefitsManagePolicies, Payroll.SeparationBenefitsOverride, Payroll.SeparationBenefitsApprove, Payroll.SeparationBenefitsViewHistory,

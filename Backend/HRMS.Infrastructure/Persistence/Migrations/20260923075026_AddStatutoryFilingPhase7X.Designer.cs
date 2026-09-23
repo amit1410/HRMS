@@ -4,6 +4,7 @@ using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HRMS.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(HrmsDbContext))]
-    partial class HrmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260923075026_AddStatutoryFilingPhase7X")]
+    partial class AddStatutoryFilingPhase7X
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -12064,69 +12067,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("StatutoryFilingAcknowledgements", (string)null);
                 });
 
-            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingConnectionProfile", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("ConcurrencyVersion")
-                        .IsConcurrencyToken()
-                        .HasColumnType("int");
-
-                    b.Property<int>("ConnectorType")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("CreatedDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<DateOnly>("EffectiveFrom")
-                        .HasColumnType("date");
-
-                    b.Property<DateOnly?>("EffectiveTo")
-                        .HasColumnType("date");
-
-                    b.Property<string>("Endpoint")
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("bit");
-
-                    b.Property<DateTime?>("LastValidatedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("LastValidationStatus")
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<DateTime?>("ModifiedDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(160)
-                        .HasColumnType("nvarchar(160)");
-
-                    b.Property<string>("NonSecretConfigurationJson")
-                        .HasMaxLength(4000)
-                        .HasColumnType("nvarchar(4000)");
-
-                    b.Property<string>("SecretReference")
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId", "Name")
-                        .IsUnique();
-
-                    b.ToTable("StatutoryFilingConnectionProfiles", (string)null);
-                });
-
             modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingDefinition", b =>
                 {
                     b.Property<Guid>("Id")
@@ -12137,9 +12077,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(80)
                         .HasColumnType("nvarchar(80)");
-
-                    b.Property<Guid?>("ConnectionProfileId")
-                        .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime2");
@@ -12177,8 +12114,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("TenantId", "Code")
                         .IsUnique();
-
-                    b.HasIndex("TenantId", "ConnectionProfileId");
 
                     b.ToTable("StatutoryFilingDefinitions", (string)null);
                 });
@@ -12360,12 +12295,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
-                    b.Property<Guid?>("PreviousPackageId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("ResubmissionOfSubmissionId")
-                        .HasColumnType("uniqueidentifier");
-
                     b.Property<int>("RowCount")
                         .HasColumnType("int");
 
@@ -12380,12 +12309,8 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("TenantId", "RunId", "PackageHash")
+                    b.HasIndex("TenantId", "PackageHash")
                         .IsUnique();
-
-                    b.HasIndex("TenantId", "PreviousPackageId");
-
-                    b.HasIndex("TenantId", "ResubmissionOfSubmissionId");
 
                     b.HasIndex("TenantId", "RunId", "Version")
                         .IsUnique();
@@ -12540,9 +12465,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
-                    b.Property<Guid?>("ResubmissionOfSubmissionId")
-                        .HasColumnType("uniqueidentifier");
-
                     b.Property<Guid>("RunId")
                         .HasColumnType("uniqueidentifier");
 
@@ -12560,8 +12482,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("TenantId", "PackageId")
                         .IsUnique();
-
-                    b.HasIndex("TenantId", "ResubmissionOfSubmissionId");
 
                     b.HasIndex("TenantId", "RunId");
 
@@ -18939,17 +18859,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
-            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingConnectionProfile", b =>
-                {
-                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Tenant");
-                });
-
             modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingDefinition", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -18957,14 +18866,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasForeignKey("TenantId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
-
-                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingConnectionProfile", "ConnectionProfile")
-                        .WithMany("Definitions")
-                        .HasForeignKey("TenantId", "ConnectionProfileId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.Navigation("ConnectionProfile");
 
                     b.Navigation("Tenant");
                 });
@@ -19037,28 +18938,12 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingPackage", "PreviousPackage")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "PreviousPackageId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.NoAction);
-
-                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingSubmission", "ResubmissionOfSubmission")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "ResubmissionOfSubmissionId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.NoAction);
-
                     b.HasOne("HRMS.Domain.Entities.StatutoryFilingRun", "Run")
                         .WithMany("Packages")
                         .HasForeignKey("TenantId", "RunId")
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
-
-                    b.Navigation("PreviousPackage");
-
-                    b.Navigation("ResubmissionOfSubmission");
 
                     b.Navigation("Run");
 
@@ -19129,12 +19014,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("HRMS.Domain.Entities.StatutoryFilingSubmission", "ResubmissionOfSubmission")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "ResubmissionOfSubmissionId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.NoAction);
-
                     b.HasOne("HRMS.Domain.Entities.StatutoryFilingRun", "Run")
                         .WithMany("Submissions")
                         .HasForeignKey("TenantId", "RunId")
@@ -19143,8 +19022,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("Package");
-
-                    b.Navigation("ResubmissionOfSubmission");
 
                     b.Navigation("Run");
 
@@ -20208,11 +20085,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("BasisMappings");
 
                     b.Navigation("Slabs");
-                });
-
-            modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingConnectionProfile", b =>
-                {
-                    b.Navigation("Definitions");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.StatutoryFilingDefinition", b =>

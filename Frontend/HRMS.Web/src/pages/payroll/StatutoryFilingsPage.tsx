@@ -1,0 +1,24 @@
+import { useState } from 'react'
+import { Card } from '../../components/Card.tsx'
+import { PageHeader } from '../../components/PageHeader.tsx'
+import { useApiQuery } from '../../hooks/useApiQuery.ts'
+import { useAuth } from '../../auth/useAuth.ts'
+import { Permissions } from '../../auth/permissions.ts'
+import { createStatutoryFilingConnection, createStatutoryFilingDefinition, createStatutoryFilingRun, generateStatutoryFiling, listStatutoryFilingConnections, listStatutoryFilingDefinitions, listStatutoryFilingRuns, validateStatutoryFiling } from '../../api/statutoryFilings.ts'
+
+export function StatutoryFilingsPage() {
+  const { can } = useAuth()
+  const [refresh, setRefresh] = useState(0)
+  const [definitionId, setDefinitionId] = useState('')
+  const [period, setPeriod] = useState('2026-09')
+  const [connectionName, setConnectionName] = useState('Manual download')
+  const definitions = useApiQuery(signal => listStatutoryFilingDefinitions(signal), [refresh])
+  const runs = useApiQuery(signal => listStatutoryFilingRuns(signal), [refresh])
+  const connections = useApiQuery(signal => listStatutoryFilingConnections(signal), [refresh])
+  const reload = () => setRefresh(value => value + 1)
+  const createDefinition = async () => { const result = await createStatutoryFilingDefinition({ code: 'GENERIC-STATUTORY', name: 'Configured statutory export', filingType: 'ComplianceSummary', jurisdictionCode: 'IN', destinationType: 'ManualDownload' }); if (result) { setDefinitionId(result.id); reload() } }
+  const createConnection = async () => { if (connectionName.trim()) { await createStatutoryFilingConnection({ name: connectionName.trim(), connectorType: 'ManualDownload', effectiveFrom: new Date().toISOString().slice(0, 10), isActive: true }); reload() } }
+  const createRun = async () => { if (definitionId) { await createStatutoryFilingRun({ definitionId, filingPeriod: period }); reload() } }
+  const action = async (id: string, operation: (id: string) => Promise<unknown>) => { await operation(id); reload() }
+  return <section className="page-shell"><PageHeader title="Statutory Filings" subtitle="Generate controlled packages from authoritative statutory results. ManualDownload is explicit; no portal upload is implied." /><Card title="Definitions"><button type="button" onClick={() => void createDefinition()} disabled={!can(Permissions.payroll.statutoryFilingManage)}>Create configured definition</button><select value={definitionId} onChange={event => setDefinitionId(event.target.value)}><option value="">Select definition</option>{definitions.data?.map(item => <option key={item.id} value={item.id}>{item.code} — {item.name}</option>)}</select></Card><Card title="Connections"><p>Secrets are never displayed. Profiles expose only non-secret endpoint and validation metadata.</p><div className="form-grid"><label>Name <input value={connectionName} onChange={event => setConnectionName(event.target.value)} /></label><button type="button" onClick={() => void createConnection()} disabled={!can(Permissions.payroll.statutoryFilingManageConnections)}>Add ManualDownload profile</button></div>{connections.data?.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Name</th><th>Type</th><th>Endpoint</th><th>Active</th><th>Validation</th></tr></thead><tbody>{connections.data.map(item => <tr key={item.id}><td>{item.name}</td><td>{item.connectorType}</td><td>{item.endpoint ?? '—'}</td><td>{item.isActive ? 'Yes' : 'No'}</td><td>{item.lastValidationStatus ?? 'Not validated'}</td></tr>)}</tbody></table></div> : <p>No connection profiles configured.</p>}</Card><Card title="Filing runs"><div className="form-grid"><label>Period <input value={period} onChange={event => setPeriod(event.target.value)} /></label><button type="button" onClick={() => void createRun()} disabled={!definitionId || !can(Permissions.payroll.statutoryFilingManage)}>Create run</button></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Period</th><th>Status</th><th>Rows</th><th>Issues</th><th>Actions</th></tr></thead><tbody>{runs.data?.map(run => <tr key={run.id}><td>{run.filingPeriod}</td><td>{run.status}</td><td>{run.rowCount}</td><td>{run.validationErrorCount} errors / {run.validationWarningCount} warnings</td><td>{run.status === 'Draft' && <button type="button" onClick={() => void action(run.id, generateStatutoryFiling)} disabled={!can(Permissions.payroll.statutoryFilingGenerate)}>Generate</button>}{run.status === 'Generated' && <button type="button" onClick={() => void action(run.id, validateStatutoryFiling)} disabled={!can(Permissions.payroll.statutoryFilingValidate)}>Validate</button>}{(run.status === 'Rejected' || run.status === 'Failed') && <button type="button" onClick={() => void action(run.id, generateStatutoryFiling)} disabled={!can(Permissions.payroll.statutoryFilingGenerate)}>Create corrected resubmission</button>}</td></tr>)}</tbody></table></div></Card></section>
+}
