@@ -6,6 +6,12 @@ public sealed record PayrollHealthCategoryDto(string Category, string Status, in
 
 public sealed record PayrollConfigurationHealthDto(IReadOnlyList<PayrollHealthCategoryDto> Categories);
 
+public sealed record PayrollProductionHealthDto(string Status, IReadOnlyList<PayrollHealthIssueDto> Issues, DateTime CheckedAtUtc);
+
+public sealed record PayrollIntegrityCheckDto(string Code, string Status, string Message, int Count);
+
+public sealed record PayrollIntegrityDto(string Status, IReadOnlyList<PayrollIntegrityCheckDto> Checks, DateTime CheckedAtUtc);
+
 public sealed record PayrollOperationsDashboardDto(
     int OpenPeriods,
     int LockedPeriods,

@@ -16,4 +16,10 @@ public sealed class PayrollOperationsController(IPayrollOperationsService servic
 
     [HttpGet("dashboard/operations"), HasPermission(Permissions.Payroll.RunView)]
     public async Task<ActionResult<ApiResponse<PayrollOperationsDashboardDto>>> OperationsDashboard(CancellationToken ct) => (await service.GetOperationsDashboardAsync(ct)).ToActionResult();
+
+    [HttpGet("production-health"), HasPermission(Permissions.Payroll.ControlsView)]
+    public async Task<ActionResult<ApiResponse<PayrollProductionHealthDto>>> ProductionHealth(CancellationToken ct) => (await service.GetProductionHealthAsync(ct)).ToActionResult();
+
+    [HttpGet("integrity"), HasPermission(Permissions.Payroll.ControlsView)]
+    public async Task<ActionResult<ApiResponse<PayrollIntegrityDto>>> Integrity(CancellationToken ct) => (await service.GetIntegrityAsync(ct)).ToActionResult();
 }

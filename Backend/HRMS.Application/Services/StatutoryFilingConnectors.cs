@@ -24,8 +24,10 @@ public sealed class TestStatutoryFilingConnector : IStatutoryFilingConnector
 
     public Task<Result<StatutoryFilingConnectorResult>> SubmitAsync(StatutoryFilingPackage package, StatutoryFilingConnectionProfile? profile, CancellationToken ct = default)
     {
-        var outcome = profile?.NonSecretConfigurationJson?.Contains("rejected", StringComparison.OrdinalIgnoreCase) == true ? StatutoryFilingSubmissionOutcome.Rejected : profile?.NonSecretConfigurationJson?.Contains("pending", StringComparison.OrdinalIgnoreCase) == true ? StatutoryFilingSubmissionOutcome.Pending : StatutoryFilingSubmissionOutcome.Accepted;
-        return Task.FromResult(Result<StatutoryFilingConnectorResult>.Success(new(outcome, outcome == StatutoryFilingSubmissionOutcome.Accepted ? $"TEST-{package.PackageHash[..12]}" : null, "TEST_CONNECTOR", $"Deterministic test connector outcome: {outcome}.", outcome == StatutoryFilingSubmissionOutcome.Pending)));
+        var config = profile?.NonSecretConfigurationJson ?? string.Empty;
+        var outcome = config.Contains("retryable", StringComparison.OrdinalIgnoreCase) ? StatutoryFilingSubmissionOutcome.Failed : config.Contains("rejected", StringComparison.OrdinalIgnoreCase) ? StatutoryFilingSubmissionOutcome.Rejected : config.Contains("pending", StringComparison.OrdinalIgnoreCase) ? StatutoryFilingSubmissionOutcome.Pending : StatutoryFilingSubmissionOutcome.Accepted;
+        var retryable = outcome == StatutoryFilingSubmissionOutcome.Failed;
+        return Task.FromResult(Result<StatutoryFilingConnectorResult>.Success(new(outcome, outcome == StatutoryFilingSubmissionOutcome.Accepted ? $"TEST-{package.PackageHash[..12]}" : null, retryable ? "RETRYABLE_EXTERNAL_FAILURE" : "TEST_CONNECTOR", $"Deterministic test connector outcome: {outcome}.", retryable || outcome == StatutoryFilingSubmissionOutcome.Pending)));
     }
 
     public Task<Result<StatutoryFilingConnectorResult>> RefreshStatusAsync(StatutoryFilingSubmission submission, StatutoryFilingConnectionProfile? profile, CancellationToken ct = default) => Task.FromResult(Result<StatutoryFilingConnectorResult>.Success(new(submission.Outcome, submission.ExternalReference, "TEST_STATUS", "Deterministic test connector status refreshed.", false)));

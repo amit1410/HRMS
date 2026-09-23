@@ -45,6 +45,47 @@ public sealed class PayrollOperationsService(IHrmsDbContext db, ITenantContext t
         return Result<PayrollOperationsDashboardDto>.Success(result);
     }
 
+    public async Task<Result<PayrollProductionHealthDto>> GetProductionHealthAsync(CancellationToken ct = default)
+    {
+        if (tenant.TenantId is not Guid) return Result<PayrollProductionHealthDto>.Unauthorized("No authenticated tenant.");
+
+        var configuration = await GetConfigurationHealthAsync(ct);
+        if (!configuration.Succeeded) return Result<PayrollProductionHealthDto>.Failure(configuration.Status, configuration.Message);
+
+        var issues = configuration.Value!.Categories.SelectMany(x => x.Issues).ToArray();
+        var status = issues.Any(x => string.Equals(x.Severity, "Error", StringComparison.OrdinalIgnoreCase))
+            ? "Critical"
+            : issues.Any(x => string.Equals(x.Severity, "Warning", StringComparison.OrdinalIgnoreCase)) ? "Warning" : "Healthy";
+        return Result<PayrollProductionHealthDto>.Success(new PayrollProductionHealthDto(status, issues, DateTime.UtcNow));
+    }
+
+    public async Task<Result<PayrollIntegrityDto>> GetIntegrityAsync(CancellationToken ct = default)
+    {
+        if (tenant.TenantId is not Guid tenantId) return Result<PayrollIntegrityDto>.Unauthorized("No authenticated tenant.");
+
+        var duplicateResults = await db.PayrollResults.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.IsCurrent)
+            .GroupBy(x => new { x.PayrollRunId, x.EmployeeId })
+            .Where(x => x.Count() > 1)
+            .CountAsync(ct);
+        var duplicateSources = await db.PayrollAdjustments.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.SourceId != Guid.Empty)
+            .GroupBy(x => new { x.SourceType, x.SourceId })
+            .Where(x => x.Count() > 1)
+            .CountAsync(ct);
+        var unbalancedJournals = await db.PayrollJournalBatches.AsNoTracking()
+            .CountAsync(x => x.TenantId == tenantId && x.Status != PayrollJournalStatus.Cancelled && x.TotalDebit != x.TotalCredit, ct);
+
+        var checks = new[]
+        {
+            new PayrollIntegrityCheckDto("DuplicatePayrollResults", duplicateResults == 0 ? "Healthy" : "Critical", "Current payroll results are unique per run and employee.", duplicateResults),
+            new PayrollIntegrityCheckDto("DuplicateAdjustmentSources", duplicateSources == 0 ? "Healthy" : "Critical", "Payroll adjustment source identities are unique.", duplicateSources),
+            new PayrollIntegrityCheckDto("UnbalancedPayrollJournals", unbalancedJournals == 0 ? "Healthy" : "Critical", "Non-cancelled payroll journals balance debit and credit totals.", unbalancedJournals)
+        };
+        var status = checks.Any(x => x.Status == "Critical") ? "Critical" : "Healthy";
+        return Result<PayrollIntegrityDto>.Success(new PayrollIntegrityDto(status, checks, DateTime.UtcNow));
+    }
+
     private async Task<PayrollHealthCategoryDto> SalaryHealthAsync(Guid tenantId, CancellationToken ct)
     {
         var activeEmployees = await db.Employees.CountAsync(x => x.TenantId == tenantId && x.Status == EmployeeStatus.Active, ct);

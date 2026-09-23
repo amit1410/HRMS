@@ -56,6 +56,9 @@ export function getPayrollStatutoryResults(runId: string, employeeId: string): P
 export interface PayrollHealthIssue { code: string; severity: string; message: string; employeeId?: string | null; entityType?: string | null; entityId?: string | null; navigationHint?: string | null }
 export interface PayrollHealthCategory { category: string; status: string; issueCount: number; blockingCount: number; issues: PayrollHealthIssue[] }
 export interface PayrollConfigurationHealth { categories: PayrollHealthCategory[] }
+export interface PayrollProductionHealth { status: string; issues: PayrollHealthIssue[]; checkedAtUtc: string }
+export interface PayrollIntegrityCheck { code: string; status: string; message: string; count: number }
+export interface PayrollIntegrity { status: string; checks: PayrollIntegrityCheck[]; checkedAtUtc: string }
 export interface PayrollOperationsDashboard {
   openPeriods: number
   lockedPeriods: number
@@ -74,6 +77,8 @@ export interface PayrollOperationsDashboard {
 }
 export function getPayrollConfigurationHealth(signal?: AbortSignal): Promise<PayrollConfigurationHealth> { return request<PayrollConfigurationHealth>(() => api.get<ApiResponse<PayrollConfigurationHealth>>('/api/payroll/configuration-health', { signal })) }
 export function getPayrollOperationsDashboard(signal?: AbortSignal): Promise<PayrollOperationsDashboard> { return request<PayrollOperationsDashboard>(() => api.get<ApiResponse<PayrollOperationsDashboard>>('/api/payroll/dashboard/operations', { signal })) }
+export function getPayrollProductionHealth(signal?: AbortSignal): Promise<PayrollProductionHealth> { return request<PayrollProductionHealth>(() => api.get<ApiResponse<PayrollProductionHealth>>('/api/payroll/production-health', { signal })) }
+export function getPayrollIntegrity(signal?: AbortSignal): Promise<PayrollIntegrity> { return request<PayrollIntegrity>(() => api.get<ApiResponse<PayrollIntegrity>>('/api/payroll/integrity', { signal })) }
 
 export interface SalaryComponent {
   id: string
