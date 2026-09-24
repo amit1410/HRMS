@@ -48,6 +48,7 @@ public sealed class SeparationSettlementOrchestrationService(
     {
         var state = await EvaluateAsync(separationId, ct);
         if (state.Result is not null) return Result<SeparationSettlementStatusDto>.Failure(state.Result.Status, state.Result.Message, state.Result.Errors);
+        if (state.Separation?.Status == EmployeeSeparationStatus.Closed) return Result<SeparationSettlementStatusDto>.Conflict("SeparationAlreadyClosed");
         if (request.ExpectedConcurrencyVersion is int expected && state.Separation!.ConcurrencyVersion != expected)
             return Result<SeparationSettlementStatusDto>.Conflict("The separation was changed concurrently.");
         if (state.Blockers.Count > 0) return Result<SeparationSettlementStatusDto>.Conflict("Settlement readiness has blocking items.", state.Blockers.Select(x => new ValidationError(x.Code, x.Message)).ToList());

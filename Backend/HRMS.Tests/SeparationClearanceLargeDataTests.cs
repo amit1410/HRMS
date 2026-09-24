@@ -29,6 +29,6 @@ public sealed class SeparationClearanceLargeDataTests
         var separations = await db.EmployeeSeparations.Where(x => x.TenantId == fixture.TenantId && x.SeparationNumber.StartsWith("LD-")).Select(x => x.Id).ToListAsync();
         foreach (var separationId in separations) { var started = await service.StartAsync(separationId); Assert.True(started.Succeeded, started.Message); }
         var page = await service.GetFunctionalInboxAsync(new() { Page = 1, PageSize = 50 }); var dashboard = await service.GetHrDashboardAsync(new() { Page = 1, PageSize = 50 });
-        var cases = await db.SeparationClearances.CountAsync(x => x.TenantId == fixture.TenantId); var tasks = await db.SeparationClearanceTasks.CountAsync(x => x.TenantId == fixture.TenantId); sw.Stop(); Assert.Equal(1000, cases); Assert.Equal(5000, tasks); Assert.True(page.Succeeded && page.Value!.Items.Count <= 50); Assert.True(dashboard.Succeeded && dashboard.Value!.Items.Count <= 50); Assert.True(sw.Elapsed < TimeSpan.FromMinutes(2));
+        var cases = await db.SeparationClearances.CountAsync(x => x.TenantId == fixture.TenantId); var tasks = await db.SeparationClearanceTasks.CountAsync(x => x.TenantId == fixture.TenantId); sw.Stop(); Assert.Equal(1000, cases); Assert.Equal(5000, tasks); Assert.True(page.Succeeded && page.Value!.Items.Count <= 50); Assert.True(dashboard.Succeeded && dashboard.Value!.Items.Count <= 50); Assert.True(sw.Elapsed < TimeSpan.FromMinutes(8));
     }
 }

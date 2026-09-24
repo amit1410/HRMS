@@ -22,6 +22,7 @@ public static class DependencyInjection
         services.AddScoped<IPasswordRecoveryService, PasswordRecoveryService>();
         services.AddScoped<IAccountEmployeeLinkService, AccountEmployeeLinkService>();
         services.AddScoped<IManagerRoleProvisioningService, ManagerRoleProvisioningService>();
+        services.AddScoped<ISeparationExitService, SeparationExitService>();
         services.AddScoped<IEmployeeRoleProvisioningService, EmployeeRoleProvisioningService>();
         services.AddScoped<IRoleAssignmentService, RoleAssignmentService>();
         services.AddScoped<IRoleResolutionService, RoleResolutionService>();

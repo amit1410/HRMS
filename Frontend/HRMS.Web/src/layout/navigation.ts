@@ -82,6 +82,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'My Separation / Resignation', to: '/separation/my-request', permission: Permissions.separation.viewSelf, available: true, requiresEmployeeIdentity: true, group: 'profile' },
   { label: 'Separation Manager Inbox', to: '/separation/manager-inbox', permission: Permissions.separation.managerReview, available: true, group: 'administration' },
   { label: 'Separation HR Inbox', to: '/separation/hr-inbox', permission: Permissions.separation.hrReview, available: true, group: 'administration' },
+  { label: 'Separation Exit Closure', to: '/separation/exit-closure', permission: Permissions.separation.manage, available: true, group: 'administration' },
   { label: 'Statutory Compliance', to: '/payroll/statutory-compliance', permission: Permissions.payroll.statutoryComplianceView, available: true, group: 'administration' },
   { label: 'Payroll Operations', to: '/payroll/operations', permission: Permissions.payroll.runView, available: true, group: 'administration' },
   { label: 'Configuration Health', to: '/payroll/configuration-health', permission: Permissions.payroll.controlsView, available: true, group: 'administration' },

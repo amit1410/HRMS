@@ -21,6 +21,9 @@ public sealed class AttendanceWorkflowService(
     public async Task<Result<RegularizationDto>> SubmitRegularizationAsync(RegularizationRequestInput input, CancellationToken ct = default)
     {
         var subject = await Subject(ct); if (!subject.Succeeded) return Fail<RegularizationDto>(subject);
+        var employee = await db.Employees.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == subject.Value!.TenantId && x.Id == subject.Value.EmployeeId, ct);
+        if (employee is null || employee.Status != EmployeeStatus.Active) return Result<RegularizationDto>.Forbidden("Attendance regularization is unavailable for an inactive employee.");
+        if (employee.DateOfLeaving is DateOnly leavingDate && input.BusinessDate > leavingDate) return Result<RegularizationDto>.Forbidden("Attendance regularization is unavailable after the employee's date of leaving.");
         if (periodLock is not null && !(await periodLock.EnsureDateIsOpenAsync(input.BusinessDate, ct)).Succeeded) return Result<RegularizationDto>.Conflict("The Attendance period is closed and must be reopened before this change.");
         if (input.BusinessDate > DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime)) return Result<RegularizationDto>.Invalid("businessDate", "A future attendance date cannot be regularized.");
         if (string.IsNullOrWhiteSpace(input.Reason)) return Result<RegularizationDto>.Invalid("reason", "A reason is required.");
@@ -73,7 +76,12 @@ public sealed class AttendanceWorkflowService(
 
     public async Task<Result<OnDutyDto>> SubmitOnDutyAsync(OnDutyRequestInput input, CancellationToken ct = default)
     {
-        var subject = await Subject(ct); if (!subject.Succeeded) return Fail<OnDutyDto>(subject); if (input.StartDate > input.EndDate) return Result<OnDutyDto>.Invalid("dateRange", "StartDate cannot be after EndDate."); if (string.IsNullOrWhiteSpace(input.Reason)) return Result<OnDutyDto>.Invalid("reason", "A reason is required.");
+        var subject = await Subject(ct); if (!subject.Succeeded) return Fail<OnDutyDto>(subject);
+        var employee = await db.Employees.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == subject.Value!.TenantId && x.Id == subject.Value.EmployeeId, ct);
+        if (employee is null || employee.Status != EmployeeStatus.Active) return Result<OnDutyDto>.Forbidden("On Duty is unavailable for an inactive employee.");
+        if (employee.DateOfLeaving is DateOnly leavingDate && input.StartDate > leavingDate) return Result<OnDutyDto>.Forbidden("On Duty is unavailable after the employee's date of leaving.");
+        if (input.StartDate > input.EndDate) return Result<OnDutyDto>.Invalid("dateRange", "StartDate cannot be after EndDate."); if (string.IsNullOrWhiteSpace(input.Reason)) return Result<OnDutyDto>.Invalid("reason", "A reason is required.");
+        if (employee.DateOfLeaving is DateOnly endDate && input.EndDate > endDate) return Result<OnDutyDto>.Forbidden("On Duty cannot extend beyond the employee's date of leaving.");
         if (periodLock is not null && !(await periodLock.EnsureRangeIsOpenAsync(input.StartDate, input.EndDate, ct)).Succeeded) return Result<OnDutyDto>.Conflict("The Attendance period is closed and must be reopened before this change.");
         if (await db.AttendanceOnDutyRequests.AnyAsync(x => x.TenantId == subject.Value!.TenantId && x.EmployeeId == subject.Value.EmployeeId && x.Status == AttendanceRequestStatus.Pending && x.StartDate <= input.EndDate && input.StartDate <= x.EndDate, ct)) return Result<OnDutyDto>.Conflict("An overlapping pending On Duty request already exists.");
         var now = clock.GetUtcNow().UtcDateTime; var item = new AttendanceOnDutyRequest { Id = Guid.NewGuid(), TenantId = subject.Value.TenantId, EmployeeId = subject.Value.EmployeeId, StartDate = input.StartDate, EndDate = input.EndDate, Reason = input.Reason.Trim(), Purpose = input.Purpose?.Trim(), Location = input.Location?.Trim(), SubmittedByUserId = subject.Value.UserId, SubmittedAtUtc = now };

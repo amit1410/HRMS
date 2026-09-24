@@ -290,6 +290,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<SeparationGeneratedDocument> SeparationGeneratedDocuments => Set<SeparationGeneratedDocument>();
     public DbSet<SeparationDocumentEvent> SeparationDocumentEvents => Set<SeparationDocumentEvent>();
     public DbSet<SeparationDocumentNumberSequence> SeparationDocumentNumberSequences => Set<SeparationDocumentNumberSequence>();
+    public DbSet<SeparationExitExecution> SeparationExitExecutions => Set<SeparationExitExecution>();
+    public DbSet<SeparationExitExecutionEvent> SeparationExitExecutionEvents => Set<SeparationExitExecutionEvent>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
@@ -308,6 +310,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         base.OnModelCreating(modelBuilder);
         modelBuilder.Entity<SeparationSettlementOrchestration>();
         modelBuilder.Entity<SeparationSettlementEvent>();
+        modelBuilder.Entity<SeparationExitExecution>();
+        modelBuilder.Entity<SeparationExitExecutionEvent>();
 
         if (Database.IsMySql())
         {
@@ -515,6 +519,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<SeparationExitInterviewResponseRevision>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<SeparationExitInterviewHrNote>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<SeparationExitInterviewEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SeparationExitExecution>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SeparationExitExecutionEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<ImportBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveType>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeavePeriod>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

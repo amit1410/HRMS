@@ -178,7 +178,12 @@ public class SeedDataTests
             DomainPermissions.Payroll.AdjustmentsView,
             DomainPermissions.Payroll.AdjustmentsViewHistory,
             DomainPermissions.Payroll.TaxDeclarationViewOwn,
-            DomainPermissions.Payroll.TaxDeclarationManageOwn
+            DomainPermissions.Payroll.TaxDeclarationManageOwn,
+            DomainPermissions.Separation.ViewSelf,
+            DomainPermissions.Separation.CreateSelf,
+            DomainPermissions.Separation.Submit,
+            DomainPermissions.Separation.Withdraw,
+            DomainPermissions.Separation.ViewHistory
         }, SeedData.RolePermissionMap[RoleNames.Employee]);
         Assert.DoesNotContain(DomainPermissions.Leave.PolicyView, SeedData.RolePermissionMap[RoleNames.Employee]);
         Assert.DoesNotContain(DomainPermissions.Leave.Approve, SeedData.RolePermissionMap[RoleNames.Employee]);

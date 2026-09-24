@@ -109,6 +109,8 @@ public interface IHrmsDbContext
     DbSet<SeparationGeneratedDocument> SeparationGeneratedDocuments { get; }
     DbSet<SeparationDocumentEvent> SeparationDocumentEvents { get; }
     DbSet<SeparationDocumentNumberSequence> SeparationDocumentNumberSequences { get; }
+    DbSet<SeparationExitExecution> SeparationExitExecutions { get; }
+    DbSet<SeparationExitExecutionEvent> SeparationExitExecutionEvents { get; }
     DbSet<ImportBatch> ImportBatches { get; }
     DbSet<LeaveType> LeaveTypes { get; }
     DbSet<LeavePeriod> LeavePeriods { get; }

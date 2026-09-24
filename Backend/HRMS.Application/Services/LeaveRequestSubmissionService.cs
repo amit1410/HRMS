@@ -83,6 +83,13 @@ public sealed class LeaveRequestSubmissionService : ILeaveRequestSubmissionServi
         if (!validation.Succeeded || validation.Value is null)
             return Convert(validation);
 
+        var employee = await _db.Employees.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.TenantId == identity.TenantId && x.Id == identity.EmployeeId, cancellationToken);
+        if (employee is null || employee.Status != EmployeeStatus.Active)
+            return Result<LeaveRequestSubmissionResult>.Forbidden("Leave cannot be submitted for an inactive employee.");
+        if (employee.DateOfLeaving is DateOnly leavingDate && validation.Value.RequestDays.Any(x => x.Date > leavingDate))
+            return Result<LeaveRequestSubmissionResult>.Forbidden("Leave cannot be submitted beyond the employee's date of leaving.");
+
         // Allocated entitlement cannot enter the persistence path until balance reservation is implemented.
         // Keep this early gate side-effect free; the same gate is repeated after fresh validation below.
         var initialEntitlementFailure = ValidatePersistableEntitlement(validation.Value);

@@ -91,6 +91,7 @@ public sealed class ClearanceService(IHrmsDbContext db, ITenantContext tenant, I
     {
         if (tenant.TenantId is not Guid tenantId || tenant.UserId is not Guid actor) return Result<SeparationClearanceDto>.Unauthorized("No authenticated tenant and user.");
         var clearance = await db.SeparationClearances.Include(x => x.Tasks).FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == clearanceId, ct); if (clearance is null) return Result<SeparationClearanceDto>.NotFound("Clearance not found.");
+        if (await db.EmployeeSeparations.AnyAsync(x => x.TenantId == tenantId && x.Id == clearance.EmployeeSeparationId && x.Status == EmployeeSeparationStatus.Closed, ct)) return Result<SeparationClearanceDto>.Conflict("SeparationAlreadyClosed");
         if (clearance.Tasks.Any(x => x.IsMandatory && !Resolved.Contains(x.Status))) return Result<SeparationClearanceDto>.Conflict("Mandatory clearance tasks remain unresolved.");
         if (clearance.Status == SeparationClearanceStatus.Completed) return Result<SeparationClearanceDto>.Success(ToDto(clearance), "Clearance is already complete.");
         var previous = clearance.Status; clearance.Status = SeparationClearanceStatus.Completed; clearance.CompletedAtUtc = clock.GetUtcNow().UtcDateTime; clearance.ConcurrencyVersion++;
@@ -103,6 +104,7 @@ public sealed class ClearanceService(IHrmsDbContext db, ITenantContext tenant, I
         if (string.IsNullOrWhiteSpace(reason)) return Result<SeparationClearanceDto>.Invalid("reason", "A reason is required to reopen clearance.");
         if (tenant.TenantId is not Guid tenantId || tenant.UserId is not Guid actor) return Result<SeparationClearanceDto>.Unauthorized("No authenticated tenant and user.");
         var clearance = await db.SeparationClearances.Include(x => x.Tasks).FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == clearanceId, ct); if (clearance is null) return Result<SeparationClearanceDto>.NotFound("Clearance not found.");
+        if (await db.EmployeeSeparations.AnyAsync(x => x.TenantId == tenantId && x.Id == clearance.EmployeeSeparationId && x.Status == EmployeeSeparationStatus.Closed, ct)) return Result<SeparationClearanceDto>.Conflict("SeparationAlreadyClosed");
         if (clearance.Status != SeparationClearanceStatus.Completed) return Result<SeparationClearanceDto>.Conflict("Only completed clearance can be reopened.");
         var previous = clearance.Status; clearance.Status = SeparationClearanceStatus.Reopened; clearance.ReopenedAtUtc = clock.GetUtcNow().UtcDateTime; clearance.CompletedAtUtc = null; clearance.ConcurrencyVersion++; db.SeparationClearanceEvents.Add(NewEvent(clearance, SeparationClearanceEventType.ClearanceReopened, previous, clearance.Status, null, actor, reason.Trim(), null)); await db.SaveChangesAsync(ct); return Result<SeparationClearanceDto>.Success(ToDto(clearance));
     }

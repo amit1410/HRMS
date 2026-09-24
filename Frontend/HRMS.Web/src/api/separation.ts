@@ -1,7 +1,7 @@
 import { api, request } from './client.ts'
 import type { ApiResponse } from './types.ts'
 
-export type SeparationStatus = 'Draft' | 'Submitted' | 'ManagerReview' | 'HrReview' | 'Approved' | 'Rejected' | 'Withdrawn' | 'NoticePeriod' | 'ReadyForExit' | 'Exited' | 'Cancelled'
+export type SeparationStatus = 'Draft' | 'Submitted' | 'ManagerReview' | 'HrReview' | 'Approved' | 'Rejected' | 'Withdrawn' | 'NoticePeriod' | 'ReadyForExit' | 'Exited' | 'Closed' | 'Cancelled'
 export interface SeparationReason { id: string; code: string; name: string; description?: string | null; category: string; employeeInitiatedAllowed: boolean; employerInitiatedAllowed: boolean; isActive: boolean; effectiveFrom: string; effectiveTo?: string | null; displayOrder: number }
 export interface SeparationCase { id: string; employeeId: string; separationNumber: string; separationType: string; reasonId: string; reasonName: string; initiatedBy: string; requestDate: string; proposedLastWorkingDate: string; approvedLastWorkingDate?: string | null; noticeStartDate?: string | null; noticeEndDate?: string | null; expectedNoticeEndDate?: string | null; noticePeriodDays?: number | null; noticeServedDays?: number | null; noticeShortfallDays?: number | null; waivedNoticeDays: number; noticeExtensionDays: number; noticeDisposition: string; status: SeparationStatus; createdAtUtc: string }
 export interface SeparationNotice { separationId: string; requiredNoticeDays?: number | null; noticeStartDate?: string | null; expectedNoticeEndDate?: string | null; approvedLastWorkingDate?: string | null; servedNoticeDays?: number | null; waivedNoticeDays: number; shortfallDays?: number | null; extensionDays: number; noticeStatus: string; lastRevisionReason?: string | null; concurrencyVersion: number }
