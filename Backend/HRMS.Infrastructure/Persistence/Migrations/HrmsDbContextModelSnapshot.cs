@@ -11957,6 +11957,223 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("SeparationClearanceTemplateItems", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationDocumentEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("EventType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("GeneratedDocumentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("MetadataJson")
+                        .HasMaxLength(10000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<Guid?>("TemplateId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("TemplateVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "GeneratedDocumentId", "OccurredAtUtc");
+
+                    b.ToTable("SeparationDocumentEvents", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationDocumentNumberSequence", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("DocumentType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<long>("NextNumber")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Year")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "DocumentType", "Year")
+                        .IsUnique();
+
+                    b.ToTable("SeparationDocumentNumberSequences", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationDocumentTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<int>("DocumentType")
+                        .HasColumnType("int");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<bool>("RequiresApproval")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("SeparationDocumentTemplates", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationDocumentTemplateVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("BodyTemplate")
+                        .IsRequired()
+                        .HasMaxLength(100000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<string>("FooterTemplate")
+                        .HasMaxLength(20000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("HeaderTemplate")
+                        .HasMaxLength(20000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("PageSettingsJson")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<DateTime?>("PublishedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("PublishedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Subject")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<Guid>("TemplateId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "TemplateId", "EffectiveFrom");
+
+                    b.HasIndex("TenantId", "TemplateId", "VersionNumber")
+                        .IsUnique();
+
+                    b.ToTable("SeparationDocumentTemplateVersions", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterview", b =>
                 {
                     b.Property<Guid>("Id")
@@ -12479,6 +12696,131 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("SeparationExitInterviewTemplateVersions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationGeneratedDocument", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ApprovedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<string>("ContentBase64")
+                        .IsRequired()
+                        .HasMaxLength(2000000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("ContentHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CurrentDocumentKey")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<string>("CustomDocumentCode")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("DocumentNumber")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<int>("DocumentType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("EmployeeSeparationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("nvarchar(255)");
+
+                    b.Property<DateTime>("GeneratedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("GeneratedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateOnly>("IssueDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("LastReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("MimeType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("SnapshotJson")
+                        .IsRequired()
+                        .HasMaxLength(100000)
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<string>("StorageReference")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<Guid?>("SupersededByDocumentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SupersedesDocumentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TemplateId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TemplateVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SupersededByDocumentId");
+
+                    b.HasIndex("TenantId", "DocumentNumber")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.HasIndex("TenantId", "SupersedesDocumentId");
+
+                    b.HasIndex("TenantId", "TemplateVersionId");
+
+                    b.HasIndex("TenantId", "EmployeeSeparationId", "DocumentType", "CurrentDocumentKey")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "EmployeeSeparationId", "DocumentType", "Status");
+
+                    b.ToTable("SeparationGeneratedDocuments", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationReason", b =>
@@ -20199,6 +20541,67 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Template");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationDocumentEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationGeneratedDocument", "GeneratedDocument")
+                        .WithMany("Events")
+                        .HasForeignKey("TenantId", "GeneratedDocumentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("GeneratedDocument");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationDocumentNumberSequence", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationDocumentTemplate", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationDocumentTemplateVersion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationDocumentTemplate", "Template")
+                        .WithMany("Versions")
+                        .HasForeignKey("TenantId", "TemplateId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Template");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterview", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", null)
@@ -20348,6 +20751,58 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("Template");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationGeneratedDocument", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationGeneratedDocument", "SupersededByDocument")
+                        .WithMany()
+                        .HasForeignKey("SupersededByDocumentId");
+
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.EmployeeSeparation", "Separation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeSeparationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationGeneratedDocument", "SupersedesDocument")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SupersedesDocumentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationDocumentTemplateVersion", "TemplateVersion")
+                        .WithMany("GeneratedDocuments")
+                        .HasForeignKey("TenantId", "TemplateVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("Separation");
+
+                    b.Navigation("SupersededByDocument");
+
+                    b.Navigation("SupersedesDocument");
+
+                    b.Navigation("TemplateVersion");
+
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationReason", b =>
@@ -21904,6 +22359,16 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Items");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationDocumentTemplate", b =>
+                {
+                    b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationDocumentTemplateVersion", b =>
+                {
+                    b.Navigation("GeneratedDocuments");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterview", b =>
                 {
                     b.Navigation("Events");
@@ -21928,6 +22393,11 @@ namespace HRMS.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewTemplateVersion", b =>
                 {
                     b.Navigation("Questions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationGeneratedDocument", b =>
+                {
+                    b.Navigation("Events");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationReason", b =>

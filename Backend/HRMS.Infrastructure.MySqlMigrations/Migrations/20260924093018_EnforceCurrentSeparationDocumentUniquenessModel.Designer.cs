@@ -3,6 +3,7 @@ using System;
 using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 {
     [DbContext(typeof(HrmsDbContext))]
-    partial class HrmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260924093018_EnforceCurrentSeparationDocumentUniquenessModel")]
+    partial class EnforceCurrentSeparationDocumentUniquenessModel
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -12723,7 +12726,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasColumnType("datetime(6)");
 
                     b.Property<string>("CurrentDocumentKey")
-                        .IsRequired()
                         .HasColumnType("varchar(255)");
 
                     b.Property<string>("CustomDocumentCode")

@@ -3,6 +3,7 @@ using System;
 using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 {
     [DbContext(typeof(HrmsDbContext))]
-    partial class HrmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260924054211_AddSeparationDocumentsPhase8G")]
+    partial class AddSeparationDocumentsPhase8G
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -12722,10 +12725,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<string>("CurrentDocumentKey")
-                        .IsRequired()
-                        .HasColumnType("varchar(255)");
-
                     b.Property<string>("CustomDocumentCode")
                         .HasMaxLength(80)
                         .HasColumnType("varchar(80)");
@@ -12810,11 +12809,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.HasIndex("TenantId", "TemplateVersionId");
 
-                    b.HasIndex("TenantId", "EmployeeSeparationId", "DocumentType", "CurrentDocumentKey")
-                        .IsUnique();
-
-                    b.HasIndex("TenantId", "EmployeeSeparationId", "DocumentType", "Status")
-                        .HasDatabaseName("IX_SeparationGeneratedDocuments_TenantId_EmployeeSeparationId_~1");
+                    b.HasIndex("TenantId", "EmployeeSeparationId", "DocumentType", "Status");
 
                     b.ToTable("SeparationGeneratedDocuments", (string)null);
                 });

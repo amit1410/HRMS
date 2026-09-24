@@ -9,13 +9,17 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Tests;
 
+[CollectionDefinition("Exit interview SQLite isolation", DisableParallelization = true)]
+public sealed class ExitInterviewSqliteIsolationCollectionDefinition;
+
+[Collection("Exit interview SQLite isolation")]
 public sealed class SeparationExitInterviewConcurrencyTests
 {
     [Fact]
     public async Task Employee_submit_vs_employee_submit()
     {
         using var database = new SqliteInMemoryDatabase(); var setup = await ExitInterviewTestData.CreateAsync(database); await ExitInterviewTestData.SaveDraftAsync(database, setup);
-        await using var left = database.CreateContext(new TestTenantContext(setup.TenantId, setup.EmployeeUserId)); await using var right = database.CreateContext(new TestTenantContext(setup.TenantId, setup.EmployeeUserId));
+        await using var left = database.CreateIsolatedContext(new TestTenantContext(setup.TenantId, setup.EmployeeUserId)); await using var right = database.CreateIsolatedContext(new TestTenantContext(setup.TenantId, setup.EmployeeUserId));
         var results = await Task.WhenAll(ExitInterviewTestData.Service(left, setup, setup.EmployeeUserId).SubmitAsync(setup.SeparationId), ExitInterviewTestData.Service(right, setup, setup.EmployeeUserId).SubmitAsync(setup.SeparationId));
         Assert.Equal(2, results.Count(x => x.Succeeded)); await using var fresh = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); Assert.Equal(SeparationExitInterviewStatus.EmployeeSubmitted, await fresh.SeparationExitInterviews.Where(x => x.Id == setup.InterviewId).Select(x => x.Status).SingleAsync()); Assert.Equal(1, await fresh.SeparationExitInterviewEvents.CountAsync(x => x.ExitInterviewId == setup.InterviewId && x.EventType == SeparationExitInterviewEventType.EmployeeSubmitted));
     }
@@ -24,16 +28,16 @@ public sealed class SeparationExitInterviewConcurrencyTests
     public async Task Employee_submit_vs_hr_complete()
     {
         using var database = new SqliteInMemoryDatabase(); var setup = await ExitInterviewTestData.CreateAsync(database); await ExitInterviewTestData.SaveDraftAsync(database, setup);
-        await using var employee = database.CreateContext(new TestTenantContext(setup.TenantId, setup.EmployeeUserId)); await using var hr = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId));
+        await using var employee = database.CreateIsolatedContext(new TestTenantContext(setup.TenantId, setup.EmployeeUserId)); await using var hr = database.CreateIsolatedContext(new TestTenantContext(setup.TenantId, setup.HrUserId));
         var results = await Task.WhenAll(Task.Run(async () => (await ExitInterviewTestData.Service(employee, setup, setup.EmployeeUserId).SubmitAsync(setup.SeparationId)).Succeeded), Task.Run(async () => (await ExitInterviewTestData.Service(hr, setup, setup.HrUserId).CompleteAsync(setup.SeparationId, new(null, null, null, SeparationExitInterviewRehireRecommendation.NotAssessed, null))).Succeeded));
-        Assert.Equal(1, results.Count(x => x)); await using var fresh = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); Assert.Equal(SeparationExitInterviewStatus.EmployeeSubmitted, await fresh.SeparationExitInterviews.Where(x => x.Id == setup.InterviewId).Select(x => x.Status).SingleAsync());
+        await using var fresh = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); var status = await fresh.SeparationExitInterviews.Where(x => x.Id == setup.InterviewId).Select(x => x.Status).SingleAsync(); var submittedEvents = await fresh.SeparationExitInterviewEvents.CountAsync(x => x.ExitInterviewId == setup.InterviewId && x.EventType == SeparationExitInterviewEventType.EmployeeSubmitted); var completedEvents = await fresh.SeparationExitInterviewEvents.CountAsync(x => x.ExitInterviewId == setup.InterviewId && x.EventType == SeparationExitInterviewEventType.InterviewCompleted); Assert.Equal(1, submittedEvents); Assert.InRange(completedEvents, 0, 1); if (status == SeparationExitInterviewStatus.EmployeeSubmitted) { Assert.Equal(1, results.Count(x => x)); Assert.Equal(0, completedEvents); } else { Assert.Equal(SeparationExitInterviewStatus.Completed, status); Assert.Equal(2, results.Count(x => x)); Assert.Equal(1, completedEvents); }
     }
 
     [Fact]
     public async Task Hr_complete_vs_reopen()
     {
         using var database = new SqliteInMemoryDatabase(); var setup = await ExitInterviewTestData.CreateAsync(database); await ExitInterviewTestData.SaveDraftAsync(database, setup); await ExitInterviewTestData.SubmitAsync(database, setup);
-        await using var left = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); await using var right = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId));
+        await using var left = database.CreateIsolatedContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); await using var right = database.CreateIsolatedContext(new TestTenantContext(setup.TenantId, setup.HrUserId));
         var results = await Task.WhenAll(ExitInterviewTestData.Service(left, setup, setup.HrUserId).CompleteAsync(setup.SeparationId, new(null, null, null, SeparationExitInterviewRehireRecommendation.NotAssessed, null)), ExitInterviewTestData.Service(right, setup, setup.HrUserId).ReopenAsync(setup.SeparationId, new("Concurrent reopen")));
         Assert.Equal(2, results.Count(x => x.Succeeded)); await using var fresh = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); Assert.Contains(await fresh.SeparationExitInterviews.Where(x => x.Id == setup.InterviewId).Select(x => x.Status).SingleAsync(), new[] { SeparationExitInterviewStatus.Completed, SeparationExitInterviewStatus.Reopened }); Assert.Equal(2, await fresh.SeparationExitInterviewEvents.CountAsync(x => x.ExitInterviewId == setup.InterviewId && (x.EventType == SeparationExitInterviewEventType.InterviewCompleted || x.EventType == SeparationExitInterviewEventType.InterviewReopened)));
     }
@@ -42,7 +46,7 @@ public sealed class SeparationExitInterviewConcurrencyTests
     public async Task Hr_note_update_vs_complete()
     {
         using var database = new SqliteInMemoryDatabase(); var setup = await ExitInterviewTestData.CreateAsync(database); await ExitInterviewTestData.SaveDraftAsync(database, setup); await ExitInterviewTestData.SubmitAsync(database, setup);
-        await using var left = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); await using var right = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId));
+        await using var left = database.CreateIsolatedContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); await using var right = database.CreateIsolatedContext(new TestTenantContext(setup.TenantId, setup.HrUserId));
         var noteTask = Task.Run(async () => (await ExitInterviewTestData.Service(left, setup, setup.HrUserId).AddHrNoteAsync(setup.SeparationId, new("Concurrent note"))).Succeeded);
         var completeTask = Task.Run(async () => (await ExitInterviewTestData.Service(right, setup, setup.HrUserId).CompleteAsync(setup.SeparationId, new(null, null, null, SeparationExitInterviewRehireRecommendation.NotAssessed, null))).Succeeded);
         try { await Task.WhenAll(noteTask, completeTask); } catch (Microsoft.Data.Sqlite.SqliteException) { await completeTask; await using var retry = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); await ExitInterviewTestData.Service(retry, setup, setup.HrUserId).AddHrNoteAsync(setup.SeparationId, new("Concurrent note")); }
@@ -53,7 +57,7 @@ public sealed class SeparationExitInterviewConcurrencyTests
     public async Task Reopen_vs_reopen()
     {
         using var database = new SqliteInMemoryDatabase(); var setup = await ExitInterviewTestData.CreateAsync(database); await ExitInterviewTestData.SaveDraftAsync(database, setup); await ExitInterviewTestData.SubmitAsync(database, setup); await ExitInterviewTestData.CompleteAsync(database, setup);
-        await using var left = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); await using var right = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId));
+        await using var left = database.CreateIsolatedContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); await using var right = database.CreateIsolatedContext(new TestTenantContext(setup.TenantId, setup.HrUserId));
         var results = await Task.WhenAll(ExitInterviewTestData.Service(left, setup, setup.HrUserId).ReopenAsync(setup.SeparationId, new("Rework one")), ExitInterviewTestData.Service(right, setup, setup.HrUserId).ReopenAsync(setup.SeparationId, new("Rework two")));
         Assert.Single(results, x => x.Succeeded); await using var fresh = database.CreateContext(new TestTenantContext(setup.TenantId, setup.HrUserId)); Assert.Equal(1, await fresh.SeparationExitInterviewEvents.CountAsync(x => x.ExitInterviewId == setup.InterviewId && x.EventType == SeparationExitInterviewEventType.InterviewReopened));
     }

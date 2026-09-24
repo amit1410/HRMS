@@ -139,6 +139,7 @@ public static class DependencyInjection
         services.AddScoped<ISeparationService, SeparationService>();
         services.AddScoped<IClearanceService, ClearanceService>();
         services.AddScoped<ISeparationSettlementOrchestrationService, SeparationSettlementOrchestrationService>();
+        services.AddScoped<ISeparationDocumentService, SeparationDocumentService>();
         services.AddScoped<IExitInterviewService, ExitInterviewService>();
 
         return services;

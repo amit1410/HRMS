@@ -23,15 +23,17 @@ namespace HRMS.Tests.TestSupport;
 /// </summary>
 public sealed class SqliteInMemoryDatabase : IDisposable
 {
+    private readonly string _tenantDatabaseName = $"hrms-tests-{Guid.NewGuid():N}";
+    private readonly string _catalogDatabaseName = $"hrms-catalog-tests-{Guid.NewGuid():N}";
     private readonly SqliteConnection _connection;
     private readonly SqliteConnection _catalogConnection;
 
     public SqliteInMemoryDatabase()
     {
-        _connection = new SqliteConnection("DataSource=:memory:");
+        _connection = new SqliteConnection($"Data Source=file:{_tenantDatabaseName};Mode=Memory;Cache=Shared");
         _connection.Open();
 
-        _catalogConnection = new SqliteConnection("DataSource=:memory:");
+        _catalogConnection = new SqliteConnection($"Data Source=file:{_catalogDatabaseName};Mode=Memory;Cache=Shared");
         _catalogConnection.Open();
 
         // Create both schemas from their models once, against their own shared connections.
@@ -51,6 +53,20 @@ public sealed class SqliteInMemoryDatabase : IDisposable
     {
         var options = new DbContextOptionsBuilder<HrmsDbContext>()
             .UseSqlite(_connection)
+            .AddInterceptors(interceptors)
+            .Options;
+        return new HrmsDbContext(options, tenantContext);
+    }
+
+    /// <summary>
+    /// Creates a context with its own SQLite connection while retaining the same named in-memory database.
+    /// This is required for genuine concurrent-operation tests; sharing one physical connection makes
+    /// SQLite reject independent transactions and can leave active statements visible across scopes.
+    /// </summary>
+    public HrmsDbContext CreateIsolatedContext(ITenantContext tenantContext, params IInterceptor[] interceptors)
+    {
+        var options = new DbContextOptionsBuilder<HrmsDbContext>()
+            .UseSqlite($"Data Source=file:{_tenantDatabaseName};Mode=Memory;Cache=Shared")
             .AddInterceptors(interceptors)
             .Options;
         return new HrmsDbContext(options, tenantContext);

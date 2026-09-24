@@ -285,6 +285,11 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<StatutoryFilingHistory> StatutoryFilingHistories => Set<StatutoryFilingHistory>();
     public DbSet<SeparationSettlementOrchestration> SeparationSettlementOrchestrations => Set<SeparationSettlementOrchestration>();
     public DbSet<SeparationSettlementEvent> SeparationSettlementEvents => Set<SeparationSettlementEvent>();
+    public DbSet<SeparationDocumentTemplate> SeparationDocumentTemplates => Set<SeparationDocumentTemplate>();
+    public DbSet<SeparationDocumentTemplateVersion> SeparationDocumentTemplateVersions => Set<SeparationDocumentTemplateVersion>();
+    public DbSet<SeparationGeneratedDocument> SeparationGeneratedDocuments => Set<SeparationGeneratedDocument>();
+    public DbSet<SeparationDocumentEvent> SeparationDocumentEvents => Set<SeparationDocumentEvent>();
+    public DbSet<SeparationDocumentNumberSequence> SeparationDocumentNumberSequences => Set<SeparationDocumentNumberSequence>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
