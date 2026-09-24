@@ -81,6 +81,10 @@ import { YearEndTaxPage } from './pages/payroll/YearEndTaxPage.tsx'
 import { StatutoryFilingsPage } from './pages/payroll/StatutoryFilingsPage.tsx'
 import { MySeparationPage } from './pages/separation/MySeparationPage.tsx'
 import { SeparationInboxPage } from './pages/separation/SeparationInboxPage.tsx'
+import { MyExitInterviewPage } from './pages/separation/MyExitInterviewPage.tsx'
+import { ExitInterviewHrInboxPage } from './pages/separation/ExitInterviewHrInboxPage.tsx'
+import { ExitInterviewHrDetailPage } from './pages/separation/ExitInterviewHrDetailPage.tsx'
+import { ExitInterviewConfigurationPage } from './pages/separation/ExitInterviewConfigurationPage.tsx'
 import { ClearanceOperationsPage } from './pages/separation/ClearanceOperationsPage.tsx'
 
 /**
@@ -186,6 +190,10 @@ function TenantApplication() {
                   <Route path="payroll/year-end-tax" element={<RequirePermission permission={Permissions.payroll.yearEndTaxView}><YearEndTaxPage /></RequirePermission>} />
                   <Route path="payroll/statutory-filings" element={<RequirePermission permission={Permissions.payroll.statutoryFilingView}><StatutoryFilingsPage /></RequirePermission>} />
                   <Route path="separation/my-request" element={<RequirePermission permission={Permissions.separation.viewSelf}><RequireEmployeeIdentity><MySeparationPage /></RequireEmployeeIdentity></RequirePermission>} />
+                  <Route path="separation/my-exit-interview" element={<RequirePermission permission={Permissions.separation.viewSelf}><RequireEmployeeIdentity><MyExitInterviewPage /></RequireEmployeeIdentity></RequirePermission>} />
+                  <Route path="separation/hr-exit-interviews" element={<RequirePermission permission={Permissions.separation.hrReview}><ExitInterviewHrInboxPage /></RequirePermission>} />
+                  <Route path="separation/hr-exit-interviews/:separationId" element={<RequirePermission permission={Permissions.separation.hrReview}><ExitInterviewHrDetailPage /></RequirePermission>} />
+                  <Route path="separation/exit-interview-configuration" element={<RequirePermission permission={Permissions.separation.clearanceConfigure}><ExitInterviewConfigurationPage /></RequirePermission>} />
                   <Route path="separation/manager-inbox" element={<RequirePermission permission={Permissions.separation.managerReview}><SeparationInboxPage kind="manager" /></RequirePermission>} />
                   <Route path="separation/hr-inbox" element={<RequirePermission permission={Permissions.separation.hrReview}><SeparationInboxPage kind="hr" /></RequirePermission>} />
                   <Route path="separation/clearance/manager" element={<RequirePermission permission={Permissions.separation.clearanceViewTeam}><ClearanceOperationsPage mode="manager" /></RequirePermission>} />

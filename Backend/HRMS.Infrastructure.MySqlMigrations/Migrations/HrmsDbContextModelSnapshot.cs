@@ -11951,6 +11951,531 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("SeparationClearanceTemplateItems", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterview", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("AssignedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("AssignedHrUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<bool>("CompletedWithoutEmployeeResponse")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("CompletionReason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("EmployeeSeparationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("EmployeeSubmittedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("FinalizedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("HrCompletedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("HrStartedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("PrimaryReasonCategory")
+                        .HasMaxLength(160)
+                        .HasColumnType("varchar(160)");
+
+                    b.Property<string>("ReasonComment")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<int>("RehireRecommendation")
+                        .HasColumnType("int");
+
+                    b.Property<string>("RehireRecommendationReason")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<DateTime?>("ReopenedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("SecondaryReasonCategory")
+                        .HasMaxLength(160)
+                        .HasColumnType("varchar(160)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TemplateVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeSeparationId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "Status");
+
+                    b.HasIndex("TenantId", "AssignedHrUserId", "Status");
+
+                    b.ToTable("SeparationExitInterviews", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("EventType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("ExitInterviewId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int?>("FromStatus")
+                        .HasColumnType("int");
+
+                    b.Property<string>("MetadataJson")
+                        .HasMaxLength(8000)
+                        .HasColumnType("varchar(8000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int?>("ToStatus")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ExitInterviewId", "OccurredAtUtc");
+
+                    b.ToTable("SeparationExitInterviewEvents", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewHrNote", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("ExitInterviewId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<bool>("IsConfidential")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("NoteText")
+                        .IsRequired()
+                        .HasMaxLength(8000)
+                        .HasColumnType("varchar(8000)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ExitInterviewId", "CreatedDate");
+
+                    b.ToTable("SeparationExitInterviewHrNotes", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewQuestion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<bool>("AllowsComment")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsEmployeeVisible")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsHrOnly")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsRequired")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<decimal?>("MaxValue")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal?>("MinValue")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("QuestionText")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<int>("QuestionType")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TemplateVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "TemplateVersionId", "Code")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "TemplateVersionId", "Sequence")
+                        .HasDatabaseName("IX_SeparationExitInterviewQuestions_TenantId_TemplateVersionId~1");
+
+                    b.ToTable("SeparationExitInterviewQuestions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewQuestionOption", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("varchar(300)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("QuestionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "QuestionId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("SeparationExitInterviewQuestionOptions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewResponse", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<bool?>("BooleanValue")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("Comment")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("ExitInterviewId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<decimal?>("NumericValue")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid>("QuestionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("ResponseText")
+                        .HasMaxLength(8000)
+                        .HasColumnType("varchar(8000)");
+
+                    b.Property<string>("SelectedOptionCodes")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<bool>("SubmittedByEmployee")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ExitInterviewId", "QuestionId")
+                        .IsUnique();
+
+                    b.ToTable("SeparationExitInterviewResponses", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewResponseRevision", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<bool?>("BooleanValue")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("Comment")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("ExitInterviewId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<decimal?>("NumericValue")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid>("QuestionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ResponseId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("ResponseText")
+                        .HasMaxLength(8000)
+                        .HasColumnType("varchar(8000)");
+
+                    b.Property<string>("SelectedOptionCodes")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ExitInterviewId", "QuestionId", "RecordedAtUtc");
+
+                    b.ToTable("SeparationExitInterviewResponseRevisions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("AppliesToReasonId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int?>("AppliesToSeparationType")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsEmployeeSurveyEnabled")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("IsHrInterviewEnabled")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<Guid?>("ModifiedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "EffectiveFrom", "EffectiveTo");
+
+                    b.ToTable("SeparationExitInterviewTemplates", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewTemplateVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("PublishedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TemplateId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Status", "EffectiveFrom");
+
+                    b.HasIndex("TenantId", "TemplateId", "VersionNumber")
+                        .IsUnique();
+
+                    b.ToTable("SeparationExitInterviewTemplateVersions", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationReason", b =>
                 {
                     b.Property<Guid>("Id")
@@ -19514,6 +20039,155 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Template");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterview", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.EmployeeSeparation", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeSeparationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationExitInterview", "ExitInterview")
+                        .WithMany("Events")
+                        .HasForeignKey("TenantId", "ExitInterviewId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ExitInterview");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewHrNote", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationExitInterview", "ExitInterview")
+                        .WithMany("HrNotes")
+                        .HasForeignKey("TenantId", "ExitInterviewId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ExitInterview");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewQuestion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationExitInterviewTemplateVersion", "TemplateVersion")
+                        .WithMany("Questions")
+                        .HasForeignKey("TenantId", "TemplateVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("TemplateVersion");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewQuestionOption", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationExitInterviewQuestion", "Question")
+                        .WithMany("Options")
+                        .HasForeignKey("TenantId", "QuestionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Question");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewResponse", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationExitInterview", "ExitInterview")
+                        .WithMany("Responses")
+                        .HasForeignKey("TenantId", "ExitInterviewId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ExitInterview");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewResponseRevision", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationExitInterview", null)
+                        .WithMany("ResponseRevisions")
+                        .HasForeignKey("TenantId", "ExitInterviewId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewTemplate", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewTemplateVersion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationExitInterviewTemplate", "Template")
+                        .WithMany("Versions")
+                        .HasForeignKey("TenantId", "TemplateId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Template");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationReason", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -21026,6 +21700,32 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationClearanceTemplate", b =>
                 {
                     b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterview", b =>
+                {
+                    b.Navigation("Events");
+
+                    b.Navigation("HrNotes");
+
+                    b.Navigation("ResponseRevisions");
+
+                    b.Navigation("Responses");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewQuestion", b =>
+                {
+                    b.Navigation("Options");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewTemplate", b =>
+                {
+                    b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewTemplateVersion", b =>
+                {
+                    b.Navigation("Questions");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationReason", b =>

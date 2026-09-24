@@ -93,6 +93,15 @@ public interface IHrmsDbContext
     DbSet<SeparationClearanceTask> SeparationClearanceTasks { get; }
     DbSet<SeparationAssetReturn> SeparationAssetReturns { get; }
     DbSet<SeparationClearanceEvent> SeparationClearanceEvents { get; }
+    DbSet<SeparationExitInterviewTemplate> SeparationExitInterviewTemplates { get; }
+    DbSet<SeparationExitInterviewTemplateVersion> SeparationExitInterviewTemplateVersions { get; }
+    DbSet<SeparationExitInterviewQuestion> SeparationExitInterviewQuestions { get; }
+    DbSet<SeparationExitInterviewQuestionOption> SeparationExitInterviewQuestionOptions { get; }
+    DbSet<SeparationExitInterview> SeparationExitInterviews { get; }
+    DbSet<SeparationExitInterviewResponse> SeparationExitInterviewResponses { get; }
+    DbSet<SeparationExitInterviewResponseRevision> SeparationExitInterviewResponseRevisions { get; }
+    DbSet<SeparationExitInterviewHrNote> SeparationExitInterviewHrNotes { get; }
+    DbSet<SeparationExitInterviewEvent> SeparationExitInterviewEvents { get; }
     DbSet<ImportBatch> ImportBatches { get; }
     DbSet<LeaveType> LeaveTypes { get; }
     DbSet<LeavePeriod> LeavePeriods { get; }
