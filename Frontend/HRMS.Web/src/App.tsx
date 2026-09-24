@@ -86,6 +86,7 @@ import { ExitInterviewHrInboxPage } from './pages/separation/ExitInterviewHrInbo
 import { ExitInterviewHrDetailPage } from './pages/separation/ExitInterviewHrDetailPage.tsx'
 import { ExitInterviewConfigurationPage } from './pages/separation/ExitInterviewConfigurationPage.tsx'
 import { ClearanceOperationsPage } from './pages/separation/ClearanceOperationsPage.tsx'
+import { SettlementDashboardPage } from './pages/separation/SettlementDashboardPage.tsx'
 
 /**
  * Resets the ErrorBoundary on every route change. Without this, a render-time crash on
@@ -199,6 +200,7 @@ function TenantApplication() {
                   <Route path="separation/clearance/manager" element={<RequirePermission permission={Permissions.separation.clearanceViewTeam}><ClearanceOperationsPage mode="manager" /></RequirePermission>} />
                   <Route path="separation/clearance/functional" element={<RequirePermission permission={Permissions.separation.clearanceViewAll}><ClearanceOperationsPage mode="functional" /></RequirePermission>} />
                   <Route path="separation/clearance/hr" element={<RequirePermission permission={Permissions.separation.clearanceViewAll}><ClearanceOperationsPage mode="hr" /></RequirePermission>} />
+                  <Route path="separation/settlement" element={<RequirePermission permission={Permissions.separation.viewAll}><SettlementDashboardPage /></RequirePermission>} />
                   <Route path="payroll/off-cycle" element={<RequirePermission permission={Permissions.payroll.offCycleView}><PayrollOffCyclePage /></RequirePermission>} />
                   <Route path="payroll/analytics" element={<RequirePermission permission={Permissions.payroll.analyticsView}><PayrollAnalyticsPage /></RequirePermission>} />
                   <Route path="payroll/reports" element={<RequirePermission permission={Permissions.payroll.analyticsView}><PayrollReportsPage /></RequirePermission>} />

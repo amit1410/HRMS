@@ -102,6 +102,8 @@ public interface IHrmsDbContext
     DbSet<SeparationExitInterviewResponseRevision> SeparationExitInterviewResponseRevisions { get; }
     DbSet<SeparationExitInterviewHrNote> SeparationExitInterviewHrNotes { get; }
     DbSet<SeparationExitInterviewEvent> SeparationExitInterviewEvents { get; }
+    DbSet<SeparationSettlementOrchestration> SeparationSettlementOrchestrations { get; }
+    DbSet<SeparationSettlementEvent> SeparationSettlementEvents { get; }
     DbSet<ImportBatch> ImportBatches { get; }
     DbSet<LeaveType> LeaveTypes { get; }
     DbSet<LeavePeriod> LeavePeriods { get; }

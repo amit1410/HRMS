@@ -293,6 +293,8 @@ public sealed class SeparationService(IHrmsDbContext db, ITenantContext tenant, 
             var currentEmployment = await db.EmployeeEmployments.FirstOrDefaultAsync(x => x.TenantId == row.TenantId && x.EmployeeId == row.EmployeeId, ct);
             return Result<SeparationNoticeDto>.Success(ToNotice(row, currentEmployment, request.Reason.Trim()), "Approved LWD is already at the requested value.");
         }
+        if (await db.FinalSettlementCases.AnyAsync(x => x.TenantId == row.TenantId && x.EmployeeId == row.EmployeeId && x.SeparationDate == oldLwd && x.Status == FinalSettlementStatus.Finalized, ct))
+            return Result<SeparationNoticeDto>.Conflict("SettlementAlreadyFinalized: approved LWD requires an existing Payroll correction workflow.");
         if (request.NewLastWorkingDate < start) return Result<SeparationNoticeDto>.Invalid("newLastWorkingDate", "Last working date cannot precede the notice start date.");
         var employment = await db.EmployeeEmployments.FirstOrDefaultAsync(x => x.TenantId == row.TenantId && x.EmployeeId == row.EmployeeId, ct);
         if (employment is null) return Result<SeparationNoticeDto>.Conflict("An employment record is required for notice synchronization.");

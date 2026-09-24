@@ -12534,6 +12534,162 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("SeparationReasons", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationSettlementEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("EventType")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("FromStatus")
+                        .HasColumnType("int");
+
+                    b.Property<string>("MetadataJson")
+                        .HasMaxLength(8000)
+                        .HasColumnType("varchar(8000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<Guid>("SeparationSettlementOrchestrationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int?>("ToStatus")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "SeparationSettlementOrchestrationId", "OccurredAtUtc");
+
+                    b.ToTable("SeparationSettlementEvents", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationSettlementOrchestration", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ApprovedLastWorkingDateSnapshot")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("ClearanceCompletedAtSnapshotUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("ClearanceIdSnapshot")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("EmployeeSeparationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("ExitInterviewDispositionSnapshot")
+                        .HasMaxLength(120)
+                        .HasColumnType("varchar(120)");
+
+                    b.Property<Guid?>("ExitInterviewIdSnapshot")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("FailedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("IdempotencyKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<DateTime?>("InitiatedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("InitiatedByUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("LastFailureCode")
+                        .HasMaxLength(120)
+                        .HasColumnType("varchar(120)");
+
+                    b.Property<string>("LastFailureMessage")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("NoticeShortfallDaysSnapshot")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("NoticeStartDateSnapshot")
+                        .HasColumnType("date");
+
+                    b.Property<Guid?>("PayrollFinalSettlementId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("PendingAssetRecoveryCountSnapshot")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ReadinessCheckedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("RequiredNoticeDaysSnapshot")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ServedNoticeDaysSnapshot")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("WaivedNoticeDaysSnapshot")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeSeparationId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "PayrollFinalSettlementId")
+                        .IsUnique()
+                        .HasFilter("[PayrollFinalSettlementId] IS NOT NULL");
+
+                    b.HasIndex("TenantId", "Status");
+
+                    b.ToTable("SeparationSettlementOrchestrations", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.SeparationBenefitHistory", b =>
                 {
                     b.Property<Guid>("Id")
@@ -20047,12 +20203,14 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("HRMS.Domain.Entities.Separation.EmployeeSeparation", null)
+                    b.HasOne("HRMS.Domain.Entities.Separation.EmployeeSeparation", "EmployeeSeparation")
                         .WithMany()
                         .HasForeignKey("TenantId", "EmployeeSeparationId")
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("EmployeeSeparation");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationExitInterviewEvent", b =>
@@ -20195,6 +20353,46 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasForeignKey("TenantId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationSettlementEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.SeparationSettlementOrchestration", "Orchestration")
+                        .WithMany("Events")
+                        .HasForeignKey("TenantId", "SeparationSettlementOrchestrationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Orchestration");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationSettlementOrchestration", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Separation.EmployeeSeparation", "EmployeeSeparation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeSeparationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("EmployeeSeparation");
 
                     b.Navigation("Tenant");
                 });
@@ -21731,6 +21929,11 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
             modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationReason", b =>
                 {
                     b.Navigation("Separations");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.Separation.SeparationSettlementOrchestration", b =>
+                {
+                    b.Navigation("Events");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.Shift", b =>

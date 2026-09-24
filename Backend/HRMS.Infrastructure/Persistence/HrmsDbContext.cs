@@ -283,6 +283,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<StatutoryFilingSubmissionAttempt> StatutoryFilingSubmissionAttempts => Set<StatutoryFilingSubmissionAttempt>();
     public DbSet<StatutoryFilingAcknowledgement> StatutoryFilingAcknowledgements => Set<StatutoryFilingAcknowledgement>();
     public DbSet<StatutoryFilingHistory> StatutoryFilingHistories => Set<StatutoryFilingHistory>();
+    public DbSet<SeparationSettlementOrchestration> SeparationSettlementOrchestrations => Set<SeparationSettlementOrchestration>();
+    public DbSet<SeparationSettlementEvent> SeparationSettlementEvents => Set<SeparationSettlementEvent>();
     public Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? CurrentTransaction => Database.CurrentTransaction;
 
     /// <summary>
@@ -299,6 +301,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<SeparationSettlementOrchestration>();
+        modelBuilder.Entity<SeparationSettlementEvent>();
 
         if (Database.IsMySql())
         {
@@ -307,6 +311,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
                 .HasFilter(null);
             modelBuilder.Entity<EmployeeSeparation>()
                 .HasIndex(x => new { x.TenantId, x.ActiveEmployeeKey })
+                .HasFilter(null);
+            modelBuilder.Entity<SeparationSettlementOrchestration>()
+                .HasIndex(x => new { x.TenantId, x.PayrollFinalSettlementId })
                 .HasFilter(null);
         }
 
