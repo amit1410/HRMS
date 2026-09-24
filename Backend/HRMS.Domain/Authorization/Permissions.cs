@@ -312,6 +312,19 @@ public static class Permissions
         public const string ReviseLastWorkingDate = "Separation.ReviseLastWorkingDate";
         public const string Approve = "Separation.Approve";
         public const string Reject = "Separation.Reject";
+        public const string NoticeManage = "Separation.NoticeManage";
+        public const string NoticeWaive = "Separation.NoticeWaive";
+        public const string ReviseApprovedLastWorkingDate = "Separation.ReviseApprovedLastWorkingDate";
+        public const string ClearanceViewSelf = "Separation.Clearance.ViewSelf";
+        public const string ClearanceViewTeam = "Separation.Clearance.ViewTeam";
+        public const string ClearanceViewAll = "Separation.Clearance.ViewAll";
+        public const string ClearanceConfigure = "Separation.Clearance.Configure";
+        public const string ClearanceStart = "Separation.Clearance.Start";
+        public const string ClearanceManageTask = "Separation.Clearance.ManageTask";
+        public const string ClearanceWaive = "Separation.Clearance.Waive";
+        public const string ClearanceComplete = "Separation.Clearance.Complete";
+        public const string ClearanceReopen = "Separation.Clearance.Reopen";
+        public const string ClearanceAssetManage = "Separation.Clearance.AssetManage";
     }
 
     /// <summary>Every permission the system knows about. Used by the seeder and SuperAdmin/TenantAdmin grants.</summary>
@@ -354,6 +367,6 @@ public static class Permissions
         , Attendance.View, Attendance.ShiftManage, Attendance.PatternManage, Attendance.RosterManage, Attendance.RosterUpload,
         Attendance.RegularizationRequest, Attendance.RegularizationApprove, Attendance.OnDutyRequest, Attendance.OnDutyApprove,
         Attendance.MonthlyViewSelf, Attendance.MonthlyViewTeam, Attendance.MonthlyViewAll, Attendance.MonthlyProcess, Attendance.MonthlyClose, Attendance.MonthlyReopen, Attendance.ExceptionView, Attendance.AdminCorrectionManage, Attendance.ReportView, Attendance.ReportExport
-        , Separation.ViewSelf, Separation.ViewTeam, Separation.ViewAll, Separation.CreateSelf, Separation.Initiate, Separation.Submit, Separation.Withdraw, Separation.Review, Separation.Manage, Separation.ViewHistory, Separation.ManagerReview, Separation.HrReview, Separation.ReviseLastWorkingDate, Separation.Approve, Separation.Reject
+        , Separation.ViewSelf, Separation.ViewTeam, Separation.ViewAll, Separation.CreateSelf, Separation.Initiate, Separation.Submit, Separation.Withdraw, Separation.Review, Separation.Manage, Separation.ViewHistory, Separation.ManagerReview, Separation.HrReview, Separation.ReviseLastWorkingDate, Separation.Approve, Separation.Reject, Separation.NoticeManage, Separation.NoticeWaive, Separation.ReviseApprovedLastWorkingDate, Separation.ClearanceViewSelf, Separation.ClearanceViewTeam, Separation.ClearanceViewAll, Separation.ClearanceConfigure, Separation.ClearanceStart, Separation.ClearanceManageTask, Separation.ClearanceWaive, Separation.ClearanceComplete, Separation.ClearanceReopen, Separation.ClearanceAssetManage
     };
 }

@@ -25,4 +25,8 @@ public interface ISeparationService
     Task<Result<EmployeeSeparationDto>> ReviseLwdAsync(Guid id, SeparationLwdRevisionRequest request, CancellationToken ct = default);
     Task<Result<IReadOnlyList<EmployeeSeparationDto>>> GetManagerInboxAsync(CancellationToken ct = default);
     Task<Result<IReadOnlyList<EmployeeSeparationDto>>> GetHrInboxAsync(CancellationToken ct = default);
+    Task<Result<SeparationNoticeDto>> GetNoticeAsync(Guid id, CancellationToken ct = default);
+    Task<Result<IReadOnlyList<SeparationEventDto>>> GetNoticeHistoryAsync(Guid id, CancellationToken ct = default);
+    Task<Result<SeparationNoticeDto>> ApplyNoticeWaiverAsync(Guid id, NoticeWaiverRequest request, CancellationToken ct = default);
+    Task<Result<SeparationNoticeDto>> ReviseApprovedLwdAsync(Guid id, SeparationLwdRevisionRequest request, CancellationToken ct = default);
 }

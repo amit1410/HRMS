@@ -1,0 +1,16 @@
+using HRMS.Domain.Enums;
+using HRMS.Application.Common;
+
+namespace HRMS.Application.DTOs.Separation;
+
+public sealed record ClearanceTemplateItemRequest(string Code, string Name, string? Description, SeparationClearanceTaskCategory Category, ClearanceOwnerType OwnerType, Guid? OwnerReferenceId, bool IsMandatory, bool RequiresAssetReturn, bool RequiresComment, bool RequiresEvidence, int Sequence, int? DueDaysBeforeLwd);
+public sealed record ClearanceTemplateRequest(string Code, string Name, string? Description, DateOnly EffectiveFrom, DateOnly? EffectiveTo, SeparationType? AppliesToSeparationType, Guid? AppliesToReasonId, IReadOnlyList<ClearanceTemplateItemRequest> Items);
+public sealed record ClearanceTemplateItemDto(Guid Id, string Code, string Name, SeparationClearanceTaskCategory Category, ClearanceOwnerType OwnerType, bool IsMandatory, bool RequiresAssetReturn, bool RequiresComment, bool RequiresEvidence, int Sequence, int? DueDaysBeforeLwd);
+public sealed record ClearanceTemplateDto(Guid Id, string Code, string Name, bool IsActive, DateOnly EffectiveFrom, DateOnly? EffectiveTo, IReadOnlyList<ClearanceTemplateItemDto> Items);
+public sealed record SeparationClearanceTaskDto(Guid Id, string Code, string Name, SeparationClearanceTaskCategory Category, ClearanceOwnerType OwnerType, SeparationClearanceTaskStatus Status, bool IsMandatory, DateOnly? DueDate, bool IsOverdue, string? Comment, string? BlockingReason, bool RequiresAssetReturn);
+public sealed record SeparationClearanceDto(Guid Id, Guid EmployeeSeparationId, Guid EmployeeId, SeparationClearanceStatus Status, DateTime? StartedAtUtc, DateTime? CompletedAtUtc, bool ReadyForExit, int MandatoryTotal, int MandatoryResolved, IReadOnlyList<SeparationClearanceTaskDto> Tasks);
+public sealed record ClearanceTaskActionRequest(string? Comment, string? Reason);
+public sealed record SeparationAssetReturnRequest(string AssetReference, string AssetType, string AssetName, string? SerialNumber, DateOnly? ExpectedReturnDate, SeparationAssetReturnStatus ReturnStatus, SeparationAssetCondition Condition, bool RecoveryRequired, string? RecoveryReference, string? Comment);
+public sealed class ClearanceInboxQuery : PagedQuery { public SeparationClearanceTaskStatus? Status { get; set; } public SeparationClearanceTaskCategory? Category { get; set; } public DateOnly? DueDate { get; set; } public bool? Overdue { get; set; } }
+public sealed record ClearanceInboxItemDto(Guid TaskId, Guid ClearanceId, Guid SeparationId, Guid EmployeeId, string? EmployeeCode, string EmployeeName, DateOnly? ApprovedLastWorkingDate, string TaskName, SeparationClearanceTaskCategory Category, SeparationClearanceTaskStatus Status, DateOnly? DueDate, bool IsOverdue, bool AssetRequired, Guid? AssetId, SeparationAssetReturnStatus? AssetStatus, string? AssetReference, string? AssetName);
+public sealed record ClearanceDashboardItemDto(Guid EmployeeId, string? EmployeeCode, string EmployeeName, Guid SeparationId, DateOnly? ApprovedLastWorkingDate, Guid ClearanceId, SeparationClearanceStatus ClearanceStatus, int MandatoryTaskCount, int MandatoryCompletedCount, int PendingCount, int BlockedCount, int PendingAssetCount, int OverdueCount, bool ReadyForExit);

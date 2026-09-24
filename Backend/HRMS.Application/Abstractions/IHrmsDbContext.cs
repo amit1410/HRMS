@@ -87,6 +87,12 @@ public interface IHrmsDbContext
     DbSet<SeparationReason> SeparationReasons { get; }
     DbSet<EmployeeSeparation> EmployeeSeparations { get; }
     DbSet<EmployeeSeparationEvent> EmployeeSeparationEvents { get; }
+    DbSet<SeparationClearanceTemplate> SeparationClearanceTemplates { get; }
+    DbSet<SeparationClearanceTemplateItem> SeparationClearanceTemplateItems { get; }
+    DbSet<SeparationClearance> SeparationClearances { get; }
+    DbSet<SeparationClearanceTask> SeparationClearanceTasks { get; }
+    DbSet<SeparationAssetReturn> SeparationAssetReturns { get; }
+    DbSet<SeparationClearanceEvent> SeparationClearanceEvents { get; }
     DbSet<ImportBatch> ImportBatches { get; }
     DbSet<LeaveType> LeaveTypes { get; }
     DbSet<LeavePeriod> LeavePeriods { get; }

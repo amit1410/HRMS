@@ -35,9 +35,14 @@ public sealed class EmployeeSeparation : BaseEntity, ITenantEntity
     public DateOnly? ApprovedLastWorkingDate { get; set; }
     public DateOnly? NoticeStartDate { get; set; }
     public DateOnly? NoticeEndDate { get; set; }
+    public DateOnly? ExpectedNoticeEndDate { get; set; }
     public int? NoticePeriodDays { get; set; }
     public int? NoticeServedDays { get; set; }
     public int? NoticeShortfallDays { get; set; }
+    public int WaivedNoticeDays { get; set; }
+    public int NoticeExtensionDays { get; set; }
+    public NoticeDisposition NoticeDisposition { get; set; } = NoticeDisposition.None;
+    public DateTime? LastNoticeRevisionAtUtc { get; set; }
     public string? EmployeeRemarks { get; set; }
     public string? ManagerRemarks { get; set; }
     public string? HrRemarks { get; set; }

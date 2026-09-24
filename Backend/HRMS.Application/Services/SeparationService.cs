@@ -168,14 +168,21 @@ public sealed class SeparationService(IHrmsDbContext db, ITenantContext tenant, 
             return Result<EmployeeSeparationDto>.Invalid("approvedLastWorkingDate", "Approved last working date is outside the employment interval.");
         if (await db.Employees.AnyAsync(x => x.TenantId == tenantId && x.Id == row.EmployeeId && x.DateOfLeaving != null && x.DateOfLeaving < approvedLwd, ct))
             return Result<EmployeeSeparationDto>.Invalid("approvedLastWorkingDate", "Approved last working date is after the employment end date.");
+        var requiredNoticeDays = employment.NoticePeriod;
+        if (requiredNoticeDays is not > 0 || !string.Equals(employment.NoticePeriodUnit, "Days", StringComparison.OrdinalIgnoreCase))
+            return Result<EmployeeSeparationDto>.Conflict("A positive day-based employment notice period is required before approval.");
         var noticeStart = row.NoticeStartDate ?? row.RequestDate;
         if (approvedLwd < noticeStart) return Result<EmployeeSeparationDto>.Invalid("approvedLastWorkingDate", "Approved last working date cannot precede the notice start date.");
+        row.NoticePeriodDays = requiredNoticeDays;
+        row.ExpectedNoticeEndDate = noticeStart.AddDays(requiredNoticeDays.Value - 1);
         var served = Math.Max(0, approvedLwd.DayNumber - noticeStart.DayNumber + 1);
         row.ApprovedLastWorkingDate = approvedLwd;
         row.NoticeStartDate = noticeStart;
         row.NoticeEndDate = approvedLwd;
         row.NoticeServedDays = served;
-        row.NoticeShortfallDays = row.NoticePeriodDays is int required ? Math.Max(0, required - served) : null;
+        row.NoticeShortfallDays = Math.Max(0, requiredNoticeDays.Value - served - row.WaivedNoticeDays);
+        row.NoticeExtensionDays = Math.Max(0, served - requiredNoticeDays.Value);
+        row.NoticeDisposition = row.NoticeShortfallDays > 0 ? NoticeDisposition.Recoverable : NoticeDisposition.None;
         row.Status = EmployeeSeparationStatus.Approved;
         row.ModifiedByUserId = actor;
         row.ModifiedDate = clock.GetUtcNow().UtcDateTime;
@@ -184,6 +191,7 @@ public sealed class SeparationService(IHrmsDbContext db, ITenantContext tenant, 
         employment.NoticeStartDate = noticeStart;
         employment.NoticeEndDate = approvedLwd;
         AddEvent(row, EmployeeSeparationEventType.HrApproved, EmployeeSeparationStatus.HrReview, row.Status, actor, null, null);
+        AddEvent(row, EmployeeSeparationEventType.NoticeRequirementSnapshotted, row.Status, row.Status, actor, null, $"Required notice days: {requiredNoticeDays.Value}; expected end: {row.ExpectedNoticeEndDate:yyyy-MM-dd}.");
         AddEvent(row, EmployeeSeparationEventType.NoticePeriodActivated, row.Status, row.Status, actor, null, $"Notice period active through {approvedLwd:yyyy-MM-dd}.");
         try
         {
@@ -223,6 +231,98 @@ public sealed class SeparationService(IHrmsDbContext db, ITenantContext tenant, 
         AddEvent(row, EmployeeSeparationEventType.LwdRevised, row.Status, row.Status, tenant.UserId, request.Reason.Trim(), $"{old:yyyy-MM-dd} -> {request.NewLastWorkingDate:yyyy-MM-dd}");
         try { await db.SaveChangesAsync(ct); } catch (DbUpdateConcurrencyException) { return Result<EmployeeSeparationDto>.Conflict("The separation was changed concurrently."); }
         return Result<EmployeeSeparationDto>.Success(ToDto(row, row.Reason!));
+    }
+
+    public async Task<Result<SeparationNoticeDto>> GetNoticeAsync(Guid id, CancellationToken ct = default)
+    {
+        if (tenant.TenantId is not Guid tenantId) return Result<SeparationNoticeDto>.Unauthorized("No authenticated tenant.");
+        var row = await db.EmployeeSeparations.Include(x => x.Reason).FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == id, ct);
+        if (row is null) return Result<SeparationNoticeDto>.NotFound("Separation case not found.");
+        var employment = await db.EmployeeEmployments.FirstOrDefaultAsync(x => x.TenantId == tenantId && x.EmployeeId == row.EmployeeId, ct);
+        var lastReason = await db.EmployeeSeparationEvents.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeSeparationId == id && (x.EventType == EmployeeSeparationEventType.ApprovedLwdRevised || x.EventType == EmployeeSeparationEventType.ApprovedLwdExtended || x.EventType == EmployeeSeparationEventType.ApprovedLwdReduced || x.EventType == EmployeeSeparationEventType.NoticeWaiverApplied || x.EventType == EmployeeSeparationEventType.NoticeWaiverRevised)).OrderByDescending(x => x.OccurredAtUtc).Select(x => x.Reason).FirstOrDefaultAsync(ct);
+        return Result<SeparationNoticeDto>.Success(ToNotice(row, employment, lastReason));
+    }
+
+    public Task<Result<IReadOnlyList<SeparationEventDto>>> GetNoticeHistoryAsync(Guid id, CancellationToken ct = default) => GetHistoryAsync(id, ct);
+
+    public async Task<Result<SeparationNoticeDto>> ApplyNoticeWaiverAsync(Guid id, NoticeWaiverRequest request, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.Reason)) return Result<SeparationNoticeDto>.Invalid("reason", "A reason is required for a notice waiver.");
+        if (request.WaiverDays <= 0) return Result<SeparationNoticeDto>.Invalid("waiverDays", "Waiver days must be greater than zero.");
+        var loaded = await LoadForActionAsync(id, EmployeeSeparationStatus.Approved, ct);
+        if (!loaded.Succeeded) return Result<SeparationNoticeDto>.Failure(loaded.Status, loaded.Message, loaded.Errors);
+        var row = loaded.Value!;
+        if (row.InitiatedByUserId is Guid maker && maker == tenant.UserId) return Result<SeparationNoticeDto>.Forbidden("The maker cannot apply a final notice waiver.");
+        if (row.NoticePeriodDays is not int required || row.NoticeStartDate is not DateOnly start || row.ApprovedLastWorkingDate is not DateOnly lwd)
+            return Result<SeparationNoticeDto>.Conflict("Notice requirements must be approved before a waiver can be applied.");
+        var served = Math.Max(0, lwd.DayNumber - start.DayNumber + 1);
+        var remaining = Math.Max(0, required - served - row.WaivedNoticeDays);
+        if (request.WaiverDays > remaining) return Result<SeparationNoticeDto>.Invalid("waiverDays", "Waiver cannot exceed the remaining notice shortfall.");
+        var oldWaiver = row.WaivedNoticeDays;
+        row.WaivedNoticeDays += request.WaiverDays;
+        row.NoticeServedDays = served;
+        row.NoticeShortfallDays = Math.Max(0, required - served - row.WaivedNoticeDays);
+        row.NoticeDisposition = row.NoticeShortfallDays == 0 ? NoticeDisposition.CompanyWaived : NoticeDisposition.Waived;
+        row.ModifiedByUserId = tenant.UserId;
+        row.ModifiedDate = clock.GetUtcNow().UtcDateTime;
+        row.ConcurrencyVersion++;
+        AddEvent(row, oldWaiver == 0 ? EmployeeSeparationEventType.NoticeWaiverApplied : EmployeeSeparationEventType.NoticeWaiverRevised, row.Status, row.Status, tenant.UserId, request.Reason.Trim(), $"Waived notice days: {oldWaiver} -> {row.WaivedNoticeDays}; shortfall: {row.NoticeShortfallDays}.");
+        try
+        {
+            await using var transaction = await db.BeginTransactionAsync(ct);
+            await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException) { return Result<SeparationNoticeDto>.Conflict("The separation was changed concurrently."); }
+        catch (DbUpdateException) { return Result<SeparationNoticeDto>.Conflict("Notice waiver could not be saved atomically."); }
+        var employment = await db.EmployeeEmployments.FirstOrDefaultAsync(x => x.TenantId == row.TenantId && x.EmployeeId == row.EmployeeId, ct);
+        return Result<SeparationNoticeDto>.Success(ToNotice(row, employment, request.Reason.Trim()));
+    }
+
+    public async Task<Result<SeparationNoticeDto>> ReviseApprovedLwdAsync(Guid id, SeparationLwdRevisionRequest request, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.Reason)) return Result<SeparationNoticeDto>.Invalid("reason", "A reason is required for an approved LWD revision.");
+        var loaded = await LoadForActionAsync(id, EmployeeSeparationStatus.Approved, ct);
+        if (!loaded.Succeeded) return Result<SeparationNoticeDto>.Failure(loaded.Status, loaded.Message, loaded.Errors);
+        var row = loaded.Value!;
+        if (row.InitiatedByUserId is Guid maker && maker == tenant.UserId) return Result<SeparationNoticeDto>.Forbidden("The maker cannot revise the approved LWD.");
+        if (row.NoticeStartDate is not DateOnly start || row.NoticePeriodDays is not int required || row.ApprovedLastWorkingDate is not DateOnly oldLwd)
+            return Result<SeparationNoticeDto>.Conflict("Approved notice requirements are incomplete.");
+        if (request.NewLastWorkingDate == oldLwd)
+        {
+            var currentEmployment = await db.EmployeeEmployments.FirstOrDefaultAsync(x => x.TenantId == row.TenantId && x.EmployeeId == row.EmployeeId, ct);
+            return Result<SeparationNoticeDto>.Success(ToNotice(row, currentEmployment, request.Reason.Trim()), "Approved LWD is already at the requested value.");
+        }
+        if (request.NewLastWorkingDate < start) return Result<SeparationNoticeDto>.Invalid("newLastWorkingDate", "Last working date cannot precede the notice start date.");
+        var employment = await db.EmployeeEmployments.FirstOrDefaultAsync(x => x.TenantId == row.TenantId && x.EmployeeId == row.EmployeeId, ct);
+        if (employment is null) return Result<SeparationNoticeDto>.Conflict("An employment record is required for notice synchronization.");
+        if (await db.Employees.AnyAsync(x => x.TenantId == row.TenantId && x.Id == row.EmployeeId && x.DateOfLeaving != null && x.DateOfLeaving < request.NewLastWorkingDate, ct))
+            return Result<SeparationNoticeDto>.Invalid("newLastWorkingDate", "Last working date is after the employment end date.");
+        var served = Math.Max(0, request.NewLastWorkingDate.DayNumber - start.DayNumber + 1);
+        row.ApprovedLastWorkingDate = request.NewLastWorkingDate;
+        row.NoticeEndDate = request.NewLastWorkingDate;
+        row.NoticeServedDays = served;
+        row.NoticeShortfallDays = Math.Max(0, required - served - row.WaivedNoticeDays);
+        row.NoticeExtensionDays = Math.Max(0, served - required);
+        row.NoticeDisposition = row.NoticeShortfallDays > 0 ? NoticeDisposition.Recoverable : row.WaivedNoticeDays > 0 ? NoticeDisposition.CompanyWaived : NoticeDisposition.None;
+        row.LastNoticeRevisionAtUtc = clock.GetUtcNow().UtcDateTime;
+        row.ModifiedByUserId = tenant.UserId;
+        row.ModifiedDate = row.LastNoticeRevisionAtUtc.Value;
+        row.ConcurrencyVersion++;
+        employment.NoticeStatus = NoticePeriodStatus.Active;
+        employment.NoticeStartDate = start;
+        employment.NoticeEndDate = request.NewLastWorkingDate;
+        var eventType = request.NewLastWorkingDate > oldLwd ? EmployeeSeparationEventType.ApprovedLwdExtended : request.NewLastWorkingDate < oldLwd ? EmployeeSeparationEventType.ApprovedLwdReduced : EmployeeSeparationEventType.ApprovedLwdRevised;
+        AddEvent(row, eventType, row.Status, row.Status, tenant.UserId, request.Reason.Trim(), $"Approved LWD: {oldLwd:yyyy-MM-dd} -> {request.NewLastWorkingDate:yyyy-MM-dd}; shortfall: {row.NoticeShortfallDays}.");
+        try
+        {
+            await using var transaction = await db.BeginTransactionAsync(ct);
+            await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException) { return Result<SeparationNoticeDto>.Conflict("The separation or employment was changed concurrently."); }
+        catch (DbUpdateException) { return Result<SeparationNoticeDto>.Conflict("Approved LWD revision could not be synchronized atomically."); }
+        return Result<SeparationNoticeDto>.Success(ToNotice(row, employment, request.Reason.Trim()));
     }
 
     public async Task<Result<IReadOnlyList<EmployeeSeparationDto>>> GetManagerInboxAsync(CancellationToken ct = default)
@@ -267,5 +367,6 @@ public sealed class SeparationService(IHrmsDbContext db, ITenantContext tenant, 
     }
     private void AddEvent(EmployeeSeparation row, EmployeeSeparationEventType type, EmployeeSeparationStatus? from, EmployeeSeparationStatus? to, Guid? actor, string? reason, string? comment) => db.EmployeeSeparationEvents.Add(new EmployeeSeparationEvent { Id = Guid.NewGuid(), TenantId = row.TenantId, EmployeeSeparationId = row.Id, EventType = type, FromStatus = from, ToStatus = to, ActorUserId = actor, OccurredAtUtc = clock.GetUtcNow().UtcDateTime, Reason = reason, Comment = comment });
     private static SeparationReasonDto ToReason(SeparationReasonEntity x) => new(x.Id, x.Code, x.Name, x.Description, x.Category, x.EmployeeInitiatedAllowed, x.EmployerInitiatedAllowed, x.IsActive, x.EffectiveFrom, x.EffectiveTo, x.DisplayOrder);
-    private static EmployeeSeparationDto ToDto(EmployeeSeparation x, SeparationReasonEntity reason) => new(x.Id, x.EmployeeId, x.SeparationNumber, x.SeparationType, x.ReasonId, reason.Code, reason.Name, x.InitiatedBy, x.RequestDate, x.ProposedLastWorkingDate, x.ApprovedLastWorkingDate, x.NoticeStartDate, x.NoticeEndDate, x.NoticePeriodDays, x.NoticeServedDays, x.NoticeShortfallDays, x.EmployeeRemarks, x.ManagerRemarks, x.HrRemarks, x.Status, x.ConcurrencyVersion, x.CreatedDate);
+    private static EmployeeSeparationDto ToDto(EmployeeSeparation x, SeparationReasonEntity reason) => new(x.Id, x.EmployeeId, x.SeparationNumber, x.SeparationType, x.ReasonId, reason.Code, reason.Name, x.InitiatedBy, x.RequestDate, x.ProposedLastWorkingDate, x.ApprovedLastWorkingDate, x.NoticeStartDate, x.NoticeEndDate, x.ExpectedNoticeEndDate, x.NoticePeriodDays, x.NoticeServedDays, x.NoticeShortfallDays, x.WaivedNoticeDays, x.NoticeExtensionDays, x.NoticeDisposition, x.EmployeeRemarks, x.ManagerRemarks, x.HrRemarks, x.Status, x.ConcurrencyVersion, x.CreatedDate);
+    private static SeparationNoticeDto ToNotice(EmployeeSeparation row, EmployeeEmployment? employment, string? lastReason) => new(row.Id, row.NoticePeriodDays, row.NoticeStartDate, row.ExpectedNoticeEndDate, row.ApprovedLastWorkingDate, row.NoticeServedDays, row.WaivedNoticeDays, row.NoticeShortfallDays, row.NoticeExtensionDays, employment?.NoticeStatus ?? NoticePeriodStatus.NotServing, lastReason, row.ConcurrencyVersion);
 }

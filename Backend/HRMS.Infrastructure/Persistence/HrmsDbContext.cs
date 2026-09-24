@@ -103,6 +103,12 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<HRMS.Domain.Entities.Separation.SeparationReason> SeparationReasons => Set<HRMS.Domain.Entities.Separation.SeparationReason>();
     public DbSet<EmployeeSeparation> EmployeeSeparations => Set<EmployeeSeparation>();
     public DbSet<EmployeeSeparationEvent> EmployeeSeparationEvents => Set<EmployeeSeparationEvent>();
+    public DbSet<SeparationClearanceTemplate> SeparationClearanceTemplates => Set<SeparationClearanceTemplate>();
+    public DbSet<SeparationClearanceTemplateItem> SeparationClearanceTemplateItems => Set<SeparationClearanceTemplateItem>();
+    public DbSet<SeparationClearance> SeparationClearances => Set<SeparationClearance>();
+    public DbSet<SeparationClearanceTask> SeparationClearanceTasks => Set<SeparationClearanceTask>();
+    public DbSet<SeparationAssetReturn> SeparationAssetReturns => Set<SeparationAssetReturn>();
+    public DbSet<SeparationClearanceEvent> SeparationClearanceEvents => Set<SeparationClearanceEvent>();
     public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
     public DbSet<LeaveType> LeaveTypes => Set<LeaveType>();
     public DbSet<LeavePeriod> LeavePeriods => Set<LeavePeriod>();
@@ -473,6 +479,12 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<EmployeeAdditionalInfo>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeAuditLog>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeEmployment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SeparationClearanceTemplate>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SeparationClearanceTemplateItem>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SeparationClearance>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SeparationClearanceTask>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SeparationAssetReturn>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<SeparationClearanceEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<ImportBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveType>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeavePeriod>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

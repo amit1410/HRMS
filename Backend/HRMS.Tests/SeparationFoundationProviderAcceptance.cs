@@ -37,7 +37,7 @@ internal static class SeparationFoundationProviderAcceptance
         var service = new SeparationService(db, tenant, new EmployeeIdentityResolver(db, tenant), new EmployeeManagerResolver(db, tenant), TimeProvider.System);
         var reason = await service.CreateReasonAsync(new SeparationReasonRequest("VOLUNTARY", "Voluntary resignation", null, SeparationReasonCategory.Resignation, true, false, true, new(2020, 1, 1), null, 1));
         Assert.True(reason.Succeeded, reason.Message);
-        var created = await service.CreateSelfAsync(new SeparationRequest(reason.Value!.Id, new(2026, 9, 23), new(2026, 10, 23), "Provider acceptance"));
+        var created = await service.CreateSelfAsync(new SeparationRequest(reason.Value!.Id, new(2026, 9, 23), new(2026, 10, 2), "Provider acceptance"));
         Assert.True(created.Succeeded, created.Message);
         var submitted = await service.SubmitAsync(created.Value!.Id);
         Assert.True(submitted.Succeeded, submitted.Message);
@@ -46,11 +46,18 @@ internal static class SeparationFoundationProviderAcceptance
         tenant.UserId = managerUserId;
         Assert.True((await new SeparationService(db, tenant, new EmployeeIdentityResolver(db, tenant), new EmployeeManagerResolver(db, tenant), TimeProvider.System).ManagerApproveAsync(created.Value.Id)).Succeeded);
         tenant.UserId = hrUserId;
-        var approved = await new SeparationService(db, tenant, new EmployeeIdentityResolver(db, tenant), new EmployeeManagerResolver(db, tenant), TimeProvider.System).HrApproveAsync(created.Value.Id);
-        Assert.True(approved.Succeeded, approved.Message); Assert.Equal(new(2026, 10, 23), approved.Value!.ApprovedLastWorkingDate);
+        var approvalService = new SeparationService(db, tenant, new EmployeeIdentityResolver(db, tenant), new EmployeeManagerResolver(db, tenant), TimeProvider.System);
+        var approved = await approvalService.HrApproveAsync(created.Value.Id);
+        Assert.True(approved.Succeeded, approved.Message); Assert.Equal(new(2026, 10, 2), approved.Value!.ApprovedLastWorkingDate);
         var employment = await db.EmployeeEmployments.SingleAsync(x => x.EmployeeId == employeeId);
-        Assert.Equal(NoticePeriodStatus.Active, employment.NoticeStatus); Assert.Equal(new(2026, 10, 23), employment.NoticeEndDate);
-        Assert.Equal(5, await db.EmployeeSeparationEvents.CountAsync(x => x.EmployeeSeparationId == created.Value.Id));
+        Assert.Equal(NoticePeriodStatus.Active, employment.NoticeStatus); Assert.Equal(new(2026, 10, 2), employment.NoticeEndDate);
+        Assert.Equal(6, await db.EmployeeSeparationEvents.CountAsync(x => x.EmployeeSeparationId == created.Value.Id));
+        var notice = await approvalService.GetNoticeAsync(created.Value.Id);
+        Assert.True(notice.Succeeded, notice.Message); Assert.Equal(30, notice.Value!.RequiredNoticeDays); Assert.Equal(20, notice.Value.ShortfallDays);
+        var waiver = await approvalService.ApplyNoticeWaiverAsync(created.Value.Id, new NoticeWaiverRequest(5, "Provider waiver"));
+        Assert.True(waiver.Succeeded, waiver.Message); Assert.Equal(15, waiver.Value!.ShortfallDays);
+        var revised = await approvalService.ReviseApprovedLwdAsync(created.Value.Id, new(new(2026, 10, 23), "Provider extension"));
+        Assert.True(revised.Succeeded, revised.Message); Assert.Equal(new(2026, 10, 23), revised.Value!.ApprovedLastWorkingDate); Assert.Equal(new(2026, 10, 23), employment.NoticeEndDate);
         Assert.True((await service.GetAsync(created.Value.Id)).Succeeded);
     }
 }

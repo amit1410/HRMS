@@ -60,7 +60,7 @@ public sealed class SeparationApprovalConcurrencyTests
         await using var verify = database.CreateContext(new TestTenantContext(tenantId));
         var row = await verify.EmployeeSeparations.SingleAsync(x => x.Id == id);
         Assert.Contains(row.Status, new[] { EmployeeSeparationStatus.HrReview, EmployeeSeparationStatus.Approved, EmployeeSeparationStatus.Rejected, EmployeeSeparationStatus.Withdrawn });
-        Assert.InRange(await verify.EmployeeSeparationEvents.CountAsync(x => x.EmployeeSeparationId == id), 0, 2);
+        Assert.InRange(await verify.EmployeeSeparationEvents.CountAsync(x => x.EmployeeSeparationId == id), 0, 3);
     }
 
     private static SeparationService Create(HRMS.Infrastructure.Persistence.HrmsDbContext db, TestTenantContext tenant) => new(db, tenant, new EmployeeIdentityResolver(db, tenant), new EmployeeManagerResolver(db, tenant), TimeProvider.System);

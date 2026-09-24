@@ -74,7 +74,7 @@ public sealed class SeparationApprovalTests
         Assert.Equal(new(2026, 9, 23), employment.NoticeStartDate);
         Assert.Equal(new(2026, 10, 23), employment.NoticeEndDate);
         Assert.Null(await hrDb.Employees.Where(x => x.Id == employeeId).Select(x => x.DateOfLeaving).SingleAsync());
-        Assert.Equal(5, await hrDb.EmployeeSeparationEvents.CountAsync(x => x.EmployeeSeparationId == created.Value.Id));
+        Assert.Equal(6, await hrDb.EmployeeSeparationEvents.CountAsync(x => x.EmployeeSeparationId == created.Value.Id));
     }
 
     [Fact]
