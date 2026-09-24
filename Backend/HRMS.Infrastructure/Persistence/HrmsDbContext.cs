@@ -167,6 +167,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<AttendancePeriod> AttendancePeriods => Set<AttendancePeriod>();
     public DbSet<AttendancePeriodEvent> AttendancePeriodEvents => Set<AttendancePeriodEvent>();
     public DbSet<EmployeeAttendanceMonthlySummary> EmployeeAttendanceMonthlySummaries => Set<EmployeeAttendanceMonthlySummary>();
+    public DbSet<PayrollAttendanceSnapshot> PayrollAttendanceSnapshots => Set<PayrollAttendanceSnapshot>();
     public DbSet<SalaryComponent> SalaryComponents => Set<SalaryComponent>();
     public DbSet<SalaryComponentHistory> SalaryComponentHistories => Set<SalaryComponentHistory>();
     public DbSet<SalaryStructure> SalaryStructures => Set<SalaryStructure>();
@@ -566,6 +567,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<AttendancePeriod>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AttendancePeriodEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeAttendanceMonthlySummary>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollAttendanceSnapshot>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<SalaryComponent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<SalaryComponentHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<SalaryStructure>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

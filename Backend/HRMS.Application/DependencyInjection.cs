@@ -99,6 +99,7 @@ public static class DependencyInjection
         services.AddScoped<IAttendanceReadService, AttendanceReadService>();
         services.AddScoped<IAttendanceWorkflowService, AttendanceWorkflowService>();
         services.AddScoped<IAttendanceMonthlyProcessor, AttendanceMonthlyProcessor>();
+        services.AddScoped<IAttendancePayrollSnapshotResolver, AttendancePayrollSnapshotResolver>();
         services.AddScoped<IAttendancePeriodLockService, AttendancePeriodLockService>();
         services.AddScoped<IAttendanceAdminCorrectionService, AttendanceAdminCorrectionService>();
         services.AddScoped<IAttendanceReportService, AttendanceReportService>();

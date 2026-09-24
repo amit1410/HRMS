@@ -1706,6 +1706,10 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<int>("LeaveConflictCount")
                         .HasColumnType("int");
 
+                    b.Property<decimal>("LopDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
                     b.Property<int>("MissingInCount")
                         .HasColumnType("int");
 
@@ -1724,6 +1728,18 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<int>("OnLeaveDays")
                         .HasColumnType("int");
 
+                    b.Property<decimal>("PaidLeaveDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("PayableDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("PresentDayQuantity")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
                     b.Property<int>("PresentDays")
                         .HasColumnType("int");
 
@@ -1738,6 +1754,13 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("UnpaidLeaveDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("int");
 
                     b.Property<int>("WeeklyOffDays")
                         .HasColumnType("int");
@@ -7310,6 +7333,107 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("PayrollAnomalyFlags", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAttendanceSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("AbsentDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<Guid>("AttendancePeriodId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("EligibleDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("EmploymentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("FinalizedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("FinalizedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("HolidayDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<bool>("IsCurrent")
+                        .HasColumnType("bit");
+
+                    b.Property<decimal>("LopDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("OnDutyDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("PaidLeaveDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal>("PayableDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<DateOnly>("PeriodEnd")
+                        .HasColumnType("date");
+
+                    b.Property<DateOnly>("PeriodStart")
+                        .HasColumnType("date");
+
+                    b.Property<decimal>("PresentDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<string>("SourceHash")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("UnpaidLeaveDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("WeekOffDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "EmployeeId");
+
+                    b.HasIndex("TenantId", "AttendancePeriodId", "EmployeeId", "IsCurrent")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "AttendancePeriodId", "EmployeeId", "Version")
+                        .IsUnique();
+
+                    b.ToTable("PayrollAttendanceSnapshots", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollCalculationError", b =>
                 {
                     b.Property<Guid>("Id")
@@ -8676,6 +8800,24 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("AttendanceEligibleDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal?>("AttendanceLopDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<decimal?>("AttendancePayableDays")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("decimal(18,4)");
+
+                    b.Property<Guid?>("AttendanceSnapshotId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("AttendanceVersion")
+                        .HasColumnType("int");
 
                     b.Property<DateTime>("CalculatedAtUtc")
                         .HasColumnType("datetime2");
@@ -19015,6 +19157,27 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PayrollAttendanceSnapshot", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.AttendancePeriod", "AttendancePeriod")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "AttendancePeriodId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("AttendancePeriod");
+
+                    b.Navigation("Employee");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollCalculationError", b =>

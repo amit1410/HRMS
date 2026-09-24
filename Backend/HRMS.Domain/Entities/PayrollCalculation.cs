@@ -18,6 +18,11 @@ public sealed class PayrollResult : BaseEntity, ITenantEntity
     public DateOnly EmploymentSnapshotDate { get; set; }
     public int CalendarDays { get; set; }
     public int EligibleDays { get; set; }
+    public Guid? AttendanceSnapshotId { get; set; }
+    public int? AttendanceVersion { get; set; }
+    public decimal? AttendanceEligibleDays { get; set; }
+    public decimal? AttendancePayableDays { get; set; }
+    public decimal? AttendanceLopDays { get; set; }
     public decimal ProrationFactor { get; set; } = 1m;
     public DateTime CalculationDateUtc { get; set; }
     public string CurrencyCode { get; set; } = "INR";

@@ -41,6 +41,9 @@ public sealed class AttendanceMonthlyController(IAttendanceMonthlyProcessor proc
     [HttpGet("periods/{periodId:guid}/summaries"), HasPermission(Permissions.Attendance.MonthlyViewAll)]
     public async Task<ActionResult<ApiResponse<PagedResult<EmployeeAttendanceMonthlySummaryDto>>>> Summaries(Guid periodId, [FromQuery] AttendanceMonthlySummaryQuery query, CancellationToken ct) => (await processor.GetSummariesAsync(periodId, query, ct)).ToActionResult();
 
+    [HttpGet("my/monthly-summary"), HasPermission(Permissions.Attendance.MonthlyViewSelf)]
+    public async Task<ActionResult<ApiResponse<PagedResult<EmployeeAttendanceMonthlySummaryDto>>>> MySummaries([FromQuery] AttendanceMonthlySummaryQuery query, CancellationToken ct) => (await processor.GetMySummariesAsync(query, ct)).ToActionResult();
+
     [HttpGet("periods/{periodId:guid}/exceptions"), HasPermission(Permissions.Attendance.ExceptionView)]
     public async Task<ActionResult<ApiResponse<PagedResult<AttendanceExceptionDto>>>> Exceptions(Guid periodId, [FromQuery] AttendanceExceptionQuery query, CancellationToken ct) => (await processor.GetExceptionsAsync(periodId, query, ct)).ToActionResult();
 }

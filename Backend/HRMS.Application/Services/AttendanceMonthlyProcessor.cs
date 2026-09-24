@@ -77,6 +77,9 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
                     summary.EmploymentDays++;
                     days.TryGetValue(date, out var day);
                     AddDay(summary, day, tenantId, period.Id, employee.Id, date, exceptions);
+                    if (day?.Status == EmployeeAttendanceDayStatus.Present) summary.PresentDayQuantity += 1m;
+                    if (day?.Status == EmployeeAttendanceDayStatus.OnLeave) summary.PaidLeaveDays += 1m;
+                    if (day?.Status == EmployeeAttendanceDayStatus.Absent) summary.LopDays += 1m;
                     if (await db.AttendanceAdjustments.AsNoTracking().AnyAsync(x => x.TenantId == tenantId && x.EmployeeId == employee.Id && x.BusinessDate == date, ct)) summary.RegularizedDays++;
                 }
                 var pendingReg = await db.AttendanceRegularizationRequests.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employee.Id && x.BusinessDate >= period.StartDate && x.BusinessDate <= period.EndDate && x.Status == AttendanceRequestStatus.Pending).ToListAsync(ct);
@@ -84,6 +87,8 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
                 var pendingOd = await db.AttendanceOnDutyRequests.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employee.Id && x.StartDate <= period.EndDate && x.EndDate >= period.StartDate && x.Status == AttendanceRequestStatus.Pending).ToListAsync(ct);
                 exceptions.AddRange(pendingOd.Select(x => Exception(period.Id, employee.Id, x.StartDate < period.StartDate ? period.StartDate : x.StartDate, AttendanceExceptionType.PendingOnDuty, true, x.Id, "Pending On Duty blocks monthly processing.")));
                 summary.ExceptionCount = exceptions.Count;
+                summary.PayableDays = Math.Max(0m, summary.EmploymentDays - summary.LopDays);
+                summary.PresentDayQuantity = summary.PresentDays;
                 summaries.Add(summary);
             }
             db.EmployeeAttendanceMonthlySummaries.AddRange(summaries);
@@ -115,9 +120,20 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
         var period = await db.AttendancePeriods.SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == periodId, ct);
         if (period is null) return Result<AttendancePeriodDto>.NotFound("Attendance period was not found.");
         if (period.Status == AttendancePeriodStatus.Closed) return Result<AttendancePeriodDto>.Conflict("The Attendance period is already closed.");
+        if (await db.PayrollRuns.AnyAsync(x => x.TenantId == tenantId && x.PayrollPeriod!.StartDate == period.StartDate && x.PayrollPeriod.EndDate == period.EndDate && x.Status == PayrollRunStatus.Finalized, ct)) return Result<AttendancePeriodDto>.Conflict("PayrollAlreadyFinalized: Attendance correction requires a controlled payroll correction path.");
         await using var transaction = await db.BeginTransactionAsync(ct);
         var preview = await BuildClosePreviewAsync(period, ct);
         if (!preview.CanClose) return Result<AttendancePeriodDto>.Conflict(string.Join(" ", preview.Blockers));
+        var summaries = await db.EmployeeAttendanceMonthlySummaries.Where(x => x.TenantId == tenantId && x.AttendancePeriodId == period.Id).ToListAsync(ct);
+        foreach (var summary in summaries)
+        {
+            var previous = await db.PayrollAttendanceSnapshots.Where(x => x.TenantId == tenantId && x.AttendancePeriodId == period.Id && x.EmployeeId == summary.EmployeeId && x.IsCurrent).ToListAsync(ct);
+            foreach (var old in previous) old.IsCurrent = false;
+            var version = previous.Select(x => x.Version).DefaultIfEmpty(0).Max();
+            var source = $"{period.Id:N}:{summary.EmployeeId:N}:{summary.SourceDataVersion}:{summary.PayableDays}:{summary.LopDays}";
+            db.PayrollAttendanceSnapshots.Add(new PayrollAttendanceSnapshot { Id = Guid.NewGuid(), TenantId = tenantId, AttendancePeriodId = period.Id, EmployeeId = summary.EmployeeId, Version = version + 1, IsCurrent = true, PeriodStart = period.StartDate, PeriodEnd = period.EndDate, EligibleDays = summary.EmploymentDays, PayableDays = summary.PayableDays, LopDays = summary.LopDays, PresentDays = summary.PresentDayQuantity, AbsentDays = summary.AbsentDays, PaidLeaveDays = summary.PaidLeaveDays, UnpaidLeaveDays = summary.UnpaidLeaveDays, HolidayDays = summary.HolidayDays, WeekOffDays = summary.WeeklyOffDays, OnDutyDays = summary.OnDutyDays, FinalizedByUserId = userId, FinalizedAtUtc = clock.GetUtcNow().UtcDateTime, SourceHash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(source))) });
+            db.AttendancePeriodEvents.Add(Event(period, previous.Count == 0 ? AttendancePeriodEventType.PayrollSnapshotCreated : AttendancePeriodEventType.PayrollSnapshotSuperseded, userId, $"Payroll Attendance snapshot version {version + 1} created for employee {summary.EmployeeId}."));
+        }
         period.Status = AttendancePeriodStatus.Closed;
         period.ConcurrencyVersion++;
         db.AttendancePeriodEvents.Add(Event(period, AttendancePeriodEventType.Closed, userId, string.IsNullOrWhiteSpace(request?.Comment) ? "Attendance period closed." : request.Comment.Trim()));
@@ -139,6 +155,7 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
         var period = await db.AttendancePeriods.SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == periodId, ct);
         if (period is null) return Result<AttendancePeriodDto>.NotFound("Attendance period was not found.");
         if (period.Status != AttendancePeriodStatus.Closed) return Result<AttendancePeriodDto>.Conflict("Only a closed Attendance period can be reopened.");
+        if (await db.PayrollRuns.AnyAsync(x => x.TenantId == tenantId && x.PayrollPeriod!.StartDate == period.StartDate && x.PayrollPeriod.EndDate == period.EndDate && x.Status == PayrollRunStatus.Finalized, ct)) return Result<AttendancePeriodDto>.Conflict("PayrollAlreadyFinalized: Attendance correction requires a controlled payroll correction path.");
         await using var transaction = await db.BeginTransactionAsync(ct);
         period.Status = AttendancePeriodStatus.Open;
         period.DataVersion++;
@@ -194,7 +211,20 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
         }
         if (query.EmployeeId is Guid employeeId) q = q.Where(x => x.EmployeeId == employeeId);
         if (query.HasExceptions is bool has) q = has ? q.Where(x => x.ExceptionCount > 0) : q.Where(x => x.ExceptionCount == 0);
+        if (query.HasLop is bool lop) q = lop ? q.Where(x => x.LopDays > 0) : q.Where(x => x.LopDays == 0);
         var total = await q.CountAsync(ct); var rows = await q.OrderBy(x => x.EmployeeCode).ThenBy(x => x.EmployeeId).Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToListAsync(ct);
+        return Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>.Success(new(rows.Select(Map).ToList(), query.Page, query.PageSize, total));
+    }
+
+    public async Task<Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>> GetMySummariesAsync(AttendanceMonthlySummaryQuery query, CancellationToken ct = default)
+    {
+        if (!TryTenant(out var tenantId, out var userId)) return Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>.Unauthorized("No authenticated tenant.");
+        if (!ValidPage(query) || userId is null) return Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>.Invalid("page", "Page values are out of range.");
+        var employeeId = await db.AccountEmployeeCurrentLinks.AsNoTracking().Where(x => x.TenantId == tenantId && x.UserId == userId.Value).Select(x => (Guid?)x.EmployeeId).SingleOrDefaultAsync(ct);
+        if (employeeId is null) return Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>.NotFound("No employee identity is linked to this account.");
+        var q = db.EmployeeAttendanceMonthlySummaries.AsNoTracking().Where(x => x.TenantId == tenantId && x.EmployeeId == employeeId.Value);
+        if (query.HasLop is bool lop) q = lop ? q.Where(x => x.LopDays > 0) : q.Where(x => x.LopDays == 0);
+        var total = await q.CountAsync(ct); var rows = await q.OrderByDescending(x => x.AttendancePeriodId).Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToListAsync(ct);
         return Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>.Success(new(rows.Select(Map).ToList(), query.Page, query.PageSize, total));
     }
 
@@ -291,6 +321,6 @@ public sealed class AttendanceMonthlyProcessor(IHrmsDbContext db, ITenantContext
     private bool TryTenant(out Guid tenantId, out Guid? userId) { tenantId = tenant.TenantId ?? Guid.Empty; userId = tenant.UserId; return tenantId != Guid.Empty; }
     private static bool ValidPage(PagedQuery q) => q.Page >= 1 && q.PageSize is >= 1 and <= PagedQuery.MaxPageSize;
     private static AttendancePeriodDto Map(AttendancePeriod x) => new(x.Id, x.Year, x.Month, x.StartDate, x.EndDate, x.Status, x.DataVersion, x.ConcurrencyVersion, x.ProcessedAtUtc, x.LastProcessedByUserId);
-    private static EmployeeAttendanceMonthlySummaryDto Map(EmployeeAttendanceMonthlySummary x) => new(x.Id, x.AttendancePeriodId, x.EmployeeId, x.EmployeeCode, x.EmployeeName, x.CalendarDays, x.EmploymentDays, x.WorkingDays, x.PresentDays, x.AbsentDays, x.OnLeaveDays, x.OnDutyDays, x.HolidayDays, x.WeeklyOffDays, x.IncompleteDays, x.NotProcessedDays, x.LateInCount, x.EarlyOutCount, x.GraceAppliedCount, x.MissingInCount, x.MissingOutCount, x.RegularizedDays, x.ApprovedOnDutyDays, x.LeaveConflictCount, x.ExceptionCount, x.ExpectedWorkMinutes, x.ActualWorkMinutes, x.SourceDataVersion, x.ProcessedAtUtc);
+    private static EmployeeAttendanceMonthlySummaryDto Map(EmployeeAttendanceMonthlySummary x) => new(x.Id, x.AttendancePeriodId, x.EmployeeId, x.EmployeeCode, x.EmployeeName, x.CalendarDays, x.EmploymentDays, x.WorkingDays, x.PresentDays, x.AbsentDays, x.OnLeaveDays, x.OnDutyDays, x.HolidayDays, x.WeeklyOffDays, x.IncompleteDays, x.NotProcessedDays, x.LateInCount, x.EarlyOutCount, x.GraceAppliedCount, x.MissingInCount, x.MissingOutCount, x.RegularizedDays, x.ApprovedOnDutyDays, x.LeaveConflictCount, x.ExceptionCount, x.ExpectedWorkMinutes, x.ActualWorkMinutes, x.SourceDataVersion, x.ProcessedAtUtc, x.PresentDayQuantity, x.PaidLeaveDays, x.UnpaidLeaveDays, x.PayableDays, x.LopDays, x.Version);
     private static AttendancePeriodOverviewDto Overview(AttendancePeriod p, IReadOnlyCollection<EmployeeAttendanceMonthlySummary> s, int blockingExceptions) => new(p.Id, s.Count, s.Count(x => x.ExceptionCount > 0), s.Sum(x => x.ExceptionCount), blockingExceptions, p.ProcessedAtUtc, p.Status, p.DataVersion);
 }

@@ -50,6 +50,11 @@ public sealed class EmployeeAttendanceMonthlySummaryConfiguration : IEntityTypeC
         b.Property(x => x.EmployeeCode).HasMaxLength(100);
         b.Property(x => x.EmployeeName).HasMaxLength(300).IsRequired();
         b.Property(x => x.SourceDataVersion).IsRequired();
+        b.Property(x => x.PresentDayQuantity).HasPrecision(18, 4);
+        b.Property(x => x.PaidLeaveDays).HasPrecision(18, 4);
+        b.Property(x => x.UnpaidLeaveDays).HasPrecision(18, 4);
+        b.Property(x => x.PayableDays).HasPrecision(18, 4);
+        b.Property(x => x.LopDays).HasPrecision(18, 4);
         b.HasIndex(x => new { x.TenantId, x.AttendancePeriodId, x.EmployeeId }).IsUnique();
         b.HasIndex(x => new { x.TenantId, x.AttendancePeriodId, x.ExceptionCount });
         b.HasOne<AttendancePeriod>().WithMany().HasForeignKey(x => new { x.TenantId, x.AttendancePeriodId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);

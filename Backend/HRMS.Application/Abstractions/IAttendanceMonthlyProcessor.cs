@@ -14,6 +14,7 @@ public sealed class AttendanceMonthlySummaryQuery : PagedQuery
 {
     public Guid? EmployeeId { get; set; }
     public bool? HasExceptions { get; set; }
+    public bool? HasLop { get; set; }
 }
 
 public sealed class AttendanceExceptionQuery : PagedQuery
@@ -40,7 +41,8 @@ public sealed record EmployeeAttendanceMonthlySummaryDto(
     int OnDutyDays, int HolidayDays, int WeeklyOffDays, int IncompleteDays, int NotProcessedDays,
     int LateInCount, int EarlyOutCount, int GraceAppliedCount, int MissingInCount, int MissingOutCount,
     int RegularizedDays, int ApprovedOnDutyDays, int LeaveConflictCount, int ExceptionCount,
-    int ExpectedWorkMinutes, int ActualWorkMinutes, int SourceDataVersion, DateTime ProcessedAtUtc);
+    int ExpectedWorkMinutes, int ActualWorkMinutes, int SourceDataVersion, DateTime ProcessedAtUtc,
+    decimal PresentDayQuantity, decimal PaidLeaveDays, decimal UnpaidLeaveDays, decimal PayableDays, decimal LopDays, int Version);
 
 public sealed record AttendanceExceptionDto(Guid Key, Guid PeriodId, Guid EmployeeId, DateOnly BusinessDate, AttendanceExceptionType ExceptionType, bool IsBlocking, Guid? SourceId, string Message);
 
@@ -56,5 +58,13 @@ public interface IAttendanceMonthlyProcessor
     Task<Result<IReadOnlyList<AttendancePeriodEventDto>>> GetEventsAsync(Guid periodId, CancellationToken ct = default);
     Task<Result<AttendancePeriodOverviewDto>> GetOverviewAsync(Guid periodId, CancellationToken ct = default);
     Task<Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>> GetSummariesAsync(Guid periodId, AttendanceMonthlySummaryQuery query, CancellationToken ct = default);
+    Task<Result<PagedResult<EmployeeAttendanceMonthlySummaryDto>>> GetMySummariesAsync(AttendanceMonthlySummaryQuery query, CancellationToken ct = default);
     Task<Result<PagedResult<AttendanceExceptionDto>>> GetExceptionsAsync(Guid periodId, AttendanceExceptionQuery query, CancellationToken ct = default, string? authorizationPermission = null);
+}
+
+public sealed record PayrollAttendanceSnapshotContract(Guid SnapshotId, int Version, decimal EligibleDays, decimal PayableDays, decimal LopDays, decimal PresentDays, decimal AbsentDays);
+
+public interface IAttendancePayrollSnapshotResolver
+{
+    Task<Result<PayrollAttendanceSnapshotContract?>> ResolveAsync(Guid employeeId, DateOnly periodStart, DateOnly periodEnd, CancellationToken ct = default);
 }

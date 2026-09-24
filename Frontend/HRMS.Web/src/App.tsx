@@ -46,6 +46,8 @@ import { MyAttendancePage } from './pages/attendance/MyAttendancePage.tsx'
 import { ManagerAttendancePage } from './pages/attendance/ManagerAttendancePage.tsx'
 import { AttendanceRequestsPage } from './pages/attendance/AttendanceRequestsPage.tsx'
 import { AttendanceReportPage, AttendanceReportsLandingPage } from './pages/attendance/AttendanceReportsPage.tsx'
+import { AttendanceMonthlyFinalizationPage } from './pages/attendance/AttendanceMonthlyFinalizationPage.tsx'
+import { MyMonthlyAttendancePage } from './pages/attendance/MyMonthlyAttendancePage.tsx'
 import { PlatformTenantsPage } from './pages/platform/PlatformTenantsPage.tsx'
 import { PlatformLoginPage } from './pages/platform/PlatformLoginPage.tsx'
 import { PlatformAuthProvider, usePlatformAuth } from './auth/PlatformAuthProvider.tsx'
@@ -243,6 +245,8 @@ function TenantApplication() {
                   <Route path="attendance/roster-upload" element={<RequirePermission permission={Permissions.attendance.view}><AttendanceFoundationPage /></RequirePermission>} />
                   <Route path="attendance/shift-patterns" element={<RequirePermission permission={Permissions.attendance.view}><ShiftPatternsPage /></RequirePermission>} />
                   <Route path="attendance/my-attendance" element={<RequirePermission permission={Permissions.attendance.view}><RequireEmployeeIdentity><MyAttendancePage /></RequireEmployeeIdentity></RequirePermission>} />
+                  <Route path="attendance/monthly-finalization" element={<RequirePermission permission={Permissions.attendance.monthlyViewAll}><AttendanceMonthlyFinalizationPage /></RequirePermission>} />
+                  <Route path="attendance/my-monthly" element={<RequirePermission permission={Permissions.attendance.monthlyViewSelf}><RequireEmployeeIdentity><MyMonthlyAttendancePage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="attendance/team" element={<RequirePermission permission={Permissions.attendance.view}><ManagerAttendancePage /></RequirePermission>} />
                   <Route path="attendance/requests" element={<RequirePermission permission={Permissions.attendance.view}><RequireEmployeeIdentity><AttendanceRequestsPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="attendance/reports" element={<RequirePermission permission={Permissions.attendance.reportView}><AttendanceReportsLandingPage /></RequirePermission>} />

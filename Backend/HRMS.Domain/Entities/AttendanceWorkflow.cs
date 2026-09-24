@@ -136,4 +136,38 @@ public sealed class EmployeeAttendanceMonthlySummary : BaseEntity, ITenantEntity
     public int ActualWorkMinutes { get; set; }
     public int SourceDataVersion { get; set; }
     public DateTime ProcessedAtUtc { get; set; }
+    public decimal PresentDayQuantity { get; set; }
+    public decimal PaidLeaveDays { get; set; }
+    public decimal UnpaidLeaveDays { get; set; }
+    public decimal PayableDays { get; set; }
+    public decimal LopDays { get; set; }
+    public int Version { get; set; } = 1;
+}
+
+/// <summary>Immutable payroll-facing attendance contract. Refinalization creates a new version.</summary>
+public sealed class PayrollAttendanceSnapshot : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid AttendancePeriodId { get; set; }
+    public Guid EmployeeId { get; set; }
+    public Guid? EmploymentId { get; set; }
+    public int Version { get; set; }
+    public bool IsCurrent { get; set; }
+    public DateOnly PeriodStart { get; set; }
+    public DateOnly PeriodEnd { get; set; }
+    public decimal EligibleDays { get; set; }
+    public decimal PayableDays { get; set; }
+    public decimal LopDays { get; set; }
+    public decimal PresentDays { get; set; }
+    public decimal AbsentDays { get; set; }
+    public decimal PaidLeaveDays { get; set; }
+    public decimal UnpaidLeaveDays { get; set; }
+    public decimal HolidayDays { get; set; }
+    public decimal WeekOffDays { get; set; }
+    public decimal OnDutyDays { get; set; }
+    public Guid? FinalizedByUserId { get; set; }
+    public DateTime FinalizedAtUtc { get; set; }
+    public string? SourceHash { get; set; }
+    public AttendancePeriod? AttendancePeriod { get; set; }
+    public Employee? Employee { get; set; }
 }

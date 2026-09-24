@@ -160,6 +160,7 @@ public interface IHrmsDbContext
     DbSet<AttendancePeriod> AttendancePeriods { get; }
     DbSet<AttendancePeriodEvent> AttendancePeriodEvents { get; }
     DbSet<EmployeeAttendanceMonthlySummary> EmployeeAttendanceMonthlySummaries { get; }
+    DbSet<PayrollAttendanceSnapshot> PayrollAttendanceSnapshots { get; }
     DbSet<SalaryComponent> SalaryComponents { get; }
     DbSet<SalaryComponentHistory> SalaryComponentHistories { get; }
     DbSet<SalaryStructure> SalaryStructures { get; }

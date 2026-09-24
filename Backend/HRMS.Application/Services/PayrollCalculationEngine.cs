@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Application.Services;
 
-public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock, IStatutoryPayrollService? statutory = null, ILoanPayrollRecoveryResolver? loanRecovery = null, IReimbursementPayrollResolver? reimbursementResolver = null) : IPayrollCalculationEngine
+public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext tenant, TimeProvider clock, IStatutoryPayrollService? statutory = null, ILoanPayrollRecoveryResolver? loanRecovery = null, IReimbursementPayrollResolver? reimbursementResolver = null, IAttendancePayrollSnapshotResolver? attendance = null) : IPayrollCalculationEngine
 {
     public async Task<Result<PayrollCalculationSummaryDto>> CalculateAsync(Guid payrollRunId, bool recalculate, CancellationToken ct = default)
     {
@@ -55,6 +55,13 @@ public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext t
 
     private async Task<(PayrollResult? Result, PayrollCalculationError? Error)> CalculateEmployeeAsync(PayrollRun run, PayrollRunEmployee snapshot, Guid attemptId, int calculationVersion, CancellationToken ct)
     {
+        PayrollAttendanceSnapshotContract? attendanceSnapshot = null;
+        if (attendance is not null)
+        {
+            var attendanceResult = await attendance.ResolveAsync(snapshot.EmployeeId, run.PayrollPeriod!.StartDate, run.PayrollPeriod.EndDate, ct);
+            if (!attendanceResult.Succeeded) return (null, Error(run, snapshot, attendanceResult.Message.StartsWith("AttendanceSnapshotMissing", StringComparison.Ordinal) ? PayrollCalculationErrorCode.AttendanceSnapshotMissing : PayrollCalculationErrorCode.AttendanceNotFinalized, attendanceResult.Message));
+            attendanceSnapshot = attendanceResult.Value;
+        }
         if (snapshot.EmployeeSalaryAssignmentId is not Guid assignmentId || snapshot.SalaryStructureVersionId is not Guid versionId) return (null, Error(run, snapshot, PayrollCalculationErrorCode.NoSalaryAssignment, "No salary assignment/version is present in the prepared payroll snapshot."));
         var assignment = await db.EmployeeSalaryAssignments.AsNoTracking().Include(x => x.Employee).FirstOrDefaultAsync(x => x.TenantId == run.TenantId && x.Id == assignmentId, ct);
         var version = await db.SalaryStructureVersions.AsNoTracking().FirstOrDefaultAsync(x => x.TenantId == run.TenantId && x.Id == versionId, ct);
@@ -86,7 +93,7 @@ public sealed class PayrollCalculationEngine(IHrmsDbContext db, ITenantContext t
         var payableTo = assignment.EffectiveTo is DateOnly end && end < run.PayrollPeriod.EndDate ? end : run.PayrollPeriod.EndDate;
         if (assignment.Employee?.DateOfLeaving is DateOnly leaving && leaving < payableTo) payableTo = leaving;
         var eligibleDays = Math.Max(0, payableTo.DayNumber - payableFrom.DayNumber + 1);
-        var result = new PayrollResult { Id = Guid.NewGuid(), TenantId = run.TenantId, PayrollRunId = run.Id, PayrollRunEmployeeId = snapshot.Id, EmployeeId = snapshot.EmployeeId, EmployeeSalaryAssignmentId = assignmentId, SalaryStructureId = snapshot.SalaryStructureId ?? assignment.SalaryStructureId, SalaryStructureVersionId = versionId, CalculationAttemptId = attemptId, PeriodStartDate = run.PayrollPeriod.StartDate, PeriodEndDate = run.PayrollPeriod.EndDate, EmploymentSnapshotDate = run.PayrollPeriod.EndDate, CalendarDays = totalDays, EligibleDays = eligibleDays, ProrationFactor = totalDays == 0 ? 0 : (decimal)eligibleDays / totalDays, CalculationDateUtc = clock.GetUtcNow().UtcDateTime, CurrencyCode = assignment.CurrencyCode, GrossEarnings = gross, TotalDeductions = deductions, NetPay = net, EmployerContributions = resultComponents.Where(x => x.IsEmployerContribution).Sum(x => x.CalculatedAmount), CalculationVersion = calculationVersion, CalculatedAtUtc = clock.GetUtcNow().UtcDateTime, CalculatedByUserId = tenant.UserId, Components = resultComponents };
+        var result = new PayrollResult { Id = Guid.NewGuid(), TenantId = run.TenantId, PayrollRunId = run.Id, PayrollRunEmployeeId = snapshot.Id, EmployeeId = snapshot.EmployeeId, EmployeeSalaryAssignmentId = assignmentId, SalaryStructureId = snapshot.SalaryStructureId ?? assignment.SalaryStructureId, SalaryStructureVersionId = versionId, CalculationAttemptId = attemptId, PeriodStartDate = run.PayrollPeriod.StartDate, PeriodEndDate = run.PayrollPeriod.EndDate, EmploymentSnapshotDate = run.PayrollPeriod.EndDate, CalendarDays = totalDays, EligibleDays = eligibleDays, AttendanceSnapshotId = attendanceSnapshot?.SnapshotId, AttendanceVersion = attendanceSnapshot?.Version, AttendanceEligibleDays = attendanceSnapshot?.EligibleDays, AttendancePayableDays = attendanceSnapshot?.PayableDays, AttendanceLopDays = attendanceSnapshot?.LopDays, ProrationFactor = totalDays == 0 ? 0 : (decimal)eligibleDays / totalDays, CalculationDateUtc = clock.GetUtcNow().UtcDateTime, CurrencyCode = assignment.CurrencyCode, GrossEarnings = gross, TotalDeductions = deductions, NetPay = net, EmployerContributions = resultComponents.Where(x => x.IsEmployerContribution).Sum(x => x.CalculatedAmount), CalculationVersion = calculationVersion, CalculatedAtUtc = clock.GetUtcNow().UtcDateTime, CalculatedByUserId = tenant.UserId, Components = resultComponents };
         var adjustmentError = await ApplyAdjustmentsAsync(run, result, attemptId, ct);
         if (adjustmentError is not null) return (null, Error(run, snapshot, PayrollCalculationErrorCode.CalculationFailed, adjustmentError));
         if (statutory is not null)
