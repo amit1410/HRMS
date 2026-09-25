@@ -52,7 +52,7 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         if (_tenant.TenantId is not Guid tenantId) return Result<LeaveTypeDto>.Unauthorized(NoTenant);
         var code = request.Code.Trim();
         if (await _db.LeaveTypes.AnyAsync(x => x.Code.ToLower() == code.ToLower(), ct)) return Duplicate<LeaveTypeDto>("code", $"LeaveType code '{code}' already exists.");
-        var item = new LeaveType { Id = Guid.NewGuid(), TenantId = tenantId, Code = code, Name = request.Name.Trim(), Description = Normalize(request.Description), DefaultUnit = request.DefaultUnit, IsPaid = request.IsPaid, IsActive = request.IsActive };
+        var item = new LeaveType { Id = Guid.NewGuid(), TenantId = tenantId, Code = code, Name = request.Name.Trim(), Description = Normalize(request.Description), DefaultUnit = request.DefaultUnit, IsPaid = request.IsPaid, IsCompOff = request.IsCompOff, IsActive = request.IsActive };
         _db.LeaveTypes.Add(item);
         try { await _db.SaveChangesAsync(ct); } catch (DbUpdateException) { return Duplicate<LeaveTypeDto>("code", $"LeaveType code '{code}' already exists."); }
         return Result<LeaveTypeDto>.Success(ToDto(item), "LeaveType created.");
@@ -68,7 +68,7 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         if (!string.Equals(code, item.Code, StringComparison.OrdinalIgnoreCase) && await _db.LeavePolicyRules.AnyAsync(x => x.LeaveTypeId == id && x.LeavePolicyVersion!.Status == LeavePolicyVersionStatus.Published, ct))
             return Result<LeaveTypeDto>.Invalid("LeaveType code is immutable after published historical use.", [new("code", "LeaveType code cannot be changed after a Published policy references it.")]);
         if (await _db.LeaveTypes.AnyAsync(x => x.Id != id && x.Code.ToLower() == code.ToLower(), ct)) return Duplicate<LeaveTypeDto>("code", $"LeaveType code '{code}' already exists.");
-        item.Code = code; item.Name = request.Name.Trim(); item.Description = Normalize(request.Description); item.DefaultUnit = request.DefaultUnit; item.IsPaid = request.IsPaid; item.IsActive = request.IsActive; item.ModifiedDate = DateTime.UtcNow;
+        item.Code = code; item.Name = request.Name.Trim(); item.Description = Normalize(request.Description); item.DefaultUnit = request.DefaultUnit; item.IsPaid = request.IsPaid; item.IsCompOff = request.IsCompOff; item.IsActive = request.IsActive; item.ModifiedDate = DateTime.UtcNow;
         try { await _db.SaveChangesAsync(ct); } catch (DbUpdateConcurrencyException) { return Conflict<LeaveTypeDto>("Configuration changed by another user. Reload before saving."); } catch (DbUpdateException) { return Duplicate<LeaveTypeDto>("code", $"LeaveType code '{code}' already exists."); }
         return Result<LeaveTypeDto>.Success(ToDto(item), "LeaveType updated.");
     }
@@ -776,7 +776,7 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
     private static Result<T> Conflict<T>(string message) => Result<T>.Conflict(message);
     private static Result<T> Duplicate<T>(string field, string message) => Result<T>.Conflict(message, [new ValidationError(field, message)]);
     private static PagedResult<T> Page<T>(IEnumerable<T> source, PagedQuery query) { var page = Math.Max(1, query.Page); var size = Math.Clamp(query.PageSize, 1, PagedQuery.MaxPageSize); var list = source.ToList(); return new(list.Skip((page - 1) * size).Take(size).ToList(), page, size, list.Count); }
-    private static LeaveTypeDto ToDto(LeaveType x) => new(x.Id, x.Code, x.Name, x.Description, x.DefaultUnit, x.IsPaid, x.IsActive, x.CreatedDate, x.ModifiedDate, Token(x));
+    private static LeaveTypeDto ToDto(LeaveType x) => new(x.Id, x.Code, x.Name, x.Description, x.DefaultUnit, x.IsPaid, x.IsCompOff, x.IsActive, x.CreatedDate, x.ModifiedDate, Token(x));
     private static LeavePeriodDto ToDto(LeavePeriod x) => new(x.Id, x.Code, x.Name, x.StartDate, x.EndDate, x.IsActive, x.CreatedDate, x.ModifiedDate, Token(x));
     private static LeavePolicyDto ToDto(LeavePolicy x, int overlapCount = 0) { var current = x.Versions?.Where(v => v.Status == LeavePolicyVersionStatus.Published).OrderByDescending(v => v.EffectiveFrom).FirstOrDefault(); return new(x.Id, x.Code, x.Name, x.Description, x.IsActive, x.Versions?.Count ?? 0, current?.VersionNumber, x.CreatedDate, x.ModifiedDate, Token(x), overlapCount); }
     private static LeavePolicyVersionDto ToDto(LeavePolicyVersion x) => new(x.Id, x.VersionNumber, x.EffectiveFrom, x.EffectiveTo, x.Status, x.Priority, x.Rules?.Count(r => r.IsActive) ?? 0, x.ApplicabilitySets?.Count ?? 0, x.CreatedDate, x.CreatedBy, x.ModifiedDate, Token(x), new(x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Published, true));

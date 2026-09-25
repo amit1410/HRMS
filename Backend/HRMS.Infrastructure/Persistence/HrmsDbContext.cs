@@ -172,6 +172,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<OvertimeRequest> OvertimeRequests => Set<OvertimeRequest>();
     public DbSet<EmployeeMonthlyOvertime> EmployeeMonthlyOvertimes => Set<EmployeeMonthlyOvertime>();
     public DbSet<PayrollOvertimeSnapshot> PayrollOvertimeSnapshots => Set<PayrollOvertimeSnapshot>();
+    public DbSet<CompOffPolicy> CompOffPolicies => Set<CompOffPolicy>();
+    public DbSet<CompOffEarning> CompOffEarnings => Set<CompOffEarning>();
+    public DbSet<CompOffLedgerEntry> CompOffLedgerEntries => Set<CompOffLedgerEntry>();
+    public DbSet<CompOffLeaveAllocation> CompOffLeaveAllocations => Set<CompOffLeaveAllocation>();
     public DbSet<SalaryComponent> SalaryComponents => Set<SalaryComponent>();
     public DbSet<SalaryComponentHistory> SalaryComponentHistories => Set<SalaryComponentHistory>();
     public DbSet<SalaryStructure> SalaryStructures => Set<SalaryStructure>();
@@ -321,6 +325,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<OvertimeRequest>();
         modelBuilder.Entity<EmployeeMonthlyOvertime>();
         modelBuilder.Entity<PayrollOvertimeSnapshot>();
+        modelBuilder.Entity<CompOffPolicy>();
+        modelBuilder.Entity<CompOffEarning>();
+        modelBuilder.Entity<CompOffLedgerEntry>();
+        modelBuilder.Entity<CompOffLeaveAllocation>();
 
         if (Database.IsMySql())
         {
@@ -546,6 +554,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<LeavePolicyApplicabilitySet>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeLeaveBalance>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveBalanceTransaction>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<CompOffPolicy>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<CompOffEarning>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<CompOffLedgerEntry>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<CompOffLeaveAllocation>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveBalanceImportBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveBalanceImportRow>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveRequest>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

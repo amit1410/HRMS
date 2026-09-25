@@ -300,6 +300,12 @@ public static class Permissions
         public const string OvertimeApprove = "Attendance.Overtime.Approve";
         public const string OvertimeFinalize = "Attendance.Overtime.Finalize";
         public const string OvertimeReopen = "Attendance.Overtime.Reopen";
+        public const string CompOffViewSelf = "Attendance.CompOff.ViewSelf";
+        public const string CompOffViewTeam = "Attendance.CompOff.ViewTeam";
+        public const string CompOffViewAll = "Attendance.CompOff.ViewAll";
+        public const string CompOffApprove = "Attendance.CompOff.Approve";
+        public const string CompOffManage = "Attendance.CompOff.Manage";
+        public const string CompOffViewHistory = "Attendance.CompOff.ViewHistory";
     }
 
     public static class Separation
@@ -374,7 +380,8 @@ public static class Permissions
         , Attendance.View, Attendance.ShiftManage, Attendance.PatternManage, Attendance.RosterManage, Attendance.RosterUpload,
         Attendance.RegularizationRequest, Attendance.RegularizationApprove, Attendance.OnDutyRequest, Attendance.OnDutyApprove,
         Attendance.MonthlyViewSelf, Attendance.MonthlyViewTeam, Attendance.MonthlyViewAll, Attendance.MonthlyProcess, Attendance.MonthlyClose, Attendance.MonthlyReopen, Attendance.ExceptionView, Attendance.AdminCorrectionManage, Attendance.ReportView, Attendance.ReportExport,
-        Attendance.OvertimeViewSelf, Attendance.OvertimeViewTeam, Attendance.OvertimeViewAll, Attendance.OvertimeRequest, Attendance.OvertimeApprove, Attendance.OvertimeFinalize, Attendance.OvertimeReopen
+        Attendance.OvertimeViewSelf, Attendance.OvertimeViewTeam, Attendance.OvertimeViewAll, Attendance.OvertimeRequest, Attendance.OvertimeApprove, Attendance.OvertimeFinalize, Attendance.OvertimeReopen,
+        Attendance.CompOffViewSelf, Attendance.CompOffViewTeam, Attendance.CompOffViewAll, Attendance.CompOffApprove, Attendance.CompOffManage, Attendance.CompOffViewHistory
         , Separation.ViewSelf, Separation.ViewTeam, Separation.ViewAll, Separation.CreateSelf, Separation.Initiate, Separation.Submit, Separation.Withdraw, Separation.Review, Separation.Manage, Separation.ViewHistory, Separation.ManagerReview, Separation.HrReview, Separation.ReviseLastWorkingDate, Separation.Approve, Separation.Reject, Separation.NoticeManage, Separation.NoticeWaive, Separation.ReviseApprovedLastWorkingDate, Separation.ClearanceViewSelf, Separation.ClearanceViewTeam, Separation.ClearanceViewAll, Separation.ClearanceConfigure, Separation.ClearanceStart, Separation.ClearanceManageTask, Separation.ClearanceWaive, Separation.ClearanceComplete, Separation.ClearanceReopen, Separation.ClearanceAssetManage
     };
 }

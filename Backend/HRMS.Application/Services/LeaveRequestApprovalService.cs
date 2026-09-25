@@ -21,6 +21,7 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
     private readonly ILeaveRequestSubmissionRetryPolicy? _retryPolicy;
     private readonly IDatabaseTransientErrorClassifier? _deadlockClassifier;
     private readonly ILeaveBalanceAccountingService? _balanceAccountingService;
+    private readonly ICompOffService? _compOffService;
     private readonly ILeaveNotificationService? _notificationService;
     private readonly ILeaveAuthorizationService? _authorization;
 
@@ -33,6 +34,7 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
         ILeaveRequestSubmissionRetryPolicy? retryPolicy = null,
         IDatabaseTransientErrorClassifier? deadlockClassifier = null,
         ILeaveBalanceAccountingService? balanceAccountingService = null,
+        ICompOffService? compOffService = null,
         ILeaveNotificationService? notificationService = null,
         ILeaveAuthorizationService? authorization = null)
     {
@@ -44,6 +46,7 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
         _retryPolicy = retryPolicy;
         _deadlockClassifier = deadlockClassifier;
         _balanceAccountingService = balanceAccountingService;
+        _compOffService = compOffService;
         _notificationService = notificationService;
         _authorization = authorization;
     }
@@ -191,6 +194,15 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
                         x.LeaveTypeId == request.LeaveTypeId)
             .Select(x => x.EntitlementRule == null ? (EntitlementMode?)null : x.EntitlementRule.EntitlementMode)
             .SingleOrDefaultAsync(cancellationToken);
+        var isCompOff = await _db.LeaveTypes.AsNoTracking().Where(x => x.TenantId == identity.TenantId && x.Id == request.LeaveTypeId).Select(x => (bool?)x.IsCompOff).SingleOrDefaultAsync(cancellationToken) == true;
+        if (isCompOff)
+        {
+            if (_compOffService is null) return Result<LeaveRequestApprovalResult>.Conflict("Comp-Off accounting is unavailable.");
+            var operation = eventType == LeaveRequestEventType.Approved
+                ? await _compOffService.ConsumeAsync(request.Id, cancellationToken)
+                : await _compOffService.ReleaseAsync(request.Id, cancellationToken);
+            return operation.Succeeded ? null : Result<LeaveRequestApprovalResult>.Conflict(operation.Message);
+        }
         if (entitlementMode != EntitlementMode.Allocated)
             return null;
 

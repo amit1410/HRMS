@@ -1,0 +1,38 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { screen, waitFor } from '@testing-library/react'
+import { CompOffPage } from './CompOffPage.tsx'
+import { CompOffOperationsPage } from './CompOffOperationsPage.tsx'
+import { renderAsUser } from '../../test/renderWith.tsx'
+import { installStubAdapter, ok } from '../../test/stubAdapter.ts'
+import { makeUser } from '../../test/fixtures.ts'
+import { Permissions } from '../../auth/permissions.ts'
+
+const balance = { employeeId: 'e1', earnedMinutes: 480, availableMinutes: 240, reservedMinutes: 120, consumedMinutes: 120, expiredMinutes: 60 }
+const earnings = [{ id: 'c1', employeeId: 'e1', sourceWorkDate: '2026-09-15', sourceType: 'WeekOff', sourceWorkedMinutes: 480, eligibleMinutes: 480, creditedMinutes: 480, status: 'Approved', expiresOn: '2026-12-14', policyId: 'p1', policyVersion: 1, sourceAttendanceVersion: 2 }, { id: 'c2', employeeId: 'e1', sourceWorkDate: '2026-09-16', sourceType: 'Holiday', sourceWorkedMinutes: 480, eligibleMinutes: 480, creditedMinutes: 240, status: 'PendingApproval', expiresOn: '2026-12-15', policyId: 'p1', policyVersion: 1, sourceAttendanceVersion: 3 }]
+const ledger = [{ id: 'l1', earningId: 'c1', entryType: 'Credit', minutes: 480, effectiveDate: '2026-09-15', sourceReference: 'Attendance:e1', leaveRequestId: null }, { id: 'l2', earningId: 'c1', entryType: 'Release', minutes: 60, effectiveDate: '2026-09-20', sourceReference: 'Leave:r1', leaveRequestId: 'r1' }, { id: 'l3', earningId: 'c1', entryType: 'Restore', minutes: 60, effectiveDate: '2026-09-21', sourceReference: 'Leave:r1', leaveRequestId: 'r1' }]
+const operations = { items: earnings.map(item => ({ earningId: item.id, employeeId: item.employeeId, employeeCode: 'CO-001', employeeName: 'Comp Off', workDate: item.sourceWorkDate, sourceType: item.sourceType, eligibleWorkedMinutes: item.eligibleMinutes, creditedMinutes: item.creditedMinutes, availableMinutes: item.status === 'Approved' ? 240 : 0, reservedMinutes: 0, consumedMinutes: 120, expiredMinutes: 60, expiryDate: item.expiresOn, status: item.status, policyId: item.policyId, policyVersion: item.policyVersion, attendanceDayId: null, attendanceVersion: item.sourceAttendanceVersion, correctionStatus: null, correctionDeficitMinutes: null, approvalRequired: item.status === 'PendingApproval', approvedByUserId: null, approvedAtUtc: null })), page: 1, pageSize: 100, totalCount: 2, totalPages: 1, hasPreviousPage: false, hasNextPage: false }
+
+describe('Phase 6D frontend', () => {
+  let restore: (() => void) | undefined
+  let operationsCalled = false
+  beforeEach(() => { const stub = installStubAdapter(); restore = stub.restore; operationsCalled = false; stub.on('get', '/api/attendance/comp-off/balance', () => ({ data: ok(balance) })); stub.on('get', '/api/attendance/comp-off/earnings', () => ({ data: ok(earnings) })); stub.on('get', '/api/attendance/comp-off/ledger', () => ({ data: ok(ledger) })); stub.on('get', '/api/attendance/comp-off/operations', () => { operationsCalled = true; return { data: ok(operations) } }); stub.on('post', '/api/attendance/comp-off/earnings/c2/approve', () => ({ data: ok(earnings[1]) })); stub.on('post', '/api/attendance/comp-off/earnings/c2/reject', () => ({ data: ok({ ...earnings[1], status: 'Rejected' }) })) })
+  afterEach(() => restore?.())
+  function renderEmployee() { renderAsUser(<CompOffPage />, { user: makeUser({ permissions: [Permissions.attendance.compOffViewSelf] }) }) }
+  it('employee balance renders', async () => { renderEmployee(); expect(await screen.findByText('My Comp-Off')).toBeInTheDocument(); expect(screen.getByText('240 minutes')).toBeInTheDocument() })
+  it('earning history renders', async () => { renderEmployee(); expect(await screen.findByText('WeekOff')).toBeInTheDocument(); expect(screen.getByText('Holiday')).toBeInTheDocument() })
+  it('expiry renders', async () => { renderEmployee(); expect(await screen.findByText('2026-12-14')).toBeInTheDocument(); expect(screen.getByText(/Expiring soon/)).toBeInTheDocument() })
+  it('ledger renders', async () => { renderEmployee(); expect(await screen.findByText('Attendance:e1')).toBeInTheDocument(); expect(screen.getAllByText('Credit').length).toBeGreaterThan(0) })
+  it('Comp-Off Leave shows available balance', async () => { renderEmployee(); expect(await screen.findByText(/existing Leave screen/)).toBeInTheDocument(); expect(screen.getByText('Available')).toBeInTheDocument() })
+  it('insufficient balance validation renders', async () => { renderEmployee(); expect(await screen.findByText('240 minutes')).toBeInTheDocument(); expect(screen.getByText(/server-calculated entitlement/)).toBeInTheDocument() })
+  it('manager queue renders', async () => { renderAsUser(<CompOffOperationsPage />, { user: makeUser({ permissions: [Permissions.attendance.compOffViewTeam] }) }); expect(await screen.findByText('Comp-Off Operations')).toBeInTheDocument(); expect(screen.getByText('Pending Credits')).toBeInTheDocument() })
+  it('manager list uses the scoped operational endpoint', async () => { renderAsUser(<CompOffOperationsPage />, { user: makeUser({ permissions: [Permissions.attendance.compOffViewTeam] }) }); await screen.findByText('Pending Credits'); expect(operationsCalled).toBe(true) })
+  it('manager approves credit', async () => { renderAsUser(<CompOffOperationsPage />, { user: makeUser({ permissions: [Permissions.attendance.compOffApprove] }) }); expect(await screen.findByRole('button', { name: 'Approve' })).toBeInTheDocument() })
+  it('manager rejects credit', async () => { renderAsUser(<CompOffOperationsPage />, { user: makeUser({ permissions: [Permissions.attendance.compOffApprove] }) }); expect(await screen.findByRole('button', { name: 'Reject' })).toBeInTheDocument() })
+  it('time manager operations render', async () => { renderAsUser(<CompOffOperationsPage />, { user: makeUser({ permissions: [Permissions.attendance.compOffManage] }) }); expect(await screen.findByText('Balance and correction detail')).toBeInTheDocument() })
+  it('balance detail renders', async () => { renderAsUser(<CompOffOperationsPage />, { user: makeUser({ permissions: [Permissions.attendance.compOffViewAll] }) }); expect(await screen.findByText('Attendance version')).toBeInTheDocument(); expect(screen.getByText('Policy version')).toBeInTheDocument() })
+  it('correction history renders', async () => { renderAsUser(<CompOffOperationsPage />, { user: makeUser({ permissions: [Permissions.attendance.compOffViewAll] }) }); expect(await screen.findByText('Corrections')).toBeInTheDocument(); expect(screen.getAllByText('None').length).toBeGreaterThan(0) })
+  it('approved Leave consumption reflected', async () => { renderEmployee(); expect(await screen.findByText('Consumed / Used')).toBeInTheDocument(); expect(screen.getAllByText('120 minutes').length).toBeGreaterThan(0) })
+  it('rejected Leave release reflected', async () => { renderEmployee(); expect(await screen.findByText('Ledger history')).toBeInTheDocument(); expect(screen.getByText('Release', { exact: false })).toBeInTheDocument() })
+  it('cancelled Leave restoration reflected', async () => { renderEmployee(); expect(await screen.findByText('Ledger history')).toBeInTheDocument(); expect(screen.getByText('Expired')).toBeInTheDocument() })
+  it('approval and rejection actions use backend endpoints', async () => { renderAsUser(<CompOffOperationsPage />, { user: makeUser({ permissions: [Permissions.attendance.compOffApprove] }) }); await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled()); expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled() })
+})

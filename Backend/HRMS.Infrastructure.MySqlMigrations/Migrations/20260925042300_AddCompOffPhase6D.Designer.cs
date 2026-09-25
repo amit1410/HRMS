@@ -3,6 +3,7 @@ using System;
 using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 {
     [DbContext(typeof(HrmsDbContext))]
-    partial class HrmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260925042300_AddCompOffPhase6D")]
+    partial class AddCompOffPhase6D
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1119,7 +1122,12 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("char(36)");
 
+                    b.Property<Guid?>("TenantId1")
+                        .HasColumnType("char(36)");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("TenantId1");
 
                     b.HasIndex("TenantId", "PolicyId");
 
@@ -1166,9 +1174,14 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("char(36)");
 
+                    b.Property<Guid?>("TenantId1")
+                        .HasColumnType("char(36)");
+
                     b.HasKey("Id");
 
                     b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId1");
 
                     b.HasIndex("TenantId", "EarningId");
 
@@ -1233,9 +1246,14 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("char(36)");
 
+                    b.Property<Guid?>("TenantId1")
+                        .HasColumnType("char(36)");
+
                     b.HasKey("Id");
 
                     b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId1");
 
                     b.HasIndex("TenantId", "EarningId");
 
@@ -1336,7 +1354,12 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("char(36)");
 
+                    b.Property<Guid?>("TenantId1")
+                        .HasColumnType("char(36)");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("TenantId1");
 
                     b.HasIndex("TenantId", "Code")
                         .IsUnique();
@@ -6515,9 +6538,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("tinyint(1)")
                         .HasDefaultValue(true);
-
-                    b.Property<bool>("IsCompOff")
-                        .HasColumnType("tinyint(1)");
 
                     b.Property<bool>("IsPaid")
                         .HasColumnType("tinyint(1)");
@@ -17554,6 +17574,10 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId1");
+
                     b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
                         .WithMany()
                         .HasForeignKey("TenantId", "EmployeeId")
@@ -17571,6 +17595,8 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("Employee");
 
                     b.Navigation("Policy");
+
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.CompOffLeaveAllocation", b =>
@@ -17581,6 +17607,10 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId1");
+
                     b.HasOne("HRMS.Domain.Entities.CompOffEarning", "Earning")
                         .WithMany()
                         .HasForeignKey("TenantId", "EarningId")
@@ -17588,7 +17618,18 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("HRMS.Domain.Entities.LeaveRequest", "LeaveRequest")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LeaveRequestId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
                     b.Navigation("Earning");
+
+                    b.Navigation("LeaveRequest");
+
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.CompOffLedgerEntry", b =>
@@ -17599,6 +17640,10 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId1");
+
                     b.HasOne("HRMS.Domain.Entities.CompOffEarning", "Earning")
                         .WithMany("LedgerEntries")
                         .HasForeignKey("TenantId", "EarningId")
@@ -17607,6 +17652,8 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsRequired();
 
                     b.Navigation("Earning");
+
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.CompOffPolicy", b =>
@@ -17616,6 +17663,12 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasForeignKey("TenantId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId1");
+
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.CostCenter", b =>

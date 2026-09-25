@@ -11,6 +11,7 @@ public sealed class LeaveType : BaseEntity, ITenantEntity
     public string? Description { get; set; }
     public LeaveUnit DefaultUnit { get; set; } = LeaveUnit.Day;
     public bool IsPaid { get; set; }
+    public bool IsCompOff { get; set; }
     public bool IsActive { get; set; } = true;
     public string? CreatedBy { get; set; }
     public string? ModifiedBy { get; set; }

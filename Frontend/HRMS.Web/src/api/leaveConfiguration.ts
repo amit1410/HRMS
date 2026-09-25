@@ -10,6 +10,7 @@ export interface LeaveType {
   description?: string | null
   defaultUnit: LeaveUnit
   isPaid: boolean
+  isCompOff?: boolean
   isActive: boolean
   createdDate: string
   modifiedDate?: string | null
@@ -24,6 +25,7 @@ export interface LeaveTypeRequest {
   description?: string | null
   defaultUnit: LeaveUnit
   isPaid: boolean
+  isCompOff?: boolean
   isActive: boolean
   concurrencyToken?: string
 }

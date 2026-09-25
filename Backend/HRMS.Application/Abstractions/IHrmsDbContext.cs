@@ -165,6 +165,10 @@ public interface IHrmsDbContext
     DbSet<OvertimeRequest> OvertimeRequests { get; }
     DbSet<EmployeeMonthlyOvertime> EmployeeMonthlyOvertimes { get; }
     DbSet<PayrollOvertimeSnapshot> PayrollOvertimeSnapshots { get; }
+    DbSet<CompOffPolicy> CompOffPolicies { get; }
+    DbSet<CompOffEarning> CompOffEarnings { get; }
+    DbSet<CompOffLedgerEntry> CompOffLedgerEntries { get; }
+    DbSet<CompOffLeaveAllocation> CompOffLeaveAllocations { get; }
     DbSet<SalaryComponent> SalaryComponents { get; }
     DbSet<SalaryComponentHistory> SalaryComponentHistories { get; }
     DbSet<SalaryStructure> SalaryStructures { get; }

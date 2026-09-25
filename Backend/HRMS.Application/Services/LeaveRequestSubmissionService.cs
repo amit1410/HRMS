@@ -23,6 +23,7 @@ public sealed class LeaveRequestSubmissionService : ILeaveRequestSubmissionServi
     private readonly ILeaveRequestSubmissionRetryPolicy? _retryPolicy;
     private readonly IDatabaseTransientErrorClassifier? _deadlockClassifier;
     private readonly ILeaveBalanceAccountingService? _balanceAccountingService;
+    private readonly ICompOffService? _compOffService;
     private readonly ILeaveNotificationService? _notificationService;
 
     public LeaveRequestSubmissionService(
@@ -35,6 +36,7 @@ public sealed class LeaveRequestSubmissionService : ILeaveRequestSubmissionServi
         ILeaveRequestSubmissionRetryPolicy? retryPolicy = null,
         IDatabaseTransientErrorClassifier? deadlockClassifier = null,
         ILeaveBalanceAccountingService? balanceAccountingService = null,
+        ICompOffService? compOffService = null,
         ILeaveNotificationService? notificationService = null)
     {
         _db = db;
@@ -46,6 +48,7 @@ public sealed class LeaveRequestSubmissionService : ILeaveRequestSubmissionServi
         _retryPolicy = retryPolicy;
         _deadlockClassifier = deadlockClassifier;
         _balanceAccountingService = balanceAccountingService;
+        _compOffService = compOffService;
         _notificationService = notificationService;
     }
 
@@ -176,7 +179,22 @@ public sealed class LeaveRequestSubmissionService : ILeaveRequestSubmissionServi
             _db.LeaveRequests.Add(request);
             _db.LeaveRequestDays.AddRange(days);
             _db.LeaveRequestEvents.Add(submittedEvent);
-            if (authoritative.EntitlementMode == EntitlementMode.Allocated)
+            var isCompOff = await _db.LeaveTypes.AsNoTracking().Where(x => x.TenantId == identity.TenantId && x.Id == authoritative.LeaveTypeId).Select(x => (bool?)x.IsCompOff).SingleOrDefaultAsync(cancellationToken) == true;
+            if (isCompOff)
+            {
+                if (_compOffService is null)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return Result<LeaveRequestSubmissionResult>.Conflict("Comp-Off accounting is unavailable.");
+                }
+                var compOffReservation = await _compOffService.ReserveAsync(request.Id, identity.EmployeeId, Math.Max(1, (int)Math.Round(authoritative.ChargeableQuantity * 480m)), cancellationToken);
+                if (!compOffReservation.Succeeded)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return Result<LeaveRequestSubmissionResult>.Failure(compOffReservation.Status, compOffReservation.Message, compOffReservation.Errors);
+                }
+            }
+            else if (authoritative.EntitlementMode == EntitlementMode.Allocated)
             {
                 if (_balanceAccountingService is null)
                 {

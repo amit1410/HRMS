@@ -13,6 +13,7 @@ public sealed class LeaveRequestCancellationService : ILeaveRequestCancellationS
     private readonly IEmployeeSerializationLock _employeeLock;
     private readonly TimeProvider _timeProvider;
     private readonly ILeaveBalanceAccountingService? _balanceAccountingService;
+    private readonly ICompOffService? _compOffService;
     private readonly ILeaveRequestSubmissionRetryPolicy? _retryPolicy;
     private readonly IDatabaseTransientErrorClassifier? _deadlockClassifier;
     private readonly ILeaveNotificationService? _notificationService;
@@ -25,6 +26,7 @@ public sealed class LeaveRequestCancellationService : ILeaveRequestCancellationS
         ILeaveRequestSubmissionRetryPolicy? retryPolicy = null,
         IDatabaseTransientErrorClassifier? deadlockClassifier = null,
         ILeaveBalanceAccountingService? balanceAccountingService = null,
+        ICompOffService? compOffService = null,
         ILeaveNotificationService? notificationService = null)
     {
         _db = db;
@@ -34,6 +36,7 @@ public sealed class LeaveRequestCancellationService : ILeaveRequestCancellationS
         _retryPolicy = retryPolicy;
         _deadlockClassifier = deadlockClassifier;
         _balanceAccountingService = balanceAccountingService;
+        _compOffService = compOffService;
         _notificationService = notificationService;
     }
 
@@ -117,7 +120,23 @@ public sealed class LeaveRequestCancellationService : ILeaveRequestCancellationS
                     $"{LeaveRequestCancellationErrorCodes.UnsupportedConfiguration}: The captured entitlement configuration is unavailable.");
             }
 
-            if (capturedRule.EntitlementRule.EntitlementMode == EntitlementMode.Allocated)
+            var isCompOff = await _db.LeaveTypes.AsNoTracking().Where(x => x.TenantId == identity.TenantId && x.Id == request.LeaveTypeId).Select(x => (bool?)x.IsCompOff).SingleOrDefaultAsync(cancellationToken) == true;
+            if (isCompOff)
+            {
+                if (_compOffService is null)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return Result<LeaveRequestCancellationResult>.Conflict("Comp-Off accounting is unavailable.");
+                }
+                var restored = await _compOffService.RestoreAsync(request.Id, cancellationToken);
+                if (!restored.Succeeded)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return Result<LeaveRequestCancellationResult>.Conflict(restored.Message);
+                }
+            }
+
+            if (!isCompOff && capturedRule.EntitlementRule.EntitlementMode == EntitlementMode.Allocated)
             {
                 if (_balanceAccountingService is null)
                 {
@@ -148,8 +167,7 @@ public sealed class LeaveRequestCancellationService : ILeaveRequestCancellationS
                         $"{LeaveRequestCancellationErrorCodes.AllocatedConsumptionNotFound}: The request does not have sufficient consumed balance to restore.");
                 }
             }
-
-            else if (capturedRule.EntitlementRule.EntitlementMode is not (EntitlementMode.Unlimited or EntitlementMode.NoBalanceRequired))
+            else if (!isCompOff && capturedRule.EntitlementRule.EntitlementMode is not (EntitlementMode.Unlimited or EntitlementMode.NoBalanceRequired))
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return Result<LeaveRequestCancellationResult>.Conflict(

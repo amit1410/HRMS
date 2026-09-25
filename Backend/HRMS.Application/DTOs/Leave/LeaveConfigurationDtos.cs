@@ -15,13 +15,14 @@ public sealed class LeaveTypeRequest
     public string? Description { get; set; }
     public LeaveUnit DefaultUnit { get; set; } = LeaveUnit.Day;
     public bool IsPaid { get; set; }
+    public bool IsCompOff { get; set; }
     public bool IsActive { get; set; } = true;
     public string? ConcurrencyToken { get; set; }
 }
 
 public sealed record LeaveTypeDto(
     Guid Id, string Code, string Name, string? Description, LeaveUnit DefaultUnit, bool IsPaid,
-    bool IsActive, DateTime CreatedDate, DateTime? ModifiedDate, string ConcurrencyToken);
+    bool IsCompOff, bool IsActive, DateTime CreatedDate, DateTime? ModifiedDate, string ConcurrencyToken);
 
 public sealed class LeavePeriodQuery : PagedQuery
 {

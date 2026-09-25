@@ -279,6 +279,12 @@ export const Permissions = {
     overtimeApprove: 'Attendance.Overtime.Approve',
     overtimeFinalize: 'Attendance.Overtime.Finalize',
     overtimeReopen: 'Attendance.Overtime.Reopen',
+    compOffViewSelf: 'Attendance.CompOff.ViewSelf',
+    compOffViewTeam: 'Attendance.CompOff.ViewTeam',
+    compOffViewAll: 'Attendance.CompOff.ViewAll',
+    compOffApprove: 'Attendance.CompOff.Approve',
+    compOffManage: 'Attendance.CompOff.Manage',
+    compOffViewHistory: 'Attendance.CompOff.ViewHistory',
   },
   separation: {
     viewSelf: 'Separation.ViewSelf',

@@ -1,0 +1,15 @@
+import { api, cleanParams, request } from './client.ts'
+import type { ApiResponse, PagedResult } from './types.ts'
+
+export interface CompOffBalance { employeeId: string; earnedMinutes: number; availableMinutes: number; reservedMinutes: number; consumedMinutes: number; expiredMinutes: number }
+export interface CompOffEarning { id: string; employeeId: string; sourceWorkDate: string; sourceType: string; sourceWorkedMinutes: number; eligibleMinutes: number; creditedMinutes: number; status: string; expiresOn?: string | null; policyId: string; policyVersion: number; sourceAttendanceDayId?: string | null; sourceAttendanceVersion: number; correctionStatus?: string | null; correctionDeficitMinutes?: number | null }
+export interface CompOffLedgerEntry { id: string; earningId: string; leaveRequestId?: string | null; entryType: string; minutes: number; effectiveDate: string; expiresOn?: string | null; sourceReference: string }
+export interface CompOffOperationalEarning { earningId: string; employeeId: string; employeeCode: string; employeeName: string; workDate: string; sourceType: string; eligibleWorkedMinutes: number; creditedMinutes: number; availableMinutes: number; reservedMinutes: number; consumedMinutes: number; expiredMinutes: number; expiryDate?: string | null; status: string; policyId: string; policyVersion: number; attendanceDayId?: string | null; attendanceVersion: number; correctionStatus?: string | null; correctionDeficitMinutes?: number | null; approvalRequired: boolean; approvedByUserId?: string | null; approvedAtUtc?: string | null }
+export interface CompOffOperationalQuery { page?: number; pageSize?: number; search?: string; employeeId?: string; employeeCode?: string; departmentId?: string; workLocationId?: string; managerId?: string; fromDate?: string; toDate?: string; sourceType?: string; status?: string; expiryFrom?: string; expiryTo?: string }
+
+export function getMyCompOffBalance(): Promise<CompOffBalance> { return request(() => api.get<ApiResponse<CompOffBalance>>('/api/attendance/comp-off/balance')) }
+export function getMyCompOffEarnings(): Promise<CompOffEarning[]> { return request(() => api.get<ApiResponse<CompOffEarning[]>>('/api/attendance/comp-off/earnings')) }
+export function getMyCompOffLedger(): Promise<CompOffLedgerEntry[]> { return request(() => api.get<ApiResponse<CompOffLedgerEntry[]>>('/api/attendance/comp-off/ledger')) }
+export function approveCompOffEarning(earningId: string): Promise<CompOffEarning> { return request(() => api.post<ApiResponse<CompOffEarning>>(`/api/attendance/comp-off/earnings/${earningId}/approve`)) }
+export function rejectCompOffEarning(earningId: string): Promise<CompOffEarning> { return request(() => api.post<ApiResponse<CompOffEarning>>(`/api/attendance/comp-off/earnings/${earningId}/reject`)) }
+export function getCompOffOperations(params: CompOffOperationalQuery = {}): Promise<PagedResult<CompOffOperationalEarning>> { return request(() => api.get<ApiResponse<PagedResult<CompOffOperationalEarning>>>('/api/attendance/comp-off/operations', { params: cleanParams(params as Record<string, string | number | boolean | undefined>) })) }
