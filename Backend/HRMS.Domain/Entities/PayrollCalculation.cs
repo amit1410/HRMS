@@ -20,6 +20,8 @@ public sealed class PayrollResult : BaseEntity, ITenantEntity
     public int EligibleDays { get; set; }
     public Guid? AttendanceSnapshotId { get; set; }
     public int? AttendanceVersion { get; set; }
+    public Guid? PayrollOvertimeSnapshotId { get; set; }
+    public int? OvertimeVersion { get; set; }
     public decimal? AttendanceEligibleDays { get; set; }
     public decimal? AttendancePayableDays { get; set; }
     public decimal? AttendanceLopDays { get; set; }

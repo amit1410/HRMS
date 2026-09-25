@@ -4,6 +4,7 @@ using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HRMS.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(HrmsDbContext))]
-    partial class HrmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260924171938_AddOvertimePhase6C")]
+    partial class AddOvertimePhase6C
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2913,94 +2916,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.HasIndex("TenantId", "EmployeeId", "Status");
 
                     b.ToTable("EmployeeLoans", (string)null);
-                });
-
-            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeMonthlyOvertime", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("AttendancePeriodId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("AttendanceSnapshotId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("AttendanceVersion")
-                        .HasColumnType("int");
-
-                    b.Property<int>("ConcurrencyVersion")
-                        .IsConcurrencyToken()
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("CreatedDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid>("EmployeeId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("EmploymentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime?>("FinalizedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid?>("FinalizedByUserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("HolidayMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<bool>("IsCurrent")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("IsFinalized")
-                        .HasColumnType("bit");
-
-                    b.Property<DateTime?>("ModifiedDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<int>("NormalDayMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<Guid?>("PolicyId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("TenantId1")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("TotalApprovedMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<int>("Version")
-                        .HasColumnType("int");
-
-                    b.Property<int>("WeekOffMinutes")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasAlternateKey("TenantId", "Id");
-
-                    b.HasIndex("AttendancePeriodId");
-
-                    b.HasIndex("TenantId1");
-
-                    b.HasIndex("TenantId", "AttendanceSnapshotId");
-
-                    b.HasIndex("TenantId", "EmployeeId");
-
-                    b.HasIndex("TenantId", "AttendancePeriodId", "EmployeeId", "IsCurrent")
-                        .IsUnique();
-
-                    b.HasIndex("TenantId", "AttendancePeriodId", "EmployeeId", "Version")
-                        .IsUnique();
-
-                    b.ToTable("EmployeeMonthlyOvertimes", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeePreviousEmployment", b =>
@@ -6759,210 +6674,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("Organisations", (string)null);
                 });
 
-            modelBuilder.Entity("HRMS.Domain.Entities.OvertimePolicy", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<bool>("AllowHoliday")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("AllowNormalWorkingDay")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("AllowWeekOff")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("Code")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<int>("ConcurrencyVersion")
-                        .IsConcurrencyToken()
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("CreatedDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<DateOnly>("EffectiveFrom")
-                        .HasColumnType("date");
-
-                    b.Property<DateOnly?>("EffectiveTo")
-                        .HasColumnType("date");
-
-                    b.Property<string>("EligibilityMode")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<decimal>("HolidayMultiplier")
-                        .HasPrecision(10, 4)
-                        .HasColumnType("decimal(10,4)");
-
-                    b.Property<Guid?>("HourlyRateComponentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("bit");
-
-                    b.Property<int?>("MaximumMinutesPerDay")
-                        .HasColumnType("int");
-
-                    b.Property<int?>("MaximumMinutesPerMonth")
-                        .HasColumnType("int");
-
-                    b.Property<int>("MinimumExtraMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime?>("ModifiedDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<int?>("MonthlyWorkMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<decimal>("NormalDayMultiplier")
-                        .HasPrecision(10, 4)
-                        .HasColumnType("decimal(10,4)");
-
-                    b.Property<bool>("RequirePostApproval")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("RequirePreApproval")
-                        .HasColumnType("bit");
-
-                    b.Property<int>("RoundingMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<int>("RoundingMode")
-                        .HasColumnType("int");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("TenantId1")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<decimal>("WeekOffMultiplier")
-                        .HasPrecision(10, 4)
-                        .HasColumnType("decimal(10,4)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TenantId1");
-
-                    b.HasIndex("TenantId", "Code")
-                        .IsUnique();
-
-                    b.HasIndex("TenantId", "EffectiveFrom", "EffectiveTo");
-
-                    b.ToTable("OvertimePolicies", (string)null);
-                });
-
-            modelBuilder.Entity("HRMS.Domain.Entities.OvertimeRequest", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("ActualEligibleMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime?>("ApprovedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid?>("ApprovedByUserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("ApprovedMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<int>("Category")
-                        .HasColumnType("int");
-
-                    b.Property<int>("ConcurrencyVersion")
-                        .IsConcurrencyToken()
-                        .HasColumnType("int");
-
-                    b.Property<DateTime?>("CorrectedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid?>("CorrectedByUserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("CorrectionReason")
-                        .HasMaxLength(2000)
-                        .HasColumnType("nvarchar(2000)");
-
-                    b.Property<DateTime>("CreatedDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid>("EmployeeId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("EmploymentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime?>("ModifiedDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid>("PolicyId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Reason")
-                        .HasMaxLength(2000)
-                        .HasColumnType("nvarchar(2000)");
-
-                    b.Property<DateTime?>("RejectedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid?>("RejectedByUserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("RejectionReason")
-                        .HasMaxLength(2000)
-                        .HasColumnType("nvarchar(2000)");
-
-                    b.Property<int>("RequestedMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime?>("SubmittedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid?>("SubmittedByUserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("TenantId1")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateOnly>("WorkDate")
-                        .HasColumnType("date");
-
-                    b.HasKey("Id");
-
-                    b.HasAlternateKey("TenantId", "Id");
-
-                    b.HasIndex("TenantId1");
-
-                    b.HasIndex("TenantId", "PolicyId");
-
-                    b.HasIndex("TenantId", "EmployeeId", "WorkDate", "Status");
-
-                    b.ToTable("OvertimeRequests", (string)null);
-                });
-
             modelBuilder.Entity("HRMS.Domain.Entities.PasswordResetOtp", b =>
                 {
                     b.Property<Guid>("Id")
@@ -7712,6 +7423,8 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("decimal(18,4)");
 
                     b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
 
                     b.HasIndex("TenantId", "EmployeeId");
 
@@ -8781,113 +8494,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("PayrollJournalLineSources", (string)null);
                 });
 
-            modelBuilder.Entity("HRMS.Domain.Entities.PayrollOvertimeSnapshot", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("AttendancePeriodId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("AttendanceSnapshotId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("AttendanceVersion")
-                        .HasColumnType("int");
-
-                    b.Property<DateTime>("CreatedDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid>("EmployeeId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("EmploymentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("FinalizedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid?>("FinalizedByUserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("HolidayMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<decimal>("HolidayMultiplier")
-                        .HasPrecision(10, 4)
-                        .HasColumnType("decimal(10,4)");
-
-                    b.Property<Guid?>("HourlyRateComponentId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<bool>("IsCurrent")
-                        .HasColumnType("bit");
-
-                    b.Property<DateTime?>("ModifiedDate")
-                        .HasColumnType("datetime2");
-
-                    b.Property<int?>("MonthlyWorkMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<int>("NormalDayMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<decimal>("NormalDayMultiplier")
-                        .HasPrecision(10, 4)
-                        .HasColumnType("decimal(10,4)");
-
-                    b.Property<Guid?>("PolicyId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("ReopenReason")
-                        .HasMaxLength(2000)
-                        .HasColumnType("nvarchar(2000)");
-
-                    b.Property<DateTime?>("ReopenedAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<Guid?>("ReopenedByUserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid?>("TenantId1")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<int>("TotalApprovedMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<int>("Version")
-                        .HasColumnType("int");
-
-                    b.Property<int>("WeekOffMinutes")
-                        .HasColumnType("int");
-
-                    b.Property<decimal>("WeekOffMultiplier")
-                        .HasPrecision(10, 4)
-                        .HasColumnType("decimal(10,4)");
-
-                    b.HasKey("Id");
-
-                    b.HasAlternateKey("TenantId", "Id");
-
-                    b.HasIndex("TenantId1");
-
-                    b.HasIndex("TenantId", "AttendanceSnapshotId");
-
-                    b.HasIndex("TenantId", "EmployeeId");
-
-                    b.HasIndex("TenantId", "AttendancePeriodId", "EmployeeId", "IsCurrent")
-                        .IsUnique();
-
-                    b.HasIndex("TenantId", "AttendancePeriodId", "EmployeeId", "Version")
-                        .IsUnique();
-
-                    b.ToTable("PayrollOvertimeSnapshots", (string)null);
-                });
-
             modelBuilder.Entity("HRMS.Domain.Entities.PayrollPeriod", b =>
                 {
                     b.Property<Guid>("Id")
@@ -9277,12 +8883,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<decimal>("NetPay")
                         .HasPrecision(18, 6)
                         .HasColumnType("decimal(18,6)");
-
-                    b.Property<int?>("OvertimeVersion")
-                        .HasColumnType("int");
-
-                    b.Property<Guid?>("PayrollOvertimeSnapshotId")
-                        .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("PayrollRunEmployeeId")
                         .HasColumnType("uniqueidentifier");
@@ -17911,47 +17511,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
-            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeMonthlyOvertime", b =>
-                {
-                    b.HasOne("HRMS.Domain.Entities.AttendancePeriod", "AttendancePeriod")
-                        .WithMany()
-                        .HasForeignKey("AttendancePeriodId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId1");
-
-                    b.HasOne("HRMS.Domain.Entities.PayrollAttendanceSnapshot", "AttendanceSnapshot")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "AttendanceSnapshotId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "EmployeeId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("AttendancePeriod");
-
-                    b.Navigation("AttendanceSnapshot");
-
-                    b.Navigation("Employee");
-
-                    b.Navigation("Tenant");
-                });
-
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeePreviousEmployment", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -19388,54 +18947,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
-            modelBuilder.Entity("HRMS.Domain.Entities.OvertimePolicy", b =>
-                {
-                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId1");
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("HRMS.Domain.Entities.OvertimeRequest", b =>
-                {
-                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId1");
-
-                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "EmployeeId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("HRMS.Domain.Entities.OvertimePolicy", "Policy")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "PolicyId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Employee");
-
-                    b.Navigation("Policy");
-
-                    b.Navigation("Tenant");
-                });
-
             modelBuilder.Entity("HRMS.Domain.Entities.PasswordResetOtp", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -20112,46 +19623,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("JournalLine");
-
-                    b.Navigation("Tenant");
-                });
-
-            modelBuilder.Entity("HRMS.Domain.Entities.PayrollOvertimeSnapshot", b =>
-                {
-                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId1");
-
-                    b.HasOne("HRMS.Domain.Entities.AttendancePeriod", "AttendancePeriod")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "AttendancePeriodId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("HRMS.Domain.Entities.PayrollAttendanceSnapshot", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId", "AttendanceSnapshotId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
-                        .WithMany()
-                        .HasForeignKey("TenantId", "EmployeeId")
-                        .HasPrincipalKey("TenantId", "Id")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("AttendancePeriod");
-
-                    b.Navigation("Employee");
 
                     b.Navigation("Tenant");
                 });

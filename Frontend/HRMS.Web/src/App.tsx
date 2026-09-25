@@ -48,6 +48,7 @@ import { AttendanceRequestsPage } from './pages/attendance/AttendanceRequestsPag
 import { AttendanceReportPage, AttendanceReportsLandingPage } from './pages/attendance/AttendanceReportsPage.tsx'
 import { AttendanceMonthlyFinalizationPage } from './pages/attendance/AttendanceMonthlyFinalizationPage.tsx'
 import { MyMonthlyAttendancePage } from './pages/attendance/MyMonthlyAttendancePage.tsx'
+import { OvertimePage } from './pages/attendance/OvertimePage.tsx'
 import { PlatformTenantsPage } from './pages/platform/PlatformTenantsPage.tsx'
 import { PlatformLoginPage } from './pages/platform/PlatformLoginPage.tsx'
 import { PlatformAuthProvider, usePlatformAuth } from './auth/PlatformAuthProvider.tsx'
@@ -249,6 +250,7 @@ function TenantApplication() {
                   <Route path="attendance/my-monthly" element={<RequirePermission permission={Permissions.attendance.monthlyViewSelf}><RequireEmployeeIdentity><MyMonthlyAttendancePage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="attendance/team" element={<RequirePermission permission={Permissions.attendance.view}><ManagerAttendancePage /></RequirePermission>} />
                   <Route path="attendance/requests" element={<RequirePermission permission={Permissions.attendance.view}><RequireEmployeeIdentity><AttendanceRequestsPage /></RequireEmployeeIdentity></RequirePermission>} />
+                  <Route path="attendance/overtime" element={<RequirePermission anyOf={[Permissions.attendance.overtimeRequest, Permissions.attendance.overtimeViewTeam, Permissions.attendance.overtimeViewAll, Permissions.attendance.overtimeApprove, Permissions.attendance.overtimeFinalize, Permissions.attendance.overtimeReopen]}><OvertimePage /></RequirePermission>} />
                   <Route path="attendance/reports" element={<RequirePermission permission={Permissions.attendance.reportView}><AttendanceReportsLandingPage /></RequirePermission>} />
                   <Route path="attendance/reports/daily" element={<RequirePermission permission={Permissions.attendance.reportView}><AttendanceReportPage kind="daily" /></RequirePermission>} />
                   <Route path="attendance/reports/monthly" element={<RequirePermission permission={Permissions.attendance.reportView}><AttendanceReportPage kind="monthly" /></RequirePermission>} />

@@ -103,6 +103,8 @@ public static class DependencyInjection
         services.AddScoped<IAttendancePeriodLockService, AttendancePeriodLockService>();
         services.AddScoped<IAttendanceAdminCorrectionService, AttendanceAdminCorrectionService>();
         services.AddScoped<IAttendanceReportService, AttendanceReportService>();
+        services.AddScoped<IOvertimeService, OvertimeService>();
+        services.AddScoped<IPayrollOvertimeSnapshotResolver>(sp => sp.GetRequiredService<IOvertimeService>());
         services.AddScoped<ISalaryComponentService, SalaryComponentService>();
         services.AddScoped<ISalaryStructureService, SalaryStructureService>();
         services.AddScoped<IEmployeeSalaryAssignmentService, EmployeeSalaryAssignmentService>();

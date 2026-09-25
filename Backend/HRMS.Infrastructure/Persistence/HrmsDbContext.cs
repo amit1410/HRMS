@@ -168,6 +168,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<AttendancePeriodEvent> AttendancePeriodEvents => Set<AttendancePeriodEvent>();
     public DbSet<EmployeeAttendanceMonthlySummary> EmployeeAttendanceMonthlySummaries => Set<EmployeeAttendanceMonthlySummary>();
     public DbSet<PayrollAttendanceSnapshot> PayrollAttendanceSnapshots => Set<PayrollAttendanceSnapshot>();
+    public DbSet<OvertimePolicy> OvertimePolicies => Set<OvertimePolicy>();
+    public DbSet<OvertimeRequest> OvertimeRequests => Set<OvertimeRequest>();
+    public DbSet<EmployeeMonthlyOvertime> EmployeeMonthlyOvertimes => Set<EmployeeMonthlyOvertime>();
+    public DbSet<PayrollOvertimeSnapshot> PayrollOvertimeSnapshots => Set<PayrollOvertimeSnapshot>();
     public DbSet<SalaryComponent> SalaryComponents => Set<SalaryComponent>();
     public DbSet<SalaryComponentHistory> SalaryComponentHistories => Set<SalaryComponentHistory>();
     public DbSet<SalaryStructure> SalaryStructures => Set<SalaryStructure>();
@@ -313,6 +317,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<SeparationSettlementEvent>();
         modelBuilder.Entity<SeparationExitExecution>();
         modelBuilder.Entity<SeparationExitExecutionEvent>();
+        modelBuilder.Entity<OvertimePolicy>();
+        modelBuilder.Entity<OvertimeRequest>();
+        modelBuilder.Entity<EmployeeMonthlyOvertime>();
+        modelBuilder.Entity<PayrollOvertimeSnapshot>();
 
         if (Database.IsMySql())
         {
@@ -631,6 +639,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<StatutoryFilingAcknowledgement>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<StatutoryFilingHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollInputHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<OvertimePolicy>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<OvertimeRequest>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeMonthlyOvertime>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<PayrollOvertimeSnapshot>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<PayrollRetroHistory>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<FinalSettlementCase>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<FinalSettlementLine>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

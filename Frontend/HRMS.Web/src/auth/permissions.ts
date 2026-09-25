@@ -272,6 +272,13 @@ export const Permissions = {
     adminCorrectionManage: 'Attendance.AdminCorrection.Manage',
     reportView: 'Attendance.Report.View',
     reportExport: 'Attendance.Report.Export',
+    overtimeViewSelf: 'Attendance.Overtime.ViewSelf',
+    overtimeViewTeam: 'Attendance.Overtime.ViewTeam',
+    overtimeViewAll: 'Attendance.Overtime.ViewAll',
+    overtimeRequest: 'Attendance.Overtime.Request',
+    overtimeApprove: 'Attendance.Overtime.Approve',
+    overtimeFinalize: 'Attendance.Overtime.Finalize',
+    overtimeReopen: 'Attendance.Overtime.Reopen',
   },
   separation: {
     viewSelf: 'Separation.ViewSelf',

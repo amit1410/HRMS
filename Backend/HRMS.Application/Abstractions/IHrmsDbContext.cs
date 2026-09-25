@@ -161,6 +161,10 @@ public interface IHrmsDbContext
     DbSet<AttendancePeriodEvent> AttendancePeriodEvents { get; }
     DbSet<EmployeeAttendanceMonthlySummary> EmployeeAttendanceMonthlySummaries { get; }
     DbSet<PayrollAttendanceSnapshot> PayrollAttendanceSnapshots { get; }
+    DbSet<OvertimePolicy> OvertimePolicies { get; }
+    DbSet<OvertimeRequest> OvertimeRequests { get; }
+    DbSet<EmployeeMonthlyOvertime> EmployeeMonthlyOvertimes { get; }
+    DbSet<PayrollOvertimeSnapshot> PayrollOvertimeSnapshots { get; }
     DbSet<SalaryComponent> SalaryComponents { get; }
     DbSet<SalaryComponentHistory> SalaryComponentHistories { get; }
     DbSet<SalaryStructure> SalaryStructures { get; }
