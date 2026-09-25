@@ -269,6 +269,7 @@ export const Permissions = {
     monthlyClose: 'Attendance.Monthly.Close',
     monthlyReopen: 'Attendance.Monthly.Reopen',
     exceptionView: 'Attendance.Exception.View',
+    exceptionViewSelf: 'Attendance.Exception.ViewSelf',
     adminCorrectionManage: 'Attendance.AdminCorrection.Manage',
     reportView: 'Attendance.Report.View',
     reportExport: 'Attendance.Report.Export',

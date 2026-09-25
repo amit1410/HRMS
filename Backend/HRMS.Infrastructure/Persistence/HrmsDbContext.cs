@@ -158,6 +158,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<RosterUploadRow> RosterUploadRows => Set<RosterUploadRow>();
     public DbSet<AttendancePunch> AttendancePunches => Set<AttendancePunch>();
     public DbSet<EmployeeAttendanceDay> EmployeeAttendanceDays => Set<EmployeeAttendanceDay>();
+    public DbSet<AttendanceExceptionResolution> AttendanceExceptionResolutions => Set<AttendanceExceptionResolution>();
     public DbSet<AttendanceRegularizationRequest> AttendanceRegularizationRequests => Set<AttendanceRegularizationRequest>();
     public DbSet<AttendanceRegularizationEvent> AttendanceRegularizationEvents => Set<AttendanceRegularizationEvent>();
     public DbSet<AttendanceAdjustment> AttendanceAdjustments => Set<AttendanceAdjustment>();

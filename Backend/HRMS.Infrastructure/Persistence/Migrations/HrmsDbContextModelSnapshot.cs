@@ -227,6 +227,59 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("AttendanceAdminCorrections", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendanceExceptionResolution", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Action")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("AttendanceDayId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("AttendanceVersion")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("ExceptionType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime>("ResolvedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("ResolvedBy")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "AttendanceDayId", "AttendanceVersion", "ExceptionType")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "EmployeeId", "ExceptionType", "AttendanceVersion");
+
+                    b.ToTable("AttendanceExceptionResolutions", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.AttendanceOnDutyEvent", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1938,8 +1991,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("int");
 
                     b.HasKey("Id");
-
-                    b.HasAlternateKey("TenantId", "Id");
 
                     b.HasIndex("TenantId", "BusinessDate");
 
@@ -17305,6 +17356,29 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.HasOne("HRMS.Domain.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("TenantId", "CreatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendanceExceptionResolution", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeAttendanceDay", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "AttendanceDayId")
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();

@@ -151,6 +151,7 @@ public interface IHrmsDbContext
     DbSet<RosterUploadRow> RosterUploadRows { get; }
     DbSet<AttendancePunch> AttendancePunches { get; }
     DbSet<EmployeeAttendanceDay> EmployeeAttendanceDays { get; }
+    DbSet<AttendanceExceptionResolution> AttendanceExceptionResolutions { get; }
     DbSet<AttendanceRegularizationRequest> AttendanceRegularizationRequests { get; }
     DbSet<AttendanceRegularizationEvent> AttendanceRegularizationEvents { get; }
     DbSet<AttendanceAdjustment> AttendanceAdjustments { get; }

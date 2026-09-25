@@ -115,10 +115,12 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Roster', to: '/attendance/roster', permission: Permissions.attendance.view, available: true, group: 'attendance' },
   { label: 'Roster Upload', to: '/attendance/roster-upload', permission: Permissions.attendance.view, available: true, group: 'attendance' },
   { label: 'My Attendance', to: '/attendance/my-attendance', permission: Permissions.attendance.view, available: true, requiresEmployeeIdentity: true, group: 'attendance' },
+  { label: 'My Exceptions', to: '/attendance/my-exceptions', permission: Permissions.attendance.view, available: true, requiresEmployeeIdentity: true, group: 'attendance' },
   { label: 'My Monthly Attendance', to: '/attendance/my-monthly', permission: Permissions.attendance.monthlyViewSelf, available: true, requiresEmployeeIdentity: true, group: 'attendance' },
   { label: 'Monthly Finalization', to: '/attendance/monthly-finalization', permission: Permissions.attendance.monthlyViewAll, available: true, group: 'attendance' },
   { label: 'Attendance Requests', to: '/attendance/requests', permission: Permissions.attendance.view, available: true, requiresEmployeeIdentity: true, group: 'attendance' },
   { label: 'Team Attendance', to: '/attendance/team', permission: Permissions.attendance.view, available: true, group: 'attendance' },
+  { label: 'Attendance Operations', to: '/attendance/operations', permission: Permissions.attendance.exceptionView, available: true, group: 'attendance' },
   { label: 'Attendance Reports', to: '/attendance/reports', permission: Permissions.attendance.reportView, available: true, group: 'reports' },
   { label: 'My Comp-Off', to: '/attendance/comp-off', permission: Permissions.attendance.compOffViewSelf, available: true, requiresEmployeeIdentity: true, group: 'attendance' },
 ]

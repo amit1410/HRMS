@@ -103,3 +103,18 @@ public sealed class EmployeeAttendanceDayConfiguration : IEntityTypeConfiguratio
         b.HasOne<Shift>().WithMany().HasForeignKey(x => new { x.TenantId, x.ShiftId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
     }
 }
+
+public sealed class AttendanceExceptionResolutionConfiguration : IEntityTypeConfiguration<AttendanceExceptionResolution>
+{
+    public void Configure(EntityTypeBuilder<AttendanceExceptionResolution> b)
+    {
+        b.ToTable("AttendanceExceptionResolutions"); b.HasKey(x => x.Id); AttendanceConfigurationHelpers.Tenant(b);
+        b.Property(x => x.ExceptionType).HasConversion<int>(); b.Property(x => x.Action).HasConversion<int>();
+        b.Property(x => x.Reason).HasMaxLength(500).IsRequired();
+        b.HasIndex(x => new { x.TenantId, x.AttendanceDayId, x.AttendanceVersion, x.ExceptionType }).IsUnique();
+        b.HasIndex(x => new { x.TenantId, x.EmployeeId, x.ExceptionType, x.AttendanceVersion });
+        b.HasOne<Employee>().WithMany().HasForeignKey(x => new { x.TenantId, x.EmployeeId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<EmployeeAttendanceDay>().WithMany().HasForeignKey(x => new { x.TenantId, x.AttendanceDayId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Tenant>().WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+    }
+}

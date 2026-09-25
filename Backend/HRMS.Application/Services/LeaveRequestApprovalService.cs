@@ -24,6 +24,7 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
     private readonly ICompOffService? _compOffService;
     private readonly ILeaveNotificationService? _notificationService;
     private readonly ILeaveAuthorizationService? _authorization;
+    private readonly IAttendanceDayProcessor? _attendanceProcessor;
 
     public LeaveRequestApprovalService(
         IHrmsDbContext db,
@@ -36,7 +37,8 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
         ILeaveBalanceAccountingService? balanceAccountingService = null,
         ICompOffService? compOffService = null,
         ILeaveNotificationService? notificationService = null,
-        ILeaveAuthorizationService? authorization = null)
+        ILeaveAuthorizationService? authorization = null,
+        IAttendanceDayProcessor? attendanceProcessor = null)
     {
         _db = db;
         _identityResolver = identityResolver;
@@ -49,6 +51,7 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
         _compOffService = compOffService;
         _notificationService = notificationService;
         _authorization = authorization;
+        _attendanceProcessor = attendanceProcessor;
     }
 
     public Task<Result<LeaveRequestApprovalResult>> ApproveAsync(Guid requestId, CancellationToken cancellationToken = default) =>
@@ -147,6 +150,21 @@ public sealed class LeaveRequestApprovalService : ILeaveRequestApprovalService
             });
 
             await _db.SaveChangesAsync(cancellationToken);
+            if (targetStatus == LeaveRequestStatus.Approved && _attendanceProcessor is not null)
+            {
+                var dates = request.Days.Count > 0
+                    ? request.Days.Select(x => x.Date).Distinct().OrderBy(x => x).ToArray()
+                    : Enumerable.Range(0, request.EndDate.DayNumber - request.StartDate.DayNumber + 1)
+                        .Select(offset => request.StartDate.AddDays(offset)).ToArray();
+                foreach (var date in dates)
+                {
+                    var attendance = await _attendanceProcessor.ProcessAsync(request.EmployeeId, date, cancellationToken);
+                    if (attendance.Succeeded) continue;
+                    await transaction.RollbackAsync(cancellationToken);
+                    _db.ClearChangeTracker();
+                    return Result<LeaveRequestApprovalResult>.Failure(attendance.Status, attendance.Message, attendance.Errors);
+                }
+            }
             await transaction.CommitAsync(cancellationToken);
             if (_notificationService is not null)
                 await _notificationService.NotifyAsync(request.Id, eventType, cancellationToken);

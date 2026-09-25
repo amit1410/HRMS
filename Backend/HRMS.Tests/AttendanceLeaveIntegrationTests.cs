@@ -1,4 +1,7 @@
 using HRMS.Application.Services;
+using HRMS.Application.Abstractions;
+using HRMS.Application.Common;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using HRMS.Tests.TestSupport;
@@ -26,6 +29,53 @@ public sealed class AttendanceLeaveIntegrationTests
         Assert.Null(result.Value.WorkedMinutes);
 
         await AssertLeaveUnchangedAsync(fixture, leave, LeaveRequestStatus.Approved, date);
+    }
+
+    [Fact]
+    public async Task Leave_approval_removes_resolved_absence_from_active_exceptions()
+    {
+        using var fixture = await CreateFixtureAsync();
+        var date = new DateOnly(2026, 10, 10);
+        var absent = await ProcessAsync(fixture, date);
+        Assert.Equal(EmployeeAttendanceDayStatus.Absent, absent.Value!.Status);
+        var leave = await AddLeaveAsync(fixture, date, LeaveRequestStatus.PendingApproval);
+        var before = await new AttendanceOperationsService(fixture.Context, fixture.TenantContext)
+            .GetOperationalExceptionsAsync(new() { FromDate = date, ToDate = date, ExceptionType = AttendanceExceptionType.Absent, Page = 1, PageSize = 10 });
+        Assert.Single(before.Value!.Items);
+
+        var managerId = Guid.NewGuid();
+        var managerUserId = Guid.NewGuid();
+        var roleId = 903;
+        var permissionId = 3903;
+        fixture.Context.Employees.Add(new Employee { Id = managerId, TenantId = fixture.TenantId, EmployeeCode = "MGR-LEAVE", FirstName = "Leave", LastName = "Manager", Email = $"{managerId:N}@example.test", DateOfJoining = new(2026, 1, 1) });
+        fixture.Context.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory { Id = Guid.NewGuid(), TenantId = fixture.TenantId, EmployeeId = managerId, EffectiveFrom = new(2026, 1, 1), EmploymentStatus = EmployeeStatus.Active });
+        var requesterHistory = await fixture.Context.EmployeeEmploymentHistory.SingleAsync(x => x.EmployeeId == fixture.EmployeeId);
+        requesterHistory.ManagerId = managerId;
+        fixture.Context.Users.Add(new User { Id = managerUserId, TenantId = fixture.TenantId, Email = $"{managerUserId:N}@example.test", PasswordHash = "test-only", FirstName = "Leave", LastName = "Manager", IsActive = true });
+        fixture.Context.Roles.Add(new Role { Id = roleId, Name = "AttendanceLeaveApprovalTest", Description = "test" });
+        fixture.Context.Permissions.Add(new Permission { Id = permissionId, Name = Permissions.Leave.Approve, Description = "test" });
+        fixture.Context.RolePermissions.Add(new RolePermission { RoleId = roleId, PermissionId = permissionId });
+        fixture.Context.UserRoles.Add(new UserRole { Id = Guid.NewGuid(), TenantId = fixture.TenantId, UserId = managerUserId, RoleId = roleId, EffectiveFrom = new(2026, 1, 1) });
+        await fixture.Context.SaveChangesAsync();
+
+        var identity = new FixedLeaveIdentity(new(fixture.TenantId, managerUserId, managerId));
+        var managerResolver = new EmployeeManagerResolver(fixture.Context, fixture.TenantContext);
+        var serializer = new TestEmployeeSerializationLock();
+        var attendanceProcessor = new AttendanceDayProcessor(fixture.Context, fixture.TenantContext, fixture.CalendarService,
+            new FixedClock(new DateTimeOffset(date.ToDateTime(new(20, 0)), TimeSpan.Zero)),
+            new AttendancePeriodLockService(fixture.Context, fixture.TenantContext));
+        var approval = new LeaveRequestApprovalService(fixture.Context, identity, managerResolver, serializer,
+            new FixedClock(new DateTimeOffset(date.ToDateTime(new(20, 0)), TimeSpan.Zero)), attendanceProcessor: attendanceProcessor);
+        var approved = await approval.ApproveAsync(leave.RequestId);
+
+        Assert.True(approved.Succeeded, approved.Message);
+        Assert.Equal(LeaveRequestStatus.Approved, approved.Value!.Status);
+        Assert.Equal(EmployeeAttendanceDayStatus.OnLeave, (await fixture.Context.EmployeeAttendanceDays.SingleAsync(x => x.EmployeeId == fixture.EmployeeId && x.BusinessDate == date)).Status);
+        var after = await new AttendanceOperationsService(fixture.Context, fixture.TenantContext)
+            .GetOperationalExceptionsAsync(new() { FromDate = date, ToDate = date, ExceptionType = AttendanceExceptionType.Absent, Page = 1, PageSize = 10 });
+        Assert.Empty(after.Value!.Items);
+        var dayId = await fixture.Context.EmployeeAttendanceDays.Where(d => d.EmployeeId == fixture.EmployeeId && d.BusinessDate == date).Select(d => d.Id).SingleAsync();
+        Assert.Equal(0, await fixture.Context.AttendanceExceptionResolutions.CountAsync(x => x.AttendanceDayId == dayId));
     }
 
     [Fact]
@@ -155,6 +205,8 @@ public sealed class AttendanceLeaveIntegrationTests
     private static Task<LeaveSeed> AddLeaveAsync(AttendanceTestFixture fixture, DateOnly date, LeaveRequestStatus status) =>
         AddLeaveAsync(fixture.Context, fixture.TenantId, fixture.EmployeeId, date, status);
 
+    internal static Task<LeaveSeed> AddPendingLeaveAsync(HRMS.Infrastructure.Persistence.HrmsDbContext context, Guid tenantId, Guid employeeId, DateOnly date) => AddLeaveAsync(context, tenantId, employeeId, date, LeaveRequestStatus.PendingApproval);
+
     private static async Task<LeaveSeed> AddLeaveAsync(HRMS.Infrastructure.Persistence.HrmsDbContext context, Guid tenantId, Guid employeeId, DateOnly date, LeaveRequestStatus status)
     {
         var typeId = Guid.NewGuid(); var periodId = Guid.NewGuid(); var policyId = Guid.NewGuid(); var versionId = Guid.NewGuid(); var ruleId = Guid.NewGuid(); var requestId = Guid.NewGuid();
@@ -180,5 +232,15 @@ public sealed class AttendanceLeaveIntegrationTests
         Assert.Single(await fixture.Context.LeaveRequestDays.AsNoTracking().Where(x => x.LeaveRequestId == seed.RequestId).ToListAsync());
     }
 
-    private sealed record LeaveSeed(Guid RequestId, LeaveRequestStatus Status, DateOnly Date);
+    internal sealed record LeaveSeed(Guid RequestId, LeaveRequestStatus Status, DateOnly Date);
+
+    private sealed class FixedLeaveIdentity(RuntimeEmployeeIdentity value) : IEmployeeIdentityResolver
+    {
+        public Task<Result<RuntimeEmployeeIdentity>> ResolveCurrentAsync(CancellationToken cancellationToken = default) => Task.FromResult(Result<RuntimeEmployeeIdentity>.Success(value));
+    }
+
+    private sealed class TestEmployeeSerializationLock : IEmployeeSerializationLock
+    {
+        public Task AcquireAsync(Guid tenantId, Guid employeeId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
 }

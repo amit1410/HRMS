@@ -20,4 +20,11 @@ public enum AttendanceRequestStatus { Pending, Approved, Rejected, Cancelled }
 public enum AttendanceRequestEventType { Submitted, Approved, Rejected, Cancelled }
 public enum AttendancePeriodStatus { Open, Processing, ReadyToClose, Closed }
 public enum AttendancePeriodEventType { Created, ProcessingStarted, ProcessingCompleted, ProcessingFailed, Closed, Reopened, PayrollSnapshotCreated, PayrollSnapshotSuperseded, Refinalized }
-public enum AttendanceExceptionType { MissingInPunch, MissingOutPunch, Incomplete, NotProcessed, LeaveConflict, PendingRegularization, PendingOnDuty, ProcessingError }
+public enum AttendanceExceptionType { MissingInPunch, MissingOutPunch, Incomplete, NotProcessed, LeaveConflict, PendingRegularization, PendingOnDuty, ProcessingError, LateArrival, EarlyDeparture, Absent }
+public enum AttendanceExceptionResolutionAction { Acknowledge, Waive }
+public static class AttendanceExceptionResolutionSemantics
+{
+    public static bool IsTerminal(AttendanceExceptionResolutionAction action) => action is AttendanceExceptionResolutionAction.Acknowledge or AttendanceExceptionResolutionAction.Waive;
+    public static bool TryParseTerminal(string? value, out AttendanceExceptionResolutionAction action) =>
+        Enum.TryParse(value, true, out action) && IsTerminal(action);
+}

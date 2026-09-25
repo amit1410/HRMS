@@ -60,6 +60,29 @@ public sealed class AttendanceWorkflowTests
     }
 
     [Fact]
+    public async Task OnDuty_approval_removes_resolved_absence_from_active_exceptions()
+    {
+        using var f = await FixtureAsync();
+        var date = new DateOnly(2026, 10, 9);
+        var initial = await f.Processor.ProcessAsync(f.EmployeeId, date);
+        Assert.True(initial.Succeeded, initial.Message);
+        Assert.Equal(EmployeeAttendanceDayStatus.Absent, initial.Value!.Status);
+        var query = new AttendanceOperationsService(f.Context, f.Inner.TenantContext);
+        var before = await query.GetOperationalExceptionsAsync(new() { FromDate = date, ToDate = date, ExceptionType = AttendanceExceptionType.Absent, Page = 1, PageSize = 10 });
+        Assert.Single(before.Value!.Items);
+
+        var request = (await Service(f).SubmitOnDutyAsync(new(date, date, "Client visit"))).Value!;
+        f.Identity.EmployeeId = f.ManagerId;
+        var approval = await Service(f).ApproveOnDutyAsync(request.Id);
+
+        Assert.True(approval.Succeeded, approval.Message);
+        Assert.Equal(EmployeeAttendanceDayStatus.OnDuty, (await f.Context.EmployeeAttendanceDays.SingleAsync(x => x.EmployeeId == f.EmployeeId && x.BusinessDate == date)).Status);
+        var after = await query.GetOperationalExceptionsAsync(new() { FromDate = date, ToDate = date, ExceptionType = AttendanceExceptionType.Absent, Page = 1, PageSize = 10 });
+        Assert.Empty(after.Value!.Items);
+        Assert.Empty(await f.Context.AttendanceExceptionResolutions.ToListAsync());
+    }
+
+    [Fact]
     public async Task Concurrent_close_and_regularization_approval_never_apply_after_close()
     {
         using var f = await FixtureAsync();
@@ -75,7 +98,7 @@ public sealed class AttendanceWorkflowTests
         await using var closeDb = f.CreateContext(f.TenantId, out var closeTenant);
         await using var approvalDb = f.CreateContext(f.TenantId, out var approvalTenant);
         var closeTask = new AttendanceMonthlyProcessor(closeDb, closeTenant).CloseAsync(period.Id);
-        var approvalIdentity = new MutableIdentity(f.TenantId, f.Identity.UserId, f.ManagerId);
+        var approvalIdentity = new MutableIdentity(f.TenantId, f.ManagerUserId, f.ManagerId, f.ManagerUserId, f.ManagerId);
         var approvalCalendar = new WorkingDayCalendarResolver(approvalDb, approvalTenant, new EffectiveEmploymentResolver(approvalDb, approvalTenant));
         var approvalProcessor = new AttendanceDayProcessor(approvalDb, approvalTenant, new AttendanceFoundationService(approvalDb, approvalTenant, new EffectiveEmploymentResolver(approvalDb, approvalTenant), approvalCalendar), new FixedClock(new DateTimeOffset(2026, 9, 10, 20, 0, 0, TimeSpan.Zero)), new AttendancePeriodLockService(approvalDb, approvalTenant));
         var approvalService = new AttendanceWorkflowService(approvalDb, approvalIdentity, f.Managers, approvalProcessor, new FixedClock(new DateTimeOffset(2026, 9, 10, 20, 0, 0, TimeSpan.Zero)), new AttendancePeriodLockService(approvalDb, approvalTenant));
@@ -107,7 +130,7 @@ public sealed class AttendanceWorkflowTests
         await using var closeDb = f.CreateContext(f.TenantId, out var closeTenant);
         await using var approvalDb = f.CreateContext(f.TenantId, out var approvalTenant);
         var closeTask = new AttendanceMonthlyProcessor(closeDb, closeTenant).CloseAsync(period.Id);
-        var approvalIdentity = new MutableIdentity(f.TenantId, f.Identity.UserId, f.ManagerId);
+        var approvalIdentity = new MutableIdentity(f.TenantId, f.ManagerUserId, f.ManagerId, f.ManagerUserId, f.ManagerId);
         var approvalCalendar = new WorkingDayCalendarResolver(approvalDb, approvalTenant, new EffectiveEmploymentResolver(approvalDb, approvalTenant));
         var approvalProcessor = new AttendanceDayProcessor(approvalDb, approvalTenant, new AttendanceFoundationService(approvalDb, approvalTenant, new EffectiveEmploymentResolver(approvalDb, approvalTenant), approvalCalendar), new FixedClock(new DateTimeOffset(2026, 9, 10, 20, 0, 0, TimeSpan.Zero)), new AttendancePeriodLockService(approvalDb, approvalTenant));
         var approvalService = new AttendanceWorkflowService(approvalDb, approvalIdentity, f.Managers, approvalProcessor, new FixedClock(new DateTimeOffset(2026, 9, 10, 20, 0, 0, TimeSpan.Zero)), new AttendancePeriodLockService(approvalDb, approvalTenant));
@@ -260,7 +283,7 @@ public sealed class AttendanceWorkflowTests
         await SeedIncompleteDayAsync(f, date);
         var request = (await Service(f).SubmitRegularizationAsync(new(date, AttendanceRegularizationType.MissingOutPunch, null, date.ToDateTime(new(18, 0), DateTimeKind.Utc), "forgot"))).Value!;
         f.Identity.EmployeeId = f.ManagerId;
-        Assert.Single((await Service(f).GetManagerRegularizationsAsync(new TestPageQuery())).Value!.Items);
+        Assert.Single((await Service(f).GetManagerRegularizationsAsync(new AttendanceRegularizationQuery())).Value!.Items);
 
         var otherTenant = Guid.NewGuid();
         var otherEmployee = Guid.NewGuid();
@@ -275,7 +298,7 @@ public sealed class AttendanceWorkflowTests
             await other.SaveChangesAsync();
         }
         Assert.Null(await f.Context.AttendanceRegularizationRequests.SingleOrDefaultAsync(x => x.TenantId == otherTenant));
-        Assert.Single((await Service(f).GetManagerRegularizationsAsync(new TestPageQuery())).Value!.Items);
+        Assert.Single((await Service(f).GetManagerRegularizationsAsync(new AttendanceRegularizationQuery())).Value!.Items);
     }
 
     [Fact]
@@ -421,6 +444,10 @@ public sealed class AttendanceWorkflowTests
         Assert.Equal(ResultStatus.Forbidden, (await managerA.ApproveRegularizationAsync(laterReg.Id)).Status);
         Assert.Equal(ResultStatus.Forbidden, (await managerA.ApproveOnDutyAsync(laterOd.Id)).Status);
         f.Identity.EmployeeId = managerB;
+        var managerBUserId = Guid.NewGuid();
+        f.Context.Users.Add(new User { Id = managerBUserId, TenantId = f.TenantId, Email = $"{managerBUserId:N}@example.test", FirstName = "Workflow", LastName = "Manager B", PasswordHash = "test" });
+        await f.Context.SaveChangesAsync();
+        f.Identity.UserId = managerBUserId;
         var managerBService = new AttendanceWorkflowService(f.Context, f.Identity, managerResolver, f.Processor);
         var laterRegApproval = await managerBService.ApproveRegularizationAsync(laterReg.Id);
         var laterOdApproval = await managerBService.ApproveOnDutyAsync(laterOd.Id);
@@ -494,9 +521,9 @@ public sealed class AttendanceWorkflowTests
         Assert.Equal(permission, attribute.Permission);
     }
 
-    private static AttendanceWorkflowService Service(WorkflowFixture f) => Service(f, f.Processor);
-    private static AttendanceWorkflowService Service(WorkflowFixture f, IAttendanceDayProcessor processor) => new(f.Context, f.Identity, f.Managers, processor, new FixedClock(new DateTimeOffset(2026, 10, 20, 20, 0, 0, TimeSpan.Zero)));
-    private static async Task<WorkflowFixture> FixtureAsync()
+    internal static AttendanceWorkflowService Service(WorkflowFixture f) => Service(f, f.Processor);
+    internal static AttendanceWorkflowService Service(WorkflowFixture f, IAttendanceDayProcessor processor) => new(f.Context, f.Identity, f.Managers, processor, new FixedClock(new DateTimeOffset(2026, 10, 20, 20, 0, 0, TimeSpan.Zero)));
+    internal static async Task<WorkflowFixture> FixtureAsync()
     {
         var baseFixture = await AttendanceTestFixture.CreateAsync();
         var manager = Guid.NewGuid();
@@ -504,15 +531,18 @@ public sealed class AttendanceWorkflowTests
         var shift = new Shift { Id = Guid.NewGuid(), TenantId = baseFixture.TenantId, ShiftCode = "WF", ShiftName = "Workflow", IsDefault = true, IsActive = true, EffectiveFrom = new(2026, 1, 1), StartTime = new(9, 0), EndTime = new(18, 0), PlannedDurationMinutes = 540, FullDayWorkMinutes = 480, MinimumWorkMinutes = 1, CaptureMode = AttendanceCaptureMode.Mixed };
         baseFixture.Context.Shifts.Add(shift);
         await baseFixture.Context.SaveChangesAsync();
-        var identity = new MutableIdentity(baseFixture.TenantId, Guid.NewGuid(), baseFixture.EmployeeId);
+        var employeeUserId = Guid.NewGuid();
+        var managerUserId = Guid.NewGuid();
+        var identity = new MutableIdentity(baseFixture.TenantId, employeeUserId, baseFixture.EmployeeId, managerUserId, manager);
         baseFixture.Context.Users.Add(new User { Id = identity.UserId, TenantId = baseFixture.TenantId, Email = $"{identity.UserId:N}@example.test", FirstName = "Workflow", LastName = "User", PasswordHash = "test" });
+        baseFixture.Context.Users.Add(new User { Id = managerUserId, TenantId = baseFixture.TenantId, Email = $"{managerUserId:N}@example.test", FirstName = "Workflow", LastName = "Manager", PasswordHash = "test" });
         await baseFixture.Context.SaveChangesAsync();
         var managers = new FixedManagerResolver(manager);
         var processor = new AttendanceDayProcessor(baseFixture.Context, baseFixture.TenantContext, baseFixture.CalendarService, new FixedClock(new DateTimeOffset(2026, 10, 10, 20, 0, 0, TimeSpan.Zero)));
-        return new WorkflowFixture(baseFixture, manager, identity, managers, processor);
+        return new WorkflowFixture(baseFixture, manager, managerUserId, identity, managers, processor);
     }
 
-    private static async Task SeedIncompleteDayAsync(WorkflowFixture f, DateOnly date)
+    internal static async Task SeedIncompleteDayAsync(WorkflowFixture f, DateOnly date)
     {
         f.Context.EmployeeAttendanceDays.Add(new EmployeeAttendanceDay { Id = Guid.NewGuid(), TenantId = f.TenantId, EmployeeId = f.EmployeeId, BusinessDate = date, ShiftId = f.ShiftId, ShiftCode = "WF", ExpectedWorkMinutes = 480, RosterAssignmentSource = RosterAssignmentSource.Auto, RosterDayType = RosterDayType.Shift, Status = EmployeeAttendanceDayStatus.Incomplete, HasMissingOutPunch = true });
         await f.Context.SaveChangesAsync();
@@ -538,30 +568,56 @@ public sealed class AttendanceWorkflowTests
         return requestId;
     }
 
-    private sealed class WorkflowFixture(AttendanceTestFixture inner, Guid managerId, MutableIdentity identity, FixedManagerResolver managers, IAttendanceDayProcessor processor) : IDisposable
+    internal sealed class WorkflowFixture(AttendanceTestFixture inner, Guid managerId, Guid managerUserId, MutableIdentity identity, FixedManagerResolver managers, IAttendanceDayProcessor processor) : IDisposable
     {
         public AttendanceTestFixture Inner { get; } = inner;
         public HRMS.Infrastructure.Persistence.HrmsDbContext Context => Inner.Context;
         public Guid TenantId => Inner.TenantId;
         public Guid EmployeeId => Inner.EmployeeId;
         public Guid ManagerId { get; } = managerId;
+        public Guid ManagerUserId { get; } = managerUserId;
+        public Guid RequestId { get; set; }
         public Guid ShiftId => Inner.Context.Shifts.Single(x => x.ShiftCode == "WF").Id;
         public MutableIdentity Identity { get; } = identity;
         public FixedManagerResolver Managers { get; } = managers;
         public IAttendanceDayProcessor Processor { get; } = processor;
         public HRMS.Infrastructure.Persistence.HrmsDbContext CreateContext(Guid tenantId, out TestTenantContext tenant) => Inner.CreateContext(tenantId, out tenant);
+        public HRMS.Infrastructure.Persistence.HrmsDbContext CreateIsolatedContext(Guid userId, out TestTenantContext tenant, params Microsoft.EntityFrameworkCore.Diagnostics.IInterceptor[] interceptors)
+        {
+            tenant = new TestTenantContext(TenantId, userId);
+            return Inner.CreateIsolatedContext(tenant, interceptors);
+        }
+        public AttendanceWorkflowService CreateService(HRMS.Infrastructure.Persistence.HrmsDbContext db, TestTenantContext tenant, Guid userId, Guid employeeId, IEmployeeSerializationLock? serializationLock = null)
+        {
+            var identity = new MutableIdentity(TenantId, userId, employeeId, ManagerUserId, ManagerId);
+            var employment = new EffectiveEmploymentResolver(db, tenant);
+            var calendar = new WorkingDayCalendarResolver(db, tenant, employment);
+            var foundation = new AttendanceFoundationService(db, tenant, employment, calendar);
+            var periodLock = new AttendancePeriodLockService(db, tenant);
+            var processor = new AttendanceDayProcessor(db, tenant, foundation, new FixedClock(new DateTimeOffset(2026, 10, 20, 20, 0, 0, TimeSpan.Zero)), periodLock);
+            return new AttendanceWorkflowService(db, identity, Managers, processor, new FixedClock(new DateTimeOffset(2026, 10, 20, 20, 0, 0, TimeSpan.Zero)), periodLock, employeeLock: serializationLock);
+        }
         public void Dispose() => Inner.Dispose();
     }
 
-    private sealed class MutableIdentity(Guid tenantId, Guid userId, Guid employeeId) : IEmployeeIdentityResolver
+    internal sealed class MutableIdentity(Guid tenantId, Guid employeeUserId, Guid employeeId, Guid managerUserId, Guid managerEmployeeId) : IEmployeeIdentityResolver
     {
         public Guid TenantId { get; } = tenantId;
-        public Guid UserId { get; } = userId;
-        public Guid EmployeeId { get; set; } = employeeId;
+        private Guid employeeId = employeeId;
+        public Guid UserId { get; set; } = employeeUserId;
+        public Guid EmployeeId
+        {
+            get => employeeId;
+            set
+            {
+                employeeId = value;
+                UserId = value == managerEmployeeId ? managerUserId : employeeUserId;
+            }
+        }
         public Task<Result<RuntimeEmployeeIdentity>> ResolveCurrentAsync(CancellationToken cancellationToken = default) => Task.FromResult(Result<RuntimeEmployeeIdentity>.Success(new(TenantId, UserId, EmployeeId)));
     }
 
-    private sealed class FixedManagerResolver(Guid managerId) : IEmployeeManagerResolver
+    internal sealed class FixedManagerResolver(Guid managerId) : IEmployeeManagerResolver
     {
         public Task<Result<EmployeeManagerResolution>> ResolveAsync(Guid employeeId, DateOnly asOfDate, CancellationToken cancellationToken = default) => Task.FromResult(Result<EmployeeManagerResolution>.Success(new(EmployeeManagerResolutionStatus.Resolved, employeeId, managerId, "MGR", "Manager", "test")));
         public Task<bool> WouldCreateCycleAsync(Guid employeeId, Guid proposedManagerId, DateOnly asOfDate, CancellationToken cancellationToken = default) => Task.FromResult(false);

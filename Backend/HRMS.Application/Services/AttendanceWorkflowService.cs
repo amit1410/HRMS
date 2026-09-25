@@ -14,7 +14,8 @@ public sealed class AttendanceWorkflowService(
     IAttendanceDayProcessor processor,
     TimeProvider? timeProvider = null,
     IAttendancePeriodLockService? periodLock = null,
-    IAttendanceAuthorizationService? authorization = null) : IAttendanceWorkflowService
+    IAttendanceAuthorizationService? authorization = null,
+    IEmployeeSerializationLock? employeeLock = null) : IAttendanceWorkflowService
 {
     private readonly TimeProvider clock = timeProvider ?? TimeProvider.System;
 
@@ -30,18 +31,34 @@ public sealed class AttendanceWorkflowService(
         if (input.ProposedInAtUtc is null && input.ProposedOutAtUtc is null) return Result<RegularizationDto>.Invalid("punches", "At least one corrected punch is required.");
         var existing = await db.EmployeeAttendanceDays.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == subject.Value!.TenantId && x.EmployeeId == subject.Value.EmployeeId && x.BusinessDate == input.BusinessDate, ct);
         if (existing is not null && existing.Status == EmployeeAttendanceDayStatus.Present && !existing.HasMissingInPunch && !existing.HasMissingOutPunch && !existing.HasInvalidPunchSequence) return Result<RegularizationDto>.Conflict("A clean Present day is not eligible for regularization.");
+        await using var transaction = await db.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
+        if (employeeLock is not null) await employeeLock.AcquireAsync(subject.Value.TenantId, subject.Value.EmployeeId, ct);
         if (await db.AttendanceRegularizationRequests.AnyAsync(x => x.TenantId == subject.Value.TenantId && x.EmployeeId == subject.Value.EmployeeId && x.BusinessDate == input.BusinessDate && x.Status == AttendanceRequestStatus.Pending, ct)) return Result<RegularizationDto>.Conflict("A pending regularization already exists for this date.");
         var now = clock.GetUtcNow().UtcDateTime; var item = new AttendanceRegularizationRequest { Id = Guid.NewGuid(), TenantId = subject.Value.TenantId, EmployeeId = subject.Value.EmployeeId, BusinessDate = input.BusinessDate, RequestType = input.RequestType, ProposedInAtUtc = input.ProposedInAtUtc, ProposedOutAtUtc = input.ProposedOutAtUtc, Reason = input.Reason.Trim(), SubmittedByUserId = subject.Value.UserId, SubmittedAtUtc = now };
-        db.AttendanceRegularizationRequests.Add(item); db.AttendanceRegularizationEvents.Add(Event(item.TenantId, item.Id, AttendanceRequestEventType.Submitted, subject.Value.UserId, now, null)); await db.SaveChangesAsync(ct); return Result<RegularizationDto>.Success(Map(item));
+        db.AttendanceRegularizationRequests.Add(item); db.AttendanceRegularizationEvents.Add(Event(item.TenantId, item.Id, AttendanceRequestEventType.Submitted, subject.Value.UserId, now, null));
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+            return Result<RegularizationDto>.Success(Map(item));
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Result<RegularizationDto>.Conflict("A concurrent Attendance correction already changed this employee and date.");
+        }
     }
 
     public async Task<Result<PagedResult<RegularizationDto>>> GetMyRegularizationsAsync(PagedQuery query, CancellationToken ct = default) { var s = await Subject(ct); if (!s.Succeeded) return Fail<PagedResult<RegularizationDto>>(s); var q = db.AttendanceRegularizationRequests.AsNoTracking().Where(x => x.TenantId == s.Value!.TenantId && x.EmployeeId == s.Value.EmployeeId).OrderByDescending(x => x.SubmittedAtUtc); return Result<PagedResult<RegularizationDto>>.Success(await Page(q, query, ct)); }
     public async Task<Result<RegularizationDto>> GetMyRegularizationAsync(Guid id, CancellationToken ct = default) { var s = await Subject(ct); if (!s.Succeeded) return Fail<RegularizationDto>(s); var x = await db.AttendanceRegularizationRequests.Include(x => x.Events).SingleOrDefaultAsync(x => x.TenantId == s.Value!.TenantId && x.Id == id && x.EmployeeId == s.Value.EmployeeId, ct); return x is null ? Result<RegularizationDto>.NotFound("Regularization request was not found.") : Result<RegularizationDto>.Success(Map(x)); }
     public Task<Result<RegularizationDto>> CancelRegularizationAsync(Guid id, CancellationToken ct = default) => TransitionRegularization(id, AttendanceRequestStatus.Cancelled, null, ct);
-    public async Task<Result<PagedResult<RegularizationDto>>> GetManagerRegularizationsAsync(PagedQuery query, CancellationToken ct = default)
+    public async Task<Result<PagedResult<RegularizationDto>>> GetManagerRegularizationsAsync(AttendanceRegularizationQuery query, CancellationToken ct = default)
     {
         var s = await Subject(ct); if (!s.Succeeded) return Fail<PagedResult<RegularizationDto>>(s);
-        var dates = await db.AttendanceRegularizationRequests.AsNoTracking().Where(x => x.TenantId == s.Value!.TenantId && x.Status == AttendanceRequestStatus.Pending).Select(x => x.BusinessDate).Distinct().ToListAsync(ct);
+        if (query.Page < 1 || query.PageSize is < 1 or > PagedQuery.MaxPageSize || query.FromDate > query.ToDate || query.FromDate is DateOnly from && query.ToDate is DateOnly to && to.DayNumber - from.DayNumber + 1 > 3660) return Result<PagedResult<RegularizationDto>>.Invalid("query", "The manager Regularization query is invalid.");
+        var pendingDates = db.AttendanceRegularizationRequests.AsNoTracking().Where(x => x.TenantId == s.Value!.TenantId && x.Status == AttendanceRequestStatus.Pending);
+        if (query.FromDate is DateOnly fromDate) pendingDates = pendingDates.Where(x => x.BusinessDate >= fromDate);
+        if (query.ToDate is DateOnly toDate) pendingDates = pendingDates.Where(x => x.BusinessDate <= toDate);
+        var dates = await pendingDates.Select(x => x.BusinessDate).Distinct().ToListAsync(ct);
         if (authorization is not null)
         {
             IQueryable<AttendanceRegularizationRequest>? scoped = null;
@@ -130,9 +147,11 @@ public sealed class AttendanceWorkflowService(
     {
         var s = await Subject(ct); if (!s.Succeeded) return Fail<RegularizationDto>(s);
         var x = await db.AttendanceRegularizationRequests.Include(x => x.Events).SingleOrDefaultAsync(x => x.TenantId == s.Value!.TenantId && x.Id == id, ct); if (x is null) return Result<RegularizationDto>.NotFound("Regularization request was not found.");
-        if (target == AttendanceRequestStatus.Cancelled) { if (x.EmployeeId != s.Value!.EmployeeId) return Result<RegularizationDto>.NotFound("Regularization request was not found."); } else { if (x.EmployeeId == s.Value!.EmployeeId) return Result<RegularizationDto>.Forbidden("An employee cannot approve or reject their own request."); if (authorization is not null) { var access = await authorization.CanAccessEmployeeAsync(x.EmployeeId, Permissions.Attendance.RegularizationApprove, false, true, true, x.BusinessDate, ct); if (!access.Succeeded) return Result<RegularizationDto>.Failure(access.Status, access.Message, access.Errors); if (!access.Value) return Result<RegularizationDto>.NotFound("Regularization request was not found."); } else { var m = await managers.ResolveAsync(x.EmployeeId, x.BusinessDate, ct); if (m.Value?.ManagerId != s.Value!.EmployeeId) return Result<RegularizationDto>.Forbidden("The employee is not an effective report for this date."); } }
+        if (target == AttendanceRequestStatus.Cancelled) { if (x.EmployeeId != s.Value!.EmployeeId) return Result<RegularizationDto>.NotFound("Regularization request was not found."); } else { if (x.EmployeeId == s.Value!.EmployeeId) return Result<RegularizationDto>.Forbidden("An employee cannot approve or reject their own request."); if (x.SubmittedByUserId == s.Value.UserId) return Result<RegularizationDto>.Forbidden("The request maker cannot approve or reject their own request."); if (authorization is not null) { var access = await authorization.CanAccessEmployeeAsync(x.EmployeeId, Permissions.Attendance.RegularizationApprove, false, true, true, x.BusinessDate, ct); if (!access.Succeeded) return Result<RegularizationDto>.Failure(access.Status, access.Message, access.Errors); if (!access.Value) return Result<RegularizationDto>.NotFound("Regularization request was not found."); } else { var m = await managers.ResolveAsync(x.EmployeeId, x.BusinessDate, ct); if (m.Value?.ManagerId != s.Value!.EmployeeId) return Result<RegularizationDto>.Forbidden("The employee is not an effective report for this date."); } }
         if (x.Status != AttendanceRequestStatus.Pending) return Result<RegularizationDto>.Conflict("The request has already been processed.");
         if (periodLock is not null && !(await periodLock.EnsureDateIsOpenAsync(x.BusinessDate, ct)).Succeeded) return Result<RegularizationDto>.Conflict("The Attendance period is closed and must be reopened before this change.");
+        var periodVersionBefore = await db.AttendancePeriods.AsNoTracking().Where(p => p.TenantId == x.TenantId && p.StartDate <= x.BusinessDate && p.EndDate >= x.BusinessDate).Select(p => (int?)p.DataVersion).SingleOrDefaultAsync(ct) ?? 1;
+        var oldDay = await db.EmployeeAttendanceDays.AsNoTracking().SingleOrDefaultAsync(d => d.TenantId == x.TenantId && d.EmployeeId == x.EmployeeId && d.BusinessDate == x.BusinessDate, ct);
         await using var transaction = await db.BeginTransactionAsync(ct);
         var now = clock.GetUtcNow().UtcDateTime;
         var reviewerId = target == AttendanceRequestStatus.Cancelled ? (Guid?)null : s.Value!.UserId;
@@ -163,6 +182,18 @@ public sealed class AttendanceWorkflowService(
             var processed = await processor.ProcessAsync(x.EmployeeId, x.BusinessDate, ct);
             if (!processed.Succeeded) return Result<RegularizationDto>.Failure(processed.Status, processed.Message, processed.Errors);
         }
+        var newDay = await db.EmployeeAttendanceDays.AsNoTracking().SingleOrDefaultAsync(d => d.TenantId == x.TenantId && d.EmployeeId == x.EmployeeId && d.BusinessDate == x.BusinessDate, ct);
+        var periodVersionAfter = await db.AttendancePeriods.AsNoTracking().Where(p => p.TenantId == x.TenantId && p.StartDate <= x.BusinessDate && p.EndDate >= x.BusinessDate).Select(p => (int?)p.DataVersion).SingleOrDefaultAsync(ct) ?? periodVersionBefore;
+        var employeeCode = await db.Employees.AsNoTracking().Where(e => e.TenantId == x.TenantId && e.Id == x.EmployeeId).Select(e => e.EmployeeCode).SingleAsync(ct);
+        db.EmployeeAuditLogs.Add(new EmployeeAuditLog
+        {
+            Id = Guid.NewGuid(), TenantId = x.TenantId, EmployeeId = x.EmployeeId, EmployeeCode = employeeCode,
+            Module = "Attendance", Section = "Operations", EntityName = newDay is not null || oldDay is not null ? "EmployeeAttendanceDay" : "AttendanceRegularizationRequest", RecordId = newDay?.Id ?? oldDay?.Id ?? x.Id,
+            FieldName = $"Regularization{target}", OldValue = oldDay?.Status.ToString(), NewValue = newDay?.Status.ToString(),
+            ChangeType = AuditChangeType.Update, EffectiveDate = x.BusinessDate, ChangedBy = s.Value.UserId.ToString(),
+            Reason = comments?.Trim() ?? x.Reason, Source = $"AttendanceVersion:{periodVersionBefore}->{periodVersionAfter}", ImportBatchId = x.Id
+        });
+        await db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
         return Result<RegularizationDto>.Success(Map(x));
     }
@@ -170,7 +201,7 @@ public sealed class AttendanceWorkflowService(
     private async Task<Result<OnDutyDto>> TransitionOnDuty(Guid id, AttendanceRequestStatus target, string? comments, CancellationToken ct)
     {
         var s = await Subject(ct); if (!s.Succeeded) return Fail<OnDutyDto>(s);
-        var x = await db.AttendanceOnDutyRequests.Include(x => x.Events).SingleOrDefaultAsync(x => x.TenantId == s.Value!.TenantId && x.Id == id, ct); if (x is null) return Result<OnDutyDto>.NotFound("On Duty request was not found."); if (target != AttendanceRequestStatus.Cancelled && x.EmployeeId == s.Value!.EmployeeId) return Result<OnDutyDto>.Forbidden("An employee cannot approve or reject their own request."); if (target == AttendanceRequestStatus.Cancelled ? x.EmployeeId != s.Value!.EmployeeId : authorization is not null ? !(await CanAuthorizeOnDutyAsync(x.EmployeeId, x.StartDate, x.EndDate, ct)) : !await CanAuthorizeOnDutyWithManagerAsync(x.EmployeeId, x.StartDate, x.EndDate, s.Value!.EmployeeId, ct)) return Result<OnDutyDto>.Forbidden("You are not authorized for this On Duty request."); if (x.Status != AttendanceRequestStatus.Pending) return Result<OnDutyDto>.Conflict("The request has already been processed.");
+        var x = await db.AttendanceOnDutyRequests.Include(x => x.Events).SingleOrDefaultAsync(x => x.TenantId == s.Value!.TenantId && x.Id == id, ct); if (x is null) return Result<OnDutyDto>.NotFound("On Duty request was not found."); if (target != AttendanceRequestStatus.Cancelled && x.EmployeeId == s.Value!.EmployeeId) return Result<OnDutyDto>.Forbidden("An employee cannot approve or reject their own request."); if (target != AttendanceRequestStatus.Cancelled && x.SubmittedByUserId == s.Value.UserId) return Result<OnDutyDto>.Forbidden("The request maker cannot approve or reject their own request."); if (target == AttendanceRequestStatus.Cancelled ? x.EmployeeId != s.Value!.EmployeeId : authorization is not null ? !(await CanAuthorizeOnDutyAsync(x.EmployeeId, x.StartDate, x.EndDate, ct)) : !await CanAuthorizeOnDutyWithManagerAsync(x.EmployeeId, x.StartDate, x.EndDate, s.Value!.EmployeeId, ct)) return Result<OnDutyDto>.Forbidden("You are not authorized for this On Duty request."); if (x.Status != AttendanceRequestStatus.Pending) return Result<OnDutyDto>.Conflict("The request has already been processed.");
         if (target == AttendanceRequestStatus.Approved && await db.LeaveRequestDays.AnyAsync(d => d.TenantId == x.TenantId && d.Date >= x.StartDate && d.Date <= x.EndDate && d.LeaveRequest != null && d.LeaveRequest.EmployeeId == x.EmployeeId && d.LeaveRequest.Status == LeaveRequestStatus.Approved, ct)) return Result<OnDutyDto>.Conflict("Approved Leave overlaps this On Duty request.");
         if (periodLock is not null && !(await periodLock.EnsureRangeIsOpenAsync(x.StartDate, x.EndDate, ct)).Succeeded) return Result<OnDutyDto>.Conflict("The Attendance period is closed and must be reopened before this change.");
         await using var transaction = await db.BeginTransactionAsync(ct);

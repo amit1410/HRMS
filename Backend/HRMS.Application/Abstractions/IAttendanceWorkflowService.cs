@@ -3,6 +3,12 @@ using HRMS.Domain.Enums;
 
 namespace HRMS.Application.Abstractions;
 
+public sealed class AttendanceRegularizationQuery : PagedQuery
+{
+    public DateOnly? FromDate { get; set; }
+    public DateOnly? ToDate { get; set; }
+}
+
 public sealed record RegularizationRequestInput(DateOnly BusinessDate, AttendanceRegularizationType RequestType, DateTime? ProposedInAtUtc, DateTime? ProposedOutAtUtc, string Reason);
 public sealed record OnDutyRequestInput(DateOnly StartDate, DateOnly EndDate, string Reason, string? Purpose = null, string? Location = null);
 public sealed record AttendanceWorkflowEventDto(AttendanceRequestEventType EventType, Guid ActorUserId, DateTime OccurredAtUtc, string? Comments);
@@ -15,7 +21,7 @@ public interface IAttendanceWorkflowService
     Task<Result<PagedResult<RegularizationDto>>> GetMyRegularizationsAsync(PagedQuery query, CancellationToken ct = default);
     Task<Result<RegularizationDto>> GetMyRegularizationAsync(Guid id, CancellationToken ct = default);
     Task<Result<RegularizationDto>> CancelRegularizationAsync(Guid id, CancellationToken ct = default);
-    Task<Result<PagedResult<RegularizationDto>>> GetManagerRegularizationsAsync(PagedQuery query, CancellationToken ct = default);
+    Task<Result<PagedResult<RegularizationDto>>> GetManagerRegularizationsAsync(AttendanceRegularizationQuery query, CancellationToken ct = default);
     Task<Result<RegularizationDto>> ApproveRegularizationAsync(Guid id, CancellationToken ct = default);
     Task<Result<RegularizationDto>> RejectRegularizationAsync(Guid id, string comments, CancellationToken ct = default);
     Task<Result<OnDutyDto>> SubmitOnDutyAsync(OnDutyRequestInput input, CancellationToken ct = default);

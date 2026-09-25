@@ -9,13 +9,13 @@ public sealed class AuthorizationMatrixTests
     [
         [RoleNames.Employee, true, false, false, false, true, true, false],
         [RoleNames.Manager, false, true, false, false, true, true, false],
-        [RoleNames.HRBP, false, true, true, false, true, false, false],
+        [RoleNames.HRBP, false, true, true, false, true, true, false],
         [RoleNames.EmployeeRelationshipOfficer, false, false, true, false, false, false, false],
         [RoleNames.TimeManager, false, false, true, false, false, true, false],
         [RoleNames.IT, false, false, false, false, false, false, false],
         [RoleNames.Accounts, false, false, false, false, false, false, false],
         [RoleNames.HRAdmin, false, false, false, true, true, true, true],
-        [RoleNames.SuperHR, false, true, false, false, true, false, true],
+        [RoleNames.SuperHR, false, true, false, false, true, true, true],
         [RoleNames.TenantAdmin, true, true, false, true, true, true, true]
     ];
 

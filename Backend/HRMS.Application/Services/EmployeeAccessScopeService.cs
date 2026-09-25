@@ -43,6 +43,10 @@ public sealed class EmployeeAccessScopeService(
         // tenant-filtered by the DbContext.
         if (assignments.Count == 0)
         {
+            if (currentAuthorization?.HasAnyPermission(Permissions.Attendance.MonthlyViewAll) == true)
+                return _ => true;
+            if (currentAuthorization?.HasAnyPermission(Permissions.Attendance.MonthlyViewTeam) == true && linkedEmployeeId is Guid managerId)
+                return employee => employee.Id == managerId || employee.EmploymentHistory.Any(history => !history.IsSuperseded && history.ManagerId == managerId);
             var hasEmployeeAccessPermission = currentAuthorization?.HasAnyPermission(
                 Permissions.Employee.View,
                 Permissions.Employee.Create,
@@ -106,6 +110,18 @@ public sealed class EmployeeAccessScopeService(
     {
         if (tenantContext.UserId is not Guid userId || tenantContext.TenantId is not Guid tenantId)
             return _ => false;
+
+        if (currentAuthorization?.HasAnyPermission(Permissions.Attendance.MonthlyViewAll) == true)
+            return _ => true;
+        if (currentAuthorization?.HasAnyPermission(Permissions.Attendance.MonthlyViewTeam) == true)
+        {
+            var managerId = await db.AccountEmployeeCurrentLinks.AsNoTracking()
+                .Where(x => x.TenantId == tenantId && x.UserId == userId)
+                .Select(x => (Guid?)x.EmployeeId)
+                .SingleOrDefaultAsync(cancellationToken);
+            if (managerId is Guid linkedManager)
+                return employee => employee.Id == linkedManager || employee.EmploymentHistory.Any(history => !history.IsSuperseded && history.ManagerId == linkedManager && history.EffectiveFrom <= effectiveDate && (history.EffectiveTo == null || history.EffectiveTo >= effectiveDate));
+        }
 
         var assignments = await db.UserRoles.AsNoTracking().Include(x => x.Scopes)
             .Where(x => x.TenantId == tenantId && x.UserId == userId &&

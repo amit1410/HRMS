@@ -239,3 +239,17 @@ public sealed class EmployeeAttendanceDay : BaseEntity, ITenantEntity
     public DateTime ProcessedAtUtc { get; set; }
     public string? ProcessingOutcome { get; set; }
 }
+
+/// <summary>Operational resolution for one derived exception at one attendance-period version.</summary>
+public sealed class AttendanceExceptionResolution : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid EmployeeId { get; set; }
+    public Guid AttendanceDayId { get; set; }
+    public int AttendanceVersion { get; set; }
+    public AttendanceExceptionType ExceptionType { get; set; }
+    public AttendanceExceptionResolutionAction Action { get; set; }
+    public string Reason { get; set; } = string.Empty;
+    public Guid ResolvedBy { get; set; }
+    public DateTime ResolvedAtUtc { get; set; }
+}

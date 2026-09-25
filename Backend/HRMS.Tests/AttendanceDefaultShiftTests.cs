@@ -212,6 +212,8 @@ internal sealed class AttendanceTestFixture : IDisposable
         return _database.CreateContext(tenant);
     }
 
+    public HRMS.Infrastructure.Persistence.HrmsDbContext CreateIsolatedContext(ITenantContext tenant, params Microsoft.EntityFrameworkCore.Diagnostics.IInterceptor[] interceptors) => _database.CreateIsolatedContext(tenant, interceptors);
+
     public async Task AddHolidayAsync(DateOnly date)
     {
         Context.Holidays.Add(new Holiday { Id = Guid.NewGuid(), TenantId = TenantId, Name = "Test Holiday", Date = date, IsActive = true });

@@ -169,6 +169,8 @@ public class SeedDataTests
         {
             DomainPermissions.Geography.View,
             DomainPermissions.Attendance.MonthlyViewSelf,
+            DomainPermissions.Attendance.ExceptionViewSelf,
+            DomainPermissions.Attendance.CompOffViewSelf,
             DomainPermissions.Leave.RequestCreate,
             DomainPermissions.Leave.RequestViewOwn,
             DomainPermissions.Leave.RequestWithdrawOwn,
