@@ -121,6 +121,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Attendance Requests', to: '/attendance/requests', permission: Permissions.attendance.view, available: true, requiresEmployeeIdentity: true, group: 'attendance' },
   { label: 'Team Attendance', to: '/attendance/team', permission: Permissions.attendance.view, available: true, group: 'attendance' },
   { label: 'Attendance Operations', to: '/attendance/operations', permission: Permissions.attendance.exceptionView, available: true, group: 'attendance' },
+  { label: 'Device Integration', to: '/attendance/devices', anyPermission: [Permissions.attendance.deviceView, Permissions.attendance.deviceManage, Permissions.attendance.deviceMapping, Permissions.attendance.deviceSync, Permissions.attendance.deviceViewHistory], available: true, group: 'attendance' },
   { label: 'Attendance Reports', to: '/attendance/reports', permission: Permissions.attendance.reportView, available: true, group: 'reports' },
   { label: 'My Comp-Off', to: '/attendance/comp-off', permission: Permissions.attendance.compOffViewSelf, available: true, requiresEmployeeIdentity: true, group: 'attendance' },
 ]

@@ -286,6 +286,12 @@ export const Permissions = {
     compOffApprove: 'Attendance.CompOff.Approve',
     compOffManage: 'Attendance.CompOff.Manage',
     compOffViewHistory: 'Attendance.CompOff.ViewHistory',
+    deviceView: 'Attendance.Device.View',
+    deviceManage: 'Attendance.Device.Manage',
+    deviceMapping: 'Attendance.Device.Mapping',
+    deviceSync: 'Attendance.Device.Sync',
+    deviceImport: 'Attendance.Device.Import',
+    deviceViewHistory: 'Attendance.Device.ViewHistory',
   },
   separation: {
     viewSelf: 'Separation.ViewSelf',

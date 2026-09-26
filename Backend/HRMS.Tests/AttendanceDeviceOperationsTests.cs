@@ -223,11 +223,23 @@ public sealed class AttendanceDeviceOperationsTests
         });
         await f.Context.SaveChangesAsync();
 
-        var monthly = new AttendanceMonthlyProcessor(f.Context, f.TenantContext);
+        f.Context.EmployeeAttendanceDays.AddRange(Enumerable.Range(1, 31).Select(day => new EmployeeAttendanceDay
+        {
+            Id = Guid.NewGuid(), TenantId = f.TenantId, EmployeeId = f.EmployeeId,
+            BusinessDate = new DateOnly(2026, 10, day), Status = EmployeeAttendanceDayStatus.Holiday,
+            ProcessedAtUtc = new DateTime(2026, 10, day, 18, 0, 0, DateTimeKind.Utc),
+            ProcessingOutcome = "Finalization test setup"
+        }));
+        await f.Context.SaveChangesAsync();
+
+        // The fixture's actor id is intentionally not persisted as a User; monthly period
+        // lifecycle events therefore use a tenant-only scope for this setup path.
+        var monthly = new AttendanceMonthlyProcessor(f.Context, new TestTenantContext(f.TenantId));
         var period = await monthly.CreatePeriodAsync(new(2026, 10));
         Assert.True(period.Succeeded, period.Message);
         Assert.True((await monthly.ProcessAsync(period.Value!.Id)).Succeeded);
-        Assert.True((await monthly.CloseAsync(period.Value.Id)).Succeeded);
+        var close = await monthly.CloseAsync(period.Value.Id);
+        Assert.True(close.Succeeded, close.Message);
         var snapshotBefore = await f.Context.PayrollAttendanceSnapshots.SingleAsync(x => x.AttendancePeriodId == period.Value.Id && x.IsCurrent);
         var immutableSnapshot = new { snapshotBefore.Id, snapshotBefore.Version, snapshotBefore.IsCurrent, snapshotBefore.PayableDays, snapshotBefore.SourceHash };
 

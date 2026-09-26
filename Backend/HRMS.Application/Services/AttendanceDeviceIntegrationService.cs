@@ -3,6 +3,7 @@ using HRMS.Application.Common;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 
 namespace HRMS.Application.Services;
 
@@ -28,6 +29,9 @@ public sealed class AttendanceDeviceIntegrationService(
         if (device is null) return Result<AttendanceDeviceBatchResult>.NotFound("Attendance device was not found in this tenant.");
         if (device.Status != AttendanceDeviceStatus.Active) return Result<AttendanceDeviceBatchResult>.Conflict("Inactive or disabled devices cannot ingest punches.");
 
+        await using var transaction = await db.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        try
+        {
         var now = _clock.GetUtcNow().UtcDateTime;
         var run = new AttendanceDeviceSyncRun
         {
@@ -145,14 +149,22 @@ public sealed class AttendanceDeviceIntegrationService(
             accepted + duplicate + unmapped > 0 ? AttendanceDeviceSyncStatus.PartiallySucceeded : AttendanceDeviceSyncStatus.Failed;
         // The checkpoint is persisted only after every receipt is durable. Rejected/unmapped receipts are
         // retained for operator remediation, so they do not cause silent event loss on the next poll.
-        if (request.CheckpointAfter is { Length: <= 1000 } checkpoint && rejected == 0)
+        if (request.CheckpointAfter is { Length: <= 1000 } checkpoint && rejected == 0 && unmapped == 0)
         {
             device.LastSuccessfulCheckpoint = checkpoint;
             device.LastSuccessfulSyncAtUtc = run.CompletedAtUtc;
             run.CheckpointAfter = checkpoint;
         }
         await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return Result<AttendanceDeviceBatchResult>.Success(new(run.Id, results.Count, accepted, duplicate, rejected, unmapped, results, run.CheckpointAfter));
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            db.ClearChangeTracker();
+            throw;
+        }
     }
 
     private async Task<bool> IsFinalizedAsync(Guid tenantId, DateOnly date, CancellationToken ct) =>

@@ -3,6 +3,7 @@ using HRMS.Application.Common;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 using System.Text.Json;
 
 namespace HRMS.Application.Services;
@@ -110,17 +111,28 @@ public sealed class AttendanceDeviceOperationsService(
     public async Task<Result<AttendanceDeviceMappingDto>> CreateMappingAsync(AttendanceDeviceMappingRequest request, CancellationToken ct = default)
     {
         if (!TryTenant(out var tenantId)) return Result<AttendanceDeviceMappingDto>.Unauthorized("No authenticated tenant.");
-        var invalid = await ValidateMappingAsync(tenantId, request, null, ct);
-        if (invalid is not null) return Result<AttendanceDeviceMappingDto>.Failure(invalid.Value.Status, invalid.Value.Message);
-        var item = new AttendanceDeviceEmployeeMapping { Id = Guid.NewGuid(), TenantId = tenantId, AttendanceDeviceId = request.DeviceId,
-            ExternalEmployeeIdentifier = request.ExternalEmployeeIdentifier.Trim(), EmployeeId = request.EmployeeId,
-            EffectiveFrom = request.EffectiveFrom, EffectiveTo = request.EffectiveTo, Status = request.Status };
-        db.AttendanceDeviceEmployeeMappings.Add(item);
-        AddAudit(tenantId, "MappingCreated", item.AttendanceDeviceId, item.Id, item.EmployeeId,
-            new { item.ExternalEmployeeIdentifier, item.EffectiveFrom, item.EffectiveTo, item.Status });
-        await db.SaveChangesAsync(ct);
-        var employeeCode = await db.Employees.AsNoTracking().Where(x => x.TenantId == tenantId && x.Id == item.EmployeeId).Select(x => x.EmployeeCode).SingleAsync(ct);
-        return Result<AttendanceDeviceMappingDto>.Success(ToDto(item, employeeCode ?? string.Empty), "Mapping created.");
+        await using var transaction = await db.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        try
+        {
+            var invalid = await ValidateMappingAsync(tenantId, request, null, ct);
+            if (invalid is not null) return Result<AttendanceDeviceMappingDto>.Failure(invalid.Value.Status, invalid.Value.Message);
+            var item = new AttendanceDeviceEmployeeMapping { Id = Guid.NewGuid(), TenantId = tenantId, AttendanceDeviceId = request.DeviceId,
+                ExternalEmployeeIdentifier = request.ExternalEmployeeIdentifier.Trim(), EmployeeId = request.EmployeeId,
+                EffectiveFrom = request.EffectiveFrom, EffectiveTo = request.EffectiveTo, Status = request.Status };
+            db.AttendanceDeviceEmployeeMappings.Add(item);
+            AddAudit(tenantId, "MappingCreated", item.AttendanceDeviceId, item.Id, item.EmployeeId,
+                new { item.ExternalEmployeeIdentifier, item.EffectiveFrom, item.EffectiveTo, item.Status });
+            await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+            var employeeCode = await db.Employees.AsNoTracking().Where(x => x.TenantId == tenantId && x.Id == item.EmployeeId).Select(x => x.EmployeeCode).SingleAsync(ct);
+            return Result<AttendanceDeviceMappingDto>.Success(ToDto(item, employeeCode ?? string.Empty), "Mapping created.");
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(ct);
+            db.ClearChangeTracker();
+            return Result<AttendanceDeviceMappingDto>.Conflict("MappingConflict: active effective mappings cannot overlap for one device identity.");
+        }
     }
 
     public async Task<Result<AttendanceDeviceMappingDto>> UpdateMappingAsync(Guid id, AttendanceDeviceMappingRequest request, CancellationToken ct = default)
