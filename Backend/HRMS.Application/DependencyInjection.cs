@@ -95,6 +95,8 @@ public static class DependencyInjection
         services.AddScoped<IAttendanceBusinessDateResolver, AttendanceBusinessDateResolver>();
         services.AddScoped<IAttendanceBusinessTimeZoneProvider, AttendanceBusinessTimeZoneProvider>();
         services.AddScoped<IAttendancePunchIngestionService, AttendancePunchIngestionService>();
+        services.AddScoped<IAttendanceDeviceIntegrationService, AttendanceDeviceIntegrationService>();
+        services.AddScoped<IAttendanceDeviceOperationsService, AttendanceDeviceOperationsService>();
         services.AddScoped<IAttendanceDayProcessor, AttendanceDayProcessor>();
         services.AddScoped<IAttendanceReadService, AttendanceReadService>();
         services.AddScoped<IAttendanceWorkflowService, AttendanceWorkflowService>();
