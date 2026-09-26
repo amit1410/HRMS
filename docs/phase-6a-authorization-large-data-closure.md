@@ -1,6 +1,6 @@
 # Phase 6A authorization and large-data closure
 
-Status: **COMPLETE**
+Status: **COMPLETE — SQL Server verification resolved**
 
 Production deployment, Ubuntu/Nginx acceptance, production backup/restore, and
 production tenant lifecycle acceptance are intentionally deferred to the later
@@ -64,17 +64,22 @@ Key results:
 - Backend: 1,257 passed, 66 skipped, 0 failed (1,323 total).
 - Authorization matrix: 12 passed, 0 failed.
 - Focused Attendance/Leave/matrix regression: 36 passed, 0 failed.
-- SQL Server: post-change verification PASS using the dedicated disposable
-  `HRMS_Phase6A_IntegrationTest_20260919` database. Migration, provider,
-  authorization, Leave, Attendance, and updated query-path verification
-  completed successfully. The SQL Server verification blocker is resolved.
+- SQL Server final post-change verification: PASS using the dedicated
+  `HRMS_Phase6A_IntegrationTest_20260919` database. The executed verification
+  covered migration application, schema/provider compatibility, authorization,
+  tenant isolation and cross-tenant denial, Leave and Attendance behavior, and
+  the updated large-data query paths. All checks completed successfully. The
+  SQL Server verification blocker is **RESOLVED**.
 - MySQL: focused Leave report and prior Attendance, Leave, Role, and Page Access
   verification passed.
 - Frontend: 573 passed across 72 files; TypeScript PASS; production build PASS;
   lint PASS with existing warnings.
 - Backend source/test compilation: PASS. The special local
   `dotnet build --no-restore` workload-resolver issue is an environment/toolchain
-  issue only and produced no source compiler errors.
+  issue only and produced no source compiler errors. Test compilation,
+  application compilation required by the tests, and provider/runtime tests
+  succeeded; this toolchain limitation is non-blocking and is not a product
+  defect.
 - `git diff --check`: PASS, with normal line-ending warnings only.
 
 ## Changed files

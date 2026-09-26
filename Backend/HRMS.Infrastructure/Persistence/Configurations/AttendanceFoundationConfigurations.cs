@@ -92,6 +92,76 @@ public sealed class AttendancePunchConfiguration : IEntityTypeConfiguration<Atte
     }
 }
 
+public sealed class AttendanceDeviceConfiguration : IEntityTypeConfiguration<AttendanceDevice>
+{
+    public void Configure(EntityTypeBuilder<AttendanceDevice> b)
+    {
+        b.ToTable("AttendanceDevices"); b.HasKey(x => x.Id); AttendanceConfigurationHelpers.Tenant(b);
+        b.Property(x => x.Code).HasMaxLength(80).IsRequired(); b.Property(x => x.Name).HasMaxLength(160).IsRequired();
+        b.Property(x => x.DeviceType).HasMaxLength(80).IsRequired(); b.Property(x => x.Vendor).HasMaxLength(100);
+        b.Property(x => x.SerialNumber).HasMaxLength(160); b.Property(x => x.TimeZoneId).HasMaxLength(100).IsRequired();
+        b.Property(x => x.ConnectionMode).HasConversion<int>(); b.Property(x => x.Status).HasConversion<int>();
+        b.Property(x => x.CredentialReference).HasMaxLength(300); b.Property(x => x.LastSuccessfulCheckpoint).HasMaxLength(1000);
+        b.HasIndex(x => new { x.TenantId, x.Code }).IsUnique();
+        b.HasOne<Tenant>().WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<WorkLocation>().WithMany().HasForeignKey(x => new { x.TenantId, x.WorkLocationId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class AttendanceDeviceEmployeeMappingConfiguration : IEntityTypeConfiguration<AttendanceDeviceEmployeeMapping>
+{
+    public void Configure(EntityTypeBuilder<AttendanceDeviceEmployeeMapping> b)
+    {
+        b.ToTable("AttendanceDeviceEmployeeMappings"); b.HasKey(x => x.Id); AttendanceConfigurationHelpers.Tenant(b);
+        b.Property(x => x.ExternalEmployeeIdentifier).HasMaxLength(200).IsRequired(); b.Property(x => x.Status).HasConversion<int>();
+        b.HasIndex(x => new { x.TenantId, x.AttendanceDeviceId, x.ExternalEmployeeIdentifier, x.EffectiveFrom }).IsUnique();
+        b.HasIndex(x => new { x.TenantId, x.AttendanceDeviceId, x.ExternalEmployeeIdentifier, x.Status, x.EffectiveFrom, x.EffectiveTo });
+        b.HasOne<AttendanceDevice>().WithMany().HasForeignKey(x => new { x.TenantId, x.AttendanceDeviceId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Employee>().WithMany().HasForeignKey(x => new { x.TenantId, x.EmployeeId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class AttendanceDeviceSyncRunConfiguration : IEntityTypeConfiguration<AttendanceDeviceSyncRun>
+{
+    public void Configure(EntityTypeBuilder<AttendanceDeviceSyncRun> b)
+    {
+        b.ToTable("AttendanceDeviceSyncRuns"); b.HasKey(x => x.Id); AttendanceConfigurationHelpers.Tenant(b);
+        b.Property(x => x.Source).HasMaxLength(100).IsRequired(); b.Property(x => x.Status).HasConversion<int>();
+        b.Property(x => x.CheckpointBefore).HasMaxLength(1000); b.Property(x => x.CheckpointAfter).HasMaxLength(1000);
+        b.HasIndex(x => new { x.TenantId, x.AttendanceDeviceId, x.StartedAtUtc });
+        b.HasOne<AttendanceDevice>().WithMany().HasForeignKey(x => new { x.TenantId, x.AttendanceDeviceId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class AttendanceDeviceIngestionEventConfiguration : IEntityTypeConfiguration<AttendanceDeviceIngestionEvent>
+{
+    public void Configure(EntityTypeBuilder<AttendanceDeviceIngestionEvent> b)
+    {
+        b.ToTable("AttendanceDeviceIngestionEvents"); b.HasKey(x => x.Id); AttendanceConfigurationHelpers.Tenant(b);
+        b.Property(x => x.Source).HasMaxLength(100).IsRequired(); b.Property(x => x.ExternalEventId).HasMaxLength(200).IsRequired();
+        b.Property(x => x.ExternalEmployeeIdentifier).HasMaxLength(200).IsRequired(); b.Property(x => x.Direction).HasConversion<int>();
+        b.Property(x => x.Status).HasConversion<int>(); b.Property(x => x.SanitizedError).HasMaxLength(1000);
+        b.HasIndex(x => new { x.TenantId, x.Source, x.ExternalEventId }).IsUnique();
+        b.HasIndex(x => new { x.TenantId, x.Status, x.ReceivedAtUtc });
+        b.HasOne<AttendanceDevice>().WithMany().HasForeignKey(x => new { x.TenantId, x.AttendanceDeviceId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<AttendanceDeviceSyncRun>().WithMany().HasForeignKey(x => new { x.TenantId, x.AttendanceDeviceSyncRunId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<Employee>().WithMany().HasForeignKey(x => new { x.TenantId, x.EmployeeId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<AttendancePunch>().WithMany().HasForeignKey(x => new { x.TenantId, x.AttendancePunchId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class AttendanceDeviceAuditEventConfiguration : IEntityTypeConfiguration<AttendanceDeviceAuditEvent>
+{
+    public void Configure(EntityTypeBuilder<AttendanceDeviceAuditEvent> b)
+    {
+        b.ToTable("AttendanceDeviceAuditEvents"); b.HasKey(x => x.Id); AttendanceConfigurationHelpers.Tenant(b);
+        b.Property(x => x.Action).HasMaxLength(80).IsRequired(); b.Property(x => x.ContextJson).HasMaxLength(4000).IsRequired();
+        b.HasIndex(x => new { x.TenantId, x.AttendanceDeviceId, x.OccurredAtUtc });
+        b.HasIndex(x => new { x.TenantId, x.AttendanceDeviceEmployeeMappingId, x.OccurredAtUtc });
+        b.HasOne<Tenant>().WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
 public sealed class EmployeeAttendanceDayConfiguration : IEntityTypeConfiguration<EmployeeAttendanceDay>
 {
     public void Configure(EntityTypeBuilder<EmployeeAttendanceDay> b)

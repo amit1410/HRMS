@@ -3,6 +3,7 @@ using System;
 using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 {
     [DbContext(typeof(HrmsDbContext))]
-    partial class HrmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260925194224_AddAttendanceDeviceIntegrationPhase6F")]
+    partial class AddAttendanceDeviceIntegrationPhase6F
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -298,57 +301,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.HasIndex("TenantId", "WorkLocationId");
 
                     b.ToTable("AttendanceDevices", (string)null);
-                });
-
-            modelBuilder.Entity("HRMS.Domain.Entities.AttendanceDeviceAuditEvent", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("char(36)");
-
-                    b.Property<string>("Action")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("varchar(80)");
-
-                    b.Property<Guid?>("ActorUserId")
-                        .HasColumnType("char(36)");
-
-                    b.Property<Guid?>("AttendanceDeviceEmployeeMappingId")
-                        .HasColumnType("char(36)");
-
-                    b.Property<Guid?>("AttendanceDeviceId")
-                        .HasColumnType("char(36)");
-
-                    b.Property<string>("ContextJson")
-                        .IsRequired()
-                        .HasMaxLength(4000)
-                        .HasColumnType("varchar(4000)");
-
-                    b.Property<DateTime>("CreatedDate")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<Guid?>("EmployeeId")
-                        .HasColumnType("char(36)");
-
-                    b.Property<DateTime?>("ModifiedDate")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<DateTime>("OccurredAtUtc")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("char(36)");
-
-                    b.HasKey("Id");
-
-                    b.HasAlternateKey("TenantId", "Id");
-
-                    b.HasIndex("TenantId", "AttendanceDeviceEmployeeMappingId", "OccurredAtUtc");
-
-                    b.HasIndex("TenantId", "AttendanceDeviceId", "OccurredAtUtc");
-
-                    b.ToTable("AttendanceDeviceAuditEvents", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.AttendanceDeviceEmployeeMapping", b =>
@@ -17698,15 +17650,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasForeignKey("TenantId", "WorkLocationId")
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict);
-                });
-
-            modelBuilder.Entity("HRMS.Domain.Entities.AttendanceDeviceAuditEvent", b =>
-                {
-                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.AttendanceDeviceEmployeeMapping", b =>
