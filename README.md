@@ -42,12 +42,12 @@ Dependency direction: `API → Infrastructure → Application → Domain`. The D
 
 ## Database provider (important)
 
-The provider is **config-driven** via the `Database:Provider` setting (`SqlServer` or `Sqlite`).
+The provider is **config-driven** via the `Database:Provider` setting (`MySql`, `SqlServer` or `Sqlite`). The checked-in default is `MySql`; see [`docs/mysql-development.md`](docs/mysql-development.md) for the local MySQL setup.
 
 | Environment | Provider | Where set | Schema created by |
 |-------------|----------|-----------|-------------------|
-| Production / default | `SqlServer` | `appsettings.json` | EF Core **migrations** (`InitialCreate`, `AddRefreshTokens`, `AddOrganizationAndEmployees`) |
-| Development | `Sqlite` | `appsettings.Development.json` | `EnsureCreated` (from the model) |
+| Default and Development | `MySql` | `appsettings.json`, `appsettings.Development.json` | EF Core **migrations** (`Backend/HRMS.Infrastructure.MySqlMigrations`) |
+| Alternate | `SqlServer` | `Database:Provider` | EF Core **migrations** (`Backend/HRMS.Infrastructure/Persistence/Migrations`) |
 
 > `EnsureCreated` does nothing to a database that already exists, so it cannot add tables the model has gained since. The SQLite dev path therefore compares the model's tables against the file and **recreates the database** (rebuilding the seed) if any are missing — a dev database left over from an earlier phase would otherwise fail at the first write. SQL Server uses migrations and is unaffected.
 
@@ -61,7 +61,7 @@ The provider is **config-driven** via the `Database:Provider` setting (`SqlServe
      "SqlServer": "Server=YOUR_SERVER;Database=HRMS;Trusted_Connection=True;TrustServerCertificate=True"
    }
    ```
-2. Ensure the environment resolves to the `SqlServer` provider (default in `appsettings.json`; note that `appsettings.Development.json` overrides it to `Sqlite` — set `Database:Provider` to `SqlServer` there, or run in a non-Development environment).
+2. Ensure the environment resolves to the `SqlServer` provider. Both `appsettings.json` and `appsettings.Development.json` default to `MySql`, so set `Database:Provider` to `SqlServer` (for example with the `Database__Provider` environment variable).
 3. Start the app — it runs `Migrate` automatically and applies the committed migrations, then seeds.
 
 ### Restoring SQL Server LocalDB (if you want the default to work locally)
@@ -81,7 +81,7 @@ If it still crashes (check **Event Viewer → Windows Logs → Application** for
 
 ## Run the API
 
-Development (SQLite, no database install required):
+Development (MySQL; the checked-in settings leave the connection strings empty, so configure them first as described in [`docs/mysql-development.md`](docs/mysql-development.md)):
 
 ```bash
 dotnet run --project Backend/HRMS.API
