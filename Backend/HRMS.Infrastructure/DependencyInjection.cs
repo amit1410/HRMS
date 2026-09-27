@@ -15,6 +15,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using MySql.EntityFrameworkCore.Extensions;
 using HRMS.Infrastructure.Reminders;
 using HRMS.Infrastructure.Accrual;
+using HRMS.Infrastructure.Attendance;
 
 namespace HRMS.Infrastructure;
 
@@ -62,6 +63,14 @@ public static class DependencyInjection
         services.AddSingleton(accrualOptions);
         services.AddSingleton(Options.Create(accrualOptions));
         services.AddHostedService<LeaveAccrualWorker>();
+
+        var attendanceDeviceWorkerOptions = configuration.GetSection(AttendanceDeviceWorkerOptions.SectionName).Get<AttendanceDeviceWorkerOptions>()
+            ?? new AttendanceDeviceWorkerOptions();
+        if (attendanceDeviceWorkerOptions.Validate() is { } attendanceDeviceProblem)
+            throw new InvalidOperationException(attendanceDeviceProblem);
+        services.AddSingleton(attendanceDeviceWorkerOptions);
+        services.AddSingleton(Options.Create(attendanceDeviceWorkerOptions));
+        services.AddHostedService<AttendanceDevicePullWorker>();
 
         services.AddMemoryCache();
         services.AddScoped<IShardContext, ShardContext>();

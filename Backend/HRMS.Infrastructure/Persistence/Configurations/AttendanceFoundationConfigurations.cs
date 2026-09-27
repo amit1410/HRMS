@@ -102,6 +102,7 @@ public sealed class AttendanceDeviceConfiguration : IEntityTypeConfiguration<Att
         b.Property(x => x.SerialNumber).HasMaxLength(160); b.Property(x => x.TimeZoneId).HasMaxLength(100).IsRequired();
         b.Property(x => x.ConnectionMode).HasConversion<int>(); b.Property(x => x.Status).HasConversion<int>();
         b.Property(x => x.CredentialReference).HasMaxLength(300); b.Property(x => x.LastSuccessfulCheckpoint).HasMaxLength(1000);
+        b.Property(x => x.LastFailureCode).HasMaxLength(120);
         b.HasIndex(x => new { x.TenantId, x.Code }).IsUnique();
         b.HasOne<Tenant>().WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);
         b.HasOne<WorkLocation>().WithMany().HasForeignKey(x => new { x.TenantId, x.WorkLocationId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
@@ -128,7 +129,20 @@ public sealed class AttendanceDeviceSyncRunConfiguration : IEntityTypeConfigurat
         b.ToTable("AttendanceDeviceSyncRuns"); b.HasKey(x => x.Id); AttendanceConfigurationHelpers.Tenant(b);
         b.Property(x => x.Source).HasMaxLength(100).IsRequired(); b.Property(x => x.Status).HasConversion<int>();
         b.Property(x => x.CheckpointBefore).HasMaxLength(1000); b.Property(x => x.CheckpointAfter).HasMaxLength(1000);
+        b.Property(x => x.FailureCode).HasMaxLength(120); b.Property(x => x.FailureMessage).HasMaxLength(1000);
         b.HasIndex(x => new { x.TenantId, x.AttendanceDeviceId, x.StartedAtUtc });
+        b.HasOne<AttendanceDevice>().WithMany().HasForeignKey(x => new { x.TenantId, x.AttendanceDeviceId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class AttendanceDeviceSyncLeaseConfiguration : IEntityTypeConfiguration<AttendanceDeviceSyncLease>
+{
+    public void Configure(EntityTypeBuilder<AttendanceDeviceSyncLease> b)
+    {
+        b.ToTable("AttendanceDeviceSyncLeases"); b.HasKey(x => x.Id); AttendanceConfigurationHelpers.Tenant(b);
+        b.Property(x => x.LeaseOwner).HasMaxLength(200);
+        b.Property(x => x.Version).HasDefaultValue(1L).IsConcurrencyToken();
+        b.HasIndex(x => new { x.TenantId, x.AttendanceDeviceId }).IsUnique();
         b.HasOne<AttendanceDevice>().WithMany().HasForeignKey(x => new { x.TenantId, x.AttendanceDeviceId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
     }
 }

@@ -160,6 +160,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<AttendanceDevice> AttendanceDevices => Set<AttendanceDevice>();
     public DbSet<AttendanceDeviceEmployeeMapping> AttendanceDeviceEmployeeMappings => Set<AttendanceDeviceEmployeeMapping>();
     public DbSet<AttendanceDeviceSyncRun> AttendanceDeviceSyncRuns => Set<AttendanceDeviceSyncRun>();
+    public DbSet<AttendanceDeviceSyncLease> AttendanceDeviceSyncLeases => Set<AttendanceDeviceSyncLease>();
     public DbSet<AttendanceDeviceIngestionEvent> AttendanceDeviceIngestionEvents => Set<AttendanceDeviceIngestionEvent>();
     public DbSet<AttendanceDeviceAuditEvent> AttendanceDeviceAuditEvents => Set<AttendanceDeviceAuditEvent>();
     public DbSet<EmployeeAttendanceDay> EmployeeAttendanceDays => Set<EmployeeAttendanceDay>();

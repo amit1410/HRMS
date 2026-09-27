@@ -19,6 +19,10 @@ public sealed class AttendanceDevice : BaseEntity, ITenantEntity
     public string? LastSuccessfulCheckpoint { get; set; }
     public DateTime? LastSuccessfulSyncAtUtc { get; set; }
     public DateTime? LastAttemptedSyncAtUtc { get; set; }
+    public DateTime? LastFailureAtUtc { get; set; }
+    public string? LastFailureCode { get; set; }
+    public int ConsecutiveFailureCount { get; set; }
+    public DateTime? NextRetryAtUtc { get; set; }
 }
 
 public sealed class AttendanceDeviceEmployeeMapping : BaseEntity, ITenantEntity
@@ -48,6 +52,22 @@ public sealed class AttendanceDeviceSyncRun : BaseEntity, ITenantEntity
     public int ErrorCount { get; set; }
     public string? CheckpointBefore { get; set; }
     public string? CheckpointAfter { get; set; }
+    public int AttemptNumber { get; set; } = 1;
+    public string? FailureCode { get; set; }
+    public string? FailureMessage { get; set; }
+}
+
+/// <summary>Durable distributed ownership record for a device synchronization.</summary>
+public sealed class AttendanceDeviceSyncLease : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid AttendanceDeviceId { get; set; }
+    public string? LeaseOwner { get; set; }
+    public Guid? LeaseToken { get; set; }
+    public DateTime? ClaimedAtUtc { get; set; }
+    public DateTime? LeaseExpiresAtUtc { get; set; }
+    public DateTime? LastHeartbeatAtUtc { get; set; }
+    public long Version { get; set; } = 1;
 }
 
 /// <summary>Integration receipt/idempotency record. AttendancePunch remains the authoritative source punch.</summary>

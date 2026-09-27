@@ -12,9 +12,12 @@ public sealed class AttendanceDeviceOperationsService(
     IHrmsDbContext db,
     ITenantContext tenant,
     IAttendanceDeviceIntegrationService ingestion,
-    IEnumerable<IAttendancePunchSource> punchSources) : IAttendanceDeviceOperationsService
+    IEnumerable<IAttendancePunchSource> punchSources,
+    IAttendanceDeviceLeaseService? lease = null,
+    AttendanceDeviceWorkerOptions? workerOptions = null) : IAttendanceDeviceOperationsService
 {
     private readonly IReadOnlyList<IAttendancePunchSource> _sources = punchSources.ToArray();
+    private readonly IAttendanceDeviceLeaseService _lease = lease ?? new AttendanceDeviceLeaseService(db, tenant, TimeProvider.System, workerOptions ?? new());
 
     public async Task<Result<PagedResult<AttendanceDeviceDto>>> GetDevicesAsync(AttendanceDeviceQuery query, CancellationToken ct = default)
     {
@@ -22,6 +25,9 @@ public sealed class AttendanceDeviceOperationsService(
         if (!ValidPage(query.Page, query.PageSize)) return Result<PagedResult<AttendanceDeviceDto>>.Invalid("page", "Page size must be between 1 and 200.");
         var rows = db.AttendanceDevices.AsNoTracking().Where(x => x.TenantId == tenantId);
         if (query.Status is not null) rows = rows.Where(x => x.Status == query.Status);
+        if (query.ConnectionMode is not null) rows = rows.Where(x => x.ConnectionMode == query.ConnectionMode);
+        if (query.EligibleAtUtc is DateTime eligibleAtUtc)
+            rows = rows.Where(x => x.NextRetryAtUtc == null || x.NextRetryAtUtc <= eligibleAtUtc);
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();
@@ -225,7 +231,8 @@ public sealed class AttendanceDeviceOperationsService(
         var total = await rows.CountAsync(ct);
         var items = await rows.OrderByDescending(x => x.StartedAtUtc).ThenBy(x => x.Id).Skip((query.Page - 1) * query.PageSize).Take(query.PageSize)
             .Select(x => new AttendanceDeviceSyncRunDto(x.Id, x.AttendanceDeviceId, x.Source, x.Status, x.StartedAtUtc, x.CompletedAtUtc,
-                x.ReceivedCount, x.AcceptedCount, x.DuplicateCount, x.RejectedCount, x.UnmappedCount, x.ErrorCount, x.CheckpointBefore, x.CheckpointAfter)).ToListAsync(ct);
+                x.ReceivedCount, x.AcceptedCount, x.DuplicateCount, x.RejectedCount, x.UnmappedCount, x.ErrorCount, x.CheckpointBefore, x.CheckpointAfter,
+                x.AttemptNumber, x.FailureCode, x.FailureMessage)).ToListAsync(ct);
         return Result<PagedResult<AttendanceDeviceSyncRunDto>>.Success(new(items, query.Page, query.PageSize, total));
     }
 
@@ -249,13 +256,27 @@ public sealed class AttendanceDeviceOperationsService(
         if (device is null) return Result<AttendanceDeviceBatchResult>.NotFound("DeviceNotFound");
         if (device.Status != AttendanceDeviceStatus.Active) return Result<AttendanceDeviceBatchResult>.Conflict("DeviceInactive");
         if (device.ConnectionMode != AttendanceDeviceConnectionMode.Pull) return Result<AttendanceDeviceBatchResult>.Conflict("Device does not support pull synchronization.");
-        var providerKey = string.IsNullOrWhiteSpace(device.Vendor) ? device.DeviceType : device.Vendor;
-        var sources = _sources.Where(x => string.Equals(x.ProviderKey, providerKey, StringComparison.OrdinalIgnoreCase)).Take(2).ToArray();
-        if (sources.Length == 0) return Result<AttendanceDeviceBatchResult>.Conflict($"UnsupportedProvider: no punch source is registered for '{providerKey}'.");
-        if (sources.Length > 1) return Result<AttendanceDeviceBatchResult>.Conflict($"UnsupportedProvider: provider key '{providerKey}' is ambiguously registered.");
-        var source = sources[0];
-        var page = await source.FetchAsync(device.LastSuccessfulCheckpoint, 1000, ct);
-        return await ingestion.IngestAsync(new(device.Id, source.ProviderKey, page.Punches, page.NextCheckpoint), ct);
+        var owner = $"sync:{Guid.NewGuid():N}";
+        var claimed = await _lease.TryAcquireAsync(device.Id, owner, ct);
+        if (!claimed.Acquired || claimed.Lease is null) return Result<AttendanceDeviceBatchResult>.Conflict(claimed.Message ?? "DeviceSyncAlreadyRunning");
+        try
+        {
+            var providerKey = string.IsNullOrWhiteSpace(device.Vendor) ? device.DeviceType : device.Vendor;
+            var sources = _sources.Where(x => string.Equals(x.ProviderKey, providerKey, StringComparison.OrdinalIgnoreCase)).Take(2).ToArray();
+            if (sources.Length == 0) return Result<AttendanceDeviceBatchResult>.Conflict($"UnsupportedProvider: no punch source is registered for '{providerKey}'.");
+            if (sources.Length > 1) return Result<AttendanceDeviceBatchResult>.Conflict($"UnsupportedProvider: provider key '{providerKey}' is ambiguously registered.");
+            var source = sources[0];
+            if (!await _lease.HeartbeatAsync(device.Id, claimed.Lease.LeaseToken, ct))
+                return Result<AttendanceDeviceBatchResult>.Conflict("DeviceSyncLeaseLost");
+            var page = await source.FetchAsync(device.LastSuccessfulCheckpoint, 1000, ct);
+            if (!await _lease.HeartbeatAsync(device.Id, claimed.Lease.LeaseToken, ct))
+                return Result<AttendanceDeviceBatchResult>.Conflict("DeviceSyncLeaseLost");
+            return await ingestion.IngestAsync(new(device.Id, source.ProviderKey, page.Punches, page.NextCheckpoint, claimed.Lease.LeaseToken), ct);
+        }
+        finally
+        {
+            await _lease.ReleaseAsync(device.Id, claimed.Lease.LeaseToken, CancellationToken.None);
+        }
     }
 
     private async Task<(ResultStatus Status, string Message)?> ValidateDeviceAsync(Guid tenantId, AttendanceDeviceRequest request, Guid? exceptId, CancellationToken ct)
@@ -302,6 +323,7 @@ public sealed class AttendanceDeviceOperationsService(
     };
     private static bool ValidPage(int page, int size) => page > 0 && size is > 0 and <= 200;
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    private static AttendanceDeviceDto ToDto(AttendanceDevice x) => new(x.Id, x.Code, x.Name, x.DeviceType, x.Vendor, x.SerialNumber, x.WorkLocationId, x.TimeZoneId, x.ConnectionMode, x.Status, x.LastSuccessfulSyncAtUtc, x.LastAttemptedSyncAtUtc);
+    private static AttendanceDeviceDto ToDto(AttendanceDevice x) => new(x.Id, x.Code, x.Name, x.DeviceType, x.Vendor, x.SerialNumber, x.WorkLocationId, x.TimeZoneId, x.ConnectionMode, x.Status,
+        x.LastSuccessfulSyncAtUtc, x.LastAttemptedSyncAtUtc, x.LastFailureAtUtc, x.LastFailureCode, x.ConsecutiveFailureCount, x.NextRetryAtUtc);
     private static AttendanceDeviceMappingDto ToDto(AttendanceDeviceEmployeeMapping x, string code) => new(x.Id, x.AttendanceDeviceId, x.ExternalEmployeeIdentifier, x.EmployeeId, code, x.EffectiveFrom, x.EffectiveTo, x.Status);
 }

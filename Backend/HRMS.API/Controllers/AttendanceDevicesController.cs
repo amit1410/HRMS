@@ -10,7 +10,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace HRMS.API.Controllers;
 
 [ApiController, Authorize, Route("api/attendance/devices")]
-public sealed class AttendanceDevicesController(IAttendanceDeviceOperationsService operations, IAttendanceDeviceIntegrationService ingestion) : ControllerBase
+public sealed class AttendanceDevicesController(IAttendanceDeviceOperationsService operations, IAttendanceDeviceIntegrationService ingestion, IAttendanceDeviceHealthService health) : ControllerBase
 {
     [HttpGet, HasPermission(Permissions.Attendance.DeviceView)]
     public async Task<ActionResult<ApiResponse<PagedResult<AttendanceDeviceDto>>>> List([FromQuery] AttendanceDeviceQuery query, CancellationToken ct) => (await operations.GetDevicesAsync(query, ct)).ToActionResult();
@@ -57,6 +57,9 @@ public sealed class AttendanceDevicesController(IAttendanceDeviceOperationsServi
 
     [HttpGet("history"), HasPermission(Permissions.Attendance.DeviceViewHistory)]
     public async Task<ActionResult<ApiResponse<PagedResult<AttendanceDeviceAuditDto>>>> History([FromQuery] AttendanceDeviceAuditQuery query, CancellationToken ct) => (await operations.GetAuditHistoryAsync(query, ct)).ToActionResult();
+
+    [HttpGet("health"), HasPermission(Permissions.Attendance.DeviceViewHistory)]
+    public async Task<ActionResult<ApiResponse<AttendanceDeviceHealthDto>>> Health(CancellationToken ct) => (await health.GetAsync(ct)).ToActionResult();
 
     [HttpGet("issues"), HasPermission(Permissions.Attendance.DeviceView)]
     public async Task<ActionResult<ApiResponse<PagedResult<AttendanceDeviceIssueDto>>>> Issues([FromQuery] AttendanceDeviceIssueQuery query, CancellationToken ct) => (await operations.GetIssuesAsync(query, ct)).ToActionResult();

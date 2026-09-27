@@ -4,6 +4,7 @@ using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace HRMS.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(HrmsDbContext))]
-    partial class HrmsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260926161306_AddAttendanceDeviceSyncLeasePhase6G")]
+    partial class AddAttendanceDeviceSyncLeasePhase6G
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -241,9 +244,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<int>("ConnectionMode")
                         .HasColumnType("int");
 
-                    b.Property<int>("ConsecutiveFailureCount")
-                        .HasColumnType("int");
-
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime2");
 
@@ -259,13 +259,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("LastAttemptedSyncAtUtc")
                         .HasColumnType("datetime2");
 
-                    b.Property<DateTime?>("LastFailureAtUtc")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("LastFailureCode")
-                        .HasMaxLength(120)
-                        .HasColumnType("nvarchar(120)");
-
                     b.Property<string>("LastSuccessfulCheckpoint")
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
@@ -280,9 +273,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(160)
                         .HasColumnType("nvarchar(160)");
-
-                    b.Property<DateTime?>("NextRetryAtUtc")
-                        .HasColumnType("datetime2");
 
                     b.Property<string>("SerialNumber")
                         .HasMaxLength(160)
@@ -553,9 +543,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Property<int>("AcceptedCount")
                         .HasColumnType("int");
 
-                    b.Property<int>("AttemptNumber")
-                        .HasColumnType("int");
-
                     b.Property<Guid?>("AttendanceDeviceId")
                         .HasColumnType("uniqueidentifier");
 
@@ -578,14 +565,6 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.Property<int>("ErrorCount")
                         .HasColumnType("int");
-
-                    b.Property<string>("FailureCode")
-                        .HasMaxLength(120)
-                        .HasColumnType("nvarchar(120)");
-
-                    b.Property<string>("FailureMessage")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
 
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime2");

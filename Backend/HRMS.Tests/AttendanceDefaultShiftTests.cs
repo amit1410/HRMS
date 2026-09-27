@@ -155,6 +155,8 @@ internal sealed class AttendanceTestFixture : IDisposable
     public Shift? Shift { get; set; }
     public AttendanceFoundationService CalendarService => new(Context, _tenant, new EffectiveEmploymentResolver(Context, _tenant), new WorkingDayCalendarResolver(Context, _tenant, new EffectiveEmploymentResolver(Context, _tenant)));
     public Guid TenantId { get; private set; }
+    public Guid DeviceId { get; set; }
+    public Guid SecondDeviceId { get; set; }
     public Guid EmployeeId { get; } = Guid.NewGuid();
     public Guid DepartmentId { get; } = Guid.NewGuid();
     public Guid OtherDepartmentId { get; } = Guid.NewGuid();

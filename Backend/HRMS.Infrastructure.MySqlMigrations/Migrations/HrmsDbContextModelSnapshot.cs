@@ -238,6 +238,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<int>("ConnectionMode")
                         .HasColumnType("int");
 
+                    b.Property<int>("ConsecutiveFailureCount")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
@@ -253,6 +256,13 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime?>("LastAttemptedSyncAtUtc")
                         .HasColumnType("datetime(6)");
 
+                    b.Property<DateTime?>("LastFailureAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("LastFailureCode")
+                        .HasMaxLength(120)
+                        .HasColumnType("varchar(120)");
+
                     b.Property<string>("LastSuccessfulCheckpoint")
                         .HasMaxLength(1000)
                         .HasColumnType("varchar(1000)");
@@ -267,6 +277,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsRequired()
                         .HasMaxLength(160)
                         .HasColumnType("varchar(160)");
+
+                    b.Property<DateTime?>("NextRetryAtUtc")
+                        .HasColumnType("datetime(6)");
 
                     b.Property<string>("SerialNumber")
                         .HasMaxLength(160)
@@ -479,6 +492,56 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("AttendanceDeviceIngestionEvents", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendanceDeviceSyncLease", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("AttendanceDeviceId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ClaimedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("LastHeartbeatAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("LeaseExpiresAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<long>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(1L);
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "AttendanceDeviceId")
+                        .IsUnique();
+
+                    b.ToTable("AttendanceDeviceSyncLeases", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.AttendanceDeviceSyncRun", b =>
                 {
                     b.Property<Guid>("Id")
@@ -486,6 +549,9 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasColumnType("char(36)");
 
                     b.Property<int>("AcceptedCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("AttemptNumber")
                         .HasColumnType("int");
 
                     b.Property<Guid?>("AttendanceDeviceId")
@@ -510,6 +576,14 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.Property<int>("ErrorCount")
                         .HasColumnType("int");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(120)
+                        .HasColumnType("varchar(120)");
+
+                    b.Property<string>("FailureMessage")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
 
                     b.Property<DateTime?>("ModifiedDate")
                         .HasColumnType("datetime(6)");
@@ -17751,6 +17825,16 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasForeignKey("TenantId", "EmployeeId")
                         .HasPrincipalKey("TenantId", "Id")
                         .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.AttendanceDeviceSyncLease", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.AttendanceDevice", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "AttendanceDeviceId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.AttendanceDeviceSyncRun", b =>

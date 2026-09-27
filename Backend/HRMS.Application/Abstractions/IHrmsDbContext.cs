@@ -153,6 +153,7 @@ public interface IHrmsDbContext
     DbSet<AttendanceDevice> AttendanceDevices { get; }
     DbSet<AttendanceDeviceEmployeeMapping> AttendanceDeviceEmployeeMappings { get; }
     DbSet<AttendanceDeviceSyncRun> AttendanceDeviceSyncRuns { get; }
+    DbSet<AttendanceDeviceSyncLease> AttendanceDeviceSyncLeases { get; }
     DbSet<AttendanceDeviceIngestionEvent> AttendanceDeviceIngestionEvents { get; }
     DbSet<AttendanceDeviceAuditEvent> AttendanceDeviceAuditEvents { get; }
     DbSet<EmployeeAttendanceDay> EmployeeAttendanceDays { get; }

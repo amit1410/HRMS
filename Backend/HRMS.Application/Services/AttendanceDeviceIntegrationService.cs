@@ -28,6 +28,8 @@ public sealed class AttendanceDeviceIntegrationService(
         var device = await db.AttendanceDevices.SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == request.DeviceId, cancellationToken);
         if (device is null) return Result<AttendanceDeviceBatchResult>.NotFound("Attendance device was not found in this tenant.");
         if (device.Status != AttendanceDeviceStatus.Active) return Result<AttendanceDeviceBatchResult>.Conflict("Inactive or disabled devices cannot ingest punches.");
+        if (request.LeaseToken is Guid leaseToken && !await IsCurrentLeaseAsync(tenantId, request.DeviceId, leaseToken, cancellationToken))
+            return Result<AttendanceDeviceBatchResult>.Conflict("DeviceSyncLeaseLost");
 
         await using var transaction = await db.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         try
@@ -149,6 +151,12 @@ public sealed class AttendanceDeviceIntegrationService(
             accepted + duplicate + unmapped > 0 ? AttendanceDeviceSyncStatus.PartiallySucceeded : AttendanceDeviceSyncStatus.Failed;
         // The checkpoint is persisted only after every receipt is durable. Rejected/unmapped receipts are
         // retained for operator remediation, so they do not cause silent event loss on the next poll.
+        if (request.LeaseToken is Guid currentLeaseToken && !await IsCurrentLeaseAsync(tenantId, request.DeviceId, currentLeaseToken, cancellationToken))
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            db.ClearChangeTracker();
+            return Result<AttendanceDeviceBatchResult>.Conflict("DeviceSyncLeaseLost");
+        }
         if (request.CheckpointAfter is { Length: <= 1000 } checkpoint && rejected == 0 && unmapped == 0)
         {
             device.LastSuccessfulCheckpoint = checkpoint;
@@ -169,6 +177,14 @@ public sealed class AttendanceDeviceIntegrationService(
 
     private async Task<bool> IsFinalizedAsync(Guid tenantId, DateOnly date, CancellationToken ct) =>
         await db.AttendancePeriods.AsNoTracking().AnyAsync(x => x.TenantId == tenantId && x.StartDate <= date && x.EndDate >= date && x.Status == AttendancePeriodStatus.Closed, ct);
+
+    private async Task<bool> IsCurrentLeaseAsync(Guid tenantId, Guid deviceId, Guid leaseToken, CancellationToken ct)
+    {
+        var now = _clock.GetUtcNow().UtcDateTime;
+        return await db.AttendanceDeviceSyncLeases.AsNoTracking().AnyAsync(x =>
+            x.TenantId == tenantId && x.AttendanceDeviceId == deviceId && x.LeaseToken == leaseToken &&
+            x.LeaseExpiresAtUtc > now, ct);
+    }
 
     private async Task SaveIssueAsync(AttendanceDeviceIngestionEvent item, CancellationToken ct)
     {

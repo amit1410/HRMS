@@ -25,8 +25,9 @@ public sealed class SqliteInMemoryDatabase : IDisposable
 {
     private readonly string _tenantDatabaseName = $"hrms-tests-{Guid.NewGuid():N}";
     private readonly string _catalogDatabaseName = $"hrms-catalog-tests-{Guid.NewGuid():N}";
-    private readonly SqliteConnection _connection;
-    private readonly SqliteConnection _catalogConnection;
+    private readonly SqliteConnection? _connection;
+    private readonly SqliteConnection? _catalogConnection;
+    private int _disposed;
 
     public SqliteInMemoryDatabase()
     {
@@ -110,7 +111,10 @@ public sealed class SqliteInMemoryDatabase : IDisposable
 
     public void Dispose()
     {
-        _connection.Dispose();
-        _catalogConnection.Dispose();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        _connection?.Dispose();
+        _catalogConnection?.Dispose();
     }
 }
