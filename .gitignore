@@ -92,3 +92,7 @@ provider-routing-test.txt
 # OS
 Thumbs.db
 .DS_Store
+
+Backend/HRMS.Tests/TestResults/
+*.trx
+claudecode
