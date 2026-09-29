@@ -1,0 +1,239 @@
+sheet: Masters_Generic_List
+submodule: Generic Engine - List & Get (api/masters/{kind})
+defaults:
+  role: HR_ADMIN
+  perm: Geography.View
+  tenant: A
+  pre: "Tenant A signed in as a user holding the HRAdmin role (Geography.View+Manage). At least 3 holding companies exist in Tenant A: HC01 (active), HC02 (active), HC03 (inactive)."
+  data: "kind=holding-companies unless stated; HC01/HC02/HC03 as seeded above."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: MASTER-LIST-001
+    func: [F-MST-01]
+    sc: Default list returns every active-and-inactive record for the tenant, paged
+    t: GET /api/masters/holding-companies with no query params returns page 1 of the tenant's holding companies
+    src: ["MasterManagementService.GetAsync", "MasterManagementPage"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/masters/holding-companies] Call with no query string => [200] success=true, data.items contains HC01, HC02 and HC03, data.page=1, data.pageSize=50, data.totalCount>=3"
+    auto: API
+
+  - id: MASTER-LIST-002
+    func: [F-MST-01]
+    sc: Search matches code or name, case-insensitively
+    t: A lower-case search term matches an upper-case code
+    src: ["MasterManagementService.ListAsync (ToLower Contains on Code/Name)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/masters/holding-companies?search=hc01] Call => [200] items contains exactly HC01 (and no others, unless another record's name also contains 'hc01')"
+      - "[GET /api/masters/holding-companies?search=HC01] Repeat with upper case => [200] identical result set"
+    auto: API
+
+  - id: MASTER-LIST-003
+    func: [F-MST-01]
+    sc: Active-only and inactive-only filters
+    t: isActive=true/false narrows the list to matching records only
+    src: ["MasterManagementService.ListAsync (IsActive filter)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/masters/holding-companies?isActive=true] Call => [200] items includes HC01/HC02, excludes HC03"
+      - "[GET /api/masters/holding-companies?isActive=false] Call => [200] items includes HC03 only"
+    auto: API
+
+  - id: MASTER-LIST-004
+    func: [F-MST-01]
+    sc: Search with no matches returns an empty page, not an error
+    t: A search term matching no record returns items=[] and totalCount=0
+    src: ["MasterManagementService.ListAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/masters/holding-companies?search=zzz-does-not-exist-zzz] Call => [200] items=[], totalCount=0"
+    auto: API
+
+  - id: MASTER-LIST-005
+    func: [F-MST-01]
+    sc: Paging beyond the last page returns an empty page with the correct total
+    t: Requesting a page number past the end of the data returns items=[] while totalCount still reflects the full set
+    src: ["MasterManagementService.GetAsync (Skip/Take)"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/masters/holding-companies?page=999&pageSize=10] Call => [200] items=[], totalCount>=3, page=999"
+    auto: API
+
+  - id: MASTER-LIST-006
+    func: [F-MST-01]
+    sc: pageSize above the 200 ceiling is silently clamped, not rejected
+    t: pageSize=5000 is clamped to 200 server-side and the call still succeeds
+    src: ["MasterManagementService.GetAsync (Math.Clamp(query.PageSize, 1, 200))"]
+    type: Boundary
+    tags: [Negative]
+    pri: P2
+    steps:
+      - "[GET /api/masters/holding-companies?pageSize=5000] Call => [200] data.pageSize=200 (not 5000, and not a 400)"
+    auto: API
+    cm: "Contrast with MASTER-AUTHZ/DEPT list boundary cases, where DepartmentQueryValidator rejects an out-of-range pageSize with 400 instead of clamping - the two engines behave differently for the same kind of input."
+
+  - id: MASTER-LIST-007
+    func: [F-MST-01]
+    sc: pageSize of 0 or negative is clamped to 1, not rejected
+    t: pageSize=0 and pageSize=-5 are both clamped to the minimum of 1
+    src: ["MasterManagementService.GetAsync (Math.Clamp)"]
+    type: Boundary
+    pri: P3
+    sev: Low
+    steps:
+      - "[GET /api/masters/holding-companies?pageSize=0] Call => [200] data.pageSize=1, data.items has exactly 1 element"
+      - "[GET /api/masters/holding-companies?pageSize=-5] Call => [200] data.pageSize=1"
+    auto: API
+
+  - id: MASTER-LIST-008
+    func: [F-MST-01]
+    sc: page of 0 or negative is clamped to 1, not rejected
+    t: page=0 and page=-3 both resolve to page 1 of results
+    src: ["MasterManagementService.GetAsync (Math.Max(1, query.Page))"]
+    type: Boundary
+    pri: P3
+    sev: Low
+    steps:
+      - "[GET /api/masters/holding-companies?page=0] Call => [200] data.page=1"
+      - "[GET /api/masters/holding-companies?page=-3] Call => [200] data.page=1"
+    auto: API
+
+  - id: MASTER-LIST-009
+    func: [F-MST-01]
+    sc: There is no client-controlled sort - the list is always Code ascending
+    t: A sortBy/sortDescending query parameter (as accepted by /api/departments) has no effect on /api/masters/{kind}, because MasterManagementQuery has no such field
+    src: ["MasterManagementService.ListAsync (hardcoded .OrderBy(Code).ThenBy(Id))", "MasterManagementQuery (no SortBy property)"]
+    type: Contract
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    steps:
+      - "[GET /api/masters/holding-companies?sortBy=name&sortDescending=true] Call => [200] request succeeds (unknown query params are ignored by model binding); items are still ordered by Code ascending, not Name descending"
+    auto: API
+
+  - id: MASTER-LIST-010
+    func: [F-MST-01, F-MST-02]
+    sc: An unsupported kind segment returns 404 for both list and get
+    t: A kind that does not exist in DefinitionFor (e.g. 'banks', which has no generic-engine registration) is reported as unsupported
+    src: ["MasterManagementService.DefinitionFor (default => null)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[GET /api/masters/banks] Call => [404] 'Master type is not supported.'"
+      - "[GET /api/masters/not-a-real-kind/00000000-0000-0000-0000-000000000001] Call => [404] 'Master type is not supported.'"
+    auto: API
+    cr: [CR-31]
+
+  - id: MASTER-LIST-011
+    func: [F-MST-01]
+    sc: List requires authentication
+    t: An anonymous caller is refused before reaching the service
+    src: ["[Authorize] + [HasPermission(Permissions.Geography.View)]"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    steps:
+      - "[GET /api/masters/holding-companies] Call with no token => [401]"
+    auto: API
+
+  - id: MASTER-LIST-012
+    func: [F-MST-02]
+    sc: Get by id returns the full record, including parent code/name for a hierarchical kind
+    t: GET a sub-department by id returns its own fields plus its parent department's code and name
+    src: ["MasterManagementService.GetByIdAsync", "MasterManagementRecordDto"]
+    type: Positive
+    pri: P0
+    pre: "Tenant A has Department DEPT01 (active) and Sub Department SUBDEPT01 whose parent is DEPT01."
+    data: "kind=sub-departments, id=SUBDEPT01's id"
+    steps:
+      - "[GET /api/masters/sub-departments/{SUBDEPT01 id}] Call => [200] code=SUBDEPT01's code, parentId=DEPT01's id, parentCode=DEPT01's code, parentName=DEPT01's name"
+    auto: API
+
+  - id: MASTER-LIST-013
+    func: [F-MST-02]
+    sc: Get by a well-formed but nonexistent id returns 404
+    t: A random GUID that matches no row is reported as not found
+    src: ["MasterManagementService.GetByIdAsync (entity is null)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[GET /api/masters/holding-companies/{random GUID}] Call => [404] 'Master record not found.'"
+    auto: API
+
+  - id: MASTER-LIST-014
+    func: [F-MST-02]
+    sc: A malformed id segment is rejected by route binding, not the service
+    t: A non-GUID id in the path never reaches MasterManagementService
+    src: ["Route constraint {id:guid}"]
+    type: Negative
+    tags: [Validation]
+    pri: P2
+    sev: Low
+    steps:
+      - "[GET /api/masters/holding-companies/not-a-guid] Call => [404] (ASP.NET Core route constraint, not the application 'not found' message)"
+    auto: API
+
+  - id: MASTER-LIST-015
+    func: [F-MST-02]
+    sc: Get by id of another tenant's record is not found, not forbidden
+    t: Tenant B cannot read Tenant A's holding company by id, and the response does not reveal that the record exists elsewhere
+    src: ["EF global query filter on TenantId"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A record, B caller
+    steps:
+      - "[GET /api/masters/holding-companies/{HC01 id}] Call as a Tenant B HRAdmin, using Tenant A's HC01 id => [404] 'Master record not found.' (never 403)"
+    auto: API
+
+  - id: MASTER-LIST-016
+    func: [F-MST-02]
+    sc: An inactive record remains individually retrievable by id
+    t: Deactivating a record only removes it from the active-only list filter; GetById still returns it
+    src: ["MasterManagementService.GetByIdAsync (no IsActive filter on Find)"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/masters/holding-companies/{HC03 id}] Call (HC03 is inactive) => [200] isActive=false, all other fields intact"
+    auto: API
+
+  - id: MASTER-LIST-017
+    func: [F-MST-01, F-MST-02, F-MST-09]
+    sc: Countries can be read through the generic engine even though they cannot be written through it
+    t: GET /api/masters/countries and GET /api/masters/countries/{id} succeed like any other kind
+    src: ["MasterManagementService.DefinitionFor ('countries' registered for read); WriteAsync/DeleteAsync short-circuit only on write"]
+    type: Positive
+    pri: P2
+    pre: "Country IN (India) exists as global reference data."
+    data: "kind=countries"
+    steps:
+      - "[GET /api/masters/countries?search=IN] Call => [200] items contains the India record"
+      - "[GET /api/masters/countries/{India id}] Call => [200] code=IN"
+    auto: API
+
+  - id: MASTER-LIST-018
+    func: [F-MST-01]
+    sc: Coverage-matrix spot check - Grades and Cost Centers list identically to Holding Companies
+    t: The same paging/search/active-filter behavior verified on holding-companies also holds for two other flat generic kinds, confirming the shared engine rather than per-kind duplication
+    src: ["MasterManagementService.DefinitionFor (all flat kinds share the same Build<TEntity> implementation)"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    pre: "Tenant A has Grade G1 (active) and Cost Center CC01 (active)."
+    steps:
+      - "[GET /api/masters/grades?search=g1&isActive=true] Call => [200] items contains G1 only"
+      - "[GET /api/masters/cost-centers?search=cc01] Call => [200] items contains CC01 only"
+    auto: API
+    cm: "Represents the coverage matrix in the module README: List/Get behavior is identical across holding-companies, lines-of-business, organisations, functions, grades, employee-types, work-locations, cost-centers and position-change-reasons because they share one Build<TEntity> definition; only hierarchy (file 05) and kind-specific validation (files 02/03) differ per kind."

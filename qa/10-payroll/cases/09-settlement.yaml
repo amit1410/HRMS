@@ -1,0 +1,243 @@
+sheet: Payroll_Settlement
+submodule: Payroll Settlement - Retro/Arrears cases (evaluate/approve/apply) and Final Settlement calculation/finalize
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Retro.Evaluate"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, with an active Employee who has at least one Finalized PayrollResult in a past period, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-SET-001
+    func: [F-PAY-179]
+    sc: Create a retro case
+    t: A well-formed retro case is created in Detected status
+    src: ["PayrollRetroSettlementService.CreateRetroCaseAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/retro/cases] EmployeeId, TriggerType=SalaryRevision, EffectiveFrom=<past date>, EffectiveTo=<past date+30> => [200/201] Status=Detected"
+    auto: API
+
+  - id: PAY-SET-002
+    func: [F-PAY-179]
+    sc: Create validation
+    t: EffectiveTo before EffectiveFrom and an unknown employee are both rejected
+    src: ["PayrollRetroSettlementService.CreateRetroCaseAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/retro/cases] EffectiveFrom=2026-06-01, EffectiveTo=2026-01-01 => [400] Effective To cannot be earlier than Effective From."
+      - "[POST /api/payroll/retro/cases] EmployeeId=<random guid> => [404] Employee not found."
+    auto: API
+
+  - id: PAY-SET-003
+    func: [F-PAY-180]
+    sc: Evaluate snapshots overlapping finalized results
+    t: Evaluating a case whose window covers one finalized period produces exactly one PayrollRetroResult
+    src: ["PayrollRetroSettlementService.EvaluateRetroAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/retro/cases/{id}/evaluate] => [200] Results.Count=1, matching the one overlapping finalized period"
+    auto: API
+
+  - id: PAY-SET-004
+    func: [F-PAY-181]
+    sc: "CRITICAL - Evaluate can never produce a usable correction; every case lands on NoImpact"
+    t: "Evaluating a case against a real, overlapping finalized result never yields NetDifference != 0 and the case's Status is always NoImpact, never Evaluated, regardless of input - a source-level stub, not a business outcome"
+    src: ["PayrollRetroSettlementService.EvaluateRetroAsync"]
+    type: Boundary
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/payroll/retro/cases/{id}/evaluate] against a case with one or more overlapping finalized results => [200] every returned PayrollRetroResult has GrossDifference=0, DeductionDifference=0, NetDifference=0"
+      - "[GET /api/payroll/retro/cases/{id}] (via subsequent read) => Status=NoImpact - Evaluated is never reached, confirmed across every combination of trigger type and window tried"
+    auto: API
+    cr: [CR-181]
+
+  - id: PAY-SET-005
+    func: [F-PAY-180]
+    sc: Evaluate is Detected/Evaluated-only and clears prior results on re-evaluation
+    t: Evaluating a case already in NoImpact/Detected/Evaluated succeeds and replaces the prior snapshot set; evaluating an Approved/Applied case is Conflict
+    src: ["PayrollRetroSettlementService.EvaluateRetroAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Case Status=Applied (via direct DB seeding, since Approved/Applied cannot be reached organically per CR-181) => precondition established"
+      - "[POST /api/payroll/retro/cases/{id}/evaluate] => [409] Retro case cannot be evaluated in its current state."
+    auto: DB-assisted
+
+  - id: PAY-SET-006
+    func: [F-PAY-182]
+    sc: "Approve is unreachable through ordinary use - documenting the precondition gap, not a working flow"
+    t: "Approve against a case in its only reachable non-terminal state (NoImpact) is rejected, since Approve requires exactly Evaluated"
+    src: ["PayrollRetroSettlementService.ApproveRetroAsync"]
+    type: Negative
+    pri: P1
+    sev: Critical
+    steps:
+      - "[POST /api/payroll/retro/cases/{id}/approve] on a case whose Status=NoImpact (the only status EvaluateRetro can ever actually produce) => [409] Retro case must be Evaluated."
+    auto: API
+    cr: [CR-181]
+
+  - id: PAY-SET-007
+    func: [F-PAY-183]
+    sc: "Apply is unreachable through ordinary use for the same root cause"
+    t: Apply against a non-Approved case is rejected, and Approved itself is unreachable per CR-181
+    src: ["PayrollRetroSettlementService.ApplyRetroAsync"]
+    type: Negative
+    pri: P1
+    sev: Critical
+    steps:
+      - "[POST /api/payroll/retro/cases/{id}/apply/{targetRunId}] on a case whose Status=NoImpact => [409] Only approved retro cases can be applied."
+    auto: API
+    cr: [CR-181]
+
+  - id: PAY-SET-008
+    func: [F-PAY-183]
+    sc: Apply requires a valid target run
+    t: Applying against a run that isn't Draft/Prepared is rejected (verified via direct DB seeding of an Approved case, bypassing CR-181's reachability gap)
+    src: ["PayrollRetroSettlementService.ApplyRetroAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[Setup] Case Status=Approved (direct DB seeding) and targetPayrollRunId references a Calculated run => precondition established"
+      - "[POST /api/payroll/retro/cases/{id}/apply/{targetRunId}] => [409] Target payroll run is not eligible for adjustments."
+    auto: DB-assisted
+
+  - id: PAY-SET-009
+    func: [F-PAY-184]
+    sc: Create a valid final settlement
+    t: A well-formed settlement is created in Draft
+    src: ["PayrollRetroSettlementService.CreateSettlementAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Payroll.FinalSettlement.Manage"
+    steps:
+      - "[POST /api/payroll/final-settlements] EmployeeId, LastWorkingDate=2026-03-31, SeparationDate=2026-03-31, SettlementDate=2026-04-15 => [200/201] Status=Draft"
+    auto: API
+
+  - id: PAY-SET-010
+    func: [F-PAY-184]
+    sc: Date-order validation and one-active-settlement-per-separation guard
+    t: LastWorkingDate after SeparationDate is rejected; a second active settlement for the same employee/date is Conflict
+    src: ["PayrollRetroSettlementService.CreateSettlementAsync"]
+    type: Negative
+    pri: P0
+    perm: "Payroll.FinalSettlement.Manage"
+    steps:
+      - "[POST /api/payroll/final-settlements] LastWorkingDate=2026-04-05, SeparationDate=2026-03-31 => [400] Settlement dates are invalid."
+      - "[POST /api/payroll/final-settlements] second create, same employee/SeparationDate as an existing non-Cancelled settlement => [409] An active final settlement already exists for this separation."
+    auto: API
+
+  - id: PAY-SET-011
+    func: [F-PAY-185]
+    sc: AddSettlementLine is Draft/Calculated-only and auto-sequences
+    t: A manual line added twice gets sequential Sequence numbers; adding to a Finalized settlement is Conflict
+    src: ["PayrollRetroSettlementService.AddSettlementLineAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.FinalSettlement.Manage"
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/lines] LineType=Other, Amount=1000, IsEarning=true => [200] Sequence=1"
+      - "[POST /api/payroll/final-settlements/{id}/lines] second line => [200] Sequence=2"
+      - "[Setup] Settlement Status=Finalized => precondition established"
+      - "[POST /api/payroll/final-settlements/{id2}/lines] => [409] Finalized settlement lines are immutable."
+    auto: API
+
+  - id: PAY-SET-012
+    func: [F-PAY-186, F-PAY-187]
+    sc: Calculate auto-generates loan/reimbursement/variable-pay/adjustment lines exactly once
+    t: An active outstanding loan produces one Recovery line; recalculating does not duplicate it
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Positive
+    pri: P0
+    perm: "Payroll.FinalSettlement.Calculate"
+    steps:
+      - "[Setup] Employee has one Active EmployeeLoan with OutstandingTotal=15000 => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] => [200] one Recovery line ComponentCode=LOAN-{loanNumber}, Amount=15000, TotalDeductions includes it"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] second call (recalculate) => [200] still exactly ONE loan-recovery line, not duplicated"
+    auto: API
+
+  - id: PAY-SET-013
+    func: [F-PAY-187]
+    sc: Totals recompute from the full line set on every Calculate
+    t: Adding a manual line then recalculating updates GrossPayable/NetSettlement to include it
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.FinalSettlement.Calculate"
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/lines] manual earning line Amount=3000 => [200]"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] => [200] GrossPayable includes the manual 3000 line plus every auto-generated earning line"
+    auto: API
+
+  - id: PAY-SET-014
+    func: [F-PAY-188]
+    sc: Approve/Finalize guard and the negative-settlement finalize block
+    t: Approve blocks self-approval; a negative NetSettlement is rejected only at Finalize, mirroring qa/09-separation's CR-157 on the same shared service
+    src: ["PayrollRetroSettlementService.ApproveSettlementAsync / FinalizeSettlementAsync"]
+    type: Negative
+    pri: P0
+    perm: "Payroll.FinalSettlement.Approve"
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/approve] as the same user who created it, with self-approval prevention on => [400] SelfApprovalNotAllowed: the user who created this payroll action cannot approve it."
+      - "[Setup] Settlement Status=Approved, NetSettlement<0 (heavy manual deduction lines) => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/finalize] => [409] Negative final settlement cannot be finalized."
+    auto: API
+
+  - id: PAY-SET-015
+    func: [F-PAY-189, F-PAY-190]
+    sc: Sub-ledger side-effects post only at Finalize, never at Calculate
+    t: The loan's OutstandingTotal is unchanged after Calculate and only decreases after Finalize
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync (Finalized branch)"]
+    type: Positive
+    pri: P0
+    perm: "Payroll.FinalSettlement.Finalize"
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] => [200] EmployeeLoan.OutstandingTotal still shows the full pre-settlement balance"
+      - "[POST /api/payroll/final-settlements/{id}/approve] => [200]"
+      - "[POST /api/payroll/final-settlements/{id}/finalize] => [200] a LoanRepayment row now exists, EmployeeLoan.OutstandingTotal is 0, Status=Closed"
+    auto: API
+
+  - id: PAY-SET-016
+    func: [F-PAY-189]
+    sc: Finalize is idempotent for its sub-ledger writes
+    t: A retried Finalize call (e.g. after a transient failure) does not double-post the same loan repayment
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    perm: "Payroll.FinalSettlement.Finalize"
+    steps:
+      - "[Manual/DB] Re-invoke the Finalize transition logic a second time against an already-Finalized settlement's loan line (simulating a retry) => no second LoanRepayment row is created for the same loan+settlement pair"
+    auto: "DB-assisted"
+
+  - id: PAY-SET-017
+    func: [F-PAY-191]
+    sc: Payroll.Retro.Cancel is an orphan permission
+    t: No endpoint anywhere checks Payroll.Retro.Cancel and no PayrollRetroCase can ever be cancelled
+    src: ["PayrollRetroSettlementService.cs (absence of a Cancel method)"]
+    type: Boundary
+    pri: P2
+    sev: Medium
+    steps:
+      - "[Manual] Grep every [HasPermission(...)] attribute across the PayrollRetroSettlementController's routes => zero references to Payroll.Retro.Cancel; no /cancel route exists for retro cases"
+    auto: "Manual only"
+    cr: [CR-174]
+
+  - id: PAY-SET-018
+    func: [F-PAY-192]
+    sc: Cross-tenant retro-case/final-settlement ids are not reachable
+    t: Tenant B's retro case and settlement ids are both NotFound as Tenant A
+    src: ["PayrollRetroSettlementService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[POST /api/payroll/retro/cases/{tenantBRetroCaseId}/evaluate] As Tenant A => [404] Retro case not found."
+      - "[POST /api/payroll/final-settlements/{tenantBSettlementId}/calculate] As Tenant A => [404] Final settlement not found."
+    auto: API

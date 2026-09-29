@@ -1,0 +1,118 @@
+sheet: Employee_CodeIntegration
+submodule: Employee Code integration seam (carried forward from Module 4)
+defaults:
+  role: HR_ADMIN
+  perm: "EmploymentHistory.Change"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (Employee.Create, EmploymentHistory.Change); an active Employee Code configuration exists."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: EMP-CODE-001
+    func: [F-EMP-127]
+    sc: A Personal-Details-created employee's code stays null until Initial Employment
+    t: The employee list/detail show the new-hire placeholder, never a blank string, before a code is assigned
+    src: ["EmployeeService (EmployeeCode remains null)", "frontend NEW_HIRE_LABEL"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/employees/personal-details] Create a new employee => [201] employeeCode=null"
+      - "[UI] Open the Personal Details form for that employee => the employee-code banner shows the 'new hire' placeholder, never an empty string"
+    auto: API + UI
+
+  - id: EMP-CODE-002
+    func: [F-EMP-128]
+    sc: HRAdmin performs Initial Employment but cannot view the Employee Code configuration that governs it
+    t: HRAdmin holds EmploymentHistory.Change but is refused GET /api/employee-code-configuration
+    src: ["SeedData.RolePermissionMap[RoleNames.HRAdmin]"]
+    type: Authorization
+    tags: [Security]
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment as HRAdmin => [200] a code is generated/assigned successfully"
+      - "[GET /api/employee-code-configuration] As the SAME HRAdmin => [403] Forbidden - cannot view what configuration produced the code just assigned"
+    auto: API
+    cr: [CR-44]
+
+  - id: EMP-CODE-003
+    func: [F-EMP-129]
+    sc: Simple-mode Auto assignment does not re-check for a code collision before assigning
+    t: When the composed Simple code collides with an existing employee's code, the failure is an unhandled 500, not a 409 Conflict
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (Simple branch, no AnyAsync duplicate probe)"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    pre: "Tenant is on Auto/Simple mode; the counter's next composed code ('EMP-005', say) already exists on a different employee (e.g. from manually-entered legacy data)."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment under Simple Auto mode, composing a code that collides => the response is an UNHANDLED error (500), not the [409] Conflict every other duplicate-code path returns"
+    auto: API
+    cr: [CR-45]
+
+  - id: EMP-CODE-004
+    func: [F-EMP-130]
+    sc: Rule-Based generation rejects an invalid/inactive master before code generation is even attempted
+    t: An employment change with an invalid Grade under a Rule-Based configuration whose rules reference Grade fails at reference validation, never at code rendering
+    src: ["EmployeeEmploymentService.CreateChangeAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment, gradeId=<inactive grade>, under Rule-Based Auto mode => [400] grade reference invalid (rejected before AssignPendingEmployeeCodeAsync ever runs)"
+    auto: API
+
+  - id: EMP-CODE-005
+    func: [F-EMP-131]
+    sc: Manual-mode Initial Employment requires a client-supplied code and rejects a case-insensitive duplicate
+    t: A blank code is required-error; a duplicate (any case) against another employee's code is a Conflict
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (Manual branch)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    pre: "Tenant is on Manual assignment mode."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment, employeeCode omitted => [400] 'Employee code is required for manual assignment.'"
+      - "[POST /api/employees/{id}/employment-history] employeeCode matching an existing employee's code, different case => [409] 'This employee code is already in use.'"
+      - "[POST /api/employees/{id}/employment-history] employeeCode='MAN-100' (unique) => [200] assigned"
+    auto: API
+
+  - id: EMP-CODE-006
+    func: [F-EMP-132]
+    sc: No active configuration version rejects Initial Employment fully-transactionally
+    t: With no EmployeeCodeConfigVersion effective on the requested date, the whole employment change is rejected and nothing is created
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (matchingVersions.Count==0)"]
+    type: Negative
+    pri: P1
+    pre: "Tenant has no Employee Code configuration at all (no EmployeeCodeConfigVersion row ever created)."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment => [400] no active Employee Code configuration is effective for the selected date"
+      - "[GET /api/employees/{id}/employment-history] Call => [200] items=[] - no history row was created"
+    auto: API
+
+  - id: EMP-CODE-007
+    func: [F-EMP-133]
+    sc: A once-assigned code is never regenerated by any later employment change
+    t: A Promotion or DepartmentChange after code assignment leaves the code exactly unchanged, even under an active Rule-Based configuration
+    src: ["EmployeeEmploymentService.CreateChangeAsync ('if (employee.EmployeeCode is null)' gate)"]
+    type: Negative
+    tags: [Contract]
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment => [200] employeeCode='ENG-001' (example, Rule-Based on Department)"
+      - "[POST /api/employees/{id}/employment-history] DepartmentChange to Finance, effective later => [200] recorded"
+      - "[GET /api/employees/{id}] Call => [200] employeeCode is STILL 'ENG-001' - unchanged despite the department the code encodes now being wrong"
+    auto: API
+
+  - id: EMP-CODE-008
+    func: [F-EMP-134]
+    sc: A rejected Initial Employment attempt (code error or otherwise) leaves no history row, no sequence advance, and no employee mutation
+    t: The whole attempt is one transaction - a failure at any validation step, including code assignment, rolls everything back
+    src: ["EmployeeEmploymentService.CreateChangeAsync (BeginTransactionAsync)"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment that fails at code assignment (e.g. Manual mode, blank code) => [400] rejected"
+      - "[GET /api/employees/{id}/employment-history] Call => [200] items=[] - no partial row"
+      - "[GET /api/employees/{id}] Call => [200] employeeCode is still null"
+    auto: API

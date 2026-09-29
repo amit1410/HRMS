@@ -1,0 +1,3439 @@
+# Functionality registry for Module 8 - Attendance Management (Foundation/Configuration, Self-View,
+# Punch/Event Ingestion, Daily Derivation, Monthly Processing, Exceptions, Regularization, On Duty,
+# Overtime, Admin Corrections, Manager/HR Scope, Reports, Devices/Ingestion, Leave/Calendar Integration,
+# Concurrency/Provider Parity, Authorization/Tenant Security, Frontend).
+# Every test case references one or more of these ids; the builder fails if a functionality has zero
+# cases or a case references an unknown id. IDs are allocated in one global sequence (F-ATT-001...) in
+# the order the case files below were authored - group boundaries are noted with a comment banner.
+#
+# Discovered implementation (authoritative source, read directly by 8 parallel research passes against
+# current code; docs/phase-6*.md were read where they exist and current code wins wherever they diverge,
+# per CLAUDE.md - Attendance Foundation itself has NO design doc at all, only source + tests):
+#   Backend/HRMS.API/Controllers/AttendanceFoundationController.cs, AttendanceReadController.cs,
+#     AttendanceWorkflowController.cs, AttendanceOperationsController.cs,
+#     AttendanceAdminCorrectionsController.cs, AttendanceMonthlyController.cs, AttendanceReportController.cs,
+#     AttendanceDevicesController.cs, OvertimeController.cs
+#   Backend/HRMS.Application/Services/AttendanceFoundationService.cs, AttendanceReadService.cs,
+#     AttendancePunchIngestionService.cs, AttendanceDayProcessor.cs, AttendanceBusinessDateResolver.cs,
+#     AttendanceBusinessTimeZoneProvider.cs, AttendanceMonthlyProcessor.cs, AttendancePeriodLockService.cs,
+#     AttendanceAdminCorrectionService.cs, AttendancePayrollSnapshotResolver.cs, AttendanceWorkflowService.cs,
+#     OvertimeService.cs, AttendanceOperationsService.cs, AttendanceReportService.cs,
+#     AttendanceAuthorizationService.cs, AttendanceDeviceIntegrationService.cs, AttendanceDeviceHealthService.cs,
+#     AttendanceDeviceLeaseService.cs, AttendanceDeviceOperationsService.cs, AttendanceDeviceSyncRecoveryService.cs,
+#     RoleScopeResolver.cs, EmployeeAccessScopeService.cs (compared for the CR-57/CR-77 matrix)
+#   Backend/HRMS.Infrastructure/Attendance/AttendanceDevicePullWorker.cs
+#   Backend/HRMS.Domain/Entities/AttendanceFoundation.cs, AttendanceWorkflow.cs, AttendanceAdminCorrection.cs,
+#     AttendanceDeviceIntegration.cs, Overtime.cs
+#   Backend/HRMS.Domain/Enums/AttendanceEnums.cs, AttendanceDeviceEnums.cs, OvertimeEnums.cs
+#   Backend/HRMS.Domain/Authorization/Permissions.cs (Attendance.*, Attendance.Overtime.*, AttendanceDevice.*)
+#   Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap - see CR-109, CR-111, CR-112, CR-113)
+#   Frontend/HRMS.Web/src/pages/attendance/*.tsx, src/api/attendance*.ts, overtime.ts, compOff.ts,
+#     attendanceDevices.ts
+#   Existing xUnit (~150 classes/nested classes touching this surface, none previously classified in
+#     qa/tools/existing_test_layers.yaml before this module) and Vitest - see README.md's mapping.
+#
+# ── Headline findings that shape this whole module's cases (see clarifications.yaml for full detail) ──
+# CR-57 is NOT a carry-forward here - Attendance IS its origin: EmployeeAccessScopeService's narrowing is
+# literally keyed off Attendance.MonthlyViewTeam/MonthlyViewAll. CR-77 recurs as Attendance's OWN 4th/5th
+# independent scope mechanism (AttendanceAuthorizationService), reusing only EmployeeAccessScopeService's
+# role-scope arm and reproducing Leave's "legacy/null-DI fallback has no role-scope path" gap independently.
+# CR-53 has a genuine, real gate here (SubmitRegularization/SubmitOnDuty block on Employee.Status/DateOfLeaving)
+# unlike the pure read-side gaps found elsewhere - but history/queue/approval/monthly-processing remain exposed
+# exactly like every other module. CR-66 and CR-82 (Leave's CompOff.Operations missing [HasPermission]) both
+# reconfirm directly against Attendance's own permission set.
+
+functionalities:
+  # ═══════════════════════════════ A. FOUNDATION / CONFIGURATION (Shift, Pattern, Applicability, Roster) ═══════════════════════════════
+  - id: F-ATT-001
+    name: List Shifts for the tenant
+    group: Foundation - Shift
+    status: Implemented
+    ui: "AttendanceFoundationPage Shift Master list"
+    api: "GET /api/attendance/shifts"
+    service: "AttendanceFoundationService.GetShiftsAsync"
+    permission: "Attendance.View"
+    db: "Shifts"
+
+  - id: F-ATT-002
+    name: Create a Shift (code/name required, imperative service-layer validation, no DTO annotations)
+    group: Foundation - Shift
+    status: Implemented
+    ui: "AttendanceFoundationPage Shift Master create"
+    api: "POST /api/attendance/shifts"
+    service: "AttendanceFoundationService.SaveShiftAsync"
+    permission: "Attendance.ShiftManage"
+    db: "Shifts, ShiftBreaks"
+
+  - id: F-ATT-003
+    name: Update a Shift; ConcurrencyToken is effectively mandatory (null/blank always Conflicts)
+    group: Foundation - Shift
+    status: Implemented
+    ui: "AttendanceFoundationPage Shift Master edit"
+    api: "PUT /api/attendance/shifts/{id}"
+    service: "AttendanceFoundationService.SaveShiftAsync"
+    permission: "Attendance.ShiftManage"
+    db: "Shifts"
+
+  - id: F-ATT-004
+    name: "Shift minute-field validation is inconsistent: MinimumWorkMinutes/FullDayWorkMinutes/GraceIn/GraceOut/MaximumEarlyMarkIn/MaximumPostShift reject negatives, but HalfDayWorkMinutes/LateThresholdMinutes/EarlyOutThresholdMinutes do not"
+    group: Foundation - Shift
+    status: Implemented
+    ui: "AttendanceFoundationPage Shift Master form"
+    api: "POST /api/attendance/shifts"
+    service: "AttendanceFoundationService.ValidateShift"
+    permission: "Attendance.ShiftManage"
+    db: "Shifts"
+
+  - id: F-ATT-005
+    name: Default-shift overlap guard on save; the overlap query does not filter by the OTHER shift's IsActive, so an inactive default can still block a new default with an overlapping interval
+    group: Foundation - Shift
+    status: Implemented
+    ui: "AttendanceFoundationPage Shift Master IsDefault toggle"
+    api: "POST /api/attendance/shifts"
+    service: "AttendanceFoundationService.SaveShiftAsync"
+    permission: "Attendance.ShiftManage"
+    db: "Shifts"
+
+  - id: F-ATT-006
+    name: Shift Breaks validation (unique Sequence, non-blank Name, EndTime after StartTime - breaks cannot cross midnight) and full replace-on-save (break identity/Id is never preserved across saves)
+    group: Foundation - Shift
+    status: Implemented
+    ui: "AttendanceFoundationPage Shift Master breaks editor"
+    api: "POST /api/attendance/shifts"
+    service: "AttendanceFoundationService.SaveShiftAsync"
+    permission: "Attendance.ShiftManage"
+    db: "ShiftBreaks"
+
+  - id: F-ATT-007
+    name: Deactivating a Shift (IsActive=false) does not invalidate or cascade to existing ShiftApplicabilityRule/ShiftPatternDay/EmployeeRosterDay references, which keep resolving to the inactive Shift
+    group: Foundation - Shift
+    status: Implemented
+    ui: "AttendanceFoundationPage Shift Master deactivate"
+    api: "POST/PUT /api/attendance/shifts, GET /api/attendance/employees/{id}/roster/{date}"
+    service: "AttendanceFoundationService.ResolveAsync"
+    permission: "Attendance.ShiftManage / Attendance.View"
+    db: "Shifts, ShiftApplicabilityRules, ShiftPatternDays, EmployeeRosterDays"
+
+  - id: F-ATT-008
+    name: Capture-source cross-validation (UseDefaultAttendanceMethodology, AllowedAttendanceSources flags, PrimaryAttendanceSource subset check, legacy CaptureMode conflict check)
+    group: Foundation - Shift
+    status: Implemented
+    ui: "AttendanceFoundationPage Shift Master capture-methodology section"
+    api: "POST /api/attendance/shifts"
+    service: "AttendanceFoundationService.ValidateCaptureSources"
+    permission: "Attendance.ShiftManage"
+    db: "Shifts"
+
+  - id: F-ATT-009
+    name: Shift effective-date validation (EffectiveTo before EffectiveFrom) and period-lock intersection guard (only enforced when IAttendancePeriodLockService is wired)
+    group: Foundation - Shift
+    status: Implemented
+    ui: "AttendanceFoundationPage Shift Master effective dates"
+    api: "POST /api/attendance/shifts"
+    service: "AttendanceFoundationService.SaveShiftAsync"
+    permission: "Attendance.ShiftManage"
+    db: "Shifts"
+
+  - id: F-ATT-010
+    name: Shift ShiftCode uniqueness and all Shift CRUD are tenant-scoped (explicit TenantId filter plus a unique index)
+    group: Foundation - Shift
+    status: Implemented
+    ui: "AttendanceFoundationPage Shift Master"
+    api: "GET/POST/PUT /api/attendance/shifts"
+    service: "AttendanceFoundationService"
+    permission: "Attendance.View / Attendance.ShiftManage"
+    db: "Shifts"
+
+  - id: F-ATT-011
+    name: List Shift Patterns for the tenant
+    group: Foundation - Shift Pattern
+    status: Implemented
+    ui: "ShiftPatternsPage list"
+    api: "GET /api/attendance/patterns"
+    service: "AttendanceFoundationService.GetPatternsAsync"
+    permission: "Attendance.View"
+    db: "ShiftPatterns, ShiftPatternDays"
+
+  - id: F-ATT-012
+    name: "Create a Shift Pattern (Code/Name required; CycleLengthDays 1..366 and Days.Count must equal CycleLengthDays with no duplicate SequenceDay)"
+    group: Foundation - Shift Pattern
+    status: Implemented
+    ui: "ShiftPatternsPage create"
+    api: "POST /api/attendance/patterns"
+    service: "AttendanceFoundationService.CreatePatternAsync"
+    permission: "Attendance.PatternManage"
+    db: "ShiftPatterns, ShiftPatternDays"
+
+  - id: F-ATT-013
+    name: Every distinct ShiftId referenced by a Pattern day must belong to the tenant and be active
+    group: Foundation - Shift Pattern
+    status: Implemented
+    ui: "ShiftPatternsPage create day editor"
+    api: "POST /api/attendance/patterns"
+    service: "AttendanceFoundationService.CreatePatternAsync"
+    permission: "Attendance.PatternManage"
+    db: "ShiftPatternDays"
+
+  - id: F-ATT-014
+    name: No update, delete, or deactivate endpoint exists for Shift Patterns - creation is the only mutating API surface
+    group: Foundation - Shift Pattern
+    status: Implemented (contract gap)
+    ui: "ShiftPatternsPage (no edit affordance)"
+    api: "PUT/DELETE /api/attendance/patterns/{id} (route does not exist)"
+    service: "n/a"
+    permission: "n/a"
+    db: "ShiftPatterns"
+
+  - id: F-ATT-015
+    name: A Pattern day with DayType=Shift and ShiftId=null is accepted by the backend with no validation error, unlike the frontend's client-side enforcement
+    group: Foundation - Shift Pattern
+    status: Implemented (gap)
+    ui: "ShiftPatternsPage day editor"
+    api: "POST /api/attendance/patterns"
+    service: "AttendanceFoundationService.CreatePatternAsync"
+    permission: "Attendance.PatternManage"
+    db: "ShiftPatternDays"
+
+  - id: F-ATT-016
+    name: Shift Pattern creation does not validate EffectiveTo against EffectiveFrom ordering, unlike Shift and Applicability
+    group: Foundation - Shift Pattern
+    status: Implemented (gap)
+    ui: "ShiftPatternsPage create"
+    api: "POST /api/attendance/patterns"
+    service: "AttendanceFoundationService.CreatePatternAsync"
+    permission: "Attendance.PatternManage"
+    db: "ShiftPatterns"
+
+  - id: F-ATT-017
+    name: Shift Pattern creation has no period-lock check at all, unlike Shift/Applicability/Roster
+    group: Foundation - Shift Pattern
+    status: Implemented (inconsistency)
+    ui: "ShiftPatternsPage create"
+    api: "POST /api/attendance/patterns"
+    service: "AttendanceFoundationService.CreatePatternAsync"
+    permission: "Attendance.PatternManage"
+    db: "ShiftPatterns"
+
+  - id: F-ATT-018
+    name: List and get-by-id Shift Applicability Rules
+    group: Foundation - Applicability
+    status: Implemented
+    ui: "AttendanceFoundationPage Applicability list"
+    api: "GET /api/attendance/shift-applicability, GET /api/attendance/shift-applicability/{id}"
+    service: "AttendanceFoundationService.GetApplicabilityAsync/GetApplicabilityByIdAsync"
+    permission: "Attendance.View"
+    db: "ShiftApplicabilityRules"
+
+  - id: F-ATT-019
+    name: "Create an Applicability rule (RuleName required, <=200 chars; exactly one of ShiftId/ShiftPatternId; EffectiveTo>=EffectiveFrom; ShiftId/ShiftPatternId/EmployeeId must exist+be active in-tenant)"
+    group: Foundation - Applicability
+    status: Implemented
+    ui: "AttendanceFoundationPage Applicability create"
+    api: "POST /api/attendance/applicability"
+    service: "AttendanceFoundationService.AddApplicabilityAsync"
+    permission: "Attendance.PatternManage"
+    db: "ShiftApplicabilityRules"
+
+  - id: F-ATT-020
+    name: Update an Applicability rule via a differently-named route (shift-applicability, not applicability); the XOR-target validation error field is named 'target' on update vs 'shiftId' on create for the identical rule
+    group: Foundation - Applicability
+    status: Implemented
+    ui: "AttendanceFoundationPage Applicability edit"
+    api: "PUT /api/attendance/shift-applicability/{id}"
+    service: "AttendanceFoundationService.UpdateApplicabilityAsync"
+    permission: "Attendance.PatternManage"
+    db: "ShiftApplicabilityRules"
+
+  - id: F-ATT-021
+    name: Delete an Applicability rule with no dependency/usage check
+    group: Foundation - Applicability
+    status: Implemented
+    ui: "AttendanceFoundationPage Applicability delete"
+    api: "DELETE /api/attendance/shift-applicability/{id}"
+    service: "AttendanceFoundationService.DeleteApplicabilityAsync"
+    permission: "Attendance.PatternManage"
+    db: "ShiftApplicabilityRules"
+
+  - id: F-ATT-022
+    name: "GET responses for an Applicability rule drop 10 of the ~16 supported dimension conditions (Gender, HoldingCompanyId, LobId, OrganisationId, SubDepartmentId, SectionId, SubSectionId, FunctionId, SubFunctionId, CountryLocationId) from the Conditions dictionary, even though they are persisted and used in resolution matching"
+    group: Foundation - Applicability
+    status: Implemented (gap - CR-91)
+    ui: "AttendanceFoundationPage Applicability detail"
+    api: "GET /api/attendance/shift-applicability/{id}"
+    service: "AttendanceFoundationService.ToApplicabilityDto"
+    permission: "Attendance.View"
+    db: "ShiftApplicabilityRules"
+
+  - id: F-ATT-023
+    name: Update skips the existence/active validation that Create performs for ShiftId/ShiftPatternId/EmployeeId, allowing a PUT to silently point a rule at a nonexistent or inactive target
+    group: Foundation - Applicability
+    status: Implemented (gap - CR-95)
+    ui: "AttendanceFoundationPage Applicability edit"
+    api: "PUT /api/attendance/shift-applicability/{id}"
+    service: "AttendanceFoundationService.UpdateApplicabilityAsync"
+    permission: "Attendance.PatternManage"
+    db: "ShiftApplicabilityRules"
+
+  - id: F-ATT-024
+    name: No creation-time duplicate/ambiguity detection between Applicability rules; two functionally-identical rules can both be saved and ambiguity is only surfaced as a Conflict at resolve time
+    group: Foundation - Applicability
+    status: Implemented
+    ui: "AttendanceFoundationPage Applicability create (second rule)"
+    api: "POST /api/attendance/applicability, GET /api/attendance/employees/{id}/roster/{date}"
+    service: "AttendanceFoundationService.ResolveAsync"
+    permission: "Attendance.PatternManage / Attendance.View"
+    db: "ShiftApplicabilityRules"
+
+  - id: F-ATT-025
+    name: "Resolve an employee's effective Shift for a date: explicit roster row > best-matching Applicability rule (highest Priority, then highest Specificity, tie = Conflict) > tenant default Shift (2+ actives = Conflict) > calendar Holiday/WeeklyOff > NotConfigured"
+    group: Foundation - Applicability
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster grid cell"
+    api: "GET /api/attendance/employees/{employeeId}/roster/{date}"
+    service: "AttendanceFoundationService.ResolveAsync"
+    permission: "Attendance.View"
+    db: "ShiftApplicabilityRules, Shifts, EmployeeRosterDays"
+
+  - id: F-ATT-026
+    name: "Contract inconsistencies on Applicability endpoints: create route uses singular 'applicability' while list/detail/update/delete use 'shift-applicability'"
+    group: Foundation - Applicability
+    status: Implemented (contract gap)
+    ui: "n/a (API surface only)"
+    api: "POST /api/attendance/applicability vs GET/PUT/DELETE /api/attendance/shift-applicability/{id}"
+    service: "AttendanceFoundationController"
+    permission: "Attendance.PatternManage"
+    db: "n/a"
+
+  - id: F-ATT-027
+    name: Applicability effective-dating is inclusive on both ends and resolution uses the employee's historical effective-employment snapshot as of the resolution date, not current employment
+    group: Foundation - Applicability
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster grid"
+    api: "GET /api/attendance/employees/{employeeId}/roster/{date}"
+    service: "AttendanceFoundationService.ResolveAsync"
+    permission: "Attendance.View"
+    db: "ShiftApplicabilityRules, EmployeeEmploymentHistory"
+
+  - id: F-ATT-028
+    name: Applicability rule CRUD and resolution are tenant-isolated (explicit TenantId filter on every query)
+    group: Foundation - Applicability
+    status: Implemented
+    ui: "AttendanceFoundationPage Applicability"
+    api: "GET/POST/PUT/DELETE /api/attendance/(shift-)applicability"
+    service: "AttendanceFoundationService"
+    permission: "Attendance.View / Attendance.PatternManage"
+    db: "ShiftApplicabilityRules"
+
+  - id: F-ATT-029
+    name: "Assign a Roster override for one or more employees over a date range (date-range/employee-list required, row cap 100,000, period-lock guard)"
+    group: Foundation - Roster
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Assignment"
+    api: "POST /api/attendance/roster/assign"
+    service: "AttendanceFoundationService.AssignRosterAsync"
+    permission: "Attendance.RosterManage"
+    db: "EmployeeRosterDays, EmployeeRosterChangeHistory"
+
+  - id: F-ATT-030
+    name: Roster assignment requires an active in-tenant ShiftId when DayType=Shift
+    group: Foundation - Roster
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Assignment"
+    api: "POST /api/attendance/roster/assign"
+    service: "AttendanceFoundationService.AssignRosterAsync"
+    permission: "Attendance.RosterManage"
+    db: "EmployeeRosterDays"
+
+  - id: F-ATT-031
+    name: Roster assignment/removal for an out-of-scope employee (per IAttendanceAuthorizationService) returns NotFound, not Forbidden, so existence is never leaked
+    group: Foundation - Roster
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Assignment"
+    api: "POST /api/attendance/roster/assign, DELETE /api/attendance/roster/{employeeId}/{date}"
+    service: "AttendanceFoundationService.AssignRosterAsync/RemoveRosterAsync"
+    permission: "Attendance.RosterManage"
+    db: "EmployeeRosterDays"
+
+  - id: F-ATT-032
+    name: Re-submitting an identical roster assignment is a no-op (no new history row) ONLY when the existing row's AssignmentSource is Manual; an identical-looking row from Upload/Auto still writes a new row and upgrades the source
+    group: Foundation - Roster
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Assignment"
+    api: "POST /api/attendance/roster/assign"
+    service: "AttendanceFoundationService.AssignRosterAsync"
+    permission: "Attendance.RosterManage"
+    db: "EmployeeRosterDays, EmployeeRosterChangeHistory"
+
+  - id: F-ATT-033
+    name: "IsCalendarOverride is computed as true whenever DayType=WeeklyOff (unconditionally, even over an already-working calendar day) OR the underlying calendar is Holiday/WeeklyOff and the new DayType is Shift"
+    group: Foundation - Roster
+    status: Implemented (semantic gap)
+    ui: "AttendanceFoundationPage Roster grid 'Calendar Override' badge"
+    api: "POST /api/attendance/roster/assign"
+    service: "AttendanceFoundationService.AssignRosterAsync"
+    permission: "Attendance.RosterManage"
+    db: "EmployeeRosterDays, EmployeeRosterChangeHistory"
+
+  - id: F-ATT-034
+    name: OriginalShiftId is captured once on first override and never updated again, but no API endpoint ever reads or restores from it - a dead audit field
+    group: Foundation - Roster
+    status: Implemented (dead field)
+    ui: "n/a"
+    api: "POST /api/attendance/roster/assign"
+    service: "AttendanceFoundationService.AssignRosterAsync"
+    permission: "Attendance.RosterManage"
+    db: "EmployeeRosterDays"
+
+  - id: F-ATT-035
+    name: Remove a Roster override for one employee/date; requires an existing explicit row and a period-lock check, then reverts to calendar/automatic resolution
+    group: Foundation - Roster
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster grid 'Remove Override'"
+    api: "DELETE /api/attendance/roster/{employeeId}/{date}"
+    service: "AttendanceFoundationService.RemoveRosterAsync"
+    permission: "Attendance.RosterManage"
+    db: "EmployeeRosterDays, EmployeeRosterChangeHistory"
+
+  - id: F-ATT-036
+    name: Roster assignment and removal are both blocked by a closed Attendance period, with wording that differs from the Shift/Applicability period-lock messages
+    group: Foundation - Roster
+    status: Implemented (message inconsistency)
+    ui: "AttendanceFoundationPage Roster Assignment"
+    api: "POST /api/attendance/roster/assign, DELETE /api/attendance/roster/{employeeId}/{date}"
+    service: "AttendanceFoundationService.AssignRosterAsync/RemoveRosterAsync"
+    permission: "Attendance.RosterManage"
+    db: "EmployeeRosterDays"
+
+  - id: F-ATT-037
+    name: "Query the effective Roster grid: FromDate/ToDate are required and range-capped at 366 days"
+    group: Foundation - Roster Grid
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster grid"
+    api: "GET /api/attendance/roster"
+    service: "AttendanceFoundationService.GetRosterAsync"
+    permission: "Attendance.View"
+    db: "EmployeeRosterDays"
+
+  - id: F-ATT-038
+    name: Roster grid query applies the caller's authorized-employee scope predicate before resolving rows
+    group: Foundation - Roster Grid
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster grid"
+    api: "GET /api/attendance/roster"
+    service: "AttendanceFoundationService.GetRosterAsync"
+    permission: "Attendance.View"
+    db: "EmployeeRosterDays"
+
+  - id: F-ATT-039
+    name: Roster grid resolves every employee x every day in range individually before paginating IN MEMORY - Page/PageSize do not reduce the underlying resolution work, a scale risk with no additional cap beyond the 366-day range limit
+    group: Foundation - Roster Grid
+    status: Implemented (performance risk)
+    ui: "AttendanceFoundationPage Roster grid"
+    api: "GET /api/attendance/roster"
+    service: "AttendanceFoundationService.GetRosterAsync"
+    permission: "Attendance.View"
+    db: "EmployeeRosterDays"
+
+  - id: F-ATT-040
+    name: Roster grid classifies a row's DayType for WeeklyOff/Holiday by parsing the resolution's human-readable Message string prefix rather than a structured field - fragile coupling to message wording
+    group: Foundation - Roster Grid
+    status: Implemented (fragile coupling)
+    ui: "AttendanceFoundationPage Roster grid"
+    api: "GET /api/attendance/roster"
+    service: "AttendanceFoundationService.GetRosterAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-041
+    name: Roster grid query is tenant-isolated across every underlying data source (manual, upload, applicability, pattern, default, calendar)
+    group: Foundation - Roster Grid
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster grid"
+    api: "GET /api/attendance/roster"
+    service: "AttendanceFoundationService.GetRosterAsync"
+    permission: "Attendance.View"
+    db: "EmployeeRosterDays"
+
+  - id: F-ATT-042
+    name: Download the Roster upload CSV template
+    group: Foundation - Roster Upload
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Upload"
+    api: "GET /api/attendance/roster/template"
+    service: "AttendanceFoundationController"
+    permission: "Attendance.RosterUpload"
+    db: "n/a"
+
+  - id: F-ATT-043
+    name: "Validate a Roster upload CSV: file-required check runs in the controller (not the service); headers must exactly match EmployeeCode,Date,ShiftCode,DayType; row cap 100,000; 10MB request-size cap"
+    group: Foundation - Roster Upload
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Upload"
+    api: "POST /api/attendance/roster/upload/validate"
+    service: "AttendanceFoundationService.ValidateRosterUploadAsync"
+    permission: "Attendance.RosterUpload"
+    db: "RosterUploadBatches, RosterUploadRows"
+
+  - id: F-ATT-044
+    name: "Per-row upload validation: Date parseable, DayType parseable (NonWorking coerced as the fallback for an unparsable value even though the row is still flagged invalid), ShiftCode empty for NonWorking, EmployeeCode resolves in-tenant, ShiftCode resolves to an active in-tenant Shift when DayType=Shift, and per-row authorization scope"
+    group: Foundation - Roster Upload
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Upload preview"
+    api: "POST /api/attendance/roster/upload/validate"
+    service: "AttendanceFoundationService.ValidateRosterUploadAsync"
+    permission: "Attendance.RosterUpload"
+    db: "RosterUploadRows"
+
+  - id: F-ATT-045
+    name: A duplicate EmployeeCode|Date row within the same upload file invalidates BOTH the first-seen row and the duplicate, not just the later one
+    group: Foundation - Roster Upload
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Upload preview"
+    api: "POST /api/attendance/roster/upload/validate"
+    service: "AttendanceFoundationService.ValidateRosterUploadAsync"
+    permission: "Attendance.RosterUpload"
+    db: "RosterUploadRows"
+
+  - id: F-ATT-046
+    name: A Failed validation batch (InvalidRows > 0) is still persisted permanently as an audit trail, with no visible cleanup/expiry path
+    group: Foundation - Roster Upload
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Upload history"
+    api: "POST /api/attendance/roster/upload/validate"
+    service: "AttendanceFoundationService.ValidateRosterUploadAsync"
+    permission: "Attendance.RosterUpload"
+    db: "RosterUploadBatches"
+
+  - id: F-ATT-047
+    name: Commit a Roster upload batch; only a batch whose status is exactly Validated can be committed, and only its valid rows are applied
+    group: Foundation - Roster Upload
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Upload commit"
+    api: "POST /api/attendance/roster/upload/{batchId}/commit"
+    service: "AttendanceFoundationService.CommitRosterUploadAsync"
+    permission: "Attendance.RosterUpload"
+    db: "RosterUploadBatches, EmployeeRosterDays, EmployeeRosterChangeHistory"
+
+  - id: F-ATT-048
+    name: Commit re-checks per-row authorization scope independently of validate time; if any row now fails scope, the whole commit call returns before SaveChanges (no partial write) but the batch is left stuck at Validated status forever with no retry/repair path
+    group: Foundation - Roster Upload
+    status: Implemented (gap - CR-92)
+    ui: "AttendanceFoundationPage Roster Upload commit"
+    api: "POST /api/attendance/roster/upload/{batchId}/commit"
+    service: "AttendanceFoundationService.CommitRosterUploadAsync"
+    permission: "Attendance.RosterUpload"
+    db: "RosterUploadBatches"
+
+  - id: F-ATT-049
+    name: Rows classified Unchanged at commit are skipped without writing history; committed rows write history with Source=Upload and no free-text Reason
+    group: Foundation - Roster Upload
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Upload commit"
+    api: "POST /api/attendance/roster/upload/{batchId}/commit"
+    service: "AttendanceFoundationService.CommitRosterUploadAsync"
+    permission: "Attendance.RosterUpload"
+    db: "EmployeeRosterChangeHistory"
+
+  - id: F-ATT-050
+    name: Roster upload validate/commit are tenant-isolated (EmployeeCode/ShiftCode resolution scoped to the caller's tenant)
+    group: Foundation - Roster Upload
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster Upload"
+    api: "POST /api/attendance/roster/upload/validate, POST /api/attendance/roster/upload/{batchId}/commit"
+    service: "AttendanceFoundationService"
+    permission: "Attendance.RosterUpload"
+    db: "RosterUploadBatches, RosterUploadRows"
+
+  - id: F-ATT-051
+    name: If IWorkingDayCalendarResolver is not wired (optional dependency), calendar-day-type resolution silently degrades to Unknown for every date - no Holiday/WeeklyOff signal, no override detection, no error raised
+    group: Foundation - Calendar Override
+    status: Implemented (silent-degrade risk)
+    ui: "AttendanceFoundationPage Roster grid / Applicability resolve"
+    api: "GET /api/attendance/employees/{employeeId}/roster/{date}, GET /api/attendance/roster"
+    service: "AttendanceFoundationService.CalendarDayTypeAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-052
+    name: Removing a Roster override does not distinguish whether it was a calendar override or a plain manual assignment - it always deletes the explicit row unconditionally and calendar/automatic resolution takes over on the next query
+    group: Foundation - Calendar Override
+    status: Implemented
+    ui: "AttendanceFoundationPage Roster grid 'Remove Override'"
+    api: "DELETE /api/attendance/roster/{employeeId}/{date}"
+    service: "AttendanceFoundationService.RemoveRosterAsync"
+    permission: "Attendance.RosterManage"
+    db: "EmployeeRosterDays"
+
+  - id: F-ATT-053
+    name: Period-lock integration is inconsistent across Foundation-management endpoints (Shift yes, Applicability create/update yes, Roster assign/remove yes, Shift Pattern create no)
+    group: Foundation - Effective Dating
+    status: Implemented (inconsistency)
+    ui: "n/a"
+    api: "POST /api/attendance/shifts, /applicability, /roster/assign, /patterns"
+    service: "AttendanceFoundationService"
+    permission: "Attendance.ShiftManage / PatternManage / RosterManage"
+    db: "Shifts, ShiftApplicabilityRules, EmployeeRosterDays, ShiftPatterns"
+
+  - id: F-ATT-054
+    name: EffectiveTo-before-EffectiveFrom is rejected identically for Shift and Applicability, but Shift Pattern has no such check at all
+    group: Foundation - Effective Dating
+    status: Implemented (inconsistency)
+    ui: "AttendanceFoundationPage / ShiftPatternsPage effective-date fields"
+    api: "POST /api/attendance/shifts, /applicability, /patterns"
+    service: "AttendanceFoundationService"
+    permission: "Attendance.ShiftManage / PatternManage"
+    db: "Shifts, ShiftApplicabilityRules, ShiftPatterns"
+
+  # ═══════════════════════════════ B. SELF-VIEW / MANAGER TEAM READ ═══════════════════════════════
+  - id: F-ATT-055
+    name: An employee views their own attendance calendar for a month, resolved server-side from the authenticated account (never a client-supplied employeeId)
+    group: Self-View
+    status: Implemented
+    ui: "MyAttendancePage calendar"
+    api: "GET /api/attendance/me/calendar"
+    service: "AttendanceReadService.GetMyCalendarAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays, Employees, AccountEmployeeCurrentLinks"
+
+  - id: F-ATT-056
+    name: An employee views a single day's raw punches and paired sessions for their own record
+    group: Self-View
+    status: Implemented
+    ui: "MyAttendancePage day-detail dialog"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceReadService.GetMyDayAsync"
+    permission: "Attendance.View"
+    db: "AttendancePunches, EmployeeAttendanceDays"
+
+  - id: F-ATT-057
+    name: "'Own' identity resolution is anti-spoofing by design: looks up AccountEmployeeCurrentLinks by (TenantId, UserId) only, never by UserId-as-EmployeeId, email, or employee code"
+    group: Self-View
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/calendar, /me/days/{date}"
+    service: "EmployeeIdentityResolver.ResolveCurrentAsync"
+    permission: "Attendance.View"
+    db: "AccountEmployeeCurrentLinks, Employees"
+
+  - id: F-ATT-058
+    name: An unlinked account, or an account linked to an Employee row that no longer exists, gets an explicit NotFound/Conflict rather than another employee's data
+    group: Self-View
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/calendar"
+    service: "EmployeeIdentityResolver.ResolveCurrentAsync"
+    permission: "Attendance.View"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-ATT-059
+    name: My-calendar year/month validation only rejects Year<1/>9999 or Month<1/>12 - no realistic-range clamp, so extreme-but-in-range years are accepted and processed
+    group: Self-View
+    status: Implemented (coarse validation)
+    ui: "MyAttendancePage month navigation"
+    api: "GET /api/attendance/me/calendar"
+    service: "AttendanceReadService.GetMyCalendarAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-060
+    name: GetMyDayAsync performs no min/max validation on the requested date at all, unlike the 92-day range check on manager-team queries
+    group: Self-View
+    status: Implemented (missing validation)
+    ui: "MyAttendancePage day-detail dialog"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceReadService.GetMyDayAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-061
+    name: The employee calendar always returns 200 with a full month of NotProcessed filler rows, even when roster resolution is failing for every date - the failure is swallowed, not surfaced
+    group: Self-View
+    status: Implemented (silent-degrade risk)
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/calendar"
+    service: "AttendanceReadService.BuildDayAsync (PlannedFallback)"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-062
+    name: Self-view read paths (me/calendar, me/days) check only that the linked Employee row exists in the tenant - they never check employment/separation status
+    group: Self-View
+    status: Implemented (gap - CR-98)
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/calendar, /me/days/{date}"
+    service: "EmployeeIdentityResolver.ResolveCurrentAsync"
+    permission: "Attendance.View"
+    db: "Employees"
+
+  - id: F-ATT-063
+    name: "me/calendar and me/days are gated by Attendance.View, while the finalized monthly summary (my/monthly-summary) is gated by a DIFFERENT permission, Attendance.MonthlyViewSelf - a role can hold one without the other"
+    group: Self-View
+    status: Implemented (permission split)
+    ui: "MyAttendancePage vs MyMonthlyAttendancePage"
+    api: "GET /api/attendance/me/calendar vs GET /api/attendance/my/monthly-summary"
+    service: "AttendanceReadService / AttendanceMonthlyController"
+    permission: "Attendance.View / Attendance.MonthlyViewSelf"
+    db: "n/a"
+
+  - id: F-ATT-064
+    name: A manager views their team's attendance for a date range, scoped by (dual DI-dependent path) role-scope-aware predicate or a plain direct-report manager check
+    group: Self-View - Manager Team
+    status: Implemented
+    ui: "ManagerAttendancePage"
+    api: "GET /api/attendance/manager/team"
+    service: "AttendanceReadService.GetManagerTeamAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays, Employees, EmployeeEmploymentHistory"
+
+  - id: F-ATT-065
+    name: Manager-team query validates FromDate<=ToDate and a maximum 92-day range, plus Page/PageSize bounds
+    group: Self-View - Manager Team
+    status: Implemented
+    ui: "ManagerAttendancePage"
+    api: "GET /api/attendance/manager/team"
+    service: "AttendanceReadService.GetManagerTeamAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-066
+    name: A manager reads a single team member's single day; denial semantics (404 vs 403) depend on whether IAttendanceAuthorizationService is DI-wired
+    group: Self-View - Manager Team
+    status: Implemented (DI-dependent inconsistency)
+    ui: "ManagerAttendancePage day-detail"
+    api: "GET /api/attendance/manager/team/{employeeId}/{date}"
+    service: "AttendanceReadService.GetManagerDayAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-067
+    name: Manager-team/day read paths are tenant-isolated; a cross-tenant employeeId never returns another tenant's data
+    group: Self-View - Manager Team
+    status: Implemented
+    ui: "ManagerAttendancePage"
+    api: "GET /api/attendance/manager/team/{employeeId}/{date}"
+    service: "AttendanceReadService.GetManagerDayAsync"
+    permission: "Attendance.View"
+    db: "Employees, AttendancePunches, EmployeeAttendanceDays"
+
+  # ═══════════════════════════════ C. PUNCH / EVENT INGESTION ═══════════════════════════════
+  - id: F-ATT-068
+    name: "There is no employee self-punch / portal-punch HTTP endpoint anywhere - the only ingestion caller in the codebase hard-codes PunchSource.Biometric, even though Portal/Manual/AutoLoginLogout are fully modeled and validated"
+    group: Punch Ingestion
+    status: Not Implemented (deferred per docs/attendance-phase-2-punch-processing.md)
+    ui: "n/a (no such UI exists)"
+    api: "n/a (no such route exists)"
+    service: "AttendancePunchIngestionService.IngestAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-069
+    name: Device-sourced punch ingestion via device Sync/Import requires the employee to exist in-tenant and resolves the effective shift before accepting the punch
+    group: Punch Ingestion
+    status: Implemented
+    ui: "n/a (device-originated)"
+    api: "POST /api/attendance/devices/{id}/sync, POST /api/attendance/devices/{id}/import"
+    service: "AttendancePunchIngestionService.IngestAsync"
+    permission: "Attendance.DeviceSync / Attendance.DeviceImport"
+    db: "AttendancePunches"
+
+  - id: F-ATT-070
+    name: A punch is rejected (no row created) when no effective shift resolves for the candidate business date, with one of three exact Holiday/WeeklyOff/NoEffectiveShift Conflict messages
+    group: Punch Ingestion
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendancePunchIngestionService.IngestAsync"
+    permission: "Attendance.DeviceSync"
+    db: "AttendancePunches (no row written)"
+
+  - id: F-ATT-071
+    name: Punch source is validated against the effective shift's AllowedAttendanceSources bitmask; a mismatched source is rejected as Forbidden
+    group: Punch Ingestion
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendancePunchIngestionService.IngestAsync"
+    permission: "Attendance.DeviceSync"
+    db: "n/a"
+
+  - id: F-ATT-072
+    name: "Punch idempotency: a duplicate ExternalPunchId under the same (TenantId, Source) returns the existing punch rather than creating a new one; a DbUpdateException race is caught and re-resolved the same way"
+    group: Punch Ingestion
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendancePunchIngestionService.IngestAsync"
+    permission: "Attendance.DeviceSync"
+    db: "AttendancePunches"
+
+  - id: F-ATT-073
+    name: The same ExternalPunchId under a different Source, or in a different tenant, is NOT treated as a duplicate - two independent punches are created
+    group: Punch Ingestion
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendancePunchIngestionService.IngestAsync"
+    permission: "Attendance.DeviceSync"
+    db: "AttendancePunches"
+
+  - id: F-ATT-074
+    name: Punches are immutable once created - no code path ever updates or deletes an AttendancePunch row
+    group: Punch Ingestion
+    status: Implemented (by design)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendancePunchIngestionService / AttendanceDayProcessor"
+    permission: "n/a"
+    db: "AttendancePunches"
+
+  - id: F-ATT-075
+    name: There is no ingestion-time rejection of out-of-order or unmatched punches - any In/Out is recorded regardless of sequence; sequence validation happens only at derivation time
+    group: Punch Ingestion
+    status: Implemented (by design)
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendancePunchIngestionService.IngestAsync"
+    permission: "Attendance.DeviceSync"
+    db: "AttendancePunches"
+
+  - id: F-ATT-076
+    name: "Overnight-shift backdating heuristic at ingestion: if no shift resolves for the punch's own calendar date and no explicit BusinessDate was supplied, the previous day's shift is checked and used if it is active and CrossesMidnight"
+    group: Punch Ingestion - Business Date
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendancePunchIngestionService.IngestAsync"
+    permission: "Attendance.DeviceSync"
+    db: "n/a"
+
+  - id: F-ATT-077
+    name: "Business-date resolution for a crossing-midnight shift: a punch whose local time is <= (shiftEnd+postShiftMinutes) AND < shiftStart rolls back to the previous calendar day; a non-overnight shift never rolls"
+    group: Punch Ingestion - Business Date
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendanceBusinessDateResolver.Resolve"
+    permission: "Attendance.DeviceSync"
+    db: "n/a"
+
+  - id: F-ATT-078
+    name: The tenant business timezone is hard-coded to UTC for every tenant regardless of the tenantId parameter, affecting overnight business-date cutoff correctness for any non-UTC tenant
+    group: Punch Ingestion - Business Date
+    status: Implemented (placeholder - CR-97)
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendanceBusinessTimeZoneProvider.GetTimeZone"
+    permission: "Attendance.DeviceSync"
+    db: "n/a"
+
+  # ═══════════════════════════════ D. DAILY ATTENDANCE DERIVATION ═══════════════════════════════
+  - id: F-ATT-079
+    name: Daily derivation is blocked entirely for a date inside a non-open (Processing/ReadyToClose/Closed) Attendance period, unless reopened
+    group: Daily Derivation
+    status: Implemented
+    ui: "n/a (triggered internally)"
+    api: "n/a (internal ProcessAsync, triggered by ingestion/regularization/correction/monthly flows)"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "n/a"
+    db: "AttendancePeriods"
+
+  - id: F-ATT-080
+    name: "Effective in/out precedence for a working day: AdminCorrection beats approved Regularization Adjustment beats raw first/last punch"
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage day-detail"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays, AttendanceAdminCorrections, AttendanceAdjustments"
+
+  - id: F-ATT-081
+    name: "A Holiday or WeeklyOff roster day is set to that status directly; raw punches remain visible but do not change the day's status"
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-082
+    name: A working day with no resolvable effective shift is left NotProcessed ('NoEffectiveShift') indefinitely, never becoming Absent regardless of punches
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-083
+    name: "A zero-punch working day resolves to OnLeave (if approved leave covers it), else NotProcessed (before the shift's finalization point) or Absent (after it) - Absent is reachable ONLY through this path"
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-084
+    name: "A single-punch day is Incomplete unless AllowPresentOnSinglePunch is enabled, in which case a lone In becomes Present with WorkedMinutes=null (not fabricated)"
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-085
+    name: An invalid punch sequence, or a missing mandatory mark-out, forces Incomplete status
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-086
+    name: "The punch-pairing algorithm flags HasInvalidPunchSequence for a consecutive double In (first In stays open, second is dropped from pairing) and for an Out with no open In (including out-of-order timestamps)"
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage day-detail"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.Pair"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-087
+    name: "IsLateIn/IsGraceApplied and IsEarlyOut are computed at exact grace-minute boundaries against GraceInMinutes/GraceOutMinutes; RequiresMarkOutApproval applies only under PostShiftMarkOutMode.RequiresApprovalBeyondLimit past MaximumPostShiftMinutes"
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-088
+    name: BreakMinutes sums only unpaid ShiftBreaks; WorkedMinutes = sum(session minutes) - BreakMinutes, floored at zero, null when there are zero sessions
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-089
+    name: A calendar override (manual working-Shift assignment on a Holiday/WeeklyOff date) is processed as a normal working day, overriding the calendar status
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays, EmployeeRosterDays"
+
+  - id: F-ATT-090
+    name: An approved On-Duty request unconditionally overrides the day's status to OnDuty last, after every other rule including Holiday/WeeklyOff/NotProcessed/NoEffectiveShift
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays, AttendanceOnDutyRequests"
+
+  - id: F-ATT-091
+    name: "LeaveConflict is set whenever an approved leave exists AND the day has punches (Count>0) - it does not change the status, only the ProcessingOutcome message on a Present day"
+    group: Daily Derivation
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-092
+    name: Reprocessing an already-processed day reuses the same EmployeeAttendanceDay row (upsert on TenantId/EmployeeId/BusinessDate), never duplicating it
+    group: Daily Derivation
+    status: Implemented
+    ui: "n/a"
+    api: "n/a (internal, triggered by re-ingestion/reprocess)"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "n/a"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-093
+    name: A day with an approved Regularization or AdminCorrection skips the raw punch-pairing routine entirely, silencing HasMissingInPunch/HasMissingOutPunch/HasInvalidPunchSequence even though the raw, still-irregular punches remain visible to the employee
+    group: Daily Derivation
+    status: Implemented (flags-vs-raw-data inconsistency - CR-99)
+    ui: "MyAttendancePage day-detail"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays, AttendancePunches"
+
+  - id: F-ATT-094
+    name: A concurrent double ProcessAsync for the same employee/date (DbUpdateException race) resolves to exactly one persisted daily aggregate row, not a throw
+    group: Daily Derivation
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "n/a"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-095
+    name: "EmployeeAttendanceDayStatus has exactly 8 members (Present, Absent, OnLeave, OnDuty, Holiday, WeeklyOff, Incomplete, NotProcessed) - there is no distinct Late/EarlyOut/MissingPunch status; those are booleans layered on top"
+    group: Daily Derivation
+    status: Implemented (contract)
+    ui: "MyAttendancePage status label map"
+    api: "GET /api/attendance/me/calendar"
+    service: "AttendanceReadService"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  # ═══════════════════════════════ E. MONTHLY PROCESSING (Period Lifecycle, Close/Reopen, Period Lock, Payroll Snapshot) ═══════════════════════════════
+  - id: F-ATT-096
+    name: "Create an Attendance Period for a (Year, Month); duplicate (Year, Month) per tenant is rejected both by pre-check and DB unique index"
+    group: Monthly - Period Lifecycle
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage"
+    api: "POST /api/attendance/periods"
+    service: "AttendanceMonthlyProcessor.CreatePeriodAsync"
+    permission: "Attendance.Monthly.Process"
+    db: "AttendancePeriods"
+
+  - id: F-ATT-097
+    name: "List/get Attendance Periods, paged/filterable by year/month/status"
+    group: Monthly - Period Lifecycle
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage"
+    api: "GET /api/attendance/periods, GET /api/attendance/periods/{id}"
+    service: "AttendanceMonthlyProcessor"
+    permission: "Attendance.Monthly.ViewAll"
+    db: "AttendancePeriods"
+
+  - id: F-ATT-098
+    name: "Run/re-run monthly processing for a period (Open/ReadyToClose -> Processing -> ReadyToClose); rejected while already Processing or Closed"
+    group: Monthly - Processing
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage"
+    api: "POST /api/attendance/periods/{id}/process"
+    service: "AttendanceMonthlyProcessor.ProcessAsync"
+    permission: "Attendance.Monthly.Process"
+    db: "AttendancePeriods, EmployeeAttendanceMonthlySummaries, AttendancePeriodEvents"
+
+  - id: F-ATT-099
+    name: "Re-running processing on the same period fully replaces the monthly summary set (idempotent on the data, but every run still appends its own ProcessingCompleted event)"
+    group: Monthly - Processing
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage"
+    api: "POST /api/attendance/periods/{id}/process"
+    service: "AttendanceMonthlyProcessor.ProcessAsync"
+    permission: "Attendance.Monthly.Process"
+    db: "EmployeeAttendanceMonthlySummaries, AttendancePeriodEvents"
+
+  - id: F-ATT-100
+    name: A processing failure rolls back the entire attempt (including summary replacement and the ProcessingStarted event) leaving the prior ReadyToClose state and summaries intact; a subsequent retry succeeds cleanly
+    group: Monthly - Processing
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage"
+    api: "POST /api/attendance/periods/{id}/process"
+    service: "AttendanceMonthlyProcessor.ProcessAsync"
+    permission: "Attendance.Monthly.Process"
+    db: "AttendancePeriods, EmployeeAttendanceMonthlySummaries"
+
+  - id: F-ATT-101
+    name: No ProcessingFailed or Refinalized audit event is ever written, even though both are defined AttendancePeriodEventType members - a failed processing attempt leaves zero trace in the period's event history
+    group: Monthly - Processing
+    status: Implemented (gap - CR-103)
+    ui: "AttendanceMonthlyFinalizationPage period events"
+    api: "GET /api/attendance/periods/{id}/events"
+    service: "AttendanceMonthlyProcessor.ProcessAsync"
+    permission: "Attendance.Monthly.ViewAll"
+    db: "AttendancePeriodEvents"
+
+  - id: F-ATT-102
+    name: "Employee inclusion in a period is driven by DateOfJoining<=EndDate AND (DateOfLeaving==null OR DateOfLeaving>=StartDate), further narrowed per-day by EmploymentHistory overlap; a future-dated joiner or a fully-ended employee before the period is excluded entirely"
+    group: Monthly - Processing
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage summaries"
+    api: "POST /api/attendance/periods/{id}/process, GET /api/attendance/periods/{id}/summaries"
+    service: "AttendanceMonthlyProcessor.ProcessAsync"
+    permission: "Attendance.Monthly.Process / ViewAll"
+    db: "EmployeeAttendanceMonthlySummaries, EmployeeEmploymentHistory"
+
+  - id: F-ATT-103
+    name: "A mid-month joiner or leaver's EmploymentDays reflects only the actual overlapping days in the period, not the full period length"
+    group: Monthly - Processing
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage summaries"
+    api: "GET /api/attendance/periods/{id}/summaries"
+    service: "AttendanceMonthlyProcessor.ProcessAsync"
+    permission: "Attendance.Monthly.ViewAll"
+    db: "EmployeeAttendanceMonthlySummaries"
+
+  - id: F-ATT-104
+    name: "Totals formula: PresentDayQuantity mirrors the integer PresentDays count (no fractional/half-day present currently possible despite the decimal column); PaidLeaveDays+=1 per OnLeave day; LopDays+=1 per Absent day (Absent==LOP, UnpaidLeaveDays never populated); PayableDays = max(0, EmploymentDays-LopDays)"
+    group: Monthly - Processing
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage summaries"
+    api: "GET /api/attendance/periods/{id}/summaries"
+    service: "AttendanceMonthlyProcessor.ProcessAsync"
+    permission: "Attendance.Monthly.ViewAll"
+    db: "EmployeeAttendanceMonthlySummaries"
+
+  - id: F-ATT-105
+    name: "Any employed date with no EmployeeAttendanceDay row raises a blocking NotProcessed exception; an Incomplete day status also raises a blocking exception; approved-leave-with-punches raises a non-blocking LeaveConflict exception"
+    group: Monthly - Processing
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage close preview"
+    api: "GET /api/attendance/periods/{id}/close-preview"
+    service: "AttendanceMonthlyProcessor.BuildClosePreviewAsync"
+    permission: "Attendance.Monthly.ViewAll"
+    db: "n/a"
+
+  - id: F-ATT-106
+    name: Pending (not yet approved/rejected) Regularization or On-Duty requests overlapping the period generate blocking exceptions that prevent Close, not just Processing
+    group: Monthly - Processing
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage close preview"
+    api: "GET /api/attendance/periods/{id}/close-preview"
+    service: "AttendanceMonthlyProcessor.BuildClosePreviewAsync"
+    permission: "Attendance.Monthly.ViewAll"
+    db: "n/a"
+
+  - id: F-ATT-107
+    name: Two concurrent ProcessAsync calls against the same period leave exactly one consistent summary set, with the loser Conflicting or being ServiceUnavailable
+    group: Monthly - Processing
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/periods/{id}/process"
+    service: "AttendanceMonthlyProcessor.ProcessAsync"
+    permission: "Attendance.Monthly.Process"
+    db: "EmployeeAttendanceMonthlySummaries"
+
+  - id: F-ATT-108
+    name: "Close-preview (CanClose) requires the period be ReadyToClose, every employee's summary SourceDataVersion current with the period's DataVersion, and zero blocking exceptions"
+    group: Monthly - Close/Reopen
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage close preview"
+    api: "GET /api/attendance/periods/{id}/close-preview"
+    service: "AttendanceMonthlyProcessor.BuildClosePreviewAsync"
+    permission: "Attendance.Monthly.ViewAll"
+    db: "n/a"
+
+  - id: F-ATT-109
+    name: "Close a ReadyToClose period; blocked if a Finalized PayrollRun already exists for the matching period dates (PayrollAlreadyFinalized); re-validates CanClose inside its own transaction to guard against races"
+    group: Monthly - Close/Reopen
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage"
+    api: "POST /api/attendance/periods/{id}/close"
+    service: "AttendanceMonthlyProcessor.CloseAsync"
+    permission: "Attendance.Monthly.Close"
+    db: "AttendancePeriods, PayrollAttendanceSnapshots, AttendancePeriodEvents"
+
+  - id: F-ATT-110
+    name: Closing an already-Closed period is rejected
+    group: Monthly - Close/Reopen
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage"
+    api: "POST /api/attendance/periods/{id}/close"
+    service: "AttendanceMonthlyProcessor.CloseAsync"
+    permission: "Attendance.Monthly.Close"
+    db: "AttendancePeriods"
+
+  - id: F-ATT-111
+    name: "Reopen a Closed period requires a non-empty Reason (<=2000 chars); blocked by the same Finalized-PayrollRun check as Close; bumps DataVersion (the mechanism that invalidates existing summaries) and returns the period to Open (not ReadyToClose)"
+    group: Monthly - Close/Reopen
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage"
+    api: "POST /api/attendance/periods/{id}/reopen"
+    service: "AttendanceMonthlyProcessor.ReopenAsync"
+    permission: "Attendance.Monthly.Reopen"
+    db: "AttendancePeriods, AttendancePeriodEvents"
+
+  - id: F-ATT-112
+    name: Concurrent close-vs-close and reopen-vs-reopen each resolve to exactly one winner and exactly one corresponding audit event
+    group: Monthly - Close/Reopen
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/periods/{id}/close, /reopen"
+    service: "AttendanceMonthlyProcessor.CloseAsync/ReopenAsync"
+    permission: "Attendance.Monthly.Close / Reopen"
+    db: "AttendancePeriods, AttendancePeriodEvents"
+
+  - id: F-ATT-113
+    name: "The append-only period-events audit trail (Created/ProcessingStarted/ProcessingCompleted/Closed/Reopened/PayrollSnapshotCreated) is readable"
+    group: Monthly - Close/Reopen
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage period events"
+    api: "GET /api/attendance/periods/{id}/events"
+    service: "AttendanceMonthlyProcessor.GetEventsAsync"
+    permission: "Attendance.Monthly.ViewAll"
+    db: "AttendancePeriodEvents"
+
+  - id: F-ATT-114
+    name: "Period Lock is a read-only guard (EnsureDateIsOpenAsync/EnsureRangeIsOpenAsync), not a stateful lock manager - 'locking' IS simply Status=Closed via Close, 'unlocking' IS Reopen; no separate lock entity exists"
+    group: Monthly - Period Lock
+    status: Implemented (architecture)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendancePeriodLockService"
+    permission: "n/a"
+    db: "AttendancePeriods"
+
+  - id: F-ATT-115
+    name: "A closed period blocks: new/reprocessed daily punches, regularization submission/approval/withdrawal, on-duty submission/approval/withdrawal, admin corrections, and Shift/Applicability/Roster configuration changes touching a closed date - reads are never blocked"
+    group: Monthly - Period Lock
+    status: Implemented
+    ui: "n/a"
+    api: "multiple (see cases)"
+    service: "AttendancePeriodLockService (called from AttendanceDayProcessor, AttendanceWorkflowService, AttendanceAdminCorrectionService, AttendanceFoundationService)"
+    permission: "varies by call site"
+    db: "n/a"
+
+  - id: F-ATT-116
+    name: The period-lock check itself is a plain read with no pessimistic row lock (no SELECT FOR UPDATE/UPDLOCK) - mutual exclusion with a concurrent Close relies entirely on the outcome invariants of each write's own optimistic concurrency, not on serializing the lock-check read itself
+    group: Monthly - Period Lock
+    status: Implemented (TOCTOU risk - CR-101)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendancePeriodLockService.EnsureDateIsOpenAsync/EnsureRangeIsOpenAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-117
+    name: A concurrent Close-vs-AdminCorrection race never leaves a Closed period with an orphaned correction - either the period closes with zero corrections for that date, or it stays ReadyToClose with exactly one correction persisted
+    group: Monthly - Period Lock
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendancePeriodLockService / AttendanceAdminCorrectionService"
+    permission: "n/a"
+    db: "AttendancePeriods, AttendanceAdminCorrections"
+
+  - id: F-ATT-118
+    name: "AttendancePeriod.ConcurrencyVersion is a plain int optimistic-concurrency counter, not a native rowversion or app-managed binary(16) token - a deliberate divergence from the repo's documented provider-portable locking pattern used elsewhere"
+    group: Monthly - Concurrency/Provider
+    status: Implemented (architecture note)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceMonthlyProcessor"
+    permission: "n/a"
+    db: "AttendancePeriods.ConcurrencyVersion"
+
+  - id: F-ATT-119
+    name: "Monthly.ViewTeam permission is seeded/referenced in scope-resolution logic but no controller route on AttendanceMonthlyController is gated by it alone - a caller holding only MonthlyViewTeam gets a flat 403 on every Monthly route"
+    group: Monthly - Permissions
+    status: Implemented (possibly vestigial - CR gap)
+    ui: "n/a"
+    api: "GET /api/attendance/periods, /summaries, etc."
+    service: "AttendanceMonthlyController"
+    permission: "Attendance.Monthly.ViewTeam (unused at controller layer)"
+    db: "n/a"
+
+  - id: F-ATT-120
+    name: "GET /periods/{id}/exceptions is gated by Attendance.Exception.View at the controller, but the underlying service resolves scope using Attendance.Monthly.ViewAll (the controller never passes an explicit authorizationPermission) - a permission/scope mismatch"
+    group: Monthly - Permissions
+    status: Implemented (gap - CR-102)
+    ui: "AttendanceOperationsPage / AttendanceMonthlyFinalizationPage exceptions view"
+    api: "GET /api/attendance/periods/{id}/exceptions"
+    service: "AttendanceMonthlyProcessor.GetExceptionsAsync"
+    permission: "Attendance.Exception.View (controller) vs Attendance.Monthly.ViewAll (scope resolution)"
+    db: "n/a"
+
+  - id: F-ATT-121
+    name: "An employee views their own finalized monthly summary (my/monthly-summary), independent from the daily me/calendar permission"
+    group: Monthly - Self View
+    status: Implemented
+    ui: "MyMonthlyAttendancePage"
+    api: "GET /api/attendance/my/monthly-summary"
+    service: "AttendanceMonthlyProcessor"
+    permission: "Attendance.Monthly.ViewSelf"
+    db: "EmployeeAttendanceMonthlySummaries"
+
+  - id: F-ATT-122
+    name: "A PayrollAttendanceSnapshot is created per employee monthly summary exclusively inside CloseAsync's own transaction, freezing EligibleDays/PayableDays/LopDays/PresentDays/AbsentDays/PaidLeaveDays/HolidayDays/WeekOffDays/OnDutyDays plus a SourceHash fingerprint"
+    group: Monthly - Payroll Snapshot
+    status: Implemented
+    ui: "n/a (consumed by Payroll)"
+    api: "n/a (internal, triggered by POST /periods/{id}/close)"
+    service: "AttendanceMonthlyProcessor.CloseAsync"
+    permission: "Attendance.Monthly.Close"
+    db: "PayrollAttendanceSnapshots"
+
+  - id: F-ATT-123
+    name: "Snapshot versioning: prior IsCurrent snapshot for (tenant, period, employee) is flipped false, a new Version=max+1/IsCurrent=true row is inserted; two unique indexes guarantee at most one current snapshot per employee per period even under a race"
+    group: Monthly - Payroll Snapshot
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceMonthlyProcessor.CloseAsync"
+    permission: "Attendance.Monthly.Close"
+    db: "PayrollAttendanceSnapshots"
+
+  - id: F-ATT-124
+    name: "Reopening a Closed period does not touch existing snapshot rows; a new snapshot version is created only when the period is reprocessed AND reclosed, leaving prior PayrollResults pointing at their original snapshot version, never retroactively mutated"
+    group: Monthly - Payroll Snapshot
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceMonthlyProcessor.ReopenAsync/CloseAsync"
+    permission: "Attendance.Monthly.Reopen / Close"
+    db: "PayrollAttendanceSnapshots, PayrollResults"
+
+  - id: F-ATT-125
+    name: "AttendancePayrollSnapshotResolver.ResolveAsync returns Success(null) when no matching AttendancePeriod exists (legacy-payroll-period compatibility escape hatch), Conflict AttendanceNotFinalized if the period exists but isn't Closed, and Conflict AttendanceSnapshotMissing if Closed but no current snapshot row exists"
+    group: Monthly - Payroll Snapshot
+    status: Implemented
+    ui: "n/a"
+    api: "n/a (consumed internally by Payroll)"
+    service: "AttendancePayrollSnapshotResolver.ResolveAsync"
+    permission: "n/a"
+    db: "AttendancePeriods, PayrollAttendanceSnapshots"
+
+  # ═══════════════════════════════ F. ADMIN CORRECTIONS ═══════════════════════════════
+  - id: F-ATT-126
+    name: "Create an Admin Correction (CorrectedInAtUtc and/or CorrectedOutAtUtc, at least one required, Out must not precede In, Reason mandatory <=2000 chars)"
+    group: Admin Corrections
+    status: Implemented
+    ui: "AttendanceOperationsPage correction dialog"
+    api: "POST /api/attendance/admin-corrections"
+    service: "AttendanceAdminCorrectionService.CreateAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "AttendanceAdminCorrections"
+
+  - id: F-ATT-127
+    name: "Admin corrections are append-only and versioned per (EmployeeId, BusinessDate): every create is a NEW row (CorrectionVersion=max+1), enforced by a unique index; raw punches are never mutated"
+    group: Admin Corrections
+    status: Implemented (by design)
+    ui: "AttendanceOperationsPage correction history"
+    api: "POST /api/attendance/admin-corrections"
+    service: "AttendanceAdminCorrectionService.CreateAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "AttendanceAdminCorrections, AttendancePunches (unchanged)"
+
+  - id: F-ATT-128
+    name: A correction re-runs day processing synchronously in the same transaction; if reprocessing fails, the whole correction (including the just-inserted row) rolls back
+    group: Admin Corrections
+    status: Implemented
+    ui: "AttendanceOperationsPage correction dialog"
+    api: "POST /api/attendance/admin-corrections"
+    service: "AttendanceAdminCorrectionService.CreateAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "AttendanceAdminCorrections, EmployeeAttendanceDays"
+
+  - id: F-ATT-129
+    name: The newest (highest-version) admin correction takes precedence over an earlier approved Regularization for the same date once the day is reprocessed
+    group: Admin Corrections
+    status: Implemented
+    ui: "AttendanceOperationsPage / MyAttendancePage day-detail"
+    api: "POST /api/attendance/admin-corrections, GET /api/attendance/me/days/{date}"
+    service: "AttendanceAdminCorrectionService.CreateAsync / AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.AdminCorrection.Manage / Attendance.View"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-130
+    name: "Authorization for a correction target is NotFound (not Forbidden) when denied - self, role-scope predicate, or resolved-manager-of-target are the three allowed paths"
+    group: Admin Corrections
+    status: Implemented
+    ui: "AttendanceOperationsPage"
+    api: "POST /api/attendance/admin-corrections, GET /api/attendance/admin-corrections/{id}"
+    service: "AttendanceAdminCorrectionService.CanAccessTargetAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "n/a"
+
+  - id: F-ATT-131
+    name: A correction is rejected when an Approved Leave or an Approved On-Duty already applies to that date, with no partial writes
+    group: Admin Corrections
+    status: Implemented
+    ui: "AttendanceOperationsPage correction dialog"
+    api: "POST /api/attendance/admin-corrections"
+    service: "AttendanceAdminCorrectionService.CreateAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "n/a (no row written)"
+  - id: F-ATT-132
+    name: A correction is blocked on a closed Attendance period, with the same period-lock guard used elsewhere
+    group: Admin Corrections
+    status: Implemented
+    ui: "AttendanceOperationsPage correction dialog"
+    api: "POST /api/attendance/admin-corrections"
+    service: "AttendanceAdminCorrectionService.CreateAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "n/a"
+
+  - id: F-ATT-133
+    name: A correction on an already-processed month makes the monthly summary stale (SourceDataVersion no longer matches the bumped DataVersion), blocking Close until the period is reprocessed
+    group: Admin Corrections
+    status: Implemented
+    ui: "AttendanceMonthlyFinalizationPage close preview"
+    api: "POST /api/attendance/admin-corrections, GET /api/attendance/periods/{id}/close-preview"
+    service: "AttendanceAdminCorrectionService.CreateAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "EmployeeAttendanceMonthlySummaries"
+
+  - id: F-ATT-134
+    name: "Repeated corrections on the same employee+date are fully supported by design - each is a new version, none are deleted/edited, and the most recent version wins for the effective day once reprocessed"
+    group: Admin Corrections
+    status: Implemented
+    ui: "AttendanceOperationsPage correction history"
+    api: "POST /api/attendance/admin-corrections"
+    service: "AttendanceAdminCorrectionService.CreateAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "AttendanceAdminCorrections"
+
+  - id: F-ATT-135
+    name: Concurrent same-day corrections from two contexts always land on distinct, gapless version numbers, retry-safe via a DbUpdateException-to-Conflict mapping
+    group: Admin Corrections
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/admin-corrections"
+    service: "AttendanceAdminCorrectionService.CreateAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "AttendanceAdminCorrections"
+
+  - id: F-ATT-136
+    name: Corrections are tenant-scoped for list/get and cross-tenant employee references are rejected at both the service and the FK layer
+    group: Admin Corrections
+    status: Implemented
+    ui: "AttendanceOperationsPage"
+    api: "GET /api/attendance/admin-corrections, GET /api/attendance/admin-corrections/{id}"
+    service: "AttendanceAdminCorrectionService.ListAsync/GetAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "AttendanceAdminCorrections"
+
+  - id: F-ATT-137
+    name: "The correction list's default scope date (when FromDate is not supplied) is evaluated against TODAY, not the historical date range being queried - a manager reassigned since the correction date could get a materially different result set"
+    group: Admin Corrections
+    status: Implemented (gap - CR-104)
+    ui: "AttendanceOperationsPage correction history"
+    api: "GET /api/attendance/admin-corrections"
+    service: "AttendanceAdminCorrectionService.ListAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "n/a"
+
+  - id: F-ATT-138
+    name: A manager holding scope over an employee via the role-scope predicate but not the AdminCorrection.Manage permission itself cannot create a correction for that direct report
+    group: Admin Corrections
+    status: Implemented
+    ui: "AttendanceOperationsPage"
+    api: "POST /api/attendance/admin-corrections"
+    service: "AttendanceAdminCorrectionService.CreateAsync"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "n/a"
+
+  # ═══════════════════════════════ G. REGULARIZATION ═══════════════════════════════
+  - id: F-ATT-139
+    name: "Submit a Regularization request (BusinessDate, RequestType, ProposedInAtUtc and/or ProposedOutAtUtc, Reason mandatory - text-only, no attachment support anywhere in the model)"
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage regularization form"
+    api: "POST /api/attendance/me/regularizations"
+    service: "AttendanceWorkflowService.SubmitRegularizationAsync"
+    permission: "Attendance.Regularization.Request"
+    db: "AttendanceRegularizationRequests"
+
+  - id: F-ATT-140
+    name: "Submission is blocked for an inactive/separated employee (EmployeeStatus != Active), and for a BusinessDate after the employee's DateOfLeaving"
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage"
+    api: "POST /api/attendance/me/regularizations"
+    service: "AttendanceWorkflowService.SubmitRegularizationAsync"
+    permission: "Attendance.Regularization.Request"
+    db: "n/a"
+
+  - id: F-ATT-141
+    name: A future BusinessDate cannot be regularized
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage"
+    api: "POST /api/attendance/me/regularizations"
+    service: "AttendanceWorkflowService.SubmitRegularizationAsync"
+    permission: "Attendance.Regularization.Request"
+    db: "n/a"
+
+  - id: F-ATT-142
+    name: "A clean Present day (no missing-in/out/invalid-sequence flags) is not eligible for regularization; a date with NO EmployeeAttendanceDay record at all skips this check and is allowed to proceed"
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage"
+    api: "POST /api/attendance/me/regularizations"
+    service: "AttendanceWorkflowService.SubmitRegularizationAsync"
+    permission: "Attendance.Regularization.Request"
+    db: "n/a"
+
+  - id: F-ATT-143
+    name: Only one Pending regularization per employee+date is allowed; a duplicate submission Conflicts, guarded by an optional serialization lock closing the race window
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage"
+    api: "POST /api/attendance/me/regularizations"
+    service: "AttendanceWorkflowService.SubmitRegularizationAsync"
+    permission: "Attendance.Regularization.Request"
+    db: "AttendanceRegularizationRequests"
+
+  - id: F-ATT-144
+    name: Regularization is blocked on a closed Attendance period (period-lock guard)
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage"
+    api: "POST /api/attendance/me/regularizations"
+    service: "AttendanceWorkflowService.SubmitRegularizationAsync"
+    permission: "Attendance.Regularization.Request"
+    db: "n/a"
+
+  - id: F-ATT-145
+    name: List and get-by-id own regularization requests
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage"
+    api: "GET /api/attendance/me/regularizations, GET /api/attendance/me/regularizations/{id}"
+    service: "AttendanceWorkflowService"
+    permission: "Attendance.View"
+    db: "AttendanceRegularizationRequests"
+
+  - id: F-ATT-146
+    name: Only the owning employee may cancel their own Pending regularization; a foreign employee's request is NotFound, not Forbidden; only Pending requests can be cancelled
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage"
+    api: "POST /api/attendance/me/regularizations/{id}/cancel"
+    service: "AttendanceWorkflowService.CancelRegularizationAsync"
+    permission: "Attendance.Regularization.Request"
+    db: "AttendanceRegularizationRequests"
+
+  - id: F-ATT-147
+    name: "Neither the target employee nor the original request submitter (by UserId) can approve/reject their own regularization - maker-checker enforced at the user level, not just the employee level"
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "POST /api/attendance/manager/regularizations/{id}/approve"
+    service: "AttendanceWorkflowService.TransitionRegularization"
+    permission: "Attendance.Regularization.Approve"
+    db: "AttendanceRegularizationRequests"
+
+  - id: F-ATT-148
+    name: "Approve creates an AttendanceAdjustment row and synchronously reprocesses the day; if reprocessing fails the whole transaction (including the adjustment) rolls back and the request stays Pending"
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "POST /api/attendance/manager/regularizations/{id}/approve"
+    service: "AttendanceWorkflowService.TransitionRegularization"
+    permission: "Attendance.Regularization.Approve"
+    db: "AttendanceRegularizationRequests, AttendanceAdjustments, EmployeeAttendanceDays"
+
+  - id: F-ATT-149
+    name: Reject stores comments with no adjustment created and no day reprocessing; raw punches are never mutated by either approve or reject
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "POST /api/attendance/manager/regularizations/{id}/reject"
+    service: "AttendanceWorkflowService.TransitionRegularization"
+    permission: "Attendance.Regularization.Approve"
+    db: "AttendanceRegularizationRequests"
+
+  - id: F-ATT-150
+    name: "Approve/reject use optimistic concurrency (ExecuteUpdateAsync guarded by Status=Pending AND matching ConcurrencyVersion); zero rows updated => Conflict; a stale transition is independently rejected by the DB's own concurrency token too"
+    group: Regularization
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/manager/regularizations/{id}/approve"
+    service: "AttendanceWorkflowService.TransitionRegularization"
+    permission: "Attendance.Regularization.Approve"
+    db: "AttendanceRegularizationRequests.ConcurrencyVersion"
+
+  - id: F-ATT-151
+    name: "Approval authority is resolved as of the request's OWN BusinessDate, not today - a manager-change boundary date means only the old manager can approve historical-date requests and only the new manager can approve later-date requests"
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "POST /api/attendance/manager/regularizations/{id}/approve"
+    service: "AttendanceWorkflowService.TransitionRegularization"
+    permission: "Attendance.Regularization.Approve"
+    db: "n/a"
+
+  - id: F-ATT-152
+    name: "The manager queue (GET manager/regularizations) is scoped by the same dual DI-dependent mechanism as elsewhere - role-scope+current-manager predicate when IAttendanceAuthorizationService is wired, or a plain per-item manager-resolver loop when it is not"
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "GET /api/attendance/manager/regularizations"
+    service: "AttendanceWorkflowService.GetManagerRegularizationsAsync"
+    permission: "Attendance.Regularization.Approve"
+    db: "n/a"
+
+  - id: F-ATT-153
+    name: "Manager list/approve/reject endpoints require the declared permission even when a genuine manager relationship exists - relationship alone never substitutes for the permission"
+    group: Regularization
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/attendance/manager/regularizations, POST .../approve"
+    service: "AttendanceWorkflowController"
+    permission: "Attendance.Regularization.Approve"
+    db: "n/a"
+
+  - id: F-ATT-154
+    name: Regularization and Admin Correction share the exact same underlying request/state-machine entity and approval pipeline - the operator's 'manual Attendance request' (POST operations/manual) creates a Pending AttendanceRegularizationRequest subject to the identical maker-checker flow, not a separate mechanism
+    group: Regularization
+    status: Implemented
+    ui: "AttendanceOperationsPage manual request"
+    api: "POST /api/attendance/operations/manual"
+    service: "AttendanceWorkflowService"
+    permission: "Attendance.Operations.Manual (or equivalent)"
+    db: "AttendanceRegularizationRequests"
+
+  - id: F-ATT-155
+    name: Cross-tenant regularization mutation attempts have zero side effects and are hidden as NotFound
+    group: Regularization
+    status: Implemented
+    ui: "n/a"
+    api: "GET/POST /api/attendance/me/regularizations, manager/regularizations"
+    service: "AttendanceWorkflowService"
+    permission: "Attendance.View / Attendance.Regularization.*"
+    db: "AttendanceRegularizationRequests"
+
+  # ═══════════════════════════════ H. ON DUTY ═══════════════════════════════
+  - id: F-ATT-156
+    name: "Submit an On Duty request (StartDate/EndDate date range - multi-day native, no time-of-day fields; Reason required; optional Purpose/Location free text; no attachment support)"
+    group: On Duty
+    status: Implemented
+    ui: "AttendanceRequestsPage on-duty form"
+    api: "POST /api/attendance/me/on-duty"
+    service: "AttendanceWorkflowService.SubmitOnDutyAsync"
+    permission: "Attendance.OnDuty.Request"
+    db: "AttendanceOnDutyRequests"
+
+  - id: F-ATT-157
+    name: StartDate must not be after EndDate; the same active-employee/DateOfLeaving/period-lock guards as Regularization apply across the whole range
+    group: On Duty
+    status: Implemented
+    ui: "AttendanceRequestsPage"
+    api: "POST /api/attendance/me/on-duty"
+    service: "AttendanceWorkflowService.SubmitOnDutyAsync"
+    permission: "Attendance.OnDuty.Request"
+    db: "n/a"
+
+  - id: F-ATT-158
+    name: "Overlap at submission is checked ONLY against the employee's own other PENDING On-Duty requests - NOT against an already-APPROVED On-Duty, existing attendance days, or approved Leave (Leave overlap is checked only at approval time)"
+    group: On Duty
+    status: Implemented (gap - CR-106)
+    ui: "AttendanceRequestsPage"
+    api: "POST /api/attendance/me/on-duty"
+    service: "AttendanceWorkflowService.SubmitOnDutyAsync"
+    permission: "Attendance.OnDuty.Request"
+    db: "AttendanceOnDutyRequests"
+
+  - id: F-ATT-159
+    name: List and get-by-id own On Duty requests
+    group: On Duty
+    status: Implemented
+    ui: "AttendanceRequestsPage"
+    api: "GET /api/attendance/me/on-duty, GET /api/attendance/me/on-duty/{id}"
+    service: "AttendanceWorkflowService"
+    permission: "Attendance.View"
+    db: "AttendanceOnDutyRequests"
+
+  - id: F-ATT-160
+    name: Only the owning employee may cancel a Pending On Duty request; only Pending requests can be cancelled
+    group: On Duty
+    status: Implemented
+    ui: "AttendanceRequestsPage"
+    api: "POST /api/attendance/me/on-duty/{id}/cancel"
+    service: "AttendanceWorkflowService.CancelOnDutyAsync"
+    permission: "Attendance.OnDuty.Request"
+    db: "AttendanceOnDutyRequests"
+
+  - id: F-ATT-161
+    name: "Approval requires manager/authorization to succeed for EVERY calendar date in the range - a manager-change boundary mid-range means NO single approver (neither old nor new manager) can approve alone"
+    group: On Duty
+    status: Implemented
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "POST /api/attendance/manager/on-duty/{id}/approve"
+    service: "AttendanceWorkflowService.TransitionOnDuty"
+    permission: "Attendance.OnDuty.Approve"
+    db: "n/a"
+
+  - id: F-ATT-162
+    name: "Approval is rejected if any day in range already has an APPROVED Leave for the employee - checked BEFORE any mutation, so nothing is touched on conflict"
+    group: On Duty
+    status: Implemented
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "POST /api/attendance/manager/on-duty/{id}/approve"
+    service: "AttendanceWorkflowService.TransitionOnDuty"
+    permission: "Attendance.OnDuty.Approve"
+    db: "n/a"
+
+  - id: F-ATT-163
+    name: "On approve, every date in range is reprocessed to project EmployeeAttendanceDayStatus.OnDuty; if any day's reprocessing fails, the WHOLE approval rolls back across all dates, not just the failed one"
+    group: On Duty
+    status: Implemented
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "POST /api/attendance/manager/on-duty/{id}/approve"
+    service: "AttendanceWorkflowService.TransitionOnDuty"
+    permission: "Attendance.OnDuty.Approve"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-164
+    name: Approving an On Duty request that resolves an already-Absent day removes that day from the active exceptions list
+    group: On Duty
+    status: Implemented
+    ui: "AttendanceOperationsPage exceptions"
+    api: "POST /api/attendance/manager/on-duty/{id}/approve"
+    service: "AttendanceWorkflowService.TransitionOnDuty"
+    permission: "Attendance.OnDuty.Approve"
+    db: "n/a"
+
+  - id: F-ATT-165
+    name: "On Duty has no separate adjustment-audit entity analogous to Regularization's AttendanceAdjustment - the projection IS the EmployeeAttendanceDay.Status=OnDuty write itself"
+    group: On Duty
+    status: Implemented (architecture note)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceWorkflowService.TransitionOnDuty"
+    permission: "n/a"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-166
+    name: Reject stores comments, is terminal, and has the same self-approval/maker-checker guards as approve
+    group: On Duty
+    status: Implemented
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "POST /api/attendance/manager/on-duty/{id}/reject"
+    service: "AttendanceWorkflowService.TransitionOnDuty"
+    permission: "Attendance.OnDuty.Approve"
+    db: "AttendanceOnDutyRequests"
+
+  - id: F-ATT-167
+    name: The manager On-Duty queue and permission gating follow the identical dual-mechanism/permission-required-even-with-relationship pattern as Regularization
+    group: On Duty
+    status: Implemented
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "GET /api/attendance/manager/on-duty"
+    service: "AttendanceWorkflowService.GetManagerOnDutyAsync"
+    permission: "Attendance.OnDuty.Approve"
+    db: "n/a"
+
+  - id: F-ATT-168
+    name: Cross-tenant On Duty mutation attempts have zero side effects and are hidden as NotFound
+    group: On Duty
+    status: Implemented
+    ui: "n/a"
+    api: "GET/POST /api/attendance/me/on-duty, manager/on-duty"
+    service: "AttendanceWorkflowService"
+    permission: "Attendance.View / Attendance.OnDuty.*"
+    db: "AttendanceOnDutyRequests"
+
+  # ═══════════════════════════════ I. OVERTIME ═══════════════════════════════
+  - id: F-ATT-169
+    name: "Create an OT policy (EligibilityMode All/None, tenant-scoped, effective-dated, resolved by the WORK date not current date); the same Overtime.Finalize permission also gates policy authoring, a double-duty reuse worth confirming with product"
+    group: Overtime
+    status: Implemented (permission double-duty)
+    ui: "OvertimePage policy admin"
+    api: "POST /api/attendance/overtime/policies"
+    service: "OvertimeService.CreatePolicyAsync"
+    permission: "Attendance.Overtime.Finalize"
+    db: "OvertimePolicies"
+
+  - id: F-ATT-170
+    name: "Create an OT request/record: self-service restricted to the caller's own linked employee independent of any role-scope; requires policy resolvable and EligibilityMode != None; RequestedMinutes>0; Category checked against policy Allow flags (NOT cross-checked against the actual roster day type)"
+    group: Overtime
+    status: Implemented
+    ui: "OvertimePage create form"
+    api: "POST /api/attendance/overtime/requests"
+    service: "OvertimeService.CreateRequestAsync"
+    permission: "Attendance.Overtime.Request"
+    db: "OvertimeRequests"
+
+  - id: F-ATT-171
+    name: "Attendance must already be authoritative (an EmployeeAttendanceDay row must exist for the work date) before OT can be requested - OT is purely attendance-derived, never independently timed"
+    group: Overtime
+    status: Implemented
+    ui: "OvertimePage"
+    api: "POST /api/attendance/overtime/requests"
+    service: "OvertimeService.CreateRequestAsync"
+    permission: "Attendance.Overtime.Request"
+    db: "n/a"
+
+  - id: F-ATT-172
+    name: "ActualEligibleMinutes is computed once at creation from the resolved attendance day (NormalDay: max(0,Worked-Expected); WeekOff/Holiday: max(0,Worked)), then minimum-threshold zeroing, rounding mode, and MaximumMinutesPerDay cap are applied in that order - never recomputed later"
+    group: Overtime
+    status: Implemented
+    ui: "OvertimePage"
+    api: "POST /api/attendance/overtime/requests"
+    service: "OvertimeService.CreateRequestAsync"
+    permission: "Attendance.Overtime.Request"
+    db: "OvertimeRequests"
+
+  - id: F-ATT-173
+    name: "A Submitted or Approved OT request already exists for the same employee+work date => Conflict duplicate guard; a prior Rejected request does NOT block a new one"
+    group: Overtime
+    status: Implemented
+    ui: "OvertimePage"
+    api: "POST /api/attendance/overtime/requests"
+    service: "OvertimeService.CreateRequestAsync"
+    permission: "Attendance.Overtime.Request"
+    db: "OvertimeRequests"
+
+  - id: F-ATT-174
+    name: "No 'view my OT' or 'view team OT' list endpoint exists server-side despite Overtime.ViewSelf/ViewTeam permissions being defined, seeded, and tested at the permission-seed level - only OvertimeViewAll (the finalized snapshot) is wired to any controller route"
+    group: Overtime
+    status: Not Implemented (gap - CR-105)
+    ui: "n/a (no such list view exists)"
+    api: "n/a (no GET requests/mine or requests/team route exists)"
+    service: "OvertimeController"
+    permission: "Attendance.Overtime.ViewSelf / ViewTeam (unused)"
+    db: "n/a"
+
+  - id: F-ATT-175
+    name: "There is no OT request cancellation/withdrawal endpoint at all - OvertimeRequestStatus.Cancelled is a defined enum member that no code path ever sets; only Draft->Submitted->Approved/Rejected is reachable"
+    group: Overtime
+    status: Not Implemented (gap - CR-107)
+    ui: "n/a (no such action exists)"
+    api: "n/a (no /cancel route exists)"
+    service: "OvertimeService"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-176
+    name: "Approve requires Submitted status; requester cannot approve their own request; ApprovedMinutes = min(RequestedMinutes, ActualEligibleMinutes), the latter frozen at creation time - never recomputed even if the underlying attendance day changes between creation and approval"
+    group: Overtime
+    status: Implemented (gap - CR-108)
+    ui: "OvertimePage manager approve (non-functional in UI, see frontend findings)"
+    api: "POST /api/attendance/overtime/requests/{id}/approve"
+    service: "OvertimeService.ApproveAsync"
+    permission: "Attendance.Overtime.Approve"
+    db: "OvertimeRequests"
+
+  - id: F-ATT-177
+    name: Reject transitions Submitted->Rejected and stores a RejectionReason; Correct is only permitted when the period is not currently finalized with a current OT snapshot for that employee, requiring an explicit Reopen first
+    group: Overtime
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/overtime/requests/{id}/reject, /correct"
+    service: "OvertimeService.RejectAsync/CorrectAsync"
+    permission: "Attendance.Overtime.Approve"
+    db: "OvertimeRequests"
+
+  - id: F-ATT-178
+    name: "Finalize requires the AttendancePeriod be Closed; sums approved minutes per employee/category from the current PayrollAttendanceSnapshot set, applies the monthly cap (split Normal->WeekOff->Holiday priority order), and creates versioned, IsCurrent-unique PayrollOvertimeSnapshot/EmployeeMonthlyOvertime rows"
+    group: Overtime
+    status: Implemented
+    ui: "OvertimePage Monthly Finalization card"
+    api: "POST /api/attendance/overtime/periods/{attendancePeriodId}/finalize"
+    service: "OvertimeService.FinalizeAsync"
+    permission: "Attendance.Overtime.Finalize"
+    db: "PayrollOvertimeSnapshots, EmployeeMonthlyOvertime"
+
+  - id: F-ATT-179
+    name: "The OT snapshot stores minutes and multipliers only, never a monetary amount - payroll calculates the amount; ResolveAsync cross-checks the OT snapshot's AttendanceSnapshotId/Version against the CURRENT PayrollAttendanceSnapshot and Conflicts (OvertimeVersionConflict) if stale"
+    group: Overtime
+    status: Implemented
+    ui: "OvertimePage Payroll OT Traceability card"
+    api: "n/a (internal, consumed by Payroll)"
+    service: "OvertimeService.ResolveAsync"
+    permission: "n/a"
+    db: "PayrollOvertimeSnapshots"
+
+  - id: F-ATT-180
+    name: Reopen marks current OT snapshots/summaries non-current, requires a non-blank reason, and preserves history without deleting it
+    group: Overtime
+    status: Implemented
+    ui: "OvertimePage Reopen/Version History card"
+    api: "POST /api/attendance/overtime/periods/{attendancePeriodId}/reopen"
+    service: "OvertimeService.ReopenAsync"
+    permission: "Attendance.Overtime.Reopen"
+    db: "PayrollOvertimeSnapshots"
+
+  - id: F-ATT-181
+    name: "OT never double-counts across an overnight shift's midnight boundary, and never inflates eligible minutes beyond the resolved WorkedMinutes for a partial day"
+    group: Overtime
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/overtime/requests"
+    service: "OvertimeService.CreateRequestAsync"
+    permission: "Attendance.Overtime.Request"
+    db: "n/a"
+
+  - id: F-ATT-182
+    name: "A day Status=OnLeave (WorkedMinutes null) or Status=OnDuty both yield zero eligible OT minutes - On Duty does not automatically become Overtime"
+    group: Overtime
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/overtime/requests"
+    service: "OvertimeService.CreateRequestAsync"
+    permission: "Attendance.Overtime.Request"
+    db: "n/a"
+
+  - id: F-ATT-183
+    name: "Overtime Category is caller-chosen and validated only against the policy's Allow flags, never cross-checked against the work date's actual resolved RosterDayType/calendar - a Holiday-category OT request could in principle be accepted on a genuinely normal working day if the policy allows it"
+    group: Overtime
+    status: Implemented (gap - CR-109)
+    ui: "OvertimePage"
+    api: "POST /api/attendance/overtime/requests"
+    service: "OvertimeService.CreateRequestAsync"
+    permission: "Attendance.Overtime.Request"
+    db: "n/a"
+
+  - id: F-ATT-184
+    name: "Comp-Off/Overtime double-benefit exclusivity is keyed on the exact source EmployeeAttendanceDay.Id: an OT request for a day already sourcing a non-Rejected/non-Superseded Comp-Off earning (or vice versa) is blocked with DoubleBenefitDenied; the guard is scoped per attendance day, not employee-wide, and is a pre-commit AnyAsync check with NO backing DB unique constraint"
+    group: Overtime
+    status: Implemented (race-susceptible - CR-110)
+    ui: "OvertimePage / CompOffPage"
+    api: "POST /api/attendance/overtime/requests, POST /api/attendance/comp-off/earn"
+    service: "OvertimeService.CreateRequestAsync / CompOffService"
+    permission: "Attendance.Overtime.Request / Attendance.CompOff.*"
+    db: "OvertimeRequests, CompOffEarnings"
+
+  - id: F-ATT-185
+    name: "Rejecting a cross-benefit attempt (Comp-Off after OT, or OT after Comp-Off) leaves the other, already-finalized benefit completely untouched - no partial mutation"
+    group: Overtime
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/overtime/requests, POST /api/attendance/comp-off/earn"
+    service: "OvertimeService / CompOffService"
+    permission: "n/a"
+    db: "PayrollOvertimeSnapshots, CompOffEarnings"
+
+  - id: F-ATT-186
+    name: "Manager-authority resolution across Workflow and Overtime composes three coexisting primitives - EmployeeManagerResolver (direct date-scoped EmploymentHistory.ManagerId lookup with cycle detection), IEmployeeAccessScopeService.BuildRoleScopePredicateAsync (role/org scope), and a time-scoped UserRoles/RolePermissions permission check - rather than inventing a new mechanism; AttendanceAuthorizationService composes/wraps these, and BOTH services accept it as an OPTIONAL DI parameter, degrading to the pure manager-resolver (no role-scope, no self-link) when absent"
+    group: Overtime - Authority Resolution
+    status: Implemented (DI-dependent composition)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceAuthorizationService / EmployeeManagerResolver"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-187
+    name: Overtime endpoints correctly declare their own distinct permissions per action (Request/Approve/Finalize/Reopen/ViewAll) with no missing controller attribute found
+    group: Overtime
+    status: Implemented
+    ui: "n/a"
+    api: "all /api/attendance/overtime/* routes"
+    service: "OvertimeController"
+    permission: "varies per route"
+    db: "n/a"
+
+  - id: F-ATT-188
+    name: A cross-tenant Overtime access attempt is rejected at the host/tenant-resolution layer (401), distinct from the in-tenant 403/404 authorization patterns used elsewhere in Attendance
+    group: Overtime
+    status: Implemented
+    ui: "n/a"
+    api: "any /api/attendance/overtime/* route"
+    service: "TenantShardResolutionMiddleware"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-189
+    name: The OvertimeRequestRequest DTO has no client-settable ApprovedMinutes/ActualEligibleMinutes property at all - a client cannot even attempt to submit these values directly
+    group: Overtime
+    status: Implemented (by design)
+    ui: "n/a"
+    api: "POST /api/attendance/overtime/requests"
+    service: "OvertimeController"
+    permission: "Attendance.Overtime.Request"
+    db: "n/a"
+
+  # ═══════════════════════════════ J. ATTENDANCE EXCEPTIONS (Operations Queue / Dashboard / Bulk / Resolve) ═══════════════════════════════
+  - id: F-ATT-190
+    name: "The operational exception queue lists every exception type (MissingInPunch, MissingOutPunch, Incomplete, NotProcessed, LeaveConflict, PendingRegularization, PendingOnDuty, ProcessingError, LateArrival, EarlyDeparture, Absent) in the caller's authorized scope, filterable by date/employee/type/status/resolution/search"
+    group: Exceptions - Operations Queue
+    status: Implemented
+    ui: "AttendanceOperationsPage exception workbench"
+    api: "GET /api/attendance/operations/exceptions"
+    service: "AttendanceOperationsService.GetOperationalExceptionsAsync"
+    permission: "Attendance.Exception.View"
+    db: "n/a (derived, not a persisted table)"
+
+  - id: F-ATT-191
+    name: The operational exceptions dashboard aggregates counts (pending regularization/correction/on-duty, exception totals, period status/version) matching the authoritative workbench data
+    group: Exceptions - Operations Queue
+    status: Implemented
+    ui: "AttendanceOperationsPage dashboard"
+    api: "GET /api/attendance/operations/dashboard"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.Exception.View"
+    db: "n/a"
+
+  - id: F-ATT-192
+    name: "Resolve (Acknowledge/Waive) an exception - gated only by Attendance.Exception.View, the SAME permission as read access, with no dedicated manage/resolve permission unlike corrections or bulk approval"
+    group: Exceptions - Operations Queue
+    status: Implemented (permission-design note)
+    ui: "AttendanceOperationsPage exception workbench"
+    api: "POST /api/attendance/operations/exceptions/resolve"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.Exception.View"
+    db: "n/a"
+
+  - id: F-ATT-193
+    name: Bulk approve/reject of Regularization and On-Duty items in one call, scoped/audited/idempotent/conflict-safe, with a per-item result set and a documented item-count limit
+    group: Exceptions - Operations Queue
+    status: Implemented
+    ui: "AttendanceOperationsPage bulk actions"
+    api: "POST /api/attendance/operations/bulk"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.Regularization.Approve"
+    db: "AttendanceRegularizationRequests, AttendanceOnDutyRequests"
+
+  - id: F-ATT-194
+    name: Manual attendance submission (HR/operator-initiated maker-checker request) and bulk-corrections both require AdminCorrection.Manage
+    group: Exceptions - Operations Queue
+    status: Implemented
+    ui: "AttendanceOperationsPage manual correction / bulk corrections"
+    api: "POST /api/attendance/operations/manual, POST /api/attendance/operations/bulk-corrections"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "AttendanceRegularizationRequests, AttendanceAdminCorrections"
+
+  - id: F-ATT-195
+    name: Export the operational exceptions queue, requiring BOTH Exception.View and Report.Export, capped at MaxExportRows=50,000, verified read-only and column-hygienic
+    group: Exceptions - Operations Queue
+    status: Implemented
+    ui: "AttendanceOperationsPage export"
+    api: "GET /api/attendance/operations/exceptions/export"
+    service: "AttendanceOperationsService.ExportExceptionsAsync"
+    permission: "Attendance.Exception.View AND Attendance.Report.Export"
+    db: "n/a"
+
+  - id: F-ATT-196
+    name: "Operational exception queue authorization is applied SQL-side (an EXISTS subquery composed into the IQueryable) BEFORE CountAsync/Skip/Take - authorization is never a data-leak risk here, confirmed at real large-data volume across Manager/HRBP/TimeManager scope mechanisms"
+    group: Exceptions - Operations Queue
+    status: Implemented (verified safe)
+    ui: "n/a"
+    api: "GET /api/attendance/operations/exceptions"
+    service: "AttendanceOperationsService.GetExceptionsAsync"
+    permission: "Attendance.Exception.View"
+    db: "n/a"
+
+  - id: F-ATT-197
+    name: "An employee's self-service exceptions read (me/exceptions) is gated on plain Attendance.View, NOT Attendance.Exception.ViewSelf - the permission the seeded Employee role actually holds - so a plain Employee gets 403 on their own exceptions route in the seeded matrix"
+    group: Exceptions - Self View
+    status: Implemented (gap - CR-111)
+    ui: "MyAttendanceExceptionsPage"
+    api: "GET /api/attendance/me/exceptions"
+    service: "AttendanceOperationsService.GetMyExceptionsAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-198
+    name: "An employee CAN view their own exceptions but cannot reach the operational (team/tenant) scope - the self/operational boundary is enforced"
+    group: Exceptions - Self View
+    status: Implemented
+    ui: "MyAttendanceExceptionsPage"
+    api: "GET /api/attendance/me/exceptions vs GET /api/attendance/operations/exceptions"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.View vs Attendance.Exception.View"
+    db: "n/a"
+
+  - id: F-ATT-199
+    name: "Removal from the active exception list: a resolved MissingPunch/Absence exception (via approved Regularization, approved On-Duty, or an admin correction) disappears from the active queue while remaining visible in employee history"
+    group: Exceptions - Lifecycle
+    status: Implemented
+    ui: "AttendanceOperationsPage"
+    api: "GET /api/attendance/operations/exceptions, GET /api/attendance/operations/employees/{id}/history"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.Exception.View"
+    db: "n/a"
+
+  - id: F-ATT-200
+    name: Rejecting a manual attendance/regularization request leaves the authoritative day unchanged and the rejected attempt remains visible historically
+    group: Exceptions - Lifecycle
+    status: Implemented
+    ui: "AttendanceOperationsPage"
+    api: "POST /api/attendance/manager/regularizations/{id}/reject, GET /api/attendance/operations/employees/{id}/history"
+    service: "AttendanceOperationsService / AttendanceWorkflowService"
+    permission: "Attendance.Regularization.Approve"
+    db: "n/a"
+
+  - id: F-ATT-201
+    name: A finalized period's exceptions/corrections require an explicit Reopen and preserve payroll snapshot history across the reopen-correct-refinalize cycle
+    group: Exceptions - Lifecycle
+    status: Implemented
+    ui: "AttendanceOperationsPage"
+    api: "POST /api/attendance/operations/manual (on a Closed period)"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "n/a"
+
+  - id: F-ATT-202
+    name: A caller with zero Attendance permissions is denied bulk-correct/reopen actions outright
+    group: Exceptions - Operations Queue
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/operations/bulk-corrections, POST /api/attendance/periods/{id}/reopen"
+    service: "AttendanceOperationsController / AttendanceMonthlyController"
+    permission: "Attendance.AdminCorrection.Manage / Attendance.Monthly.Reopen"
+    db: "n/a"
+
+  - id: F-ATT-203
+    name: A locked (closed) period cannot be modified through operations bulk-correction without first reopening, even by a caller who otherwise holds correction permissions
+    group: Exceptions - Operations Queue
+    status: Implemented
+    ui: "AttendanceOperationsPage"
+    api: "POST /api/attendance/operations/bulk-corrections"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "n/a"
+
+  - id: F-ATT-204
+    name: Cross-employee correction references (a bulk-correction row naming an employee outside the caller's scope) are denied per-item, not just tenant-wide
+    group: Exceptions - Operations Queue
+    status: Implemented
+    ui: "AttendanceOperationsPage bulk corrections"
+    api: "POST /api/attendance/operations/bulk-corrections"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "n/a"
+
+  - id: F-ATT-205
+    name: Cross-tenant operational exception queries return zero data, never another tenant's exceptions
+    group: Exceptions - Operations Queue
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/attendance/operations/exceptions"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.Exception.View"
+    db: "n/a"
+
+  # ═══════════════════════════════ K. MANAGER / HR SCOPE (AttendanceAuthorizationService, CR-57/CR-77 matrix) ═══════════════════════════════
+  - id: F-ATT-206
+    name: "AttendanceAuthorizationService is a FOURTH independent 'who can see/act on whose employees' mechanism, distinct from RoleScopeResolver, EmployeeAccessScopeService.BuildPredicateAsync (Employee/CR-57 origin), and LeaveAuthorizationService (Leave/CR-77) - it partially reuses EmployeeAccessScopeService.BuildRoleScopePredicateAsync for its role-scope arm but writes its own self-predicate, its own manager-predicate (in two independently-coded variants within the same class), and its own inline permission-check join"
+    group: Manager/HR Scope
+    status: Implemented (architecture finding)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceAuthorizationService"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-207
+    name: "BuildEmployeePredicateAsync composes self (AccountEmployeeCurrentLinks) OR role-scope (delegated to EmployeeAccessScopeService.BuildRoleScopePredicateAsync) OR current-manager (its own BuildCurrentManagerPredicate over EmployeeEmploymentHistory.ManagerId, effective-dated)"
+    group: Manager/HR Scope
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceAuthorizationService.BuildEmployeePredicateAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-208
+    name: "CanAccessEmployeeAsync evaluates self+role-scope first (includeManager forced false internally), and only on a miss falls back to a SEPARATE, third code path - IEmployeeManagerResolver.ResolveAsync - for the manager check, rather than reusing BuildCurrentManagerPredicate; two different 'is this my manager' implementations coexist within one service depending on the entry point called"
+    group: Manager/HR Scope
+    status: Implemented (internal duplication)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceAuthorizationService.CanAccessEmployeeAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-209
+    name: "Permission possession itself (HasPermissionAsync) is a separate, date-scoped UserRoles<->RolePermissions<->Permissions join, independent of manager-scope resolution - a FOURTH independent permission-check implementation across the product, not delegated to any shared primitive"
+    group: Manager/HR Scope
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceAuthorizationService.HasPermissionAsync"
+    permission: "n/a"
+    db: "UserRoles, RolePermissions, Permissions"
+
+  - id: F-ATT-210
+    name: "The manager-arm of BuildEmployeePredicateAsync genuinely honors manager-as-of-the-query's-effective-date (not manager-as-of-today) - a rotated-off manager still sees a report's historical data for dates during their tenure"
+    group: Manager/HR Scope
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceAuthorizationService.BuildEmployeePredicateAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-211
+    name: "The null-DI fallback (IAttendanceAuthorizationService? absent) used across AttendanceOperationsService/AttendanceReportService/AttendanceMonthlyProcessor is FULLY PERMISSIVE (x => true, no scoping at all), and in ReviewRegularizationAsync/ReviewOnDutyAsync the authorization check is skipped entirely when null (no else branch) - sharper/more permissive than Leave's CR-77 legacy branch; not reachable in production since DI always registers the service"
+    group: Manager/HR Scope
+    status: Implemented (design-consistency risk, not known-reachable)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceOperationsService / AttendanceReportService / AttendanceMonthlyProcessor"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-212
+    name: "GET api/attendance/comp-off/operations has no [HasPermission] attribute at all - only controller-level [Authorize] - the same pattern Leave's CR-82 flagged, confirmed present in Attendance's CompOffController too; service-level BuildOperationalScopeAsync tries 5 permissions in turn (ViewAll/ViewTeam/Manage/Approve/ViewHistory) and denies if none held, so it is not a true bypass, but is invisible to route-attribute-based permission audits"
+    group: Manager/HR Scope
+    status: Implemented (gap - CR-82 cross-reference)
+    ui: "CompOffOperationsPage"
+    api: "GET /api/attendance/comp-off/operations"
+    service: "CompOffService.GetOperationalAsync/BuildOperationalScopeAsync"
+    permission: "none declared (service checks 5 alternatives internally)"
+    db: "n/a"
+
+  - id: F-ATT-213
+    name: "Full Attendance/Overtime/CompOff/Device role x permission matrix (SuperAdmin/TenantAdmin hold everything except AccountEmployeeLink.*; HRAdmin/HRManager/Manager/Employee/ERO/HRBP/TimeManager/SuperHR each hold a distinct, uneven subset; AccountLinkAdministrator/AccountLinkAuditor/IT/Accounts hold zero Attendance permissions)"
+    group: Manager/HR Scope
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "SeedData.RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-214
+    name: No seeded role except SuperAdmin/TenantAdmin holds Regularization.Request/Approve, OnDuty.Request/Approve, AdminCorrection.Manage, any Overtime.* permission, or CompOff.ViewHistory
+    group: Manager/HR Scope
+    status: Implemented (gap - CR-112, CR-114)
+    ui: "n/a"
+    api: "n/a"
+    service: "SeedData.RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-215
+    name: "HRAdmin can view the operational exception queue and process/close/reopen monthly periods, but cannot approve/reject a single regularization or on-duty request, and cannot submit a manual correction - those actions are SuperAdmin/TenantAdmin-only in the seeded matrix"
+    group: Manager/HR Scope
+    status: Implemented (gap - CR-112)
+    ui: "AttendanceOperationsPage"
+    api: "POST /api/attendance/manager/regularizations/{id}/approve, POST /api/attendance/operations/manual"
+    service: "SeedData.RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-216
+    name: "SuperHR holds almost no Attendance permission (only CompOff.ViewAll/Approve/Manage) despite holding PageAccess.Manage and the full Payroll configuration surface - cannot open Operations, Reports, or Device Integration screens through its own role"
+    group: Manager/HR Scope
+    status: Implemented (gap - CR-113)
+    ui: "n/a"
+    api: "n/a"
+    service: "SeedData.RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-217
+    name: "TimeManager cannot approve regularizations/on-duty, cannot submit manual corrections, cannot view Attendance Reports, and (despite holding DeviceMapping/DeviceSync/DeviceImport/DeviceViewHistory) does NOT hold Device.Manage - cannot register/edit/activate/deactivate a device"
+    group: Manager/HR Scope
+    status: Implemented (gap - CR-113)
+    ui: "n/a"
+    api: "n/a"
+    service: "SeedData.RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-218
+    name: "A plain Employee role holds MonthlyViewSelf/ExceptionViewSelf/CompOffViewSelf but NOT Attendance.View - so me/calendar, me/days/{date}, and me/exceptions (all gated on plain Attendance.View) are unreachable by the seeded Employee role, while the frontend nav item is correspondingly hidden so the gap is invisible as a broken click"
+    group: Manager/HR Scope
+    status: Implemented (gap - CR-111 cross-reference)
+    ui: "MyAttendancePage / MyAttendanceExceptionsPage (nav item hidden)"
+    api: "GET /api/attendance/me/calendar, /me/days/{date}, /me/exceptions"
+    service: "SeedData.RolePermissionMap"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-219
+    name: "The seeded Manager role holds MonthlyViewTeam/ExceptionView/CompOffViewTeam+Approve but NOT Attendance.View, so manager/team and manager/team/{employeeId}/{date} (gated on plain Attendance.View) are unreachable by Manager, even though the Operations queue (ExceptionView) and Monthly summaries (MonthlyViewTeam) remain reachable through the SAME role - two 'manager view' surfaces disagree on which permission unlocks them"
+    group: Manager/HR Scope
+    status: Implemented (gap - CR-111 cross-reference)
+    ui: "ManagerAttendancePage"
+    api: "GET /api/attendance/manager/team, /manager/team/{employeeId}/{date}"
+    service: "SeedData.RolePermissionMap"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-220
+    name: Manager operational queries correctly return team-only rows and exclude same-tenant non-team employees, proven at HTTP level across role personas
+    group: Manager/HR Scope
+    status: Implemented
+    ui: "AttendanceOperationsPage"
+    api: "GET /api/attendance/operations/exceptions"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.Exception.View"
+    db: "n/a"
+
+  - id: F-ATT-221
+    name: HRBP and TimeManager role-scope resolution (via BuildRoleScopePredicateAsync) is proven at real large-data volume to be applied before count/paging, identically to the Manager manager-predicate path
+    group: Manager/HR Scope
+    status: Implemented
+    ui: "AttendanceOperationsPage"
+    api: "GET /api/attendance/operations/exceptions"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.Exception.View"
+    db: "n/a"
+
+  - id: F-ATT-222
+    name: A resolution-scope role parametrized across multiple personas (Manager/HRBP/TimeManager/HRAdmin) is exercised for the identical workbench/history workflow, confirming the same code path serves every scope mechanism consistently
+    group: Manager/HR Scope
+    status: Implemented
+    ui: "AttendanceOperationsPage"
+    api: "GET /api/attendance/operations/exceptions"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.Exception.View"
+    db: "n/a"
+
+  - id: F-ATT-223
+    name: Cross-tenant operational and exception queries return zero data regardless of which scope mechanism (manager, role-scope, tenant-wide) the caller's role uses
+    group: Manager/HR Scope
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/attendance/operations/exceptions"
+    service: "AttendanceOperationsService"
+    permission: "Attendance.Exception.View"
+    db: "n/a"
+
+  # ═══════════════════════════════ L. ATTENDANCE REPORTS ═══════════════════════════════
+  - id: F-ATT-224
+    name: "Daily report (FromDate/ToDate max 366 interactive days, EmployeeId/DepartmentId/WorkLocationId/Status filters, SQL-side paging), reads authoritative effective-day source states"
+    group: Reports
+    status: Implemented
+    ui: "AttendanceReportsPage daily"
+    api: "GET /api/attendance/reports/daily"
+    service: "AttendanceReportService.GetDailyAsync"
+    permission: "Attendance.Report.View"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-225
+    name: "Monthly report (PeriodId/Year/Month/EmployeeId filters, SQL-side paging), reads the persisted EmployeeAttendanceMonthlySummaries, not recomputed"
+    group: Reports
+    status: Implemented
+    ui: "AttendanceReportsPage monthly"
+    api: "GET /api/attendance/reports/monthly"
+    service: "AttendanceReportService.GetMonthlyAsync"
+    permission: "Attendance.Report.View"
+    db: "EmployeeAttendanceMonthlySummaries"
+
+  - id: F-ATT-226
+    name: "Exceptions report (PeriodId required, EmployeeId/ExceptionType/IsBlocking/FromDate/ToDate filters) - authorization scope is applied correctly and first at the SQL level, but the exception derivation, filtering, sorting, AND pagination all happen in-memory over the whole scoped employee x period set (DeriveExceptions), not at the DB"
+    group: Reports
+    status: Implemented (performance risk - CR-115)
+    ui: "AttendanceReportsPage exceptions"
+    api: "GET /api/attendance/reports/exceptions"
+    service: "AttendanceReportService.GetExceptionsAsync -> AttendanceMonthlyProcessor.DeriveExceptions"
+    permission: "Attendance.Report.View AND Attendance.Exception.View"
+    db: "n/a"
+
+  - id: F-ATT-227
+    name: "Exceptions report export re-derives the ENTIRE exception set from scratch once per export page (page++ loop calling GetExceptionsAsync repeatedly) rather than deriving once and paging the result, up to MaxExportRows=50,000 - a real latency multiplier for large exports, though still correctly capped"
+    group: Reports
+    status: Implemented (performance risk - CR-115)
+    ui: "AttendanceReportsPage exceptions export"
+    api: "GET /api/attendance/reports/exceptions/export"
+    service: "AttendanceReportService.ExportExceptionsAsync"
+    permission: "Attendance.Report.View AND Attendance.Report.Export AND Attendance.Exception.View"
+    db: "n/a"
+
+  - id: F-ATT-228
+    name: "Report View and Export are independently required for every export route - View alone never suffices for an export endpoint"
+    group: Reports
+    status: Implemented
+    ui: "AttendanceReportsPage export buttons"
+    api: "GET /api/attendance/reports/daily/export, /monthly/export, /exceptions/export"
+    service: "AttendanceReportController"
+    permission: "Attendance.Report.View AND Attendance.Report.Export (+ Exception.View for exceptions)"
+    db: "n/a"
+
+  - id: F-ATT-229
+    name: "All report/export endpoints enforce a hard MaxExportRows=50,000 cap, checked via TotalCount before materializing rows - export fails with a validation error rather than silently truncating"
+    group: Reports
+    status: Implemented
+    ui: "AttendanceReportsPage export"
+    api: "GET /api/attendance/reports/*/export"
+    service: "AttendanceReportService"
+    permission: "Attendance.Report.View AND Attendance.Report.Export"
+    db: "n/a"
+
+  - id: F-ATT-230
+    name: "CSV exports are formula-injection-hardened (RFC field escaping, formula-triggering leading characters neutralized) and UTF-8 encoded, including deterministic formatting of unicode/null/date/time values"
+    group: Reports
+    status: Implemented
+    ui: "AttendanceReportsPage export"
+    api: "GET /api/attendance/reports/daily/export"
+    service: "AttendanceReportService"
+    permission: "Attendance.Report.View AND Attendance.Report.Export"
+    db: "n/a"
+
+  - id: F-ATT-231
+    name: The Daily report uses the employment effective as of each historical business date to filter/label rows, not the employee's current employment snapshot
+    group: Reports
+    status: Implemented
+    ui: "AttendanceReportsPage daily"
+    api: "GET /api/attendance/reports/daily"
+    service: "AttendanceReportService.GetDailyAsync"
+    permission: "Attendance.Report.View"
+    db: "EmployeeEmploymentHistory"
+  - id: F-ATT-232
+    name: Report employee filters cannot be used to cross tenant boundaries; report reads are tenant-scoped end to end
+    group: Reports
+    status: Implemented
+    ui: "AttendanceReportsPage"
+    api: "GET /api/attendance/reports/daily?employeeId=..."
+    service: "AttendanceReportService"
+    permission: "Attendance.Report.View"
+    db: "n/a"
+
+  - id: F-ATT-233
+    name: "The seeded Manager role lacks Attendance.Report.View entirely (only HRAdmin/HRManager hold it) - a Manager is denied every report/export route outright, unlike the operational exception queue which Manager CAN reach via ExceptionView"
+    group: Reports
+    status: Implemented (permission-matrix finding)
+    ui: "AttendanceReportsPage"
+    api: "GET /api/attendance/reports/daily"
+    service: "SeedData.RolePermissionMap"
+    permission: "Attendance.Report.View"
+    db: "n/a"
+
+  # ═══════════════════════════════ M. ATTENDANCE DEVICES / INGESTION / REPLAY ═══════════════════════════════
+  - id: F-ATT-234
+    name: "Device CRUD: Code/Name/DeviceType required and length-capped; TimeZoneId must resolve via TimeZoneInfo; ConnectionMode must be a defined enum value; WorkLocationId (if set) must be in-tenant"
+    group: Devices - CRUD
+    status: Implemented
+    ui: "AttendanceDevicesPage Devices tab"
+    api: "GET/POST/PUT /api/attendance/devices"
+    service: "AttendanceDeviceOperationsService.ValidateDeviceAsync"
+    permission: "Attendance.Device.View / Manage"
+    db: "AttendanceDevices"
+
+  - id: F-ATT-235
+    name: "Device Code is tenant-unique (DB index + pre-check, Conflict DuplicateDeviceCode); different tenants may freely reuse the same Code; SerialNumber has NO uniqueness constraint at all - two devices can share an identical serial with no warning"
+    group: Devices - CRUD
+    status: Implemented (gap - CR-120)
+    ui: "AttendanceDevicesPage"
+    api: "POST /api/attendance/devices"
+    service: "AttendanceDeviceOperationsService.ValidateDeviceAsync"
+    permission: "Attendance.Device.Manage"
+    db: "AttendanceDevices"
+
+  - id: F-ATT-236
+    name: "Activate/Deactivate/Disable: Disabled is TERMINAL - once Disabled, no further status transition (including back to Active) is possible; Active<->Inactive toggles freely; each real transition writes an audit row"
+    group: Devices - CRUD
+    status: Implemented
+    ui: "AttendanceDevicesPage device status actions"
+    api: "POST /api/attendance/devices/{id}/activate, /deactivate, /disable"
+    service: "AttendanceDeviceOperationsService.SetDeviceStatusAsync"
+    permission: "Attendance.Device.Manage"
+    db: "AttendanceDevices, DeviceAuditLog"
+
+  - id: F-ATT-237
+    name: "CredentialReference is never returned in any DTO and never appears in audit ContextJson (only a boolean 'configured' flag); on update, a blank/whitespace CredentialReference silently retains the existing value - there is no way to explicitly clear it via the API"
+    group: Devices - CRUD
+    status: Implemented (gap - CR-116)
+    ui: "AttendanceDevicesPage device form (always starts blank on edit)"
+    api: "PUT /api/attendance/devices/{id}"
+    service: "AttendanceDeviceOperationsService.UpdateDeviceAsync"
+    permission: "Attendance.Device.Manage"
+    db: "AttendanceDevices.CredentialReference"
+
+  - id: F-ATT-238
+    name: "Employee-device mapping identity (DeviceId, ExternalEmployeeIdentifier) is immutable after creation - update can only change EffectiveFrom/EffectiveTo/Status; a duplicate exact triple is DB-blocked, a genuine date-overlap on the same (device,external id) is app-level-checked inside a Serializable transaction"
+    group: Devices - Mapping
+    status: Implemented
+    ui: "AttendanceDevicesPage Employee mappings tab"
+    api: "GET/POST/PUT /api/attendance/devices/mappings"
+    service: "AttendanceDeviceOperationsService.CreateMappingAsync/UpdateMappingAsync"
+    permission: "Attendance.Device.View / Mapping"
+    db: "AttendanceDeviceEmployeeMappings"
+
+  - id: F-ATT-239
+    name: "The DbUpdateException catch around mapping create/reprocess is a catch-all, not narrowed to the unique-index violation - any unrelated transient DB failure during mapping insert surfaces the same misleading 'MappingConflict: active effective mappings cannot overlap' message to the operator"
+    group: Devices - Mapping
+    status: Implemented (message-accuracy gap)
+    ui: "AttendanceDevicesPage Employee mappings tab"
+    api: "POST /api/attendance/devices/mappings"
+    service: "AttendanceDeviceOperationsService.CreateMappingAsync"
+    permission: "Attendance.Device.Mapping"
+    db: "n/a"
+
+  - id: F-ATT-240
+    name: "If more than one Active mapping ends up matching the same (device, external id, businessDate) despite the unique index (a race on differing EffectiveFrom), ingestion marks the event Rejected 'Multiple effective mappings exist; no employee was selected' rather than guessing"
+    group: Devices - Mapping
+    status: Implemented
+    ui: "AttendanceDevicesPage Ingestion issues tab"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendanceDeviceIntegrationService.IngestAsync"
+    permission: "Attendance.Device.Sync"
+    db: "AttendanceDeviceIngestionEvents"
+
+  - id: F-ATT-241
+    name: "Two INDEPENDENT idempotency keys exist: the receipt-level dedup key is (TenantId, 'device:{deviceId}:{Source}', ExternalEventId) - Source-specific, so the same event under two different Source strings (worker vs manual-import vs issue-reprocess) creates TWO separate receipt rows - while the authoritative-punch dedup key is (DeviceId, ExternalEventId) ONLY, source-independent, so the resulting AttendancePunch is never duplicated even when the receipt log accumulates multiple rows for 'the same' event"
+    group: Devices - Ingestion
+    status: Implemented (nuance - CR-117)
+    ui: "AttendanceDevicesPage Ingestion issues / Sync runs tabs"
+    api: "POST /api/attendance/devices/{id}/sync, /import, /issues/{id}/reprocess"
+    service: "AttendanceDeviceIntegrationService.IngestAsync"
+    permission: "Attendance.Device.Sync / Import"
+    db: "AttendanceDeviceIngestionEvents, AttendancePunches"
+
+  - id: F-ATT-242
+    name: A batch is capped at 1000 punches per IngestAsync call; each item is validated/ingested individually within the same transaction so a per-item rejection does not abort the whole batch
+    group: Devices - Ingestion
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync, /import"
+    service: "AttendanceDeviceIntegrationService.IngestAsync"
+    permission: "Attendance.Device.Sync / Import"
+    db: "n/a"
+
+  - id: F-ATT-243
+    name: "SyncRun.Status becomes Succeeded (zero rejected/unmapped), PartiallySucceeded (some accepted but not all failed), or Failed (all rejected/errored); the checkpoint ONLY advances when rejected==0 AND unmapped==0 for the whole batch"
+    group: Devices - Ingestion
+    status: Implemented
+    ui: "AttendanceDevicesPage Sync runs tab"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendanceDeviceIntegrationService.IngestAsync"
+    permission: "Attendance.Device.Sync"
+    db: "AttendanceDeviceSyncRuns, AttendanceDevices.LastSuccessfulCheckpoint"
+
+  - id: F-ATT-244
+    name: "Invalid/malformed events (oversized ids, unresolvable timezone, default OccurredAt) are Rejected with a synthesized ExternalEventId if the original was blank, so the receipt row always inserts; no active mapping is Unmapped; more than one matching mapping is Rejected as ambiguous; an Unknown Direction is Rejected"
+    group: Devices - Ingestion
+    status: Implemented
+    ui: "AttendanceDevicesPage Ingestion issues tab"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendanceDeviceIntegrationService.IngestAsync"
+    permission: "Attendance.Device.Sync"
+    db: "AttendanceDeviceIngestionEvents"
+
+  - id: F-ATT-245
+    name: "A mapped, valid-direction event whose target period is Closed becomes RequiresPeriodReopen - no automatic reopen, no raw punch created - this is the controlled late-punch-for-a-finalized-period path"
+    group: Devices - Ingestion
+    status: Implemented
+    ui: "AttendanceDevicesPage Ingestion issues tab"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendanceDeviceIntegrationService.IngestAsync"
+    permission: "Attendance.Device.Sync"
+    db: "n/a"
+
+  - id: F-ATT-246
+    name: "A daily processor failure AFTER a successful raw-punch insert still RETAINS the punch (not rolled back) and marks the issue RequiresPeriodReopen - 'raw punch is retained; daily processing requires an operational follow-up'"
+    group: Devices - Ingestion
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendanceDeviceIntegrationService.IngestAsync"
+    permission: "Attendance.Device.Sync"
+    db: "AttendancePunches"
+
+  - id: F-ATT-247
+    name: Every device operation is tenant-scoped end to end; a foreign-tenant device/mapping/issue id returns NotFound or an empty result across every read/write operation
+    group: Devices - Ingestion
+    status: Implemented
+    ui: "n/a"
+    api: "all /api/attendance/devices/* routes"
+    service: "AttendanceDeviceOperationsService / AttendanceDeviceIntegrationService"
+    permission: "varies"
+    db: "n/a"
+
+  - id: F-ATT-248
+    name: "Reprocessing an unmapped/rejected issue is genuinely idempotent for the raw punch, but NOT for the receipt log - each distinct Source string on retry (e.g. 'issue-reprocess') produces a NEW AttendanceDeviceIngestionEvent row even though no duplicate AttendancePunch results"
+    group: Devices - Ingestion
+    status: Implemented (nuance - CR-117)
+    ui: "AttendanceDevicesPage Ingestion issues tab reprocess action"
+    api: "POST /api/attendance/devices/issues/{id}/reprocess"
+    service: "AttendanceDeviceIntegrationService.IngestAsync"
+    permission: "Attendance.Device.Sync"
+    db: "AttendanceDeviceIngestionEvents"
+
+  - id: F-ATT-249
+    name: "Lease: one durable DB row per (TenantId, DeviceId), shared identically by the background worker and manual Sync Now; TryAcquireAsync denies a claim while a non-expired token exists (DeviceSyncAlreadyRunning), otherwise issues a new token with LeaseExpiresAtUtc=now+LeaseDurationSeconds (default 120s)"
+    group: Devices - Lease
+    status: Implemented
+    ui: "AttendanceDevicesPage Sync Now action"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendanceDeviceLeaseService.TryAcquireAsync"
+    permission: "Attendance.Device.Sync"
+    db: "AttendanceDeviceSyncLeases"
+
+  - id: F-ATT-250
+    name: A stale/superseded lease token's Heartbeat and Release calls both fail silently (no throw) once a new owner has reclaimed the lease; an expired lease with no reclaim can be reclaimed by any new claimant
+    group: Devices - Lease
+    status: Implemented
+    ui: "n/a"
+    api: "n/a (internal to the worker/SyncNow pipeline)"
+    service: "AttendanceDeviceLeaseService"
+    permission: "n/a"
+    db: "AttendanceDeviceSyncLeases"
+
+  - id: F-ATT-251
+    name: "The lease is double-checked both BEFORE starting the ingestion batch and AGAIN right before persisting the checkpoint - if reclaimed mid-batch by another owner, the whole ingestion transaction rolls back with Conflict DeviceSyncLeaseLost, zero punches, no checkpoint advance - the anti-split-brain guarantee"
+    group: Devices - Lease
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendanceDeviceIntegrationService.IngestAsync"
+    permission: "Attendance.Device.Sync"
+    db: "n/a"
+
+  - id: F-ATT-252
+    name: "Manual POST /import calls IngestAsync directly with LeaseToken=null, entirely bypassing the lease system - a manual import batch can run concurrently with an active Pull-worker cycle or manual Sync Now on the same device with NO coordination between them"
+    group: Devices - Lease
+    status: Implemented (race risk - CR-118)
+    ui: "AttendanceDevicesPage manual import"
+    api: "POST /api/attendance/devices/{id}/import"
+    service: "AttendanceDeviceIntegrationService.IngestAsync"
+    permission: "Attendance.Device.Import"
+    db: "n/a"
+
+  - id: F-ATT-253
+    name: "The lease is always released in a finally block even when the sync fails before ingestion starts (e.g. unsupported provider) - no leaked lease under any failure path exercised"
+    group: Devices - Lease
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/devices/{id}/sync"
+    service: "AttendanceDeviceOperationsService.SyncNowAsync"
+    permission: "Attendance.Device.Sync"
+    db: "AttendanceDeviceSyncLeases"
+
+  - id: F-ATT-254
+    name: "Sync retry loop classifies failures as Permanent (UnsupportedProvider, DeviceSyncAlreadyRunning/LeaseContended, Inactive, configuration, DeviceNotFound - never retried) vs Transient (DeviceSyncUnavailable, TimeoutException, HttpRequestException, DbUpdateException - retried with exponential backoff up to MaxRetries)"
+    group: Devices - Sync Recovery
+    status: Implemented
+    ui: "n/a"
+    api: "n/a (internal retry wrapper around Sync Now)"
+    service: "AttendanceDeviceSyncRecoveryService.ExecuteAsync"
+    permission: "n/a"
+    db: "AttendanceDeviceSyncRuns"
+
+  - id: F-ATT-255
+    name: "On success, ConsecutiveFailureCount resets to 0 and NextRetryAtUtc/LastFailureCode clear; on each failure, ConsecutiveFailureCount increments and a synthetic SyncRun row (Source='worker-retry') is written; NextRetryAtUtc is set only for Transient failures within budget, feeding the worker's own device-eligibility filter"
+    group: Devices - Sync Recovery
+    status: Implemented
+    ui: "AttendanceDevicesPage Health tab"
+    api: "n/a"
+    service: "AttendanceDeviceSyncRecoveryService.RecordSuccessAsync/RecordFailureAsync"
+    permission: "n/a"
+    db: "AttendanceDevices, AttendanceDeviceSyncRuns"
+
+  - id: F-ATT-256
+    name: "ReconcileStaleRunsAsync marks any Running SyncRun older than StaleRunThresholdSeconds (default 300s) as Failed/WorkerLeaseExpired, and independently clears any lease whose token is non-null but expired - the two reconciliations are independent of each other and run once per tenant per polling cycle before device processing"
+    group: Devices - Sync Recovery
+    status: Implemented
+    ui: "AttendanceDevicesPage Health tab"
+    api: "n/a"
+    service: "AttendanceDeviceSyncRecoveryService.ReconcileStaleRunsAsync"
+    permission: "n/a"
+    db: "AttendanceDeviceSyncRuns, AttendanceDeviceSyncLeases"
+
+  - id: F-ATT-257
+    name: A full process crash mid-batch leaves no partial punches (transaction fully commits or fully rolls back); the next process's reconciliation flips the orphaned Running run to Failed and frees the expired lease for a new owner
+    group: Devices - Sync Recovery
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceDeviceSyncRecoveryService"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-258
+    name: "The background worker (AttendanceDevicePullWorker) does not start its polling loop at all if Enabled=false; when enabled it processes tenants deterministically ordered, a single tenant's exception is caught/logged and never aborts the cycle for remaining tenants"
+    group: Devices - Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a (background service)"
+    service: "AttendanceDevicePullWorker"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-259
+    name: "Per-tenant device discovery is filtered server-side to Status=Active, ConnectionMode=Pull, and NextRetryAtUtc<=now (EligibleAtUtc) - Push/FileImport/ManualApi devices are never polled by the worker at all, only reachable via manual /import or an external push mechanism"
+    group: Devices - Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceDevicePullWorker.ProcessTenantAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-260
+    name: "The worker processes devices strictly SEQUENTIALLY within a tenant cycle (MaxConcurrent==1, no concurrency option exists) - a poison (always-failing) device does not block other devices in the same cycle, each device's failure is isolated"
+    group: Devices - Worker
+    status: Implemented (deliberate design - sets performance expectations)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceDevicePullWorker.ProcessTenantAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-261
+    name: A single tenant's device count is bounded per cycle by MaxDevicesPerCycle so a very large tenant does not starve a small tenant's first device from being processed within the same polling pass
+    group: Devices - Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceDevicePullWorker.ProcessTenantsAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-262
+    name: Cancellation mid-device-sync propagates and no further device is started after the cancellation signal within the same cycle
+    group: Devices - Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceDevicePullWorker"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-263
+    name: Replay across two consecutive worker cycles for the same device/event is idempotent - one punch, checkpoint set exactly once, no leaked lease
+    group: Devices - Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceDevicePullWorker"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-264
+    name: "No explicit pessimistic lock hint (SELECT FOR UPDATE / UPDLOCK,HOLDLOCK) is used anywhere in the device/lease/mapping module's own code - every mutating operation instead opens its own Serializable-isolation EF transaction, relying on DbUpdateException/DbUpdateConcurrencyException catches for conflict resolution uniformly across providers"
+    group: Devices - Concurrency/Provider
+    status: Implemented (architecture note)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceDeviceIntegrationService / AttendanceDeviceLeaseService / AttendanceDeviceOperationsService"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-265
+    name: Provider-acceptance suites run identical shared scenario code against both MySQL and SQL Server, deliberately inducing concurrent races (mapping create, duplicate ingestion) and asserting exactly one winner on both real providers - not just in-process SQLite
+    group: Devices - Concurrency/Provider
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceDeviceIntegrationProviderAcceptance / AttendanceDeviceSyncRecoveryProviderAcceptance"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-266
+    name: "No HTTP-layer (WebApplicationFactory) test exists for AttendanceDevicesController at all - every existing test calls Application-layer services directly; the reflection test only confirms a [HasPermission] attribute is PRESENT on each of the 17 routes, never that a caller lacking it actually receives 403 over real HTTP"
+    group: Devices - Coverage Gap
+    status: Implemented (coverage gap - CR-119)
+    ui: "n/a"
+    api: "all /api/attendance/devices/* routes"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-267
+    name: No IT-specific permission domain exists for device administration - all six device permissions live under the general Attendance.* namespace, and only TenantAdmin/SuperAdmin hold DeviceManage in the seeded matrix (TimeManager holds View/Sync/Mapping but not Manage; Employee/Manager hold none)
+    group: Devices - Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "SeedData.RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-268
+    name: Device management is fully exposed in the frontend as a 5-tab admin UI (Devices, Employee mappings, Ingestion issues, Sync runs, Audit history), with permission-gated action visibility and credential values never rendered anywhere
+    group: Devices - Frontend
+    status: Implemented
+    ui: "AttendanceDevicesPage"
+    api: "all /api/attendance/devices/* routes"
+    service: "n/a"
+    permission: "Attendance.Device.*"
+    db: "n/a"
+
+  # ═══════════════════════════════ N. LEAVE/CALENDAR INTEGRATION AND CR CARRY-FORWARD ═══════════════════════════════
+  - id: F-ATT-269
+    name: "CR-53 in Attendance: SubmitRegularizationAsync/SubmitOnDutyAsync check Employee.Status directly (not User.IsActive/EmploymentEligibility) - a GENUINE, self-contained eligibility gate distinct from every other module's CR-53 finding, blocking new submissions for ANY business date the instant Status != Active"
+    group: CR Carry-Forward
+    status: Implemented
+    ui: "AttendanceRequestsPage"
+    api: "POST /api/attendance/me/regularizations, /me/on-duty"
+    service: "AttendanceWorkflowService.SubmitRegularizationAsync/SubmitOnDutyAsync"
+    permission: "Attendance.Regularization.Request / OnDuty.Request"
+    db: "Employees.Status"
+
+  - id: F-ATT-270
+    name: "AttendanceAuthorizationService.ResolveContextAsync separately checks User.IsActive (the RBAC-flavoured, CR-53-style gate) governing READ/authorization predicates, independent of the Employee.Status WRITE-path gate above - two distinct flags, two distinct gates, both present in Attendance"
+    group: CR Carry-Forward
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceAuthorizationService.ResolveContextAsync"
+    permission: "n/a"
+    db: "Users.IsActive"
+
+  - id: F-ATT-271
+    name: "Day processing, monthly processing, history reads, and manager-queue visibility are NOT gated by Employee.Status at all - only Employee row existence is checked - a separated employee's historical days/requests remain fully processed/visible exactly like every other module's CR-53 read-side gap"
+    group: CR Carry-Forward
+    status: Implemented (CR-53 read-side gap, same pattern as other modules)
+    ui: "n/a"
+    api: "n/a (internal)"
+    service: "AttendanceDayProcessor.ProcessAsync / AttendanceMonthlyProcessor / AttendanceWorkflowService.GetMy*Async"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-272
+    name: "CR-57 in Attendance: Attendance IS the origin, not a carried-forward consumer - EmployeeAccessScopeService.BuildPredicateAsync's narrowing is literally keyed off Attendance.MonthlyViewTeam/MonthlyViewAll, and AttendanceAuthorizationService is a first-class, direct caller of EmployeeAccessScopeService.BuildRoleScopePredicateAsync"
+    group: CR Carry-Forward
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "EmployeeAccessScopeService.BuildPredicateAsync/BuildRoleScopePredicateAsync"
+    permission: "Attendance.MonthlyViewTeam / MonthlyViewAll"
+    db: "n/a"
+
+  - id: F-ATT-273
+    name: "CR-66 in Attendance: fully confirmed with no Attendance-specific carve-out - PageAccessService.UpdateAsync validates only 'is this permission name in Permissions.All', so Attendance.*/Attendance.Overtime.*/AttendanceDevice.* are all just as self-escalatable via PageAccess.Manage as Leave.* was in Module 7"
+    group: CR Carry-Forward
+    status: Implemented
+    ui: "PageAccessManagementPage"
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions"
+
+  - id: F-ATT-274
+    name: "CR-77 in Attendance: AttendanceAuthorizationService is a distinct, independently-implemented mechanism from LeaveAuthorizationService (different class, own BuildCurrentManagerPredicate over EmployeeEmploymentHistory.ManagerId), sharing only the role-scope dimension (EmployeeAccessScopeService.BuildRoleScopePredicateAsync) - a 5th non-communicating 'who is whose manager' implementation across the product"
+    group: CR Carry-Forward
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceAuthorizationService vs LeaveAuthorizationService"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-275
+    name: "AttendanceWorkflowService's optional-DI legacy fallback (used when IAttendanceAuthorizationService is null) reproduces Leave's CR-83-style gap independently: GetManagerRegularizationsAsync/GetManagerOnDutyAsync/TransitionRegularization/TransitionOnDuty fall back to a raw IEmployeeManagerResolver-only check with ZERO role-scope (HRBP/SuperHR) fallback"
+    group: CR Carry-Forward
+    status: Implemented (legacy-path gap - CR-124)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceWorkflowService"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-276
+    name: "AttendanceFoundationService carries the identical optional-DI authorization pattern, with enforceAuthorization explicitly bypassable per-call (default true) - AttendanceDayProcessor.ProcessAsync calls ResolveAsync with enforceAuthorization:false so batch/monthly processing is never authorization-gated by a caller identity"
+    group: CR Carry-Forward
+    status: Implemented (by design)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceFoundationService.ResolveAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-277
+    name: An approved Leave with zero punches produces OnLeave without mutating the LeaveRequest itself - AttendanceDayProcessor reads Leave via a plain unauthenticated db.LeaveRequestDays query, read-only against Leave
+    group: Leave Integration
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "LeaveRequestDays (read-only)"
+
+  - id: F-ATT-278
+    name: Approving a Leave request re-runs AttendanceDayProcessor synchronously as part of Leave's own approval transaction - Leave approval actively PUSHES into Attendance (a Present/Absent day flips to OnLeave and disappears from the Absent-exception list), not merely read lazily
+    group: Leave Integration
+    status: Implemented
+    ui: "AttendanceOperationsPage exception workbench"
+    api: "POST /api/leave-requests/{requestId}/approve"
+    service: "LeaveRequestApprovalService.ApproveAsync -> AttendanceDayProcessor.ProcessAsync"
+    permission: "Leave.Approve"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-ATT-279
+    name: Approved Leave coexisting with valid full-day punches yields Present (punches win over leave for status), with LeaveConflict=true flagged
+    group: Leave Integration
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-280
+    name: Approved Leave coexisting with an incomplete punch pattern (e.g. In-only, no AllowPresentOnSinglePunch) yields Incomplete with LeaveConflict=true still set - LeaveConflict is computed independently of the final Status
+    group: Leave Integration
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-281
+    name: "Only Approved leave is consulted (the query filters Status==Approved) - PendingApproval/Rejected/Cancelled all behave identically to 'no leave' from Attendance's point of view, by construction of the single equality filter"
+    group: Leave Integration
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-282
+    name: Leave application is strictly per-exact-date - an approved leave on an adjacent date has zero effect on the processing date, no date-range bleed
+    group: Leave Integration
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-283
+    name: The Leave lookup inside AttendanceDayProcessor is tenant-scoped - an approved leave seeded in a different tenant has zero effect on this tenant's processing
+    group: Leave Integration
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "n/a"
+    db: "LeaveRequestDays"
+
+  - id: F-ATT-284
+    name: "Existing automated coverage has no half-day-leave or month-boundary-spanning-leave test for the Leave<->Attendance integration - every seeded LeaveRequest in AttendanceLeaveIntegrationTests.cs is single-day (StartDate==EndDate); this is a test-coverage gap for manual QA to fill, not a proven defect"
+    group: Leave Integration
+    status: Implemented (untested combination)
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-285
+    name: "Post-separation, historical Attendance data is preserved byte-for-byte (Status, WorkedMinutes, FirstPunchAtUtc, LastPunchAtUtc unchanged) while new Regularization/On-Duty submissions for a date one day after FinalLwd are Forbidden BEFORE any day-processing side effect runs"
+    group: Separation Integration
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/me/regularizations, /me/on-duty"
+    service: "SeparationExitService.ExecuteAsync / AttendanceWorkflowService"
+    permission: "n/a"
+    db: "EmployeeAttendanceDays (preserved), Employees.Status/EmployeeEmploymentHistory/Users.IsActive"
+
+  - id: F-ATT-286
+    name: "Not directly asserted by any existing automated test but not blocked by any code found either: My Attendance/history READ access post-separation, manager-queue appearance of a PRE-EXISTING pending request after the requester separates, and monthly-processing inclusion for the separation month all remain open manual-QA scenarios per the CR-53 read-side gap"
+    group: Separation Integration
+    status: Implemented (untested combination, matches CR-53 pattern)
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "GET /api/attendance/manager/regularizations, POST /api/attendance/manager/regularizations/{id}/approve"
+    service: "AttendanceWorkflowService"
+    permission: "Attendance.Regularization.Approve"
+    db: "n/a"
+
+  - id: F-ATT-287
+    name: "Holiday strictly wins over WeeklyOff when both apply to the same date (WorkingDayCalendarResolver.CalculateAsync checks Holiday first, only falls through to WeeklyOff if no Holiday matches) - this same resolver is SHARED between Attendance and Leave"
+    group: Holiday/WeeklyOff Interaction
+    status: Implemented
+    ui: "AttendanceFoundationPage roster grid"
+    api: "GET /api/attendance/employees/{employeeId}/roster/{date}"
+    service: "WorkingDayCalendarResolver.CalculateAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-288
+    name: "ResolveAsync only consults the Holiday/WeeklyOff calendar in the FALLBACK branch (no matching Applicability rule AND no active default Shift) - if a Shift/Pattern applicability rule matches, the resolved day type is returned directly, NEVER cross-checked against the tenant Holiday table; a declared Holiday has zero automatic effect on an employee with an explicit/pattern-based Shift assignment for that date unless an admin re-runs AssignRosterAsync to apply a calendar override"
+    group: Holiday/WeeklyOff Interaction
+    status: Implemented (gap - CR-121)
+    ui: "AttendanceFoundationPage roster grid"
+    api: "GET /api/attendance/employees/{employeeId}/roster/{date}"
+    service: "AttendanceFoundationService.ResolveAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-289
+    name: "An approved On Duty request unconditionally overwrites a Holiday/WeeklyOff day's Status to OnDuty (the on-duty branch runs after the Holiday/WeeklyOff branch with no exclusion) - RosterDayType still correctly records Holiday/WeeklyOff, but the user-facing Status field reports OnDuty instead, a Status/RosterDayType divergence"
+    group: Holiday/WeeklyOff Interaction
+    status: Implemented (gap - CR-122)
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-290
+    name: "On a Holiday/WeeklyOff day, Status stays Holiday/WeeklyOff regardless of an approved Leave on the same date (Leave never overrides a non-working calendar day's Status), but LeaveConflict is still computed unconditionally and can be true on a Holiday/WeeklyOff day with punches alongside an approved leave"
+    group: Holiday/WeeklyOff Interaction
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/days/{date}"
+    service: "AttendanceDayProcessor.ProcessAsync"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-291
+    name: A manager can approve or reject a pending Regularization/On-Duty request from an employee who has since separated - the transition methods never re-check the target employee's current Status, only the creation-time submission path does
+    group: Separation Integration
+    status: Implemented (gap - CR-123)
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "POST /api/attendance/manager/regularizations/{id}/approve"
+    service: "AttendanceWorkflowService.TransitionRegularization"
+    permission: "Attendance.Regularization.Approve"
+    db: "n/a"
+
+  - id: F-ATT-292
+    name: EmployeeSupervisor (L1-L5/Time/ERO/CHRO fields) is never used by Attendance's primary authorization path at all - Attendance's manager/reporting-line logic is built entirely on EmployeeEmploymentHistory.ManagerId; the only indirect touchpoint is via the shared EmployeeManagerResolver's LegacyConflict detection, reached only from Attendance's legacy/no-DI fallback
+    group: Cross-Module Notes
+    status: Implemented (architecture note)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceAuthorizationService vs EmployeeManagerResolver"
+    permission: "n/a"
+    db: "EmployeeEmploymentHistory.ManagerId (authoritative), EmployeeSupervisors (unused by Attendance's primary path)"
+
+  # ═══════════════════════════════ O. FRONTEND ═══════════════════════════════
+  - id: F-ATT-293
+    name: "My Attendance page: month calendar with KPI tiles, day-detail dialog; a 403 renders a dedicated permission-unavailable banner distinct from generic errors; month navigation has no upper bound (no future-month warning)"
+    group: Frontend - My Attendance
+    status: Implemented
+    ui: "MyAttendancePage"
+    api: "GET /api/attendance/me/calendar, /me/days/{date}"
+    service: "n/a"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-294
+    name: "Manager/Team Attendance page: From/To/Status/Variance filters, server-side pagination; NO client-side validation that fromDate<=ToDate; default range is today-only, easy to miss data without knowing to widen it"
+    group: Frontend - Manager Attendance
+    status: Implemented (usability gap)
+    ui: "ManagerAttendancePage"
+    api: "GET /api/attendance/manager/team, /manager/team/{employeeId}/{date}"
+    service: "n/a"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-295
+    name: "Attendance Requests page (Regularization + On Duty): manager approval card is CORRECTLY permission-gated (a positive counter-example to the anti-pattern); the Regularization form only ever submits requestType='MissingOutPunch' with a Corrected-Out field - there is no UI path to regularize a missing IN punch or set proposedInAtUtc, despite the API supporting it"
+    group: Frontend - Requests
+    status: Implemented (functional gap - CR-127)
+    ui: "AttendanceRequestsPage"
+    api: "POST /api/attendance/me/regularizations"
+    service: "n/a"
+    permission: "Attendance.Regularization.Request"
+    db: "n/a"
+
+  - id: F-ATT-296
+    name: "Reject actions on the Requests page send a HARD-CODED 'Rejected by manager' comment string with no UI to type an actual reason; Cancel/Approve/Reject all use native window.confirm dialogs rather than in-page confirmation UI"
+    group: Frontend - Requests
+    status: Implemented (UX gap - CR-127)
+    ui: "AttendanceRequestsPage manager approvals"
+    api: "POST /api/attendance/manager/regularizations/{id}/reject, /manager/on-duty/{id}/reject"
+    service: "n/a"
+    permission: "Attendance.Regularization.Approve / OnDuty.Approve"
+    db: "n/a"
+
+  - id: F-ATT-297
+    name: "Overtime page is an orphan route (/attendance/overtime) with ZERO nav entries and zero page-to-page links - only reachable by typing the URL directly"
+    group: Frontend - Overtime
+    status: Implemented (gap - CR-126)
+    ui: "OvertimePage (no nav item)"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-298
+    name: "The Overtime page's 'Team Overtime' card Approve/Reject buttons render, correctly permission-gated, but have NO onClick handler at all and are wired to unrelated leftover state - no team-OT list is ever fetched on this screen; approveOvertimeRequest/rejectOvertimeRequest exist in the API client but are never called by any page - fully dead client code from the UI's perspective"
+    group: Frontend - Overtime
+    status: Implemented (dead UI - CR-105 cross-reference)
+    ui: "OvertimePage Team Overtime card"
+    api: "n/a (no API call is ever made by these buttons)"
+    service: "n/a"
+    permission: "Attendance.Overtime.Approve"
+    db: "n/a"
+
+  - id: F-ATT-299
+    name: "Overtime create form uses a free-text Employee ID field, not an employee picker - typo-prone, no client-side existence check before submit"
+    group: Frontend - Overtime
+    status: Implemented (usability gap)
+    ui: "OvertimePage create form"
+    api: "POST /api/attendance/overtime/requests"
+    service: "n/a"
+    permission: "Attendance.Overtime.Request"
+    db: "n/a"
+
+  - id: F-ATT-300
+    name: "Comp-Off (self) page's Ledger history table has NO permission gate at all (always renders if the page is reached, unlike the redundantly-gated Earnings table); the page shows a '0 minutes' flash during load rather than an explicit loading indicator; the route itself does not wrap with RequireEmployeeIdentity even though its nav entry marks requiresEmployeeIdentity"
+    group: Frontend - Comp-Off
+    status: Implemented (minor gaps)
+    ui: "CompOffPage"
+    api: "GET /api/attendance/comp-off/balance, /earnings, /ledger"
+    service: "n/a"
+    permission: "Attendance.CompOff.ViewSelf"
+    db: "n/a"
+
+  - id: F-ATT-301
+    name: "Comp-Off Operations page is an orphan route (/attendance/comp-off/operations) with ZERO nav entries and zero page-to-page links, matching the Overtime page's pattern; Approve/Reject buttons ARE correctly permission-gated and DO call the real approve/reject endpoints (a positive counter-example to Overtime's dead buttons), but have NO confirmation dialog at all, inconsistent with the rest of the module"
+    group: Frontend - Comp-Off Operations
+    status: "Implemented (mixed: gap CR-126, positive wiring)"
+    ui: "CompOffOperationsPage (no nav item)"
+    api: "POST /api/attendance/comp-off/earnings/{id}/approve, /reject"
+    service: "n/a"
+    permission: "Attendance.CompOff.Approve"
+    db: "n/a"
+
+  - id: F-ATT-302
+    name: "Attendance Foundation page (Shifts/Applicability/Roster) renders the IDENTICAL full page across all 5 distinct routes/nav items (/attendance, /shifts, /applicability, /roster, /roster-upload) - clicking a different nav item changes only the URL, not what's rendered or scrolled to; the Shift form has NO required-field enforcement on Create/Update (button never disabled for blank Code/Name), unlike the Applicability/Roster forms which do block on incompleteness"
+    group: Frontend - Foundation
+    status: Implemented (design/gap notes)
+    ui: "AttendanceFoundationPage"
+    api: "GET/POST/PUT /api/attendance/shifts"
+    service: "n/a"
+    permission: "Attendance.View / ShiftManage"
+    db: "n/a"
+
+  - id: F-ATT-303
+    name: "CONFIRMED anti-pattern instance: the Applicability Rules table's Edit and Delete buttons render UNCONDITIONALLY with NO canManage/permission check at all - any user with plain Attendance.View sees live Edit/Delete controls and can trigger a real updateApplicability/deleteApplicability API call, which only fails at the API layer for an unauthorized user; no existing test renders this page with a non-manager user and asserts these buttons are hidden"
+    group: Frontend - Foundation
+    status: Implemented (gap - CR-125)
+    ui: "AttendanceFoundationPage Applicability Rules table"
+    api: "PUT/DELETE /api/attendance/shift-applicability/{id}"
+    service: "n/a"
+    permission: "Attendance.PatternManage (backend-enforced, not client-gated)"
+    db: "n/a"
+
+  - id: F-ATT-304
+    name: "The 'Save Applicability Rule' button on the Foundation page is gated client-side by canManage (Attendance.ShiftManage), but the backend actually enforces Attendance.PatternManage for applicability CRUD - a user holding PatternManage but not ShiftManage would not see the button at all even though their API call would succeed; a frontend-only under-permissioning mismatch, not a security hole"
+    group: Frontend - Foundation
+    status: Implemented (gap - CR-93)
+    ui: "AttendanceFoundationPage Applicability save button"
+    api: "POST/PUT /api/attendance/applicability, /shift-applicability/{id}"
+    service: "n/a"
+    permission: "frontend checks ShiftManage, backend enforces PatternManage"
+    db: "n/a"
+
+  - id: F-ATT-305
+    name: "Shift Patterns page's 'Create Pattern' button has NO permission gate at all and NO disabled condition on blank code/name - any user reaching the route (plain Attendance.View) sees an always-enabled Create button, even though Permissions.attendance.patternManage exists as a constant and is never referenced anywhere in this page's source"
+    group: Frontend - Shift Patterns
+    status: Implemented (gap - CR-93)
+    ui: "ShiftPatternsPage"
+    api: "POST /api/attendance/patterns"
+    service: "n/a"
+    permission: "frontend: none; backend: Attendance.PatternManage"
+    db: "n/a"
+
+  - id: F-ATT-306
+    name: "Shift Patterns page has no loading indicator and no empty-state message for zero configured patterns; a 366-day cycle renders 366 unvirtualized table rows"
+    group: Frontend - Shift Patterns
+    status: Implemented (usability gap)
+    ui: "ShiftPatternsPage"
+    api: "GET /api/attendance/patterns"
+    service: "n/a"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-307
+    name: "My Attendance Exceptions page has the cleanest three-state (loading Spinner / EmptyState / error Notice) handling in the module, but its ONLY Vitest test is a single render-smoke test - no test of the empty state, error state, or pagination despite all three being implemented in source"
+    group: Frontend - Coverage Gaps
+    status: Implemented (test-coverage gap)
+    ui: "MyAttendanceExceptionsPage"
+    api: "GET /api/attendance/me/exceptions"
+    service: "n/a"
+    permission: "Attendance.View"
+    db: "n/a"
+
+  - id: F-ATT-308
+    name: "My Monthly Attendance page shows a SILENT BLANK TABLE during the initial fetch (no visible loading affordance at all, since query.data is undefined rather than an empty array during load); pagination is fixed at 50 rows with NO page-changing UI, so an employee with more than 50 monthly summaries (over 4 years of history) cannot reach later rows from this screen at all"
+    group: Frontend - Coverage Gaps
+    status: Implemented (gap)
+    ui: "MyMonthlyAttendancePage"
+    api: "GET /api/attendance/my/monthly-summary"
+    service: "n/a"
+    permission: "Attendance.Monthly.ViewSelf"
+    db: "n/a"
+
+  - id: F-ATT-309
+    name: "Monthly Finalization page: Process/Finalize/Reopen buttons are individually permission-gated AND state-aware (hidden/shown based on the period's current status) - a positive counter-example; Finalize is correctly disabled unless the server-computed preview.canClose is true, and Reopen requires a non-blank reason client-side too"
+    group: Frontend - Monthly Finalization
+    status: Implemented (positive pattern)
+    ui: "AttendanceMonthlyFinalizationPage"
+    api: "POST /api/attendance/periods/{id}/process, /close, /reopen"
+    service: "n/a"
+    permission: "Attendance.Monthly.Process / Close / Reopen"
+    db: "n/a"
+
+  - id: F-ATT-310
+    name: "CONFIRMED functional defect: the Attendance periods table's Pagination control has onPageChange={() => undefined} - a genuine no-op. For a tenant with 50+ months of period history, clicking Previous/Next on THIS specific control does nothing at all, unlike the correctly-wired 'Finalization preview' summaries table below it (onPageChange={setPage})"
+    group: Frontend - Monthly Finalization
+    status: Implemented (defect - CR-128)
+    ui: "AttendanceMonthlyFinalizationPage periods table"
+    api: "GET /api/attendance/periods"
+    service: "n/a"
+    permission: "Attendance.Monthly.ViewAll"
+    db: "n/a"
+
+  - id: F-ATT-311
+    name: "Attendance Operations page: bulk-correction textarea is a free-text, pipe-delimited manual-entry UI with a hard 100-line client-side cap and a generic format-error message, but no per-line inline validation/highlighting, no employee picker, no date picker - error-prone manual entry"
+    group: Frontend - Operations
+    status: Implemented (usability gap)
+    ui: "AttendanceOperationsPage bulk corrections"
+    api: "POST /api/attendance/operations/bulk-corrections"
+    service: "n/a"
+    permission: "Attendance.AdminCorrection.Manage"
+    db: "n/a"
+
+  - id: F-ATT-312
+    name: "Bulk approve/reject and single-row Acknowledge/Waive all route through window.prompt(...) native dialogs for the reason/comment, rather than an in-page field - not scriptable via normal form-field QA tooling"
+    group: Frontend - Operations
+    status: Implemented (UX/testability gap)
+    ui: "AttendanceOperationsPage"
+    api: "POST /api/attendance/operations/bulk, /exceptions/resolve"
+    service: "n/a"
+    permission: "Attendance.Regularization.Approve / Attendance.Exception.View"
+    db: "n/a"
+
+  - id: F-ATT-313
+    name: "Acknowledge/Waive buttons have NO dedicated frontend permission gate - any user reaching the page at all (holding only Attendance.Exception.View) can click them; there is no separate Permissions.attendance.exceptionResolve-style constant, matching the backend's own design (F-ATT-192) where View alone gates the write too - confirm this is intentional 'view implies resolve', not an oversight"
+    group: Frontend - Operations
+    status: Implemented (design question, matches backend)
+    ui: "AttendanceOperationsPage exception workbench"
+    api: "POST /api/attendance/operations/exceptions/resolve"
+    service: "n/a"
+    permission: "Attendance.Exception.View (same as read)"
+    db: "n/a"
+
+  - id: F-ATT-314
+    name: "The maker-checker self-approval guard on the Operations page OMITS the selection checkbox entirely (not merely disables it) for a request whose Submitted-event actor is the current user - a good, well-tested client-side defense-in-depth pattern"
+    group: Frontend - Operations
+    status: Implemented (positive pattern)
+    ui: "AttendanceOperationsPage maker-checker queue"
+    api: "n/a"
+    service: "n/a"
+    permission: "Attendance.Regularization.Approve"
+    db: "n/a"
+
+  - id: F-ATT-315
+    name: "Internal navigation on the Operations page uses plain <a href> tags (full browser page reload) instead of React Router <Link> for several links, inconsistent with AttendanceReportsPage's use of <Link> for the same kind of internal navigation - given the access token is in-memory only, a full reload forces re-bootstrapping auth state on every such click"
+    group: Frontend - Operations
+    status: Implemented (inconsistency)
+    ui: "AttendanceOperationsPage"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-316
+    name: "Attendance Reports landing/daily/monthly/exceptions routes correctly use real React Router <Link> for internal navigation, and the Exceptions route is the ONLY doubly-permission-gated route in the module (both reportView AND exceptionView required, nested RequirePermission)"
+    group: Frontend - Reports
+    status: Implemented (positive pattern)
+    ui: "AttendanceReportsPage / AttendanceReportsLandingPage"
+    api: "GET /api/attendance/reports/*"
+    service: "n/a"
+    permission: "Attendance.Report.View (+ Exception.View for exceptions)"
+    db: "n/a"
+
+  - id: F-ATT-317
+    name: "Year/Month report filter fields use inputMode='numeric' with min/max attributes on a plain (non-numeric) <input> - these min/max attributes have NO effect on this input type, so they are cosmetic only; any text can be typed and is converted via Number(), which could produce NaN sent as a query param"
+    group: Frontend - Reports
+    status: Implemented (client-validation gap)
+    ui: "AttendanceReportsPage monthly filter"
+    api: "GET /api/attendance/reports/monthly"
+    service: "n/a"
+    permission: "Attendance.Report.View"
+    db: "n/a"
+
+  - id: F-ATT-318
+    name: "Device Integration page is the BEST-implemented page in the module: every mutating action individually and correctly permission-gated (Add/Edit/Activate/Deactivate on deviceManage, Sync Now on deviceSync AND Active+Pull device state, Mappings on deviceMapping, History on deviceViewHistory), consistent DataTable-driven loading/empty/error across all 5 tabs, and credential values deliberately never pre-filled or rendered anywhere, backed by dedicated negative tests for each gate"
+    group: Frontend - Devices
+    status: Implemented (best-practice reference pattern)
+    ui: "AttendanceDevicesPage"
+    api: "all /api/attendance/devices/* routes"
+    service: "n/a"
+    permission: "Attendance.Device.*"
+    db: "n/a"
+
+  - id: F-ATT-319
+    name: "Three page test files (ShiftPatternsPage, MyAttendanceExceptionsPage, MyMonthlyAttendancePage) contain EXACTLY ONE smoke-render test each, not exercising error states, empty states, or (for Shift Patterns) the create-submission flow at all - the thinnest coverage in the module relative to page functional surface"
+    group: Frontend - Coverage Gaps
+    status: Implemented (test-coverage gap)
+    ui: "ShiftPatternsPage / MyAttendanceExceptionsPage / MyMonthlyAttendancePage"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-320
+    name: "The API client modules attendance.ts/overtime.ts/compOff.ts/attendanceDevices.ts have ZERO dedicated unit tests of their own - every request-shape/param-mapping assertion comes indirectly through page-level tests; approveOvertimeRequest/rejectOvertimeRequest are exported but never imported by any page (dead from the UI's perspective, matching F-ATT-298)"
+    group: Frontend - Coverage Gaps
+    status: Implemented (test-coverage gap)
+    ui: "n/a"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-321
+    name: "Every 'My ...' page except CompOffPage correctly wraps its route with RequireEmployeeIdentity (redirecting an unlinked account to /forbidden) - CompOffPage's route does NOT wrap with it even though its nav entry marks requiresEmployeeIdentity:true, an inconsistency between nav-level and route-level enforcement"
+    group: Frontend - Route Guards
+    status: Implemented (inconsistency)
+    ui: "CompOffPage vs MyAttendancePage/MyMonthlyAttendancePage/MyAttendanceExceptionsPage/AttendanceRequestsPage"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-322
+    name: All Attendance page/tab/filter/pagination state is local component useState, never URL- or localStorage-backed - refreshing the browser or navigating away and back always resets to defaults across every page in the module
+    group: Frontend - State Persistence
+    status: Implemented (consistent, module-wide behavior)
+    ui: "all Attendance pages"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  # ═══════════════════════════════ P. CONCURRENCY / PROVIDER PARITY (cross-cutting matrix) ═══════════════════════════════
+  - id: F-ATT-323
+    name: "Monthly Processing/Period Lock/Admin Corrections/Payroll Snapshot use ONLY optimistic concurrency (plain int ConcurrencyVersion + DB unique indexes), with NO pessimistic row lock (no SELECT FOR UPDATE on MySQL, no UPDLOCK/HOLDLOCK on SQL Server) anywhere in this module's own code - a deliberate divergence from the repo's documented per-provider locking pattern used elsewhere; this design is provider-portable by construction, but the race-safety guarantees must still be independently verified on real MySQL and SQL Server, not assumed from SQLite"
+    group: Concurrency/Provider - Monthly
+    status: Implemented (architecture - CR-101)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceMonthlyProcessor / AttendancePeriodLockService / AttendanceAdminCorrectionService"
+    permission: "n/a"
+    db: "AttendancePeriods.ConcurrencyVersion, AttendanceAdminCorrections (unique index), PayrollAttendanceSnapshots (2 unique indexes)"
+
+  - id: F-ATT-324
+    name: "Regularization/On-Duty transitions use a conditional ExecuteUpdateAsync (WHERE Status=Pending AND ConcurrencyVersion=@expected) plus a real EF IsConcurrencyToken() as a second line of defense - both layers must be proven on real providers, not just SQLite's DbUpdateConcurrencyException emulation"
+    group: Concurrency/Provider - Workflow
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceWorkflowService.TransitionRegularization/TransitionOnDuty"
+    permission: "n/a"
+    db: "AttendanceRegularizationRequests.ConcurrencyVersion, AttendanceOnDutyRequests.ConcurrencyVersion"
+
+  - id: F-ATT-325
+    name: "A real MySQL replay of an already-approved On-Duty approval returns Conflict on the second call (idempotent-safe replay), independently proven against MySQL's binary(16)-style concurrency semantics, not merely SQLite's in-memory equivalent"
+    group: Concurrency/Provider - Workflow
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceWorkflowService.TransitionOnDuty"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-326
+    name: "Overtime approve/finalize/reopen races (Approve-vs-Approve, Finalize-vs-Finalize, Duplicate-current-snapshot) resolve to exactly one winner via the SAME optimistic-concurrency-plus-unique-index pattern as Monthly - provider-acceptance suites (MySQL and SQL Server) run the identical shared scenario code, not provider-specific lock syntax"
+    group: Concurrency/Provider - Overtime
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "OvertimeService / OvertimeConcurrencyTests"
+    permission: "n/a"
+    db: "PayrollOvertimeSnapshots (unique index)"
+
+  - id: F-ATT-327
+    name: "Device/lease/mapping code opens its own EF Serializable-isolation transaction per mutating operation and catches DbUpdateException/DbUpdateConcurrencyException for conflict resolution, uniformly across providers - no raw FOR UPDATE/UPDLOCK hint appears anywhere in this module either, mirroring the Monthly module's own architecture choice"
+    group: Concurrency/Provider - Devices
+    status: Implemented (architecture note, cross-reference F-ATT-264)
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendanceDeviceIntegrationService / AttendanceDeviceLeaseService / AttendanceDeviceOperationsService"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-328
+    name: "The DoubleBenefitDenied (Comp-Off/Overtime exclusivity) guard is a pre-commit AnyAsync application check with NO backing DB unique constraint - the ONE genuinely race-susceptible boundary identified in this whole module, since every other race-sensitive path (Monthly, Workflow, Overtime finalize, Device lease/mapping) has a DB-level unique index as the ultimate backstop and this one does not"
+    group: Concurrency/Provider - Overtime
+    status: Implemented (genuine race risk - CR-110)
+    ui: "n/a"
+    api: "n/a"
+    service: "OvertimeService.CreateRequestAsync / CompOffService"
+    permission: "n/a"
+    db: "OvertimeRequests, CompOffEarnings (no exclusivity constraint)"
+
+  - id: F-ATT-329
+    name: "Punch ingestion idempotency (duplicate ExternalPunchId, tenant-scoped uniqueness) is independently proven against real MySQL, not just SQLite - a duplicate-race and a same-external-id-different-tenant scenario both hold on a real provider"
+    group: Concurrency/Provider - Punch Ingestion
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "AttendancePunchIngestionService.IngestAsync"
+    permission: "n/a"
+    db: "AttendancePunches"
+
+  - id: F-ATT-330
+    name: "A cross-subsystem race between Leave approval (which reprocesses the Attendance day) and a concurrent Admin Correction on the same employee/date is NOT independently exercised by any existing provider-acceptance test found in this module's research - only same-subsystem races (Monthly-vs-Monthly, Correction-vs-Correction, Close-vs-Correction) have dedicated MySQL/SQL Server coverage; a Leave-approval-vs-Attendance-correction race is a genuine coverage gap worth a manual concurrency test on both real providers"
+    group: Concurrency/Provider - Cross-Subsystem
+    status: Implemented (coverage gap)
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveRequestApprovalService / AttendanceAdminCorrectionService"
+    permission: "n/a"
+    db: "n/a"
+
+  # ═══════════════════════════════ Q. AUTHORIZATION / TENANT SECURITY (consolidated matrix) ═══════════════════════════════
+  - id: F-ATT-331
+    name: "Consolidated tenant-isolation matrix: every Attendance data category (attendance records/days, punches, regularization, on-duty, overtime, reports, devices, device events, admin corrections, monthly processing/periods, manager queues) is independently verified tenant-scoped across this module's 17 test areas - no single missed TenantId filter was found anywhere in the source read for this module"
+    group: Tenant Security
+    status: Implemented
+    ui: "n/a"
+    api: "all /api/attendance/* routes"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-332
+    name: "A cross-tenant Overtime request returns 401 at the host/tenant-resolution middleware layer (before controller authorization even runs), distinct from the 403/404 in-tenant patterns used by every other Attendance-family controller for out-of-scope access - a genuinely different failure-mode shape for the SAME underlying tenant-isolation guarantee"
+    group: Tenant Security
+    status: Implemented (contract note)
+    ui: "n/a"
+    api: "any /api/attendance/overtime/* route"
+    service: "TenantShardResolutionMiddleware"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-333
+    name: "Out-of-scope access within the SAME tenant (a manager/employee lacking scope over a target) consistently returns NotFound rather than Forbidden across Roster assign/remove, Admin Corrections, Regularization/On-Duty read, and Manager-day reads - a deliberate anti-enumeration design choice applied uniformly, distinct from cross-permission denials (missing permission entirely), which DO return 403"
+    group: Tenant Security
+    status: Implemented (design pattern)
+    ui: "n/a"
+    api: "multiple (see cases)"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-334
+    name: An unauthenticated caller (no token at all) is rejected with 401 on every single Attendance-family route, with no exceptions/AllowAnonymous anywhere in the module
+    group: Authorization Matrix
+    status: Implemented
+    ui: "n/a"
+    api: "every /api/attendance/* route"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-335
+    name: "IT, Accounts, AccountLinkAdministrator, and AccountLinkAuditor roles hold ZERO Attendance/Overtime/CompOff/Device permissions of any kind in the seeded matrix, despite IT plausibly sounding relevant to device administration"
+    group: Authorization Matrix
+    status: Implemented (seeded matrix note)
+    ui: "n/a"
+    api: "n/a"
+    service: "SeedData.RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-336
+    name: A direct API call bypassing the frontend entirely is subject to the exact same server-side authorization as a UI-driven call - no endpoint trusts a client-supplied role/permission claim beyond the validated JWT's own resolved permissions
+    group: Authorization Matrix
+    status: Implemented
+    ui: "n/a (API-only verification)"
+    api: "any mutating /api/attendance/* route"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-337
+    name: A forged/cross-tenant JWT (valid signature, wrong tenant claim, or a tenant claim not matching the resolved host) is rejected before any Attendance business logic runs
+    group: Tenant Security
+    status: Implemented
+    ui: "n/a"
+    api: "any /api/attendance/* route"
+    service: "TenantShardResolutionMiddleware"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-ATT-338
+    name: "Consolidated cross-subsystem tenant-isolation sweep: in a single pass, confirm zero Tenant A data leaks into Tenant B across attendance days/punches, regularization, on-duty, overtime, reports, devices/device-events, admin corrections, monthly processing/periods, and manager queues simultaneously"
+    group: Tenant Security
+    status: Implemented
+    ui: "n/a"
+    api: "multiple /api/attendance/* routes in one sweep"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"

@@ -1,0 +1,169 @@
+sheet: TaxDcl_Authz_Scope
+submodule: Authorization & Scope
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-AUTHZ-001
+    func: [F-TAXDCL-117]
+    sc: "CONFIRMED POSITIVE - HRAdmin/HRManager/Employee are each seeded with meaningful, scoped grants"
+    t: HRAdmin holds all 15 permissions, HRManager gets a view/review-only subset, Employee gets self-service only, all out of the box
+    src: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs RolePermissionMap"
+    type: Authorization
+    tags: [Positive]
+    pri: P0
+    sev: Medium
+    pre: "Freshly seeded tenant with the standard role set, no custom permission grants"
+    role: HRAdmin, HRManager, Employee (freshly seeded, no explicit tax grants)
+    perm: "all 15 Payroll.TaxDeclaration*/YearEndTax* permissions"
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/tax-declarations/cycles] as freshly-seeded HRAdmin => [200] OK (Configure/Review both granted)"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/history] as freshly-seeded HRManager => [200] OK (ViewHistory granted)"
+      - "[POST /api/payroll/year-end-tax/runs] as freshly-seeded HRManager (no Manage grant) => [403] Forbidden (HRManager's grant is view/review-only, not Manage)"
+      - "[GET /api/me/tax-declarations] as freshly-seeded Employee, own record => [200] OK (ViewOwn granted by default)"
+    auto: API
+
+  - id: TAXDCL-AUTHZ-002
+    func: [F-TAXDCL-118]
+    sc: "SuperHR holds zero of the 15 TaxDeclaration/YearEndTax permissions"
+    t: A freshly-seeded SuperHR user cannot access any tax-declaration or year-end-tax route despite a broad seeded Payroll grant otherwise
+    src: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs RolePermissionMap[RoleNames.SuperHR]"
+    type: Authorization
+    tags: [Security]
+    pri: P1
+    sev: Medium
+    pre: "Freshly seeded tenant, SuperHR role, no custom grants"
+    role: SuperHR (freshly seeded)
+    perm: "any of the 15 Payroll.TaxDeclaration*/YearEndTax* permissions"
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/tax-declarations/cycles] as freshly-seeded SuperHR => [403] Forbidden"
+      - "[GET /api/payroll/year-end-tax/runs] as freshly-seeded SuperHR => [403] Forbidden"
+      - "[Manual] grep SeedData.cs's RolePermissionMap[RoleNames.SuperHR] array for any of the 15 constants => zero matches, despite Payroll.RunManage/RunApprove/RunFinalize all being present"
+    secc: true
+    auto: API
+    cr: [CR-251]
+
+  - id: TAXDCL-AUTHZ-003
+    func: [F-TAXDCL-119]
+    sc: Manager, HRBP, and link-administration roles hold zero of the 15 permissions
+    t: A full role-array grep confirms only SuperAdmin/TenantAdmin (via Permissions.All), HRAdmin, HRManager (partial), and Employee (self-service) hold any of the 15
+    src: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs RolePermissionMap"
+    type: Authorization
+    tags: [Security]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] grep every remaining seeded role's own array (Manager, HRBP, AccountLinkAdministrator, AccountLinkAuditor, EmployeeRelationshipOfficer) for any of the 15 TaxDeclaration/YearEndTax constants => zero matches for all of them"
+    auto: Manual only
+
+  - id: TAXDCL-AUTHZ-004
+    func: [F-TAXDCL-120]
+    sc: No anonymous route exists anywhere in the module
+    t: Every mutating and read route across all three controllers requires authentication
+    src: "TaxDeclarationsController.cs, YearEndTaxController.cs (full grep for [AllowAnonymous])"
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: none
+    role: n/a (unauthenticated)
+    perm: "n/a"
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/me/tax-declarations] with no Authorization header => [401] Unauthorized"
+      - "[GET /api/payroll/tax-declarations/cycles] with no Authorization header => [401] Unauthorized"
+      - "[GET /api/payroll/year-end-tax/runs] with no Authorization header => [401] Unauthorized"
+      - "[Manual] full grep of all three controllers for [AllowAnonymous] => zero matches"
+    secc: true
+    auto: API
+
+  - id: TAXDCL-AUTHZ-005
+    func: [F-TAXDCL-121, F-TAXDCL-129]
+    sc: Employee self-service cannot target another employee's data by manipulating input
+    t: None of the ...Own methods accept an employeeId; identity is always resolved from the authenticated account link
+    src: "MyTaxDeclarationsController.cs (no employeeId parameter on any action); TaxDeclarationService.Subject"
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: High
+    pre: "EMP1 and EMP2 are distinct employees, each with their own declaration"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ViewOwn, ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full route-signature review of MyTaxDeclarationsController.cs => zero actions accept an employeeId query/route/body parameter"
+      - "[GET /api/me/tax-declarations] as EMP1 => [200] always returns EMP1's own declaration, never EMP2's, regardless of any client-supplied hint"
+    auto: API
+    secc: true
+
+  - id: TAXDCL-AUTHZ-006
+    func: [F-TAXDCL-122]
+    sc: "TaxDeclaration ApproveAsync has no self-approval guard of any kind"
+    t: A reviewer with both Review and Approve can review and approve their own declaration chain with no control available
+    src: "TaxDeclarationService.cs (full grep for PayrollApprovalGuard - zero matches)"
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    sev: High
+    pre: "Custom role R3 holds both Payroll.TaxDeclaration.Review and Payroll.TaxDeclaration.Approve"
+    role: Custom role R3
+    perm: Payroll.TaxDeclaration.Review, Payroll.TaxDeclaration.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/review] as R3 => [200] line reviewed"
+      - "[POST /api/payroll/tax-declarations/{id}/approve] as the SAME R3 user => [200] Approved - no self-approval guard of any kind exists for this specific action, unlike YearEndTax's own (opt-in) Approve guard"
+    secc: true
+    auto: API
+    cr: [CR-252]
+
+  - id: TAXDCL-AUTHZ-007
+    func: [F-TAXDCL-123]
+    sc: Configure is separated from Review/Approve
+    t: A role holding only Configure cannot review or approve a declaration
+    src: "TaxDeclarationsController.cs (permission attribute per route)"
+    type: Authorization
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Custom role R4 holds only Payroll.TaxDeclaration.Configure"
+    role: Custom role R4
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/tax-declarations/review] as R4 (Configure only) => [403] Forbidden"
+      - "[POST /api/payroll/tax-declarations/{id}/approve] as R4 (Configure only) => [403] Forbidden"
+    auto: API
+
+  - id: TAXDCL-AUTHZ-008
+    func: [F-TAXDCL-124]
+    sc: YearEndTax.Manage is a broad bucket covering Create/PreviousEmployer/Cancel/Handoff
+    t: A role holding only Manage (no Calculate/Submit/Approve/Close) can create/cancel a run and manage previous-employer inputs but cannot progress the lifecycle
+    src: "YearEndTaxController.cs (permission attribute per route)"
+    type: Authorization
+    tags: [Positive, Negative]
+    pri: P1
+    sev: Medium
+    pre: "Custom role R5 holds only Payroll.YearEndTax.Manage"
+    role: Custom role R5
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs] as R5 (Manage only) => [201] created"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/previous-employer] as R5 => [201] created"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] as R5 (no Calculate grant) => [403] Forbidden"
+    auto: API

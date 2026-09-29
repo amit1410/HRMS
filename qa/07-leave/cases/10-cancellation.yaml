@@ -1,0 +1,168 @@
+sheet: Leave_Approvals
+submodule: Leave Request Cancellation and Withdrawal (owner-only lifecycle actions distinct from Approve/Reject)
+defaults:
+  role: EMPLOYEE
+  perm: "Leave.RequestWithdrawOwn"
+  tenant: A
+  pre: "Tenant A signed in; caller is the request's own linked employee unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LEAVE-CANCEL-001
+    func: [F-LEAVE-207]
+    sc: Owner withdraws their own still-pending request
+    t: A PendingApproval request is withdrawn by its owner, releasing the reservation
+    src: ["LeaveRequestWithdrawalService.AttemptAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/leave-requests/{requestId}/withdraw] As the owning employee, request is PendingApproval => [200] Status=Withdrawn"
+      - "[GET /api/leave-balances/mine] => [200] ReservedQuantity decreased by the request's chargeable quantity, AvailableQuantity restored"
+    auto: API
+
+  - id: LEAVE-CANCEL-002
+    func: [F-LEAVE-207]
+    sc: A different employee cannot withdraw someone else's request
+    t: Withdraw on a request not owned by the caller is disguised as NotFound, not Forbidden
+    src: ["LeaveRequestWithdrawalService.AttemptAsync"]
+    type: Security
+    pri: P1
+    steps:
+      - "[POST /api/leave-requests/{otherEmployeesRequestId}/withdraw] As an unrelated employee (even one holding Leave.Approve via another role) => [404] 'Leave request was not found' - existence of another employee's request is never confirmed to a non-owner"
+    auto: API
+
+  - id: LEAVE-CANCEL-003
+    func: [F-LEAVE-208]
+    sc: Withdrawing a non-pending request fails
+    t: Withdraw is rejected Conflict for an already Approved/Rejected/Withdrawn/Cancelled request
+    src: ["LeaveRequestWithdrawalService.AttemptAsync"]
+    type: Negative
+    pri: P0
+    data: "One request per each of Approved, Rejected, Withdrawn, Cancelled"
+    steps:
+      - "[POST /api/leave-requests/{requestId}/withdraw] Request status is Approved => [409] 'InvalidStatusTransition: Only PendingApproval requests can be withdrawn'"
+      - "[POST /api/leave-requests/{requestId}/withdraw] Repeated on an already-Withdrawn request => [409] same error - not idempotently accepted"
+    auto: API
+
+  - id: LEAVE-CANCEL-004
+    func: [F-LEAVE-209]
+    sc: Owner cancels their own approved request when the policy allows it
+    t: An Approved request with CancellationRule.CancelAllowed=true is cancelled, restoring the CONSUMED quantity
+    src: ["LeaveRequestCancellationService.AttemptAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Leave.RequestCancelOwn"
+    steps:
+      - "[POST /api/leave-requests/{requestId}/cancel] Policy CancelAllowed=true, request is Approved => [200] Status=Cancelled"
+      - "[GET /api/leave-balances/mine] => [200] ConsumedQuantity decreased by the chargeable quantity, AvailableQuantity restored - NOT a reservation release, since Approval already moved Reserved to Consumed"
+    auto: API
+
+  - id: LEAVE-CANCEL-005
+    func: [F-LEAVE-209, F-LEAVE-318]
+    sc: Cancellation is blocked by policy when CancelAllowed=false, and an ABSENT rule is restrictive by default
+    t: CancelAllowed=false rejects Cancel Conflict; a policy with no CancellationRule row at all is treated the SAME as CancelAllowed=false (restrictive, not permissive, unlike Eligibility/Calendar/Attachment's own "absent = default" pattern)
+    src: ["LeaveRequestCancellationService.AttemptAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Leave.RequestCancelOwn"
+    steps:
+      - "[POST /api/leave-requests/{requestId}/cancel] Policy explicitly sets CancelAllowed=false => [409] 'CancellationNotAllowed'"
+      - "[POST /api/leave-requests/{otherRequestId}/cancel] Resolved policy rule has NO CancellationRule row at all (baseline/never configured) => [409] 'CancellationNotAllowed' - absence is restrictive here, the opposite of Eligibility/Calendar/Attachment's permissive-by-default convention"
+    auto: API
+
+  - id: LEAVE-CANCEL-006
+    func: [F-LEAVE-210]
+    sc: Cancel only accepts Approved -> Cancelled; every other status is rejected
+    t: Cancel on a PendingApproval, Rejected, Withdrawn, or already-Cancelled request all fail Conflict
+    src: ["LeaveRequestCancellationService.AttemptAsync"]
+    type: Negative
+    pri: P1
+    perm: "Leave.RequestCancelOwn"
+    steps:
+      - "[POST /api/leave-requests/{pendingRequestId}/cancel] Request is still PendingApproval (never approved) => [409] 'InvalidStatusTransition'"
+      - "[POST /api/leave-requests/{rejectedRequestId}/cancel] Request is Rejected => [409] 'InvalidStatusTransition'"
+    auto: API
+
+  - id: LEAVE-CANCEL-007
+    func: [F-LEAVE-211]
+    sc: There is no manager-initiated cancellation anywhere in the API
+    t: A manager attempting to cancel a direct report's approved leave on the employee's behalf is rejected exactly like any other non-owner
+    src: ["LeaveRequestCancellationService.AttemptAsync"]
+    type: Contract
+    pri: P1
+    role: MANAGER
+    perm: "Leave.RequestCancelOwn"
+    steps:
+      - "[POST /api/leave-requests/{directReportsRequestId}/cancel] As the request's own current manager, holding Leave.Approve but NOT owning the request => [404] 'Leave request was not found' - the manager path exists nowhere in this service; ownership, not scope/relationship, is the only gate"
+      - "[UI /leave-management/approvals] Frontend: open a historical Approved request in the manager's inbox => no Cancel action is rendered anywhere on the page"
+    auto: API
+    cr: [CR-89]
+
+  - id: LEAVE-CANCEL-008
+    func: [F-LEAVE-212]
+    sc: Cancelling a request whose Leave Period has since closed
+    t: Cancellation after LeavePeriodCloseProcessor has already lapsed/carried the balance still succeeds and restores into the same (now period-closed) EmployeeLeaveBalance row
+    src: ["LeaveBalanceAccountingService.ApplyProjection (CancellationRestore branch)"]
+    type: Boundary
+    pri: P1
+    perm: "Leave.RequestCancelOwn"
+    steps:
+      - "[Setup] Approve a request consuming 2 days from FY27's balance, then run LeavePeriodCloseProcessor for FY27 (carrying/lapsing the remaining balance) => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/{requestId}/cancel] Cancel the FY27 request AFTER period close => [200] Status=Cancelled"
+      - "[GET /api/leave-reports/balances?leavePeriodId={fy27Id}] => [200] ConsumedQuantity for FY27 decreased by the restored amount - confirm this does NOT drive AvailableQuantity negative and does not silently target the WRONG (already-closed) period's balance row incorrectly"
+    auto: DB-assisted
+
+  - id: LEAVE-CANCEL-009
+    func: [F-LEAVE-213]
+    sc: A second Cancel/Withdraw call on an already-terminal request is rejected, not idempotently accepted
+    t: Unlike some other lifecycle actions in the product, Leave's own Cancel/Withdraw are strictly single-shot
+    src: ["LeaveRequestCancellationService.AttemptAsync", "LeaveRequestWithdrawalService.AttemptAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/leave-requests/{requestId}/cancel] First call on an Approved request => [200] Cancelled"
+      - "[POST /api/leave-requests/{requestId}/cancel] Second call, same request => [409] 'InvalidStatusTransition' - not a silent no-op replay"
+    auto: API
+
+  - id: LEAVE-CANCEL-010
+    func: [F-LEAVE-214]
+    sc: Cross-employee cancel/withdraw attempts are uniformly NotFound
+    t: Both Cancel and Withdraw disguise a non-owned request as NotFound rather than Forbidden
+    src: ["LeaveRequestCancellationService.AttemptAsync", "LeaveRequestWithdrawalService.AttemptAsync"]
+    type: Security
+    pri: P1
+    steps:
+      - "[POST /api/leave-requests/{otherEmployeesApprovedRequestId}/cancel] As an unrelated employee => [404]"
+      - "[POST /api/leave-requests/{otherEmployeesPendingRequestId}/withdraw] As an unrelated employee => [404]"
+    auto: API
+
+  - id: LEAVE-CANCEL-011
+    func: [F-LEAVE-318]
+    sc: WithdrawAllowed=false has no effect on Withdraw's own runtime behavior
+    t: A PendingApproval request remains withdrawable by its owner even when the resolved policy explicitly sets WithdrawAllowed=false
+    src: ["LeaveRequestWithdrawalService.AttemptAsync"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Setup] Publish a policy rule with CancellationRule.WithdrawAllowed=false for this LeaveType => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/{requestId}/withdraw] Request is PendingApproval => [200] Status=Withdrawn - the WithdrawAllowed=false configuration was never consulted"
+    auto: API
+    cr: [CR-89]
+
+  - id: LEAVE-CANCEL-012
+    func: [F-LEAVE-318]
+    sc: WithdrawAllowed and CancelAllowed are independently configurable and independently (in)effective
+    t: A policy with WithdrawAllowed=true and CancelAllowed=false permits Withdraw but blocks Cancel - the SAME rule row, two different flags, only one of them enforced
+    src: ["LeaveRequestWithdrawalService.AttemptAsync", "LeaveRequestCancellationService.AttemptAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Setup] Publish a policy rule with WithdrawAllowed=true, CancelAllowed=false => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/{pendingRequestId}/withdraw] => [200] Withdrawn - WithdrawAllowed's true value happens to align with actual (unconditional) behavior here"
+      - "[POST /api/leave-requests/{approvedRequestId}/cancel] Different request, same policy => [409] 'CancellationNotAllowed' - CancelAllowed IS enforced"
+    auto: API
+    cr: [CR-89]

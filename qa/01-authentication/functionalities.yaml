@@ -1,0 +1,552 @@
+# Functionality registry for Module 1 - Authentication & Tenant Security.
+# Each functionality maps to UI, API, service, permission and DB impact. Test cases reference these ids
+# through their `func` field; the builder fails if a case references an unknown id or a functionality has no case.
+# Status vocabulary: Implemented | Partially implemented | Backend only | Needs clarification
+
+functionalities:
+  # ------------------------------------------------------------------ Tenant authentication
+  - id: F-AUTH-01
+    name: Tenant credential login (email identifier)
+    group: Tenant Authentication
+    status: Implemented
+    ui: "/login (LoginPage)"
+    api: "POST /api/auth/login"
+    service: "AuthService.LoginAsync; LoginRequestValidator"
+    permission: "Anonymous (rate limited: auth policy)"
+    db: "Users (LastLoginDate), RefreshTokens (insert), Tenants, UserRoles, Roles, RolePermissions, Permissions"
+  - id: F-AUTH-02
+    name: Login identifier modes and employee-code login
+    group: Tenant Authentication
+    status: Implemented
+    ui: "/login; /configuration/login-settings (TenantLoginSettingsPage)"
+    api: "POST /api/auth/login; GET|PUT /api/tenants/current/login-settings"
+    service: "AuthService.LoginAsync; TenantBrandingService"
+    permission: "Anonymous (login); User.Edit (settings)"
+    db: "TenantBranding.LoginIdentifierMode, AccountEmployeeCurrentLinks, Employees.EmployeeCode"
+  - id: F-AUTH-03
+    name: Login request validation and error envelope
+    group: Tenant Authentication
+    status: Implemented
+    ui: "LoginPage field errors"
+    api: "POST /api/auth/login"
+    service: "LoginRequestValidator; ValidationFilter; ApiBehaviorOptions.InvalidModelStateResponseFactory"
+    permission: "Anonymous"
+    db: "none"
+  - id: F-AUTH-04
+    name: Login enumeration resistance (generic errors, timing)
+    group: Tenant Authentication
+    status: Implemented
+    ui: "LoginPage error banner"
+    api: "POST /api/auth/login"
+    service: "AuthService.LoginAsync (VerifyAgainstDummyHash)"
+    permission: "Anonymous"
+    db: "none"
+  - id: F-AUTH-05
+    name: Account and organization status gating at login
+    group: Tenant Authentication
+    status: Implemented
+    ui: "LoginPage error banner / Workspace unavailable"
+    api: "POST /api/auth/login"
+    service: "AuthService.LoginAsync; TenantShardResolutionMiddleware"
+    permission: "Anonymous"
+    db: "Users.IsActive, Tenants.Status (tenant DB) and catalog Tenants.Status"
+  - id: F-AUTH-06
+    name: Access token issuance and claim content
+    group: Tokens
+    status: Implemented
+    ui: "none (in-memory only)"
+    api: "POST /api/auth/login; POST /api/auth/refresh"
+    service: "JwtTokenService.CreateAccessToken; JwtSettings"
+    permission: "n/a"
+    db: "none (stateless)"
+  - id: F-AUTH-07
+    name: Access token validation (signature, algorithm, issuer, audience, lifetime, tenant claims)
+    group: Tokens
+    status: Implemented
+    ui: "401 handling in api/client.ts"
+    api: "Any authorized endpoint (probe GET /api/auth/me)"
+    service: "AddJwtAuthentication (JwtBearer); TenantMatchesShardHandler"
+    permission: "Authenticated"
+    db: "none"
+  - id: F-AUTH-08
+    name: Refresh token issuance, storage and lifetime
+    group: Tokens
+    status: Implemented
+    ui: "session.ts (localStorage key hrms.refreshToken.v1)"
+    api: "POST /api/auth/login; POST /api/auth/refresh"
+    service: "JwtTokenService.CreateRefreshToken/HashRefreshToken; AuthService.IssueTokensAsync"
+    permission: "n/a"
+    db: "RefreshTokens (TokenHash, TenantId, UserId, ExpiresAtUtc, RevokedAtUtc, ReplacedByTokenHash)"
+  - id: F-AUTH-09
+    name: Refresh rotation (single use)
+    group: Tokens
+    status: Implemented
+    ui: "api/client.ts refreshSession"
+    api: "POST /api/auth/refresh"
+    service: "AuthService.RefreshAsync"
+    permission: "Anonymous (rate limited)"
+    db: "RefreshTokens (old row RevokedAtUtc + ReplacedByTokenHash, new row)"
+  - id: F-AUTH-10
+    name: Refresh replay and theft response (all-session revocation)
+    group: Tokens
+    status: Implemented
+    ui: "session ends on refresh failure"
+    api: "POST /api/auth/refresh"
+    service: "AuthService.RefreshAsync; RevokeAllActiveTokensForUserAsync"
+    permission: "Anonymous"
+    db: "RefreshTokens (all active rows for the user revoked)"
+  - id: F-AUTH-11
+    name: Concurrent refresh race handling
+    group: Tokens
+    status: Implemented
+    ui: "single-flight refresh in api/client.ts (per tab only)"
+    api: "POST /api/auth/refresh"
+    service: "AuthService.RefreshAsync (conditional ExecuteUpdate)"
+    permission: "Anonymous"
+    db: "RefreshTokens (conditional UPDATE ... WHERE RevokedAtUtc IS NULL)"
+  - id: F-AUTH-12
+    name: Refresh token host and tenant binding
+    group: Tokens
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/auth/refresh"
+    service: "AuthService.RefreshAsync (shard vs token tenant; caller tenant vs token tenant)"
+    permission: "Anonymous"
+    db: "RefreshTokens.TenantId"
+  - id: F-AUTH-13
+    name: Refresh revalidation (user active, tenant active, permissions re-read)
+    group: Tokens
+    status: Implemented
+    ui: "AuthProvider handles 'refreshed' event (new permissions)"
+    api: "POST /api/auth/refresh"
+    service: "AuthService.RefreshAsync; RoleResolutionService"
+    permission: "Anonymous"
+    db: "Users.IsActive, Tenants.Status, UserRoles (effective-dated), RolePermissions"
+  - id: F-AUTH-14
+    name: Logout (revocation, idempotency, ownership)
+    group: Session
+    status: Implemented
+    ui: "Header/Sidebar sign-out; ChangePasswordPage post-change sign-out"
+    api: "POST /api/auth/logout"
+    service: "AuthService.LogoutAsync; RefreshTokenRequestValidator"
+    permission: "Authenticated (default tenant-scoped policy)"
+    db: "RefreshTokens.RevokedAtUtc"
+  - id: F-AUTH-15
+    name: Current user (me) - profile, roles, permissions, tenant, employee identity
+    group: Session
+    status: Implemented
+    ui: "AuthProvider.fetchCurrentUser; MyProfilePage (GET /api/me/profile)"
+    api: "GET /api/auth/me; GET /api/me/profile"
+    service: "AuthService.GetCurrentUserAsync; MyEmployeeProfileService"
+    permission: "Authenticated"
+    db: "Users, Tenants, UserRoles, AccountEmployeeCurrentLinks, Employees, EmployeeEmploymentHistory"
+  - id: F-AUTH-16
+    name: Permission and account-state freshness (claims live in token until expiry/refresh)
+    group: Session
+    status: Needs clarification
+    ui: "AuthProvider re-fetches user after refresh"
+    api: "Any [HasPermission] endpoint; GET /api/auth/me"
+    service: "TenantScoped policy RequireClaim(permission); AuthService.GetCurrentUserAsync"
+    permission: "Various"
+    db: "UserRoles, RolePermissions, Users.IsActive"
+  # ------------------------------------------------------------------ Password lifecycle
+  - id: F-AUTH-17
+    name: Change password (authenticated)
+    group: Password Lifecycle
+    status: Implemented
+    ui: "/change-password (ChangePasswordPage)"
+    api: "POST /api/me/change-password"
+    service: "PasswordRecoveryService.ChangePasswordAsync; ChangePasswordRequestValidator"
+    permission: "Authenticated"
+    db: "Users.PasswordHash, RefreshTokens (all revoked)"
+  - id: F-AUTH-18
+    name: Set initial password from invitation
+    group: Password Lifecycle
+    status: Implemented
+    ui: "/set-password (SetPasswordPage)"
+    api: "POST /api/auth/set-password"
+    service: "EmployeePortalAccountService.SetPasswordAsync; SetPasswordRequestValidator"
+    permission: "Anonymous (rate limited: auth policy)"
+    db: "UserInvitations (UsedAtUtc/RevokedAtUtc/TokenHash), Users (PasswordHash, IsActive)"
+  - id: F-AUTH-19
+    name: Forgot password - identify account and channels
+    group: Password Lifecycle
+    status: Implemented
+    ui: "/forgot-password (ForgotPasswordPage)"
+    api: "POST /api/auth/forgot-password"
+    service: "PasswordRecoveryService.IdentifyAsync"
+    permission: "Anonymous (rate limited: password-recovery policy)"
+    db: "PasswordResetOtps (challenge rows)"
+  - id: F-AUTH-20
+    name: Recovery OTP send and resend (channels, cooldown, max resends)
+    group: Password Lifecycle
+    status: Implemented
+    ui: "ForgotPasswordPage"
+    api: "POST /api/auth/forgot-password/send-otp; POST /api/auth/forgot-password/resend-otp"
+    service: "PasswordRecoveryService.SendCoreAsync; IEmailSender; ISmsOtpSender"
+    permission: "Anonymous (password-recovery policy)"
+    db: "PasswordResetOtps (OtpHash, ExpiresAtUtc, ResendCount, LastSentAtUtc)"
+  - id: F-AUTH-21
+    name: Recovery OTP verification (attempts, expiry)
+    group: Password Lifecycle
+    status: Implemented
+    ui: "ForgotPasswordPage"
+    api: "POST /api/auth/forgot-password/verify-otp"
+    service: "PasswordRecoveryService.VerifyOtpAsync; VerifyRecoveryOtpRequestValidator"
+    permission: "Anonymous (password-recovery policy)"
+    db: "PasswordResetOtps (AttemptCount, VerifiedAtUtc)"
+  - id: F-AUTH-22
+    name: Password reset with reset token (single use, session revocation)
+    group: Password Lifecycle
+    status: Implemented
+    ui: "ForgotPasswordPage"
+    api: "POST /api/auth/forgot-password/reset"
+    service: "PasswordRecoveryService.ResetPasswordAsync; ResetPasswordRequestValidator"
+    permission: "Anonymous (password-recovery policy)"
+    db: "Users.PasswordHash, PasswordResetOtps.ConsumedAtUtc, RefreshTokens (all revoked)"
+  - id: F-AUTH-23
+    name: Password policy and hashing
+    group: Password Lifecycle
+    status: Implemented
+    ui: "ChangePasswordPage/SetPasswordPage requirement hints"
+    api: "set-password; reset; change-password"
+    service: "PasswordPolicy.IsValid; IdentityPasswordHasher"
+    permission: "n/a"
+    db: "Users.PasswordHash (hash only)"
+  - id: F-AUTH-24
+    name: Public tenant branding and recovery/login settings administration
+    group: Tenant Authentication
+    status: Implemented
+    ui: "LoginPage branding; /configuration/login-settings; /configuration/password-recovery"
+    api: "GET /api/tenants/current/branding; GET|PUT /api/tenants/current/login-settings; GET|PUT /api/tenants/current/password-recovery-settings"
+    service: "TenantBrandingService"
+    permission: "Anonymous (branding, rate limited); User.Edit (settings)"
+    db: "TenantBranding"
+  # ------------------------------------------------------------------ Tenant security
+  - id: F-TEN-01
+    name: Host to organization resolution (normalization)
+    group: Tenant Resolution
+    status: Implemented
+    ui: "host-aware API origin"
+    api: "Every request (middleware)"
+    service: "TenantShardResolutionMiddleware; TenantShardResolver.Normalize"
+    permission: "n/a"
+    db: "Catalog Tenants (Host unique, lowercase)"
+  - id: F-TEN-02
+    name: Host resolution caching window
+    group: Tenant Resolution
+    status: Implemented
+    ui: "n/a"
+    api: "Every request"
+    service: "TenantShardResolver (IMemoryCache: CacheSeconds, UnknownHostCacheSeconds)"
+    permission: "n/a"
+    db: "Catalog Tenants"
+  - id: F-TEN-03
+    name: Inactive or suspended organization refused at the edge
+    group: Tenant Resolution
+    status: Implemented
+    ui: "LoginPage 'Workspace not found/unavailable'"
+    api: "Every request at that host"
+    service: "TenantShardResolutionMiddleware.WriteWorkspaceUnavailableAsync"
+    permission: "n/a"
+    db: "Catalog Tenants.Status"
+  - id: F-TEN-04
+    name: Token to host agreement (tid and tcode) with 401 refusal
+    group: Tenant Isolation
+    status: Implemented
+    ui: "401 -> refresh -> session end"
+    api: "Every authorized endpoint"
+    service: "TenantMatchesShardHandler; ShardMismatchAuthorizationResultHandler"
+    permission: "Authenticated"
+    db: "none"
+  - id: F-TEN-05
+    name: Apex and unregistered host behaviour
+    group: Tenant Resolution
+    status: Implemented
+    ui: "WorkspacePickerPage (apex)"
+    api: "/health; /ready; /api/system/info; branding; login; authorized routes"
+    service: "TenantShardResolutionMiddleware; TenantMatchesShardHandler; AuthService.LoginAsync"
+    permission: "Mixed"
+    db: "none"
+  - id: F-TEN-06
+    name: Platform host boundary (platform routes vs tenant hosts)
+    group: Platform vs Tenant
+    status: Implemented
+    ui: "platform.localhost -> PlatformApplication"
+    api: "/api/platform/* ; tenant routes at platform host"
+    service: "PlatformRequestRoutingMiddleware; Platform:AllowedHosts"
+    permission: "n/a"
+    db: "none"
+  - id: F-TEN-07
+    name: Forwarded headers handling (X-Forwarded-For/Host/Proto)
+    group: Tenant Resolution
+    status: Implemented
+    ui: "n/a"
+    api: "Every request"
+    service: "AddHrmsForwardedHeaders; UseForwardedHeaders"
+    permission: "n/a"
+    db: "none"
+  - id: F-TEN-08
+    name: Client-supplied tenant identity is ignored (body, query, header, route)
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "All tenant APIs (sample: employees, users)"
+    service: "HttpTenantContext; HrmsDbContext.ApplyAuditAndTenantStamps"
+    permission: "Various"
+    db: "TenantId on created rows"
+  - id: F-TEN-09
+    name: Cross-tenant data isolation (read/update/delete by identifier)
+    group: Tenant Isolation
+    status: Implemented
+    ui: "direct URL /employees/:id etc."
+    api: "Sample of ID-taking endpoints in Auth/RBAC scope (full matrix per module)"
+    service: "EF global query filters; composite (TenantId, ...) FKs"
+    permission: "Various"
+    db: "All tenant tables"
+  - id: F-TEN-10
+    name: Per-tenant isolation of sessions (refresh tokens, users with same email)
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "login, refresh, logout"
+    service: "AuthService (explicit TenantId predicates)"
+    permission: "Anonymous/Authenticated"
+    db: "Users (unique per tenant), RefreshTokens"
+  - id: F-TEN-11
+    name: Shard mismatch handling and neutral refusal message
+    group: Tenant Isolation
+    status: Implemented
+    ui: "session ends on 401"
+    api: "Every authorized endpoint"
+    service: "ShardMismatchAuthorizationResultHandler"
+    permission: "Authenticated"
+    db: "none"
+  # ------------------------------------------------------------------ Platform identity
+  - id: F-PLT-01
+    name: Platform login
+    group: Platform Authentication
+    status: Implemented
+    ui: "platform.localhost /platform/login (PlatformLoginPage)"
+    api: "POST /api/platform/auth/login"
+    service: "PlatformAuthService.LoginAsync"
+    permission: "Anonymous (NOT rate limited)"
+    db: "PlatformUsers (LastLoginAtUtc), PlatformRefreshTokens, PlatformUserRoles"
+  - id: F-PLT-02
+    name: Platform refresh rotation (no family revocation on replay)
+    group: Platform Authentication
+    status: Implemented
+    ui: "platformAuth.ts platformRefresh"
+    api: "POST /api/platform/auth/refresh"
+    service: "PlatformAuthService.RefreshAsync"
+    permission: "Anonymous"
+    db: "PlatformRefreshTokens"
+  - id: F-PLT-03
+    name: Platform logout
+    group: Platform Authentication
+    status: Implemented
+    ui: "PlatformTenantsPage sign-out"
+    api: "POST /api/platform/auth/logout"
+    service: "PlatformAuthService.LogoutAsync"
+    permission: "PlatformAuthenticated policy"
+    db: "PlatformRefreshTokens.RevokedAtUtc"
+  - id: F-PLT-04
+    name: Platform current user and security revision
+    group: Platform Authentication
+    status: Implemented
+    ui: "PlatformAuthProvider.platformMe"
+    api: "GET /api/platform/auth/me"
+    service: "PlatformAuthService.GetCurrentUserAsync; PlatformPermissionHandler"
+    permission: "PlatformAuthenticated policy"
+    db: "PlatformUsers (IsActive, SecurityRevision)"
+  - id: F-PLT-05
+    name: Platform token validation (separate issuer, audience, key, scope)
+    group: Platform Authentication
+    status: Implemented
+    ui: "platformClient 401 handling"
+    api: "Any /api/platform/* authorized endpoint"
+    service: "PlatformBearer scheme; PlatformJwtSettings"
+    permission: "Platform"
+    db: "none"
+  - id: F-PLT-06
+    name: Platform permission enforcement (PlatformTenant.View/Create/UpdateStatus)
+    group: Platform Authentication
+    status: Implemented
+    ui: "PlatformTenantsPage actions"
+    api: "GET|POST|PUT /api/platform/tenants..."
+    service: "PlatformPermissionAttribute; PlatformPermissionHandler"
+    permission: "PlatformTenant.*"
+    db: "PlatformRolePermissions, PlatformUserRoles"
+  - id: F-PLT-07
+    name: Platform versus tenant token separation (both directions)
+    group: Platform vs Tenant
+    status: Implemented
+    ui: "n/a"
+    api: "tenant endpoints with platform token; platform endpoints with tenant token"
+    service: "Two JwtBearer schemes; default policy uses tenant scheme"
+    permission: "n/a"
+    db: "none"
+  - id: F-PLT-08
+    name: Platform frontend session and route protection
+    group: Platform Authentication
+    status: Implemented
+    ui: "/platform/login; /platform/tenants; RequirePlatformAuth; platformSession.ts"
+    api: "platform auth endpoints"
+    service: "PlatformAuthProvider; platformClient interceptor"
+    permission: "Platform"
+    db: "none"
+  # ------------------------------------------------------------------ Authorization foundation
+  - id: F-AZ-01
+    name: Permission-guarded endpoints ([HasPermission] policy per permission, AND semantics)
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "Sample: GET /api/employees, POST /api/employees, POST /api/employees/personal-details, GET /api/departments"
+    service: "HasPermissionAttribute; AddAuthorization (Permissions.All policies)"
+    permission: "Employee.View, Employee.Create, EmployeeSensitive.Edit, Department.View"
+    db: "none"
+  - id: F-AZ-02
+    name: Fallback deny-by-default and explicit anonymous surface
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "All routes; anonymous list: login, refresh, set-password, forgot-password*, branding, platform login/refresh, /health, /ready, /api/system/info"
+    service: "AuthorizationOptions.FallbackPolicy; [AllowAnonymous]"
+    permission: "n/a"
+    db: "none"
+  - id: F-AZ-03
+    name: Roles, multiple roles and permission union
+    group: Authorization
+    status: Implemented
+    ui: "Sidebar visibility"
+    api: "Role assignment then login/refresh"
+    service: "AuthService.LoadAuthorizationAsync; RoleResolutionService"
+    permission: "RoleManagement.*"
+    db: "UserRoles (effective-dated), RolePermissions"
+  - id: F-AZ-04
+    name: 401 versus 403 semantics and response envelope
+    group: Authorization
+    status: Implemented
+    ui: "/forbidden; 401 -> refresh"
+    api: "Any protected endpoint"
+    service: "JwtBearerEvents; ShardMismatchAuthorizationResultHandler; FailureResponse"
+    permission: "n/a"
+    db: "none"
+  - id: F-AZ-05
+    name: Frontend guards versus backend enforcement (RequireAuth, RequirePermission, navigation)
+    group: Authorization
+    status: Implemented
+    ui: "RequireAuth; RequirePermission; Sidebar/navigation.ts; /forbidden; direct URL"
+    api: "GET /api/auth/navigation and guarded APIs"
+    service: "AuthProvider.can; PageAccessService.GetNavigationAsync"
+    permission: "Various"
+    db: "none"
+  - id: F-AZ-06
+    name: Post-login redirect target (returnTo) safety
+    group: Authorization
+    status: Implemented
+    ui: "LoginPage.redirectTarget"
+    api: "n/a"
+    service: "RequireAuth state.from"
+    permission: "n/a"
+    db: "none"
+  - id: F-AZ-07
+    name: Self-service and scoped endpoints authorization sample (CR-02, CR-03)
+    group: Authorization
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/attendance/comp-off/operations; GET /api/payroll/adjustments; GET /api/me/payroll-adjustments"
+    service: "CompOffService.BuildOperationalScopeAsync; PayrollAdjustmentService"
+    permission: "Attendance.CompOffView*, Payroll.AdjustmentsView"
+    db: "none"
+  # ------------------------------------------------------------------ Transport and infrastructure security
+  - id: F-SEC-01
+    name: Authentication rate limiting (auth policy, fixed window per tenant+IP)
+    group: Transport Security
+    status: Implemented
+    ui: "429 message surfaced by LoginPage"
+    api: "login, refresh, set-password, branding"
+    service: "RateLimitingServiceCollectionExtensions; AuthenticationRateLimitSettings"
+    permission: "Anonymous"
+    db: "none"
+  - id: F-SEC-02
+    name: Password-recovery rate limiting
+    group: Transport Security
+    status: Implemented
+    ui: "ForgotPasswordPage"
+    api: "forgot-password*"
+    service: "PasswordRecoveryRateLimitSettings"
+    permission: "Anonymous"
+    db: "none"
+  - id: F-SEC-03
+    name: CORS policy (exact origins, workspace templates, credentials, preflight)
+    group: Transport Security
+    status: Implemented
+    ui: "browser cross-origin calls"
+    api: "Any endpoint (OPTIONS preflight)"
+    service: "CorsOriginPolicy; WorkspaceOriginPattern; HrmsCorsServiceCollectionExtensions"
+    permission: "n/a"
+    db: "none"
+  - id: F-SEC-04
+    name: Security response headers
+    group: Transport Security
+    status: Needs clarification
+    ui: "n/a"
+    api: "Any endpoint"
+    service: "Program.cs response-header middleware (after UseAuthorization)"
+    permission: "n/a"
+    db: "none"
+  - id: F-SEC-05
+    name: Error handling and information disclosure (500 envelope, Development leak, Swagger)
+    group: Transport Security
+    status: Implemented
+    ui: "n/a"
+    api: "Any endpoint"
+    service: "ExceptionHandlingMiddleware; Program.cs (UseSwagger in Development)"
+    permission: "n/a"
+    db: "none"
+  - id: F-SEC-06
+    name: Anonymous operational endpoints (/health, /ready, /api/system/info)
+    group: Transport Security
+    status: Implemented
+    ui: "n/a"
+    api: "GET /health; GET /ready; GET /api/system/info"
+    service: "Program.cs; SystemController"
+    permission: "Anonymous"
+    db: "Catalog reachable (ready)"
+  - id: F-SEC-07
+    name: Frontend session storage, remember-me and cross-tab behaviour
+    group: Frontend Session
+    status: Implemented
+    ui: "session.ts; AuthProvider (storage event); LoginPage remember-me"
+    api: "login/refresh/logout"
+    service: "session; refreshSession single-flight"
+    permission: "n/a"
+    db: "none"
+  - id: F-SEC-08
+    name: Frontend host-aware API origin and workspace picker
+    group: Frontend Session
+    status: Implemented
+    ui: "/ (apex WorkspacePickerPage); apiOrigin.ts; workspaceHost.ts"
+    api: "n/a"
+    service: "resolveApiBaseUrl; isApexHost; toWorkspaceLabel"
+    permission: "n/a"
+    db: "none"
+  - id: F-SEC-09
+    name: Frontend login page behaviour (validation, submit-once, branding states, remembered identifier)
+    group: Frontend Session
+    status: Implemented
+    ui: "/login"
+    api: "GET /api/tenants/current/branding; POST /api/auth/login"
+    service: "LoginPage; useTenantBranding"
+    permission: "Anonymous"
+    db: "none"
+  - id: F-SEC-10
+    name: Auth persistence parity across database providers (MySQL / SQL Server)
+    group: Provider Parity
+    status: Implemented
+    ui: "n/a"
+    api: "login, refresh (ExecuteUpdate), logout"
+    service: "Infrastructure providers; conditional UPDATE semantic"
+    permission: "n/a"
+    db: "RefreshTokens across providers"

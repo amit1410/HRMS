@@ -1,0 +1,198 @@
+sheet: Masters_AuthZ_Security
+submodule: Cross-Cutting Authorization, Tenant Isolation and Security
+defaults:
+  role: HR_ADMIN
+  perm: "See each case's role/steps for the exact permission(s) under test."
+  tenant: A
+  sev: Medium
+  reg: true
+  data: "Role/permission combinations and record ids as named in each case's steps."
+  pre: "Tenant A and Tenant B both exist with disposable QA data; a HRAdmin, HRManager, Manager and Employee test user exist in each tenant, matching SeedData.RolePermissionMap."
+
+cases:
+  - id: AUTHZ-001
+    func: [F-MST-32]
+    sc: Geography.View/Manage permission matrix across the seeded roles
+    t: Confirms exactly which seeded roles can read vs write the 15 generic-engine kinds plus Country/State/City, per SeedData.RolePermissionMap
+    src: ["Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap)"]
+    type: Authorization
+    pri: P0
+    role: HR_ADMIN, HR_MANAGER, MANAGER, EMPLOYEE, SUPER_HR
+    steps:
+      - "[GET /api/masters/holding-companies] As HR_ADMIN => [200]; [POST] => [201] (Geography.View + Manage)"
+      - "[GET /api/masters/holding-companies] As HR_MANAGER => [200]; [POST] => [403] (Geography.View only, no Manage)"
+      - "[GET /api/masters/holding-companies] As MANAGER => [200]; [POST] => [403] (Geography.View only, no Manage)"
+      - "[GET /api/masters/holding-companies] As EMPLOYEE => [200]; [POST] => [403] (Geography.View only, no Manage)"
+      - "[GET /api/masters/holding-companies] As SUPER_HR => [403] (SuperHR is not granted Geography.View at all)"
+    auto: API
+
+  - id: AUTHZ-002
+    func: [F-MST-16]
+    sc: Department.View/Create/Edit/Delete permission matrix across the seeded roles
+    t: HRAdmin has all four; HRManager and Manager have View only; Employee and SuperHR have none
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P0
+    role: HR_ADMIN, HR_MANAGER, MANAGER, EMPLOYEE, SUPER_HR
+    steps:
+      - "[GET /api/departments] As HR_ADMIN/HR_MANAGER/MANAGER => [200] each; [GET] as EMPLOYEE/SUPER_HR => [403] each"
+      - "[POST /api/departments] As HR_ADMIN => [201]; as HR_MANAGER/MANAGER (View only) => [403] each"
+    auto: API
+
+  - id: AUTHZ-003
+    func: [F-MST-18]
+    sc: Designation.View/Create/Edit/Delete permission matrix mirrors Department's
+    t: Identical shape to AUTHZ-002, for the Designations endpoints
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P0
+    role: HR_ADMIN, HR_MANAGER, MANAGER, EMPLOYEE, SUPER_HR
+    steps:
+      - "[GET /api/designations] As HR_ADMIN/HR_MANAGER/MANAGER => [200] each; as EMPLOYEE/SUPER_HR => [403] each"
+      - "[POST /api/designations] As HR_ADMIN => [201]; as HR_MANAGER => [403]"
+    auto: API
+
+  - id: AUTHZ-004
+    func: [F-MST-24, F-MST-25]
+    sc: The three distinct lookup permissions (Department.View, Designation.View, EmploymentHistory.View) are each independently enforced
+    t: A role can hold any subset of the three and get a correspondingly mixed set of lookup results, confirming they are not treated as equivalent or bundled
+    src: ["MasterLookupController (per-endpoint [HasPermission])"]
+    type: Authorization
+    pri: P1
+    role: HR_MANAGER
+    steps:
+      - "[GET /api/master-data/departments] As HR_MANAGER (has Department.View) => [200]"
+      - "[GET /api/master-data/designations] As HR_MANAGER (has Designation.View) => [200]"
+      - "[GET /api/master-data/position-change-reasons] As HR_MANAGER (has EmploymentHistory.View) => [200]"
+      - "[GET /api/master-data/grades] As HR_MANAGER (has neither Geography.Manage nor a separate 'Grade' permission - only Department.View gates it) => [200]"
+    auto: API
+
+  - id: AUTHZ-005
+    func: [F-MST-33]
+    sc: Every master endpoint family refuses an anonymous caller
+    t: One consolidated sweep across every controller in this module confirms none of them is reachable without a token
+    src: ["[Authorize] at the base of every controller in this module"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    steps:
+      - "[GET /api/masters/holding-companies] No token => [401]"
+      - "[GET /api/master-data/holding-companies] No token => [401]"
+      - "[GET /api/master-import/holding-companies/template] No token => [401]"
+      - "[GET /api/departments] No token => [401]"
+      - "[GET /api/designations] No token => [401]"
+      - "[GET /api/countries] No token => [401]"
+      - "[GET /api/states] No token => [401]"
+      - "[GET /api/cities] No token => [401]"
+    auto: API
+
+  - id: AUTHZ-006
+    func: [F-MST-36]
+    sc: A permission the frontend uses to hide navigation does not, by itself, protect the API - it is enforced independently server-side
+    t: Removing Department.View from a role hides the Departments link in MasterManagementPage's catalogue nav (see MASTER-FE-005), but this case proves the API-level [HasPermission] is what actually blocks the data, independent of any UI hiding
+    src: ["DepartmentsController [HasPermission(Permissions.Department.View)]; MasterManagementPage.tsx (visibleGroups filter)"]
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: SUPER_HR
+    steps:
+      - "[GET /api/departments] As SUPER_HR (Department.View not granted; the frontend would not show this link at all) => [403] - calling the API directly, bypassing the UI entirely, is refused identically to clicking a hidden link that somehow existed"
+    auto: API
+
+  - id: AUTHZ-007
+    func: [F-MST-34]
+    sc: Consolidated cross-tenant id probing sweep across every tenant-owned master kind
+    t: Using Tenant A's record ids while authenticated as Tenant B returns 404 (never 403, never the record) on every kind, confirming existence is never disclosed cross-tenant
+    src: ["EF global query filter on TenantId, applied uniformly across all tenant-owned entities"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A record ids, B caller
+    steps:
+      - "[GET /api/masters/holding-companies/{Tenant A HC01 id}] As Tenant B => [404]"
+      - "[GET /api/masters/grades/{Tenant A grade id}] As Tenant B => [404]"
+      - "[GET /api/departments/{Tenant A department id}] As Tenant B => [404]"
+      - "[GET /api/designations/{Tenant A designation id}] As Tenant B => [404]"
+    auto: API
+
+  - id: AUTHZ-008
+    func: [F-MST-06, F-MST-35]
+    sc: Consolidated cross-tenant parent-injection sweep
+    t: Using a Tenant B parent id while creating a Tenant A hierarchical record is refused identically across every hierarchical kind, not only sub-departments (already detailed in MASTER-CREATE-025)
+    src: ["MasterManagementService.ParentExistsAsync (tenant-filtered per kind)"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/masters/lines-of-business] As Tenant A, parentId = a Tenant B holding company id => [400] field 'parentId'"
+      - "[POST /api/masters/sub-functions] As Tenant A, parentId = a Tenant B function id => [400] field 'parentId'"
+    auto: API
+
+  - id: AUTHZ-009
+    func: [F-MST-32, F-MST-16, F-MST-18]
+    sc: SuperAdmin/TenantAdmin, which hold every permission, can perform every master operation without restriction
+    t: A smoke sweep confirming the 'super' roles are not blocked by any of the individual permission checks this module relies on
+    src: ["SeedData.RolePermissionMap[RoleNames.TenantAdmin] (DomainPermissions.All)"]
+    type: Positive
+    tags: [Authorization]
+    pri: P1
+    role: TENANT_ADMIN
+    smoke: true
+    steps:
+      - "[POST /api/masters/holding-companies] As TENANT_ADMIN => [201]"
+      - "[POST /api/departments] As TENANT_ADMIN => [201]"
+      - "[POST /api/designations] As TENANT_ADMIN => [201]"
+      - "[POST /api/countries] As TENANT_ADMIN => [201]"
+      - "[POST /api/master-import/cost-centers/validate] As TENANT_ADMIN, valid CSV => [200]"
+    auto: API
+
+  - id: AUTHZ-010
+    func: [F-MST-17, F-MST-19]
+    sc: Geography.Manage alone is sufficient to fully manage Department/Designation, bypassing their dedicated permissions entirely
+    t: A role holding Geography.Manage but neither Department.* nor Designation.* can create, update AND deactivate departments/designations end to end through the generic route
+    src: ["MasterManagementController [HasPermission(Permissions.Geography.Manage)] applies uniformly to every kind, including 'departments'/'designations'"]
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    sev: High
+    role: "A role with Geography.Manage but no Department.*/Designation.* permission at all (no seeded role has exactly this split; construct a custom test role to isolate the check)"
+    data: "kind=departments"
+    steps:
+      - "[POST /api/masters/departments] As the constructed role, body {code: 'MKT', name: 'Marketing'} => [201] - succeeds with no Department.Create at all"
+      - "[PUT /api/masters/departments/{MKT id}] As the same role, body {code: 'MKT', name: 'Marketing Dept'} => [200] - succeeds with no Department.Edit"
+      - "[DELETE /api/masters/departments/{MKT id}] As the same role => [200] - succeeds with no Department.Delete, and (per CR-28) with no reference check either"
+    auto: API
+    cr: [CR-29]
+
+  - id: AUTHZ-011
+    func: [F-MST-34]
+    sc: The tenant used for a write is always the caller's own resolved tenant, never a value taken from the request
+    t: Supplying an unrelated tenantId-shaped field in the request body has no effect - the architecture note that "tenant id comes only from the resolved host/validated JWT tid claim, never from client input" holds for every master write
+    src: ["MasterManagementService.WriteAsync (Set(entity, 'TenantId', tenantId) uses only _tenant.TenantId from ITenantContext, never anything from MasterManagementRequest, which has no TenantId field at all)"]
+    type: Security
+    pri: P1
+    steps:
+      - "[POST /api/masters/holding-companies] As a Tenant A HRAdmin, body {code: 'HC50', name: 'Injection Attempt', tenantId: '{Tenant B id}'} (an extra, unsupported field) => [201] the extra field is ignored by model binding; the created record belongs to Tenant A"
+      - "[GET /api/masters/holding-companies/{HC50 id}] As a Tenant B HRAdmin => [404] (confirms it was never actually created under Tenant B)"
+    auto: API
+
+  - id: AUTHZ-012
+    func: [F-MST-33]
+    sc: A valid token for one permission does not implicitly grant a different, unrelated permission on the same controller
+    t: Geography.View does not imply Geography.Manage, and Department.View does not imply Department.Create/Edit/Delete - each is checked independently per action
+    src: ["[HasPermission(...)] is applied per action, not per controller"]
+    type: Authorization
+    tags: [Negative]
+    pri: P1
+    role: HR_MANAGER
+    steps:
+      - "[GET /api/masters/grades] As HR_MANAGER (Geography.View) => [200]"
+      - "[PUT /api/masters/grades/{any id}] As HR_MANAGER => [403] (Geography.Manage still required, View does not carry over)"
+      - "[GET /api/departments] As HR_MANAGER (Department.View) => [200]"
+      - "[DELETE /api/departments/{any id}] As HR_MANAGER => [403] (Department.Delete still required)"
+    auto: API

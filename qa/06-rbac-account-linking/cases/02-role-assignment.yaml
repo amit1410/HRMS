@@ -1,0 +1,423 @@
+sheet: RBAC_Assignments
+submodule: User-Role Assignment (assign / revoke / history)
+defaults:
+  role: TENANT_ADMIN
+  perm: "RoleAssignment.AssignmentManage"
+  tenant: A
+  pre: "Tenant A signed in as TenantAdmin unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: RBAC-ASSIGN-001
+    func: [F-RBAC-028]
+    sc: List role assignments, paged and filterable
+    t: GET assignments supports page/pageSize plus role/status/source/search filters, ordered by EffectiveFrom desc
+    src: ["RoleAssignmentService.GetAssignmentsAsync"]
+    type: Positive
+    pri: P1
+    smoke: true
+    perm: "RoleAssignment.View"
+    steps:
+      - "[GET /api/role-assignments?page=1&pageSize=20] Call => [200] items ordered by effectiveFrom descending, totalCount matches the tenant's assignment count"
+      - "[GET /api/role-assignments?roleId={hrbpRoleId}] Call => [200] only HRBP assignments returned"
+    auto: API
+    ex: ["xU:RoleAssignmentServiceTests.Assignment_listing_returns_authoritative_statuses_and_server_side_filters"]
+
+  - id: RBAC-ASSIGN-002
+    func: [F-RBAC-029]
+    sc: Status is computed, Revoked overrides date-derived status
+    t: An assignment revoked before its own EffectiveTo still reports Status=Revoked, not Active/Expired
+    src: ["RoleAssignmentService.Map"]
+    type: Boundary
+    pri: P1
+    perm: "RoleAssignment.View"
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP, EffectiveFrom=today, EffectiveTo=+90days => [200] Active"
+      - "[POST /api/role-assignments/{assignmentId}/revoke] Revoke with EffectiveTo=today => [200]"
+      - "[GET /api/role-assignments?userId={userId}] Call => [200] the assignment's status is 'Revoked', not 'Active' even though the original EffectiveTo (+90 days) has not passed"
+    auto: API
+
+  - id: RBAC-ASSIGN-003
+    func: [F-RBAC-030]
+    sc: Search matches user OR linked-employee code/name
+    t: Searching by an employee code finds the assignment for the account linked to that employee
+    src: ["RoleAssignmentService.GetAssignmentsAsync"]
+    type: Positive
+    pri: P2
+    perm: "RoleAssignment.View"
+    steps:
+      - "[GET /api/role-assignments?search=EMP-002] Call (a linked employee's code) => [200] returns assignments for the account linked to EMP-002"
+    auto: API
+
+  - id: RBAC-ASSIGN-004
+    func: [F-RBAC-031]
+    sc: List assignment candidates
+    t: Candidates are active tenant users excluding the caller, with linked employee's department/designation/location where available
+    src: ["RoleAssignmentService.GetCandidatesAsync"]
+    type: Positive
+    pri: P1
+    perm: "RoleAssignment.AssignmentManage"
+    steps:
+      - "[GET /api/role-assignments/candidates] Call as TenantAdmin => [200] the caller's own userId is absent from items; each item carries department/designation/location when the account is linked"
+    auto: API
+    ex: ["xU:RoleAssignmentServiceTests.Role_management_candidates_are_tenant_scoped_and_do_not_require_link_permissions"]
+
+  - id: RBAC-ASSIGN-005
+    func: [F-RBAC-032]
+    sc: Get all role assignments for a user
+    t: Returns every assignment (any role, any status) for the given user
+    src: ["RoleAssignmentService.GetUserAssignmentsAsync"]
+    type: Positive
+    pri: P2
+    perm: "RoleAssignment.View"
+    steps:
+      - "[GET /api/role-assignments/users/{userId}] Call => [200] returns all of this user's assignments, ordered by EffectiveFrom"
+    auto: API
+
+  - id: RBAC-ASSIGN-006
+    func: [F-RBAC-033]
+    sc: Assign a role with explicit effective dates
+    t: A valid assign call persists EffectiveFrom/EffectiveTo, actor and reason, and writes an Assigned event
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] effectiveFrom=today, effectiveTo=null, reason='Pilot HRBP' => [201/200] assignment created, assignmentSource=Manual, isCurrentlyEffective=true"
+      - "[GET /api/role-assignments/{assignmentId}/history] Call => [200] one Assigned event, reason='Pilot HRBP', performedByUserId=the caller"
+    auto: API
+    ex: ["xU:RoleAssignmentServiceTests.Manual_assignment_persists_explicit_dates_actor_reason_and_event"]
+
+  - id: RBAC-ASSIGN-007
+    func: [F-RBAC-033]
+    sc: EffectiveTo before EffectiveFrom is rejected
+    t: An invalid date range is rejected with 400 before any write
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] effectiveFrom=2026-06-01, effectiveTo=2026-05-01 => [400] EffectiveTo cannot be before EffectiveFrom"
+    auto: API
+
+  - id: RBAC-ASSIGN-008
+    func: [F-RBAC-034]
+    sc: Multiple roles and non-overlapping periods coexist
+    t: Assigning two different roles, or the same role in two non-overlapping windows, does not overwrite an existing assignment
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP, effectiveFrom=today => [200]"
+      - "[POST /api/role-assignments/users/{userId}] Assign IT, effectiveFrom=today => [200]"
+      - "[GET /api/role-assignments/users/{userId}] Call => [200] both HRBP and IT assignments present, independently"
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP again, effectiveFrom=+180days (after the first HRBP grant's own effectiveTo has been set to +90days via a prior revoke) => [200] a second, distinct HRBP assignment row"
+    auto: API
+    ex: ["xU:RoleAssignmentServiceTests.User_can_hold_multiple_manual_roles_without_overwriting_assignments"]
+
+  - id: RBAC-ASSIGN-009
+    func: [F-RBAC-035]
+    sc: Duplicate/overlapping assignment of the same role
+    t: Assigning the same role to the same user with an overlapping effective period is rejected 409; an ADJACENT (non-overlapping) period is accepted
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP, effectiveFrom=today, effectiveTo=+30days => [200]"
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP again, effectiveFrom=+15days (overlaps) => [409] the role assignment overlaps an existing assignment"
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP again, effectiveFrom=+31days (adjacent, no overlap) => [200] succeeds"
+    auto: API
+    ex: ["xU:RoleAssignmentServiceTests.Invalid_and_overlapping_periods_are_rejected_but_adjacent_periods_are_allowed"]
+
+  - id: RBAC-ASSIGN-010
+    func: [F-RBAC-036]
+    sc: Employee and Manager roles cannot be manually assigned or revoked
+    t: A direct API attempt to assign or revoke either system role is rejected 400, regardless of caller permission
+    src: ["RoleAssignmentService.AssignAsync", "RoleAssignmentService.RevokeAsync"]
+    type: Negative
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] roleId = Employee's id => [400] Employee and Manager roles are system-managed"
+      - "[POST /api/role-assignments/users/{userId}] roleId = Manager's id => [400] Employee and Manager roles are system-managed"
+      - "[POST /api/role-assignments/{systemAssignmentId}/revoke] Attempt to revoke a System-sourced Employee-role assignment => [400] System-managed roles cannot be revoked manually"
+    auto: API
+    ex: ["xU:RoleAssignmentServiceTests.System_roles_cannot_be_manually_assigned_or_revoked"]
+
+  - id: RBAC-ASSIGN-011
+    func: [F-RBAC-037]
+    sc: Revoke a nonexistent or already-revoked assignment
+    t: Revoking an unknown assignmentId is 404; revoking an already-fully-revoked assignment again is an idempotent success, not an error
+    src: ["RoleAssignmentService.RevokeAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/role-assignments/{randomGuid}/revoke] Call => [404] Role assignment not found"
+      - "[POST /api/role-assignments/{alreadyRevokedId}/revoke] Call with an effectiveTo >= the existing revocation's => [200] 'The role assignment was already revoked.' - not an error"
+    auto: API
+
+  - id: RBAC-ASSIGN-012
+    func: [F-RBAC-038]
+    sc: Revoke closes the effective period and writes a Revoked event
+    t: A revoke call defaults EffectiveTo to today, cannot precede the assignment's own start, and is reflected in history
+    src: ["RoleAssignmentService.RevokeAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP, effectiveFrom=today => [200]"
+      - "[POST /api/role-assignments/{assignmentId}/revoke] effectiveTo omitted, reason='role change' => [200] EffectiveTo=today, status=Revoked"
+      - "[POST /api/role-assignments/{assignmentId}/revoke] Retry with effectiveTo BEFORE the assignment's EffectiveFrom => [400] Revocation date cannot be before assignment start"
+      - "[GET /api/role-assignments/{assignmentId}/history] Call => [200] a Revoked event with reason='role change'"
+    auto: API
+    ex: ["xU:RoleAssignmentServiceTests.Revocation_writes_an_immutable_audit_event_and_closes_the_period"]
+
+  - id: RBAC-ASSIGN-013
+    func: [F-RBAC-039, F-RBAC-040]
+    sc: Scope validation - disallowed scope for a role, and duplicate scope rows
+    t: Assigning IT/Accounts/SuperHR with any scope is rejected; a scoped role (HRBP) with a duplicate (type+entity) scope row is rejected
+    src: ["RoleAssignmentService.AssignAsync", "RoleAssignmentService.ScopesAllowed"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] roleId=IT, scopes=[{scopeType:'Department', scopeEntityId:<deptId>}] => [400] One or more scopes are not allowed for this role"
+      - "[POST /api/role-assignments/users/{userId}] roleId=HRBP, scopes=[{Department,<id>},{Department,<id>}] (duplicate) => [400] Duplicate scopes are not allowed"
+    auto: API
+    ex: ["xU:RoleAssignmentServiceTests.Invalid_scope_and_duplicate_scope_are_rejected"]
+
+  - id: RBAC-ASSIGN-014
+    func: [F-RBAC-040]
+    sc: Only HRBP/ERO/TimeManager may carry any scope
+    t: Every other role (HRAdmin, HRManager, IT, Accounts, SuperHR, AccountLinkAdministrator, AccountLinkAuditor) must be assigned with zero scopes
+    src: ["RoleAssignmentService.ScopesAllowed"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] roleId=SuperHR, scopes=[] => [200] accepted (tenant-wide)"
+      - "[POST /api/role-assignments/users/{userId}] roleId=SuperHR, scopes=[{Department,<id>}] => [400] scope not allowed for this role"
+    auto: API
+
+  - id: RBAC-ASSIGN-015
+    func: [F-RBAC-041]
+    sc: Frontend scope-type picker is narrower than the backend
+    t: A backend-legal scope dimension absent from the AssignDialog's SCOPE_TYPES map (e.g. SubDepartment for HRBP) is still accepted via a direct API call
+    src: ["RoleAssignmentService.ScopesAllowed vs RoleManagementPage SCOPE_TYPES"]
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[UI] Open AssignDialog, select HRBP, open the Scope Type dropdown => [200] SubDepartment/Section/SubSection/Function/SubFunction/Country are NOT offered as options"
+      - "[POST /api/role-assignments/users/{userId}] roleId=HRBP, scopes=[{scopeType:'SubDepartment', scopeEntityId:<id>}] (direct API call) => [200] accepted - the backend allows it even though the UI cannot construct it"
+    auto: API + UI
+    cr: [CR-67]
+
+  - id: RBAC-ASSIGN-016
+    func: [F-RBAC-042]
+    sc: Scope entity id must exist in the caller's tenant
+    t: A nonexistent or cross-tenant scope entity id is rejected as Invalid
+    src: ["RoleAssignmentService.ScopeExistsAsync"]
+    type: Negative
+    tenant: A+B
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] roleId=HRBP, scopes=[{Department, <randomGuid>}] => [400] A scope does not exist in the current tenant"
+      - "[POST /api/role-assignments/users/{userId}] roleId=HRBP, scopes=[{Department, <TenantB deptId>}] (as Tenant A) => [400] A scope does not exist in the current tenant"
+    auto: API
+
+  - id: RBAC-ASSIGN-017
+    func: [F-RBAC-043, F-RBAC-044]
+    sc: SuperHR assignment requires existing SuperHR authority and cannot be self-assigned
+    t: Only an existing SuperHR-holder may grant SuperHR; the actor cannot grant it to themselves
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    role: SUPER_HR
+    steps:
+      - "[POST /api/role-assignments/users/{ownUserId}] As an existing SuperHR, roleId=SuperHR, userId=self => [403] Only an existing Super HR may assign Super HR to another account"
+      - "[POST /api/role-assignments/users/{otherUserId}] As a non-SuperHR caller who nonetheless holds RoleAssignment.AssignmentManage (e.g. TenantAdmin, who is not itself a SuperHR role holder), roleId=SuperHR => [403] the actor is not a SuperHR holder"
+      - "[POST /api/role-assignments/users/{otherUserId}] As an existing SuperHR, roleId=SuperHR, targeting a different user => [200] succeeds"
+    auto: API
+    ex: ["xU:RoleAssignmentServiceTests.Super_hr_requires_existing_authority_and_cannot_be_self_assigned"]
+
+  - id: RBAC-ASSIGN-018
+    func: [F-RBAC-045]
+    sc: Cannot revoke the tenant's last effective SuperHR
+    t: Revoking the only currently-effective SuperHR assignment in the tenant is rejected 409
+    src: ["RoleAssignmentService.RevokeAsync"]
+    type: Negative
+    pri: P0
+    role: SUPER_HR
+    steps:
+      - "[GET /api/role-assignments?roleId={superHrRoleId}&status=Active] Confirm exactly one active SuperHR assignment exists => [200]"
+      - "[POST /api/role-assignments/{thatAssignmentId}/revoke] Attempt to revoke it => [409] The tenant must retain at least one effective Super HR assignment"
+      - "[POST /api/role-assignments/users/{anotherUserId}] Assign a second SuperHR => [200]"
+      - "[POST /api/role-assignments/{firstAssignmentId}/revoke] Now revoke the first => [200] succeeds - a second SuperHR remains"
+    auto: API
+    ex: ["xU:RoleAssignmentServiceTests.Super_hr_revocation_preserves_the_last_active_assignment"]
+
+  - id: RBAC-ASSIGN-019
+    func: [F-RBAC-046, F-RBAC-149]
+    sc: Assignment and revocation history is immutable and tenant-isolated
+    t: History is append-only, ordered chronologically, and never crosses tenant boundaries
+    src: ["RoleAssignmentService.GetAssignmentHistoryAsync", "RoleAssignmentService.GetUserHistoryAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    perm: "RoleAssignment.AssignmentViewHistory"
+    steps:
+      - "[GET /api/role-assignments/{assignmentId}/history] Call => [200] events ordered oldest-first by occurredAtUtc"
+      - "[GET /api/role-assignments/{tenantBAssignmentId}/history] As Tenant A => [404] Role assignment not found - never another tenant's history"
+    auto: API
+    ex: ["xU:RoleAssignmentServiceTests.Role_assignment_history_is_tenant_isolated"]
+
+  - id: RBAC-ASSIGN-020
+    func: [F-RBAC-047]
+    sc: History records actor and reason; System events carry no actor
+    t: A manual Assign/Revoke event records PerformedByUserId; a System-sourced auto-provisioning event does not
+    src: ["RoleAssignmentService.Event"]
+    type: Positive
+    pri: P2
+    perm: "RoleAssignment.AssignmentViewHistory"
+    steps:
+      - "[GET /api/role-assignments/{manualAssignmentId}/history] Call => [200] the Assigned event's performedByUserId = the assigning admin's id"
+      - "[GET /api/role-assignments/{systemEmployeeRoleAssignmentId}/history] Call (the auto-provisioned Employee role) => [200] the Assigned event's performedByUserId is null and assignmentSource='System'"
+    auto: API
+
+  - id: RBAC-ASSIGN-021
+    func: [F-RBAC-048]
+    sc: No maker-checker workflow
+    t: A single authorized Assign call takes effect immediately - there is no pending/approval intermediate state
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Contract
+    pri: P3
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP => [200] status='Active' immediately (assuming effectiveFrom<=today), no 'Pending' or 'Awaiting Approval' state exists anywhere in the response schema"
+    auto: API
+
+  - id: RBAC-ASSIGN-022
+    func: [F-RBAC-049]
+    sc: "PRIVILEGE ESCALATION: an actor can assign/revoke roles for their own account"
+    t: Unlike Account-Employee Linking's hard self-service block, Role Assignment has no general self-target guard outside the SuperHR-specific rule
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Security
+    tags: [Authorization]
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{ownUserId}] As TenantAdmin, roleId=HRBP (a non-SuperHR role), userId=self => [200] succeeds - no self-assignment guard blocks it"
+      - "[POST /api/role-assignments/{thatAssignmentId}/revoke] As the same TenantAdmin, revoke their own new HRBP assignment => [200] succeeds"
+    auto: API
+    cr: [CR-68]
+
+  - id: RBAC-ASSIGN-023
+    func: [F-RBAC-050]
+    sc: Cross-tenant user on assign
+    t: Assigning a role to a Tenant B user id from a Tenant A session is rejected as NotFound
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    smoke: true
+    tenant: A+B
+    steps:
+      - "[POST /api/role-assignments/users/{tenantBUserId}] As Tenant A TenantAdmin => [404] Account not found"
+    auto: API
+
+  - id: RBAC-ASSIGN-024
+    func: [F-RBAC-051]
+    sc: Nonexistent roleId on assign
+    t: An unknown roleId is rejected as NotFound
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] roleId=999999 => [404] Role not found"
+    auto: API
+
+  - id: RBAC-ASSIGN-025
+    func: [F-RBAC-142]
+    sc: "PRIVILEGE ESCALATION: cannot change another user's roles without AssignmentManage"
+    t: Every role lacking RoleAssignment.AssignmentManage is rejected 403 on assign/revoke
+    src: ["RoleAssignmentsController"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] As HRManager (no AssignmentManage) => [403] Forbidden"
+      - "[POST /api/role-assignments/users/{userId}] As HRBP => [403] Forbidden"
+      - "[POST /api/role-assignments/users/{userId}] As SuperHR (View+AssignmentView only) => [403] Forbidden"
+    auto: API
+
+  - id: RBAC-ASSIGN-026
+    func: [F-RBAC-143]
+    sc: Direct API call bypassing the UI is authorized identically
+    t: Calling POST /api/role-assignments/users/{userId} directly (no UI) with insufficient permission is rejected the same way a UI-originated call would be
+    src: ["RoleAssignmentsController"]
+    type: Security
+    pri: P2
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Direct call (curl-equivalent) as HRManager => [403] Forbidden - identical to the UI-blocked case"
+    auto: API
+
+  - id: RBAC-ASSIGN-027
+    func: [F-RBAC-144]
+    sc: Manipulated roleId assigns an unexpected but real role
+    t: Submitting a roleId that resolves to a different role than the caller intended succeeds normally - there is no cross-check against intent
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Security
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] roleId manipulated from HRBP's id to Accounts' id => [200] the Accounts role is assigned - no mismatch detection exists"
+    auto: API
+
+  - id: RBAC-ASSIGN-028
+    func: [F-RBAC-145]
+    sc: Manipulated userId targets a cross-tenant account
+    t: Substituting a Tenant B userId into a Tenant A assign call is rejected NotFound
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Security
+    tags: [Tenant-Isolation]
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[POST /api/role-assignments/users/{tenantBUserId}] As Tenant A => [404] Account not found"
+    auto: API
+
+  - id: RBAC-ASSIGN-029
+    func: [F-RBAC-146]
+    sc: Shared role ids are valid in every tenant - no 'wrong tenant role' state exists
+    t: A role id, which is global, works identically regardless of which tenant the caller authenticates to
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Tenant-Isolation
+    pri: P2
+    tenant: A+B
+    steps:
+      - "[POST /api/role-assignments/users/{tenantAUserId}] As Tenant A, roleId=HRBP's shared id => [200] succeeds"
+      - "[POST /api/role-assignments/users/{tenantBUserId}] As Tenant B, the SAME roleId => [200] also succeeds - roles are not tenant-owned, so there is no cross-tenant role id to misuse"
+    auto: API
+
+  - id: RBAC-ASSIGN-030
+    func: [F-RBAC-052, F-RBAC-158]
+    sc: Concurrent overlapping assignment race
+    t: Two simultaneous assigns of the same role/user/overlapping period leave exactly one UserRoles row and one Assigned event
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Fire two concurrent identical HRBP-assign requests => [200]/[409] exactly one succeeds cleanly, or both succeed only if non-overlapping; the database ends with exactly one HRBP UserRoles row for the overlapping-period case"
+      - "[GET /api/role-assignments/users/{userId}/history] Call => [200] exactly one Assigned event for the surviving assignment"
+    auto: API
+    ex: ["xU:RoleAssignmentConcurrencyTests.Concurrent_overlapping_assignments_leave_one_assignment_and_one_event", "xU:RoleAssignmentConcurrencyTests.Concurrent_non_overlapping_assignments_both_succeed_and_persist_events"]
+
+  - id: RBAC-ASSIGN-031
+    func: [F-RBAC-159]
+    sc: Concurrent assign and revoke on the same assignment
+    t: A simultaneous assign (new) and revoke (of an unrelated existing assignment for the same user) do not corrupt each other's audit trail
+    src: ["RoleAssignmentService.AssignAsync", "RoleAssignmentService.RevokeAsync"]
+    type: Integration-Concurrency
+    pri: P2
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Assign IT concurrently with revoking an existing HRBP assignment for the same user => [200]/[200] both operations complete independently"
+      - "[GET /api/role-assignments/users/{userId}/history] Call => [200] both an Assigned (IT) event and a Revoked (HRBP) event are present, each with its own timestamp, neither overwritten"
+    auto: API

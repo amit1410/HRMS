@@ -1,0 +1,192 @@
+sheet: PYA_Findings_Lifecycle
+submodule: Findings List & Lifecycle Actions
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-FIND-001
+    func: [F-PYA-075]
+    sc: Findings list spans all reconciliation versions for the run
+    t: GetFindingsAsync returns findings from every reconciliation version generated for the run, not just the latest
+    src: "PayrollAnalyticsController.Findings; PayrollAnalyticsService.GetFindingsAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RUN1 has 2 reconciliation versions, version 1 with 1 finding and version 2 with 2 findings"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/findings] => [200] TotalCount=3, spanning both versions' findings"
+    auto: API
+
+  - id: PYA-FIND-002
+    func: [F-PYA-075]
+    sc: Findings free-text search matches ControlCode or Message
+    t: search=bankadvice matches a finding whose ControlCode contains that text, case-insensitively via the DB provider's default text comparison
+    src: "PayrollAnalyticsService.GetFindingsAsync"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Medium
+    pre: "RUN2 has a MissingBankAdvice finding and 2 unrelated findings"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "search=BankAdvice"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN2}/findings?search=BankAdvice] => [200] returns only the MissingBankAdvice finding"
+    auto: API
+
+  - id: PYA-FIND-003
+    func: [F-PYA-076]
+    sc: Findings ignore sortBy and are always ordered GeneratedAtUtc descending, Id ascending
+    t: Passing sortBy=controlCode has no visible effect on ordering
+    src: "PayrollAnalyticsService.GetFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "RUN1 from PYA-FIND-001 (3 findings across 2 versions, generated at different times)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "sortBy=controlCode"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/findings?sortBy=controlCode] => [200] rows remain ordered by GeneratedAtUtc descending (version 2's findings before version 1's), not alphabetically by ControlCode"
+    auto: API
+    cr: [CR-300]
+
+  - id: PYA-FIND-004
+    func: [F-PYA-077]
+    sc: Acknowledge happy path
+    t: Acknowledging an Open finding transitions it to Acknowledged and stamps the actor/timestamp
+    src: "PayrollReconciliationController.Acknowledge; PayrollAnalyticsService.ActOnFindingAsync"
+    type: Positive
+    tags: []
+    pri: P0
+    sev: High
+    pre: "FINDING1 is Open"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Acknowledge)
+    perm: Payroll.Reconciliation.Acknowledge
+    tenant: "T1 (DEMO01)"
+    data: "id=FINDING1"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING1}/acknowledge] {} => [200] the finding's Status=Acknowledged"
+    auto: API
+    db: "Assert AcknowledgedAtUtc and AcknowledgedByUserId are both populated on the row"
+
+  - id: PYA-FIND-005
+    func: [F-PYA-078]
+    sc: Resolve happy path with note/reference
+    t: Resolving an Open finding transitions it to Resolved and persists the caller-supplied Note/Reference
+    src: "PayrollAnalyticsController; PayrollAnalyticsService.ActOnFindingAsync"
+    type: Positive
+    tags: []
+    pri: P0
+    sev: High
+    pre: "FINDING2 is Open"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Resolve)
+    perm: Payroll.Reconciliation.Resolve
+    tenant: "T1 (DEMO01)"
+    data: "id=FINDING2, note='Root cause fixed in bank export batch', reference='FIX-123'"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING2}/resolve] {note:'Root cause fixed in bank export batch', reference:'FIX-123'} => [200] Status=Resolved, ResolutionNote='Root cause fixed in bank export batch', ResolutionReference='FIX-123'"
+    auto: API
+
+  - id: PYA-FIND-006
+    func: [F-PYA-079]
+    sc: Accept-exception happy path, same permission as resolve
+    t: Accepting a finding as an exception transitions it to AcceptedException and is reachable using only Payroll.Reconciliation.Resolve (no separate accept-exception permission exists)
+    src: "PayrollAnalyticsController.Accept; PayrollAnalyticsService.ActOnFindingAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "FINDING3 is Open"
+    role: HRAdmin (custom role holding ONLY Payroll.Reconciliation.Resolve, no other reconciliation permission)
+    perm: Payroll.Reconciliation.Resolve
+    tenant: "T1 (DEMO01)"
+    data: "id=FINDING3, note='Accepted business risk', reference='RISK-ACCEPT-1'"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING3}/accept-exception] {note:'Accepted business risk', reference:'RISK-ACCEPT-1'} => [200] Status=AcceptedException, ResolutionNote/ResolutionReference persisted"
+    auto: API
+    cr: [CR-304]
+
+  - id: PYA-FIND-007
+    func: [F-PYA-080]
+    sc: A terminal finding rejects further action; Acknowledged is not terminal
+    t: A Resolved finding rejects a further acknowledge/resolve/accept-exception call with Conflict; an Acknowledged finding still accepts a subsequent resolve
+    src: "PayrollAnalyticsService.ActOnFindingAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: High
+    pre: "FINDING4 is Resolved. FINDING5 is Acknowledged (not yet Resolved/AcceptedException)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Acknowledge, Payroll.Reconciliation.Resolve)
+    perm: "Payroll.Reconciliation.Acknowledge, Payroll.Reconciliation.Resolve"
+    tenant: "T1 (DEMO01)"
+    data: "id=FINDING4, id=FINDING5"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING4}/acknowledge] {} => [409] Finding is already closed."
+      - "[POST /api/payroll/reconciliation/findings/{FINDING5}/resolve] {} => [200] Status transitions from Acknowledged to Resolved successfully"
+    auto: API
+
+  - id: PYA-FIND-008
+    func: [F-PYA-081]
+    sc: An unrecognized action string is rejected without mutating the finding
+    t: A malformed action route parameter (handled server-side via the same ActOnFindingAsync with a literal string) returns Invalid and leaves the finding's Status unchanged
+    src: "PayrollAnalyticsService.ActOnFindingAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: "This is exercised at the service layer directly since the 3 controller routes only ever pass their own literal action strings; a 4th literal ('escalate') is passed directly to ActOnFindingAsync to simulate a future/typo'd route"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Resolve)
+    perm: Payroll.Reconciliation.Resolve
+    tenant: "T1 (DEMO01)"
+    data: "action='escalate'"
+    steps:
+      - "[Service] ActOnFindingAsync(findingId, 'escalate', request) => Invalid result, 'Unsupported finding action.'; finding's Status is unchanged in the DB afterward"
+    auto: DB-assisted
+    db: "Assert the finding row's Status/AcknowledgedAtUtc/ResolvedAtUtc are all unchanged after the call"
+
+  - id: PYA-FIND-009
+    func: [F-PYA-082]
+    sc: Finding actions require the finding to resolve for the caller's tenant
+    t: A finding id belonging to a different tenant returns NotFound from acknowledge/resolve/accept-exception
+    src: "PayrollAnalyticsService.ActOnFindingAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "FINDING-T2 exists under Tenant T2 (DEMO02)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Acknowledge, tenant T1)
+    perm: Payroll.Reconciliation.Acknowledge
+    tenant: "T1 (DEMO01)"
+    data: "id=FINDING-T2"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING-T2}/acknowledge] (authenticated to T1) => [404] Finding not found."
+    auto: API
+
+  - id: PYA-FIND-010
+    func: [F-PYA-077, F-PYA-078]
+    sc: Acknowledge and resolve each independently require their own permission
+    t: A caller holding only Payroll.Reconciliation.Acknowledge (no Resolve) receives Forbidden on resolve, and vice versa
+    src: "PayrollAnalyticsController"
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "FINDING6 is Open"
+    role: "Role A (holds only Payroll.Reconciliation.Acknowledge); Role B (holds only Payroll.Reconciliation.Resolve)"
+    perm: "Payroll.Reconciliation.Acknowledge / Payroll.Reconciliation.Resolve"
+    tenant: "T1 (DEMO01)"
+    data: "id=FINDING6"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING6}/resolve] {} (as Role A, holding only Acknowledge) => [403] Forbidden"
+      - "[POST /api/payroll/reconciliation/findings/{FINDING6}/acknowledge] {} (as Role B, holding only Resolve) => [403] Forbidden"
+    auto: API

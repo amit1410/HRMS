@@ -1,0 +1,314 @@
+sheet: Masters_Status_Delete
+submodule: Generic Engine and Dedicated Department/Designation - Deactivate (DELETE)
+defaults:
+  role: HR_ADMIN
+  perm: Geography.Manage
+  tenant: A
+  pre: "Tenant A signed in as a user holding the HRAdmin role (Geography.Manage)."
+  data: "kind=holding-companies unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: MASTER-DELETE-001
+    func: [F-MST-07]
+    sc: Deleting an unreferenced record soft-deactivates it; the row is preserved
+    t: DELETE on a holding company with no child LOB and no employment references sets IsActive=false and returns success, never removing the row
+    src: ["MasterManagementService.DeleteAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    pre: "Tenant A has holding company HC30 with no Lines of Business and no employment references."
+    steps:
+      - "[DELETE /api/masters/holding-companies/{HC30 id}] Call => [200] 'Master record deactivated. Existing references were preserved.'"
+      - "[GET /api/masters/holding-companies/{HC30 id}] Call => [200] the record still exists, isActive=false (proves this is a deactivation, not a row deletion)"
+    auto: API
+
+  - id: MASTER-DELETE-002
+    func: [F-MST-07, F-MST-10]
+    sc: Deleting a holding company that still has a child Line of Business is refused
+    t: The reference check blocks deactivation and the record is left untouched
+    src: ["MasterManagementService.HasReferencesAsync ('holding-companies' checks LinesOfBusiness.HoldingCompanyId)"]
+    type: Negative
+    pri: P0
+    pre: "Tenant A has holding company HC01 with at least one active Line of Business parented to it."
+    steps:
+      - "[DELETE /api/masters/holding-companies/{HC01 id}] Call => [409] 'This record is referenced by existing employees, employment history, child masters, or employee-code rules. Deactivate it instead; no data was deleted.'"
+      - "[GET /api/masters/holding-companies/{HC01 id}] Call => [200] isActive is unchanged (still true)"
+    auto: API
+
+  - id: MASTER-DELETE-003
+    func: [F-MST-07]
+    sc: Deleting a master referenced only via employment history (not a direct employee FK) is refused
+    t: A Grade referenced by a historical EmployeeEmploymentHistory row (not necessarily the employee's current grade) still blocks deactivation
+    src: ["MasterManagementService.EmploymentReferencesAsync (EmployeeCodeConditionField.Grade -> EmployeeEmploymentHistory.GradeId)"]
+    type: Negative
+    pri: P1
+    pre: "Tenant A has Grade G1 referenced by at least one EmployeeEmploymentHistory row, current or historical."
+    data: "kind=grades"
+    steps:
+      - "[DELETE /api/masters/grades/{G1 id}] Call => [409]"
+    auto: API
+
+  - id: MASTER-DELETE-004
+    func: [F-MST-07]
+    sc: Deleting an already-inactive, unreferenced record succeeds again (idempotent no-op)
+    t: Calling DELETE a second time on a record that is already IsActive=false, with still no references, returns success again rather than an error
+    src: ["MasterManagementService.DeleteAsync (no 'already inactive' guard; simply re-sets IsActive=false and saves)"]
+    type: Boundary
+    tags: [Idempotency]
+    pri: P2
+    pre: "HC30 from MASTER-DELETE-001 is already inactive."
+    steps:
+      - "[DELETE /api/masters/holding-companies/{HC30 id}] Call a second time => [200] 'Master record deactivated. Existing references were preserved.' (same success response, not an error about already being inactive)"
+    auto: API
+
+  - id: MASTER-DELETE-005
+    func: [F-MST-07]
+    sc: Delete of a nonexistent id returns 404
+    t: A well-formed but unknown id is reported as not found
+    src: ["MasterManagementService.DeleteAsync (entity is null)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[DELETE /api/masters/holding-companies/{random GUID}] Call => [404] 'Master record not found.'"
+    auto: API
+
+  - id: MASTER-DELETE-006
+    func: [F-MST-07, F-MST-34]
+    sc: Delete of another tenant's record returns 404 and changes nothing
+    t: Tenant B cannot deactivate Tenant A's record by id
+    src: ["EF global query filter on TenantId"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A record, B caller
+    steps:
+      - "[DELETE /api/masters/holding-companies/{HC02 id}] As a Tenant B HRAdmin => [404]"
+      - "[GET /api/masters/holding-companies/{HC02 id}] As the Tenant A HRAdmin => [200] isActive still true"
+    auto: API
+
+  - id: MASTER-DELETE-007
+    func: [F-MST-07]
+    sc: Delete requires Geography.Manage
+    t: A Geography.View-only caller cannot deactivate a record
+    src: ["[HasPermission(Permissions.Geography.Manage)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: MANAGER
+    perm: Geography.View (held); Geography.Manage (missing)
+    steps:
+      - "[DELETE /api/masters/holding-companies/{HC30 id}] As MANAGER => [403]"
+    auto: API
+
+  - id: MASTER-DELETE-008
+    func: [F-MST-07]
+    sc: Delete requires authentication
+    t: An anonymous caller is refused before reaching the service
+    src: ["[Authorize]"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    steps:
+      - "[DELETE /api/masters/holding-companies/{HC30 id}] With no token => [401]"
+    auto: API
+
+  - id: MASTER-DELETE-009
+    func: [F-MST-09]
+    sc: Delete is always rejected for the 'countries' kind, even for an unreferenced country
+    t: DELETE /api/masters/countries/{id} returns 409 unconditionally, before any reference check runs
+    src: ["MasterManagementService.DeleteAsync (kind == 'countries' short-circuit, ahead of HasReferencesAsync)"]
+    type: Negative
+    pri: P1
+    pre: "A country with zero states and zero employee references exists (so the reference check, if it ran, would pass)."
+    data: "kind=countries"
+    steps:
+      - "[DELETE /api/masters/countries/{that country's id}] Call => [409] 'Countries are shared reference data and cannot be changed from the tenant Masters screen.'"
+    auto: API
+    cm: "HasReferencesAsync does have a 'countries' case (checks States and Employee/EmploymentHistory country references), but it is unreachable dead code from this endpoint: DeleteAsync's countries short-circuit returns before HasReferencesAsync is ever called for this kind."
+
+  - id: MASTER-DELETE-010
+    func: [F-MST-07, F-MST-13]
+    sc: Function delete checks two independent reference sources - child Sub Functions and employment history
+    t: A Function with either a child Sub Function or an employment-history reference is blocked; one with neither is deactivated
+    src: ["MasterManagementService.HasReferencesAsync ('functions' checks SubFunctions.FunctionId OR EmploymentReferencesAsync(Function))"]
+    type: Negative
+    tags: [Positive]
+    pri: P1
+    pre: "Tenant A has Function FN01 with a child Sub Function, and Function FN02 with neither a child nor any employment reference."
+    data: "kind=functions"
+    steps:
+      - "[DELETE /api/masters/functions/{FN01 id}] Call => [409]"
+      - "[DELETE /api/masters/functions/{FN02 id}] Call => [200] deactivated"
+    auto: API
+
+  - id: MASTER-DELETE-011
+    func: [F-MST-07, F-MST-08]
+    sc: The generic engine's DELETE for the 'departments' kind ignores employee and child-sub-department references
+    t: A department with employees assigned, and with a child sub-department, is still deactivated without a 409 when reached through /api/masters/departments/{id}
+    src: ["MasterManagementService.HasReferencesAsync (no case for 'departments' - falls through to `return false`)"]
+    type: Negative
+    tags: [Contract]
+    pri: P0
+    sev: High
+    pre: "Tenant A department ENG has at least one employee assigned and one child SubDepartment."
+    data: "kind=departments"
+    steps:
+      - "[DELETE /api/masters/departments/{ENG id}] Call (as an HRAdmin who holds Geography.Manage) => [200] 'Master record deactivated. Existing references were preserved.' - no 409, despite ENG having employees and a child sub-department"
+      - "[DELETE /api/departments/{ENG id}] Immediately repeat through the DEDICATED endpoint for the same still-referenced department => [409] '...still has N employee(s) assigned...' (the dedicated path DOES enforce the guard, on the same underlying row)"
+    auto: API
+    cr: [CR-28]
+
+  - id: MASTER-DELETE-012
+    func: [F-MST-07, F-MST-08]
+    sc: The generic engine's DELETE for the 'designations' kind ignores employee references
+    t: A designation held by employees is still deactivated without a 409 when reached through /api/masters/designations/{id}
+    src: ["MasterManagementService.HasReferencesAsync (no case for 'designations')"]
+    type: Negative
+    tags: [Contract]
+    pri: P0
+    sev: High
+    pre: "Tenant A designation SE2 is held by at least one employee."
+    data: "kind=designations"
+    steps:
+      - "[DELETE /api/masters/designations/{SE2 id}] Call => [200] deactivated despite being held by an employee"
+    auto: API
+    cr: [CR-28]
+
+  - id: MASTER-DELETE-013
+    func: [F-MST-07]
+    sc: Delete never removes a row, across repeated deactivate/reactivate cycles
+    t: Toggling IsActive via update and DELETE several times never changes the record's id or reduces the table's row count
+    src: ["MasterManagementService.DeleteAsync (Set(entity, 'IsActive', false); SaveChanges - never Remove)"]
+    type: Boundary
+    pri: P2
+    sev: Low
+    pre: "Tenant A has Cost Center CC02, active, unreferenced."
+    data: "kind=cost-centers"
+    steps:
+      - "[DELETE /api/masters/cost-centers/{CC02 id}] Call => [200] isActive=false"
+      - "[PUT /api/masters/cost-centers/{CC02 id}] Body {code: 'CC02', name: 'Cost Center 2', isActive: true} => [200] isActive=true, same id as before"
+      - "[DELETE /api/masters/cost-centers/{CC02 id}] Call again => [200] isActive=false"
+      - "[GET /api/masters/cost-centers?search=CC02] Call => [200] exactly one row for CC02 across the whole cycle (no duplicate rows created)"
+    auto: API
+
+  - id: DEPT-DELETE-001
+    func: [F-MST-16]
+    sc: Dedicated Department delete refuses a department that still has employees
+    t: The exact employee count is reported in the conflict message
+    src: ["DepartmentService.DeleteAsync"]
+    type: Negative
+    pri: P0
+    pre: "Tenant A department ENG has 2 employees assigned."
+    steps:
+      - "[DELETE /api/departments/{ENG id}] Call => [409] '...still has 2 employee(s) assigned. Reassign them, or mark the department inactive instead of deleting it.'"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Delete_refuses_a_department_that_still_has_employees"]
+
+  - id: DEPT-DELETE-002
+    func: [F-MST-16]
+    sc: Dedicated Department delete deactivates a department nobody is assigned to
+    t: An unreferenced department is deactivated, not removed
+    src: ["DepartmentService.DeleteAsync"]
+    type: Positive
+    pri: P0
+    pre: "Tenant A department FIN has zero employees."
+    steps:
+      - "[DELETE /api/departments/{FIN id}] Call => [200] 'Department deactivated. Existing references were preserved.'"
+      - "[GET /api/departments/{FIN id}] Call => [200] isActive=false"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Delete_deactivates_a_department_nobody_is_assigned_to"]
+
+  - id: DEPT-DELETE-003
+    func: [F-MST-16, F-MST-34]
+    sc: Dedicated Department delete of another tenant's department is not found
+    t: Tenant B cannot deactivate Tenant A's department
+    src: ["DepartmentService.DeleteAsync (tenant-filtered lookup)"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A record, B caller
+    steps:
+      - "[DELETE /api/departments/{ENG id}] As a Tenant B HRAdmin => [404]"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Delete_of_another_tenants_department_is_not_found"]
+
+  - id: DEPT-DELETE-004
+    func: [F-MST-16]
+    sc: Dedicated Department delete requires Department.Delete
+    t: A role holding Department.Edit but not Department.Delete cannot deactivate a department
+    src: ["[HasPermission(Permissions.Department.Delete)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: HR_MANAGER
+    perm: Department.View (held); Department.Delete (missing)
+    steps:
+      - "[DELETE /api/departments/{FIN id}] As HR_MANAGER => [403]"
+    auto: API
+
+  - id: DEPT-DELETE-005
+    func: [F-MST-16]
+    sc: Every Department operation is unauthorized without a resolved tenant
+    t: A token that resolves to no tenant at all (rather than lacking a permission) gets 401, not 403, from every Department endpoint
+    src: ["DepartmentService (every method checks _tenantContext.TenantId is null first)"]
+    type: Negative
+    tags: [Security]
+    pri: P2
+    sev: Medium
+    role: "Authenticated user with no resolvable tenant"
+    steps:
+      - "[GET /api/departments] => [401] 'No authenticated tenant.'"
+      - "[POST /api/departments] Body {code: 'X', name: 'X'} => [401]"
+      - "[DELETE /api/departments/{any id}] => [401]"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Without_a_tenant_every_operation_is_unauthorized"]
+
+  - id: DESIG-DELETE-001
+    func: [F-MST-18]
+    sc: Dedicated Designation delete refuses a designation employees still hold
+    t: Mirrors DEPT-DELETE-001 for designations
+    src: ["DesignationService.DeleteAsync"]
+    type: Negative
+    pri: P0
+    pre: "Tenant A designation SE2 is held by at least one employee."
+    steps:
+      - "[DELETE /api/designations/{SE2 id}] Call => [409] '...held by N employee(s). Reassign them, or mark the designation inactive instead of deleting it.'"
+    auto: API
+    ex: ["xU:DesignationServiceTests.Delete_refuses_a_designation_that_employees_still_hold"]
+
+  - id: DESIG-DELETE-002
+    func: [F-MST-18]
+    sc: Dedicated Designation delete deactivates a designation nobody holds
+    t: Mirrors DEPT-DELETE-002 for designations
+    src: ["DesignationService.DeleteAsync"]
+    type: Positive
+    pri: P0
+    pre: "Tenant A designation SE3 is held by nobody."
+    steps:
+      - "[DELETE /api/designations/{SE3 id}] Call => [200] 'Designation deactivated. Existing references were preserved.'"
+    auto: API
+    ex: ["xU:DesignationServiceTests.Delete_deactivates_a_designation_nobody_holds"]
+
+  - id: DESIG-DELETE-003
+    func: [F-MST-18]
+    sc: Every Designation operation is unauthorized without a resolved tenant
+    t: Mirrors DEPT-DELETE-005 for designations
+    src: ["DesignationService (every method checks _tenantContext.TenantId is null first)"]
+    type: Negative
+    tags: [Security]
+    pri: P2
+    sev: Medium
+    role: "Authenticated user with no resolvable tenant"
+    steps:
+      - "[GET /api/designations] => [401]"
+      - "[DELETE /api/designations/{any id}] => [401]"
+    auto: API
+    ex: ["xU:DesignationServiceTests.Without_a_tenant_every_operation_is_unauthorized"]

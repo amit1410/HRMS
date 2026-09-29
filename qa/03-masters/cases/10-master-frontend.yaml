@@ -1,0 +1,198 @@
+sheet: Masters_Frontend
+submodule: MasterManagementPage / MasterDropdown / MasterBulkImport (React)
+defaults:
+  role: HR_ADMIN
+  perm: "See each case's role/steps for the exact permission(s) under test."
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin in the frontend app, at /masters/holding-companies or a sibling route."
+  data: "Record ids and form field values as named in each case's steps."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: MASTER-FE-001
+    func: [F-MST-36]
+    sc: The catalogue nav lists every manageable kind, grouped, and the catalogue search filters it live
+    t: Navigating to /masters/holding-companies renders four groups (Organization, Classification, Workplace, Employment) with all 16 listed kinds; typing in the catalogue search box narrows the visible links
+    src: ["Frontend/HRMS.Web/src/pages/masters/MasterManagementPage.tsx (groups, catalogueSearch)"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "Open /masters/holding-companies => the 'Masters' catalogue card shows Organization/Classification/Workplace/Employment groups with Holding Companies highlighted as the active link"
+      - "Type 'grade' into the catalogue search box => only the 'Grades' link remains visible across all groups"
+    auto: UI
+
+  - id: MASTER-FE-002
+    func: [F-MST-36, F-MST-09]
+    sc: The Countries page renders as read-only - no Add button, no row actions, an explicit notice
+    t: Navigating to /masters/countries never offers a create/edit/delete affordance, matching the backend's unconditional write rejection
+    src: ["MasterManagementPage.tsx (canCreate/canEdit/canDelete forced false for kind==='countries')"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "Open /masters/countries => no '+ Add country' button in the page actions; each row has no Edit/Delete action (shows '—' instead); the catalogue nav shows 'Countries are shared reference data and are read-only here.'"
+    auto: UI
+
+  - id: MASTER-FE-003
+    func: [F-MST-17, F-MST-19, F-MST-36]
+    sc: Departments and Designations render through the same shared component but at their own routes and under their own permissions
+    t: The catalogue nav links for Departments/Designations point at /departments and /designations, not /masters/departments or /masters/designations, even though MasterManagementPage handles both URL shapes
+    src: ["MasterManagementPage.tsx (groups.items Link target: key === 'departments' || 'designations' ? `/${key}` : `/masters/${key}`)"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Low
+    steps:
+      - "Open /masters/holding-companies and inspect the 'Departments' catalogue link's href => '/departments', not '/masters/departments'"
+      - "Navigate directly to /departments => the same MasterManagementPage component renders, with canCreate/canEdit/canDelete driven by Permissions.department.* instead of Permissions.geography.*"
+    auto: UI
+
+  - id: MASTER-FE-004
+    func: [F-MST-36]
+    sc: Create/Edit/Delete controls are shown or hidden per-kind according to the correct permission branch
+    t: A user with Geography.Manage but not Department.Create sees the Add button on every generic kind's page but not on the Departments page
+    src: ["MasterManagementPage.tsx (canCreate ternary keyed on kind)"]
+    type: Positive
+    tags: [Authorization]
+    pri: P1
+    role: HR_MANAGER
+    steps:
+      - "As HR_MANAGER (Geography.View only, Department.View/Designation.View only - no Manage/Create/Edit/Delete anywhere), open /masters/holding-companies => no '+ Add' button, row actions show '—' instead of Edit/Delete"
+      - "As HR_MANAGER, open /departments => same result (no Add button, since Department.Create is also missing)"
+    auto: UI
+
+  - id: MASTER-FE-005
+    func: [F-MST-36]
+    sc: A kind the caller cannot view at all is hidden from the catalogue nav entirely, not merely disabled
+    t: A role without Department.View never sees a 'Departments' link to click in the first place
+    src: ["MasterManagementPage.tsx (visibleGroups filter: key !== 'departments' || can(Permissions.department.view))"]
+    type: Positive
+    tags: [Authorization]
+    pri: P1
+    role: SUPER_HR
+    steps:
+      - "As SUPER_HR (no Department.View), open /masters/holding-companies => the catalogue nav's 'Organization' group does not list 'Departments' at all"
+    auto: UI
+    cm: "Paired with AUTHZ-006, which proves the backend refuses the same request even if a user reached /departments directly (e.g. via a bookmarked URL, a shared link, or by typing it) - the hidden nav is a UX convenience, not the actual security boundary."
+
+  - id: MASTER-FE-006
+    func: [F-MST-06, F-MST-37]
+    sc: The parent <select> in the create/edit form is populated only with active parent options
+    t: An inactive Department never appears as a selectable Department option when creating or editing a Sub Department, so a user cannot even attempt to pick an invalid parent through the UI
+    src: ["MasterManagementPage.tsx (definitions['sub-departments'].parent.load = () => listDepartments({isActive: true}))"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    pre: "Tenant A has an inactive Department DEPT99."
+    steps:
+      - "Open /masters/sub-departments and click '+ Add sub department' => the 'Department' <select> options do not include DEPT99"
+    auto: UI
+
+  - id: MASTER-FE-007
+    func: [F-MST-36]
+    sc: Closing a dirty editor prompts for confirmation before discarding
+    t: Typing into any form field and then clicking the close (×) button or Cancel triggers a native confirm dialog
+    src: ["MasterManagementPage.tsx (closeEditor: if (dirty && !window.confirm('Discard unsaved changes?')) return)"]
+    type: Positive
+    tags: [Usability]
+    pri: P2
+    sev: Low
+    steps:
+      - "Open '+ Add holding company', type a code, then click the × close button => a 'Discard unsaved changes?' confirm dialog appears; cancelling it keeps the editor open with the typed value intact"
+    auto: UI
+
+  - id: MASTER-FE-008
+    func: [F-MST-07, F-MST-36]
+    sc: The delete confirmation dialog explicitly states that references will be preserved
+    t: Clicking Delete on a row shows a confirm dialog naming the record and stating existing references are kept, before any DELETE call is made
+    src: ["MasterManagementPage.tsx (remove: window.confirm(`Deactivate ${row.code} — ${row.name}? Existing references will be preserved.`))"]
+    type: Positive
+    pri: P2
+    sev: Low
+    steps:
+      - "Click 'Delete' on any row => a confirm dialog reading 'Deactivate {code} — {name}? Existing references will be preserved.' appears; cancelling it makes no API call"
+    auto: UI
+
+  - id: MASTER-FE-009
+    func: [F-MST-01, F-MST-36]
+    sc: Changing the search text or status filter resets pagination to page 1
+    t: Being on page 2 of results and then typing a new search term or changing the status filter returns to page 1 automatically
+    src: ["MasterManagementPage.tsx (setPage(1) inside the search/status onChange handlers)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: "The current kind has enough records to span at least 2 pages of 25."
+    steps:
+      - "Navigate to page 2 of the records list, then type into the record search box => the list immediately shows page 1 of the filtered results, and the footer shows 'Showing 1-...'"
+    auto: UI
+
+  - id: MASTER-FE-010
+    func: [F-MST-36]
+    sc: Deep links open the editor automatically, once, and only when the caller is permitted
+    t: ?edit={id} opens the edit form for that row if canEdit is true; ?add=1 opens the create form if canCreate is true; neither does anything if the corresponding permission is missing
+    src: ["MasterManagementPage.tsx (searchParams effect, intentHandledRef)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    steps:
+      - "Navigate to /masters/holding-companies?edit={HC01 id} as HR_ADMIN => the edit form opens pre-filled with HC01's data, automatically, without clicking Edit"
+      - "Navigate to /masters/holding-companies?add=1 as HR_MANAGER (no Geography.Manage) => the create form does NOT open, because canCreate is false"
+    auto: UI
+
+  - id: MASTER-FE-011
+    func: [F-MST-37]
+    sc: MasterDropdown clears the child selection when its parent changes after the initial render, but preserves an initially-hydrated value
+    t: Changing the selected Department in a form clears any already-chosen Sub Department below it; but loading a saved record with both already set does not wipe the Sub Department on first render
+    src: ["Frontend/HRMS.Web/src/components/MasterDropdown.tsx (previousParentId effect: only clears after the FIRST parentId, not on the initial undefined -> value transition)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "Open a form with a saved Department + Sub Department already selected => both values are shown as-is on first render (no clearing)"
+      - "Change the Department dropdown to a different department => the Sub Department field's value is cleared immediately"
+    auto: UI
+
+  - id: MASTER-FE-012
+    func: [F-MST-37]
+    sc: MasterDropdown caps its visible option list at 100 and still allows displaying (but not newly selecting) an inactive value already on the record
+    t: A search matching more than 100 options shows a 'first 100 of N' notice; a previously-saved inactive selection still displays via valueLabel, but cannot be re-selected fresh unless allowInactiveSelection is set
+    src: ["MasterDropdown.tsx (visible = filtered.slice(0, 100); selectOption blocks inactive unless allowInactiveSelection)"]
+    type: Boundary
+    pri: P2
+    pre: "A dropdown source has more than 100 active options (e.g. Cost Centers in a heavily-seeded QA tenant)."
+    steps:
+      - "Open the dropdown and clear the search box => the option list shows only the first 100 matches with a 'Showing first 100 of N matches.' footer line"
+      - "Open a record whose saved value is now an inactive option => the field displays that value via valueLabel; attempting to pick a different inactive option from the open list is a no-op (click does not select it) unless allowInactiveSelection is true for that field"
+    auto: UI
+
+  - id: MASTER-FE-013
+    func: [F-MST-38]
+    sc: The bulk-import control is gated by Geography.Manage even on the Departments/Designations pages, independent of their own create/edit/delete permissions
+    t: A role with Department.Create/Edit/Delete but not Geography.Manage sees the Add/Edit/Delete controls on /departments but never the bulk-import button
+    src: ["MasterManagementPage.tsx (canBulkImport = bulkKinds.has(kind) && can(Permissions.geography.manage))"]
+    type: Authorization
+    tags: [Boundary]
+    pri: P1
+    role: "A role with Department.Create/Edit/Delete but not Geography.Manage (construct a custom test role to isolate the check, as in AUTHZ-010/IMPORT-022)"
+    steps:
+      - "Open /departments as the constructed role => the '+ Add department' button is visible (Department.Create), but no bulk-import control renders in the page actions at all (Geography.Manage is missing)"
+      - "Open /masters/countries as the same role => no bulk-import control either (countries is excluded from bulkKinds regardless of permission)"
+    auto: UI
+    cr: [CR-29]
+
+  - id: MASTER-FE-014
+    func: [F-MST-39]
+    sc: There is no catalogue entry, page or route for States, Cities or Banks
+    t: The masters catalogue nav has no way to reach state/city/bank management, and a static notice explains the Location gap explicitly
+    src: ["MasterManagementPage.tsx ('definitions' has no 'states'/'cities'/'banks' key; static text 'Location management is unavailable because no Location master is defined.')"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "Inspect the catalogue nav on /masters/holding-companies => no group or link mentions States, Cities or Banks anywhere"
+      - "Attempt to navigate directly to /masters/states => the page renders 'This master is not available. Location is not supported by the current data model.' (the 'definition' lookup for an unknown kind returns undefined)"
+    auto: UI
+    cr: [CR-32, CR-31]

@@ -1,0 +1,115 @@
+sheet: PYA_Component_Variance
+submodule: Component-Level Variance
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-CVAR-001
+    func: [F-PYA-030]
+    sc: Component variance happy path
+    t: GetComponentVarianceAsync groups by (CalculationSource, ComponentCode, ComponentName) and sums CalculatedAmount per group for both runs
+    src: "PayrollAnalyticsController.Components; PayrollAnalyticsService.GetComponentVarianceAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RUN-PREV: 3 employees each with a BASIC component of 1000 (Source=Salary). RUN-CURR: same 3 employees each with BASIC=1100"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, compareRunId=RUN-PREV"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/components?compareRunId={RUN-PREV}] => [200] one row for BASIC/Salary with BaseAmount=3000, CurrentAmount=3300, Delta=300, VariancePercent=10"
+    auto: API
+
+  - id: PYA-CVAR-002
+    func: [F-PYA-031]
+    sc: A component present in only one run still appears with 0 for the other run's amount
+    t: A component code introduced only in the current run (absent from the comparison run) is included in the result set with BaseAmount=0, not omitted
+    src: "PayrollAnalyticsService.GetComponentVarianceAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN-CURR has a new SPECIAL-BONUS component (CalculatedAmount=500) absent from RUN-PREV entirely"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, compareRunId=RUN-PREV"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/components?compareRunId={RUN-PREV}] => [200] includes a SPECIAL-BONUS row with BaseAmount=0, CurrentAmount=500, Delta=500"
+    auto: API
+
+  - id: PYA-CVAR-003
+    func: [F-PYA-031]
+    sc: A component present only in the comparison run appears with 0 CurrentAmount
+    t: A component removed entirely from the current run's structure (present only in the prior run) reports CurrentAmount=0 and a negative Delta
+    src: "PayrollAnalyticsService.GetComponentVarianceAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN-PREV had a RETIRED-ALLOWANCE component (CalculatedAmount=200) not present at all in RUN-CURR"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, compareRunId=RUN-PREV"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/components?compareRunId={RUN-PREV}] => [200] includes a RETIRED-ALLOWANCE row with BaseAmount=200, CurrentAmount=0, Delta=-200"
+    auto: API
+
+  - id: PYA-CVAR-004
+    func: [F-PYA-032]
+    sc: Component variance uses the same default-comparison-run rule as employee variance
+    t: Omitting compareRunId on the components endpoint selects the identical most-recent-other-same-RunType run that employee variance would select
+    src: "PayrollAnalyticsService.GetComponentVarianceAsync"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Medium
+    pre: "Same 3-run setup as PYA-VAR-002 (RUN-OLD, RUN-MID, RUN-CURR)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, no compareRunId"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/components] (no compareRunId) => [200] BaseAmount values match RUN-MID's components, not RUN-OLD's"
+    auto: API
+
+  - id: PYA-CVAR-005
+    func: [F-PYA-033]
+    sc: Component variance has no paging and no CSV export
+    t: The components endpoint always returns the full result set regardless of any page/pageSize query parameter supplied, and there is no components.csv route
+    src: "PayrollAnalyticsService.GetComponentVarianceAsync; PayrollAnalyticsController"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "RUN-CURR has 8 distinct component codes across its employees"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/components?page=1&pageSize=2] => [200] all 8 rows are returned, ignoring page/pageSize (the action does not bind PagedQuery at all)"
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/components.csv] => [404] no such route is registered"
+    auto: API
+
+  - id: PYA-CVAR-006
+    func: [F-PYA-034]
+    sc: Component variance requires the requested run to resolve for the caller's tenant
+    t: A runId belonging to a different tenant returns NotFound/Unauthorized
+    src: "PayrollAnalyticsService.LoadRunAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "RUN-T2 exists under Tenant T2 (DEMO02)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View, tenant T1)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-T2"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-T2}/components] (authenticated to T1) => [404] Payroll run not found"
+    auto: API

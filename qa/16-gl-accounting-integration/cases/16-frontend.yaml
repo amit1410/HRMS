@@ -1,0 +1,184 @@
+sheet: GLAcc_Frontend
+submodule: Frontend
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-FE-001
+    func: [F-GLACC-130]
+    sc: Journal list and detail render correctly
+    t: PayrollAccountingPage renders the journal batch list and, once a batch is selected, its detail header and lines table
+    src: "Frontend/HRMS.Web/src/pages/payroll/PayrollAccountingPage.tsx"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "T1 has 2 journals, one Generated one Posted"
+    role: HRAdmin (browser session, holds Accounting.View)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[UI] navigate to /payroll/accounting => both journals listed with journalNumber/status/totalDebit"
+      - "[UI] click a journal in the list => detail header shows journalNumber/status/debit/credit, lines table renders each line's account/description/debit/credit"
+    auto: UI
+    ui: "Journal list and detail-with-lines render correctly"
+
+  - id: GLACC-FE-002
+    func: [F-GLACC-131]
+    sc: No UI path exists to generate any journal
+    t: A full grep of the frontend confirms there is no button, form, or client function anywhere to generate a payroll-run or final-settlement journal
+    src: "Frontend/HRMS.Web/src/api/payroll.ts, src/pages/payroll/"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] grep src/api/payroll.ts's Accounting section for any generate function => zero matches"
+      - "[UI] as a user holding full Accounting.Generate, browse the entire product UI => no button or form anywhere triggers journal generation; the only way to generate accounting is a direct API call (Swagger/Postman/script)"
+    auto: Manual only
+    cr: [CR-284]
+
+  - id: GLACC-FE-003
+    func: [F-GLACC-132]
+    sc: No UI path exists to create a version or a mapping
+    t: PayrollAccountingConfigurationPage only wires create-account and create-configuration - a configuration can never be given a usable mapping rule through the UI
+    src: "Frontend/HRMS.Web/src/pages/payroll/PayrollAccountingConfigurationPage.tsx"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "T1 has one configuration with zero versions/mappings"
+    role: HRAdmin (browser session, holds Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[UI] navigate to /payroll/accounting/configuration => the page renders GL Accounts and Configurations panels only - no form or control to add a version or a mapping rule exists anywhere on the page"
+    auto: UI
+    ui: "No version/mapping form present on the configuration page"
+    cr: [CR-284]
+
+  - id: GLACC-FE-004
+    func: [F-GLACC-133]
+    sc: Validate/Approve/Post/Export buttons are correctly wired and status-conditioned
+    t: Each of the 4 lifecycle buttons appears only when the selected journal's Status makes that action valid, and correctly advances the journal
+    src: "Frontend/HRMS.Web/src/pages/payroll/PayrollAccountingPage.tsx"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "J28 exists at Status=Generated"
+    role: HRAdmin (browser session, holds Accounting.Validate, Approve, Post, Export)
+    perm: Payroll.Accounting.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[UI] select J28 (Generated) => only a Validate button is shown"
+      - "[UI] click Validate => Status becomes 'Validated', an Approve button now appears (Validate button gone)"
+      - "[UI] click Approve => Status becomes 'Approved', a Post button and an Export CSV button both appear"
+      - "[UI] click Post => Status becomes 'Posted', Export CSV button remains visible"
+    auto: UI
+    ui: "Button visibility tracks journal Status exactly through the full lifecycle"
+
+  - id: GLACC-FE-005
+    func: [F-GLACC-134]
+    sc: No permission gating on any control
+    t: Every button/form on both accounting pages renders unconditionally for any user who can reach the page, regardless of which specific sub-permission they hold
+    src: "Frontend/HRMS.Web/src/pages/payroll/PayrollAccountingPage.tsx, PayrollAccountingConfigurationPage.tsx"
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: "User U5 holds only Payroll.Accounting.View (not Validate/Approve/Post/Export/ManageConfiguration)"
+    role: U5 (browser session, holds only Accounting.View)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[UI] as U5, select a Generated journal => the Validate button still renders (client-side), but clicking it returns [403] Forbidden from the backend, surfaced as an inline error message"
+    auto: UI
+    ui: "Validate button renders despite U5 lacking the Validate permission; backend 403 is the real gate"
+    cr: [CR-285]
+
+  - id: GLACC-FE-006
+    func: [F-GLACC-135]
+    sc: Both pages are discoverable through navigation
+    t: navigation.ts and App.tsx correctly register both accounting pages under the administration nav group, gated on their real permissions
+    src: "Frontend/HRMS.Web/src/layout/navigation.ts, App.tsx"
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Low
+    pre: none
+    role: HRAdmin (browser session, holds Accounting.View and ManageConfiguration)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[UI] open the main navigation => 'Payroll Accounting' and 'Accounting Configuration' both appear under the administration group"
+      - "[UI] click each nav entry => routes to /payroll/accounting and /payroll/accounting/configuration respectively without error"
+    auto: UI
+
+  - id: GLACC-FE-007
+    func: [F-GLACC-136]
+    sc: Frontend permission mirror matches backend 1:1
+    t: permissions.ts lists all 8 Accounting constants, including the dead accountingViewHistory, matching Permissions.cs exactly
+    src: "Frontend/HRMS.Web/src/auth/permissions.ts"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a (automated mirror test)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] run the repo's existing frontend/backend permission-mirror test (auth/permissions.mirror.test.ts, which reads Permissions.cs directly) => passes, confirming all 8 Accounting.* constants match 1:1"
+    auto: Manual only
+    cm: "auth/permissions.mirror.test.ts is a repo-wide test not specific to this module (per the qa/8-15 precedent, no ex: reference is cited here)."
+
+  - id: GLACC-FE-008
+    func: [F-GLACC-137]
+    sc: PayrollAccountingPage has zero automated test coverage
+    t: There is no .test.tsx for PayrollAccountingPage at all; PayrollAccountingConfigurationPage's single test covers only the initial render
+    src: "Frontend/HRMS.Web/src/pages/payroll/"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] list Frontend/HRMS.Web/src/pages/payroll/ for PayrollAccountingPage.test.tsx => file does not exist"
+      - "[Manual] read PayrollAccountingConfigurationPage.test.tsx in full => 1 test, covers only the render/empty-state path; no form-submission or accounting-action test exists anywhere in this module's frontend"
+    auto: Manual only
+    cr: [CR-286]
+
+  - id: GLACC-FE-009
+    func: [F-GLACC-138]
+    sc: No external ERP/GL connector exists anywhere
+    t: A full grep confirms the internal CSV export is the only real accounting output; no SAP/Oracle Financials/Tally/QuickBooks/SFTP connector exists
+    src: "Backend/HRMS.Application/Services/PayrollAccountingService.cs"
+    type: Contract
+    tags: []
+    pri: P3
+    sev: Low
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] grep the whole Backend solution for SAP/Oracle Financials/Tally/QuickBooks/ERP connector references tied to payroll accounting => none found; the internal CSV export (F-GLACC-089) and PostAsync's own 'posted within HRMS' message (F-GLACC-069) are the only real accounting outputs"
+    auto: Manual only

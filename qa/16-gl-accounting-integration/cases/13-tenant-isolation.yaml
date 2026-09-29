@@ -1,0 +1,139 @@
+sheet: GLAcc_Tenant_Isolation
+submodule: Tenant Isolation
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-TEN-001
+    func: [F-GLACC-115]
+    sc: Generate's PayrollRun lookup is TenantId-filtered
+    t: A cross-tenant runId on Generate is NotFound
+    src: "PayrollAccountingService.GenerateAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "RUN_T2 belongs to tenant T2 (DEMO02)"
+    role: HRAdmin (T1, custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN_T2}/accounting/generate] as a T1 user => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: GLACC-TEN-002
+    func: [F-GLACC-116]
+    sc: Final-settlement source queries are independently TenantId-filtered
+    t: A final settlement's loan/reimbursement/gratuity/leave/notice source rows belonging to another tenant are never picked up during generation
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Final settlement FS15 (T1, Finalized) has a matching-id loan repayment row that ACTUALLY belongs to tenant T2 (a colliding Reference string across tenants)"
+    role: HRAdmin (T1, custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS15}/accounting/generate] as a T1 user => [409] Conflict (No finalized separation benefit or recovery is available) - the T2-owned loan repayment row is never matched despite the colliding Reference value"
+    auto: DB-assisted
+    db: "Assert the T2 LoanRepayment row is excluded by the TenantId filter"
+
+  - id: GLACC-TEN-003
+    func: [F-GLACC-117]
+    sc: Every id-scoped journal action is TenantId-filtered
+    t: Get/List/Validate/Approve/Post/Export all exclude another tenant's journal
+    src: "PayrollAccountingService.GetAsync, ListAsync, TransitionAsync, ExportAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "J_T2 belongs to tenant T2 (DEMO02); T1 has its own unrelated journals"
+    role: HRAdmin (T1, custom role holding all Accounting permissions)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting] as a T1 user => [200] the returned page never includes J_T2"
+      - "[POST /api/payroll/accounting/{J_T2}/approve] as a T1 user => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: GLACC-TEN-004
+    func: [F-GLACC-118]
+    sc: Master-data reads/writes are all TenantId-filtered
+    t: A T2-owned GL account/configuration/mapping is never visible, resolvable, or usable during T1's mapping save or journal generation
+    src: "PayrollAccountingService (accounts/configurations/versions/mappings, all methods)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "T2 has an account with the same Code as one used in a T1 mapping attempt"
+    role: HRAdmin (T1, custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/versions/{V1}/mappings] {mappingType:'NetPayable', creditAccountId:{T2's account id}} as a T1 user => [409] Conflict (all mapped GL accounts must be active and belong to the tenant)"
+    auto: API
+    secc: true
+
+  - id: GLACC-TEN-005
+    func: [F-GLACC-119]
+    sc: Composite FK pattern proof
+    t: A full read of all 8 PayrollAccounting* EF configurations confirms every relationship is TenantId-composite-keyed
+    src: "Backend/HRMS.Infrastructure/Persistence/Configurations/PayrollAccountingConfiguration.cs"
+    type: Contract
+    tags: [Tenant-Isolation]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] read all 8 configuration classes in PayrollAccountingConfiguration.cs => every HasOne/HasForeignKey pair uses a composite (TenantId, ...) key, none uses a bare Guid FK"
+    auto: Manual only
+
+  - id: GLACC-TEN-006
+    func: [F-GLACC-120]
+    sc: Maker-checker policy is tenant-scoped
+    t: T1's PayrollControlConfiguration self-approval opt-in has no effect on T2's Approve/Post calls
+    src: "PayrollApprovalGuard.ValidateAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "T1 has RequireMakerChecker=true, PreventSelfApproval=true; T2 has both false (or unset); user U4 generated a journal in T2 and also holds Approve in T2"
+    role: U4 (T2, custom role holding Accounting.Generate, Approve)
+    perm: Payroll.Accounting.Approve
+    tenant: "T2 (DEMO02)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/{J_T2_self}/approve] as U4 (the journal's own generator, in T2) => [200] succeeds - T1's strict self-approval policy does not apply"
+    auto: API
+    secc: true
+
+  - id: GLACC-TEN-007
+    func: [F-GLACC-121]
+    sc: Identical journal numbers across tenants never collide
+    t: Two tenants generating journals for equivalent payroll runs on the same PayDate can independently produce identical-looking JournalNumbers with no collision
+    src: "PayrollJournalBatchConfiguration (unique index scoped by TenantId)"
+    type: Tenant-Isolation
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: "T1's RUN1 and T2's RUN1-equivalent both have PayDate=2026-10-05 and the same RunId value is impossible across tenants (Guids differ), but the numbering scheme is otherwise identical"
+    role: HRAdmin (T1 and T2, custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{T1_RUN}/accounting/generate] in T1 => [200] JournalNumber = PJ/202610/{T1_RUN:N}/1"
+      - "[POST /api/payroll/runs/{T2_RUN}/accounting/generate] in T2 => [200] JournalNumber = PJ/202610/{T2_RUN:N}/1 - both succeed since RunId differs and the unique index is TenantId-scoped regardless"
+    auto: API

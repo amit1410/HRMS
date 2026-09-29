@@ -1,0 +1,332 @@
+sheet: GLAcc_FinalSettlement_Accounting
+submodule: Final Settlement Accounting
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-FS-001
+    func: [F-GLACC-047]
+    sc: Nonexistent final settlement
+    t: GenerateFinalSettlementAsync for a case id that does not exist in the tenant returns NotFound
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: "id = a fresh random guid"
+    steps:
+      - "[POST /api/payroll/final-settlements/{randomGuid}/accounting/generate] => [404] NotFound"
+    auto: API
+
+  - id: GLACC-FS-002
+    func: [F-GLACC-048]
+    sc: Status gate - only Finalized cases can generate accounting
+    t: Draft/Calculated/Reviewed/Approved/Cancelled final settlement cases are all rejected with Conflict
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync"
+    type: Negative
+    tags: [Boundary, Validation]
+    pri: P0
+    sev: High
+    pre: "One final settlement case per status value exists"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: "Cases at Draft/Calculated/Reviewed/Approved/Finalized/Cancelled"
+    steps:
+      - "[POST /api/payroll/final-settlements/{draftCase}/accounting/generate] => [409] Conflict (finalized final settlement)"
+      - "[POST /api/payroll/final-settlements/{approvedCase}/accounting/generate] => [409] Conflict"
+      - "[POST /api/payroll/final-settlements/{finalizedCase}/accounting/generate] => [200] journal created"
+    auto: API
+
+  - id: GLACC-FS-003
+    func: [F-GLACC-049]
+    sc: Second generation for a case that already has a journal is permanently blocked, DB-enforced
+    t: A second GenerateFinalSettlement call while a journal already exists is Conflict, and the unique (TenantId, FinalSettlementCaseId) index enforces this at the database level too
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (AnyAsync guard); PayrollJournalBatchConfiguration (unique index)"
+    type: Negative
+    tags: [Idempotency]
+    pri: P0
+    sev: High
+    pre: "Case FS1 (Finalized) already has a journal"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS1}/accounting/generate] a second time => [409] Conflict (An active journal already exists for this final settlement.)"
+    auto: API
+    cr: [CR-275]
+
+  - id: GLACC-FS-004
+    func: [F-GLACC-050]
+    sc: Version resolution uses SettlementDate, not a payroll period
+    t: The accounting configuration version applied is the one whose date range covers the case's SettlementDate
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (version resolution)"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Case FS2 (Finalized, SettlementDate=2026-05-15) has a loan repayment source; two configuration versions exist, one covering 2026-05-15 and one that does not"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS2}/accounting/generate] => [200] mappings from the version covering SettlementDate=2026-05-15 are used"
+    auto: DB-assisted
+    db: "Assert generated journal's AccountingConfigurationVersionId matches the version whose date range covers 2026-05-15"
+
+  - id: GLACC-FS-005
+    func: [F-GLACC-051]
+    sc: All 5 source collections empty means Conflict
+    t: A Finalized case with zero eligible loan repayments, reimbursement settlements, gratuity, leave encashment, and notice settlement rows returns Conflict
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Case FS3 is Finalized but has zero rows across all 5 source tables for this finalSettlementId"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS3}/accounting/generate] => [409] Conflict (No finalized separation benefit or recovery is available for this final settlement.)"
+    auto: API
+
+  - id: GLACC-FS-006
+    func: [F-GLACC-052]
+    sc: Missing mapping blocks generation only for the source types actually present
+    t: A missing gratuity mapping is Conflict when gratuity is present, but generation succeeds for a case with only a leave-encashment source and no gratuity mapping configured at all
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (per-source mapping checks)"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Case FS4 (Finalized) has a Finalized gratuity calculation but no GratuityExpense/GratuityPayable mapping configured; Case FS5 (Finalized) has only a leave-encashment source, fully mapped, and no gratuity mapping at all"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS4}/accounting/generate] => [409] Conflict (MissingGLMapping for gratuity.)"
+      - "[POST /api/payroll/final-settlements/{FS5}/accounting/generate] => [200] journal created despite no gratuity mapping existing (gratuity is not among FS5's actual sources)"
+    auto: API
+
+  - id: GLACC-FS-007
+    func: [F-GLACC-053]
+    sc: Loan repayment produces principal/interest split lines with correct capping
+    t: A loan repayment with interest larger than the total amount caps interest at the amount, leaving zero principal
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (loan repayment loop)"
+    type: Boundary
+    tags: [Positive]
+    pri: P0
+    sev: High
+    pre: "Case FS6 (Finalized) has one final-settlement loan repayment: Amount=5000, InterestAmount=7000 (larger than Amount); fully mapped including a dedicated LoanInterestRecovery credit account"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS6}/accounting/generate] => [200] one Debit line of 5000 on the settlement account, zero Credit lines for principal (capped to 0), one Credit line of 5000 on the dedicated interest account"
+    auto: DB-assisted
+    db: "Assert interest line Credit=5000, no principal-only Credit line exists"
+
+  - id: GLACC-FS-008
+    func: [F-GLACC-053]
+    sc: Loan interest falls back to the receivable account when no dedicated interest account is mapped
+    t: Without a LoanInterestRecovery mapping, the interest portion posts to the same receivable account as principal
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (loan repayment loop, interest fallback)"
+    type: Boundary
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Case FS7 (Finalized) has one loan repayment: Amount=5000, InterestAmount=1000; no LoanInterestRecovery mapping configured"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS7}/accounting/generate] => [200] two Credit lines on the SAME receivable account: 4000 (principal) and 1000 (interest)"
+    auto: DB-assisted
+    db: "Assert both Credit lines share the receivable account id"
+
+  - id: GLACC-FS-009
+    func: [F-GLACC-054]
+    sc: Reimbursement settlement produces a debit/credit pair with final-settlement traceability
+    t: Each reimbursement settlement produces one Debit + one Credit line for its full Amount, traced via a FinalSettlement source
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (reimbursement loop)"
+    type: Contract
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Case FS8 (Finalized) has one FinalSettlement-type reimbursement settlement, Amount=1500, fully mapped"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS8}/accounting/generate] => [200] one Debit line (1500) and one Credit line (1500), both with a FinalSettlement PayrollJournalLineSource pointing to FS8"
+    auto: DB-assisted
+    db: "Assert PayrollJournalLineSources row SourceType='FinalSettlement', SourceId=FS8"
+
+  - id: GLACC-FS-010
+    func: [F-GLACC-055]
+    sc: Gratuity produces expense/payable pair
+    t: A Finalized gratuity calculation with FinalGratuityAmount>0 produces a Debit (expense) + Credit (payable) pair
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (gratuity branch)"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Case FS9 (Finalized) has a Finalized gratuity calculation with FinalGratuityAmount=250000, fully mapped"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS9}/accounting/generate] => [200] one Debit line of 250000 (GratuityExpense) and one Credit line of 250000 (GratuityPayable)"
+    auto: DB-assisted
+    db: "Assert 2 lines for the gratuity source, correctly split debit/credit"
+
+  - id: GLACC-FS-011
+    func: [F-GLACC-056]
+    sc: Leave encashment produces expense/payable pair on the shared benefit-payable account
+    t: Each leave encashment calculation with GrossAmount>0 produces a Debit (LeaveEncashmentExpense) + Credit (FinalSettlementBenefitPayable) pair
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (leave encashment loop)"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Case FS10 (Finalized) has 2 leave-encashment calculations, GrossAmount 12000 and 3000, fully mapped"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS10}/accounting/generate] => [200] 4 lines total: 2 Debit (12000, 3000) and 2 Credit on the shared FinalSettlementBenefitPayable account (12000, 3000)"
+    auto: DB-assisted
+    db: "Assert 4 lines correctly split, both Credit lines share the same account id"
+
+  - id: GLACC-FS-012
+    func: [F-GLACC-057]
+    sc: NoticePay and NoticeRecovery use different account pairs
+    t: Type=NoticePay posts to NoticePayExpense/FinalSettlementBenefitPayable; Type=NoticeRecovery posts to the dedicated NoticeRecoveryReceivable mapping's own two accounts
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (notice branch)"
+    type: Boundary
+    tags: [Positive]
+    pri: P0
+    sev: High
+    pre: "Case FS11 (Finalized) has a NoticeSettlementCalculation Type=NoticePay, Amount=8000; Case FS12 (Finalized) has one Type=NoticeRecovery, Amount=5000; both fully mapped"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS11}/accounting/generate] => [200] Debit on NoticePayExpense account (8000), Credit on FinalSettlementBenefitPayable account (8000)"
+      - "[POST /api/payroll/final-settlements/{FS12}/accounting/generate] => [200] Debit and Credit both on NoticeRecoveryReceivable's own dedicated accounts (5000 each), NOT on FinalSettlementBenefitPayable"
+    auto: DB-assisted
+    db: "Assert FS11's Credit account differs from FS12's Credit account"
+
+  - id: GLACC-FS-013
+    func: [F-GLACC-058]
+    sc: Unbalanced final-settlement journal blocks persistence
+    t: If the summed final-settlement journal's TotalDebit != TotalCredit, Generate is Conflict and nothing is persisted
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (balance check)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Case FS13 (Finalized) has a deliberately misconfigured mapping pair such that debit and credit accounts diverge in a way that unbalances the total"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS13}/accounting/generate] => [409] Conflict (Generated journal is unbalanced.)"
+    auto: DB-assisted
+    db: "Assert zero PayrollJournalBatches rows exist for FS13 after the failed call"
+
+  - id: GLACC-FS-014
+    func: [F-GLACC-059, F-GLACC-060]
+    sc: Final-settlement journal number format and cross-tenant isolation
+    t: JournalNumber follows FSJ/{SettlementDate:yyyyMM}/{finalSettlementId:N}/1; a cross-tenant final settlement id is NotFound
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync"
+    type: Tenant-Isolation
+    tags: [Contract, Negative]
+    pri: P0
+    sev: High
+    pre: "Case FS14 (Finalized, SettlementDate=2026-07-20) has a fully-mapped gratuity source; Case FS_T2 belongs to tenant T2 (DEMO02)"
+    role: HRAdmin (T1, custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS14}/accounting/generate] => [200] JournalNumber == \"FSJ/202607/{FS14:N}/1\""
+      - "[POST /api/payroll/final-settlements/{FS_T2}/accounting/generate] as a T1 user => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: GLACC-FS-015
+    func: [F-GLACC-140]
+    sc: "CR-289 - a Variable Pay/Bonus settlement is the sole eligible source"
+    t: A Finalized case whose only settled item is a FinalSettlement-typed VariablePaySettlement (bonus) is wrongly rejected as having no eligible source at all
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (all-5-sources-empty guard); VariablePayService.SettleAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Case FS15 (Finalized) has one approved VariablePayAward settled via SettleAsync with SettlementType=FinalSettlement, FinalSettlementId=FS15, Amount=20000 - and zero rows across all 5 sources GenerateFinalSettlementAsync actually reads (LoanRepayments/ReimbursementSettlements/GratuityCalculations/LeaveEncashmentCalculations/NoticeSettlementCalculations)"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: "Settled bonus amount = 20000"
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS15}/accounting/generate] => [409] Conflict (No finalized separation benefit or recovery is available for this final settlement.) despite a real settled 20000 variable-pay amount existing for FS15"
+    auto: API
+    cr: [CR-289]
+
+  - id: GLACC-FS-016
+    func: [F-GLACC-139]
+    sc: "CR-289 - a Variable Pay/Bonus settlement combined with a supported source is silently dropped from the generated journal"
+    t: A Finalized case with both a fully-mapped gratuity source and a FinalSettlement-typed VariablePaySettlement (bonus) generates successfully, but the journal contains no line, no PayrollJournalLineSource, and no MissingGLMapping error for the settled bonus amount
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (gratuity branch; full grep for VariablePay - zero matches)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Case FS16 (Finalized) has a Finalized gratuity calculation (FinalGratuityAmount=100000, fully mapped) AND one approved VariablePayAward settled via SettleAsync with SettlementType=FinalSettlement, FinalSettlementId=FS16, Amount=30000"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: "Gratuity=100000 (mapped); settled bonus=30000 (no mapping exists or needed - never checked)"
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS16}/accounting/generate] => [200] journal created with exactly 2 lines (GratuityExpense Debit 100000, GratuityPayable Credit 100000), TotalDebit=TotalCredit=100000, no MissingGLMapping (or any other) error raised for the unmapped/unqueried 30000 bonus amount"
+    auto: DB-assisted
+    db: "Assert PayrollJournalLines has zero rows and PayrollJournalLineSources has zero rows referencing the VariablePaySettlement id or the VariablePayAward id anywhere; assert journal TotalDebit/TotalCredit = 100000 (excludes the settled 30000 bonus entirely)"
+    cr: [CR-289]
+
+  - id: GLACC-FS-017
+    func: [F-GLACC-139]
+    sc: "CR-289 regression - all 5 currently-supported final-settlement sources remain fully covered when an unrelated Variable Pay/Bonus settlement also exists for the same case"
+    t: A Finalized case with one of each of the 5 supported sources (loan repayment, reimbursement, gratuity, leave encashment, notice pay) plus a FinalSettlement-typed VariablePaySettlement produces exactly the 10 expected lines for the 5 supported sources, correctly balanced, with the bonus amount excluded from both the line set and the balance
+    src: "PayrollAccountingService.GenerateFinalSettlementAsync (all 5 source loops; full grep for VariablePay - zero matches)"
+    type: Positive
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Case FS17 (Finalized) has: one loan repayment (Amount=5000, InterestAmount=500), one reimbursement settlement (Amount=1500), one Finalized gratuity calculation (FinalGratuityAmount=100000), one leave-encashment calculation (GrossAmount=6000), one NoticeSettlementCalculation Type=NoticePay (Amount=8000) - all fully mapped per F-GLACC-052 - AND one approved VariablePayAward settled via SettleAsync with SettlementType=FinalSettlement, FinalSettlementId=FS17, Amount=30000"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: "5 supported sources totaling 120500 debit/credit each; settled bonus=30000 (excluded)"
+    steps:
+      - "[POST /api/payroll/final-settlements/{FS17}/accounting/generate] => [200] journal created with exactly 10 lines covering the 5 supported sources unchanged from their individually-tested behavior (GLACC-FS-007/009/010/011/012), TotalDebit=TotalCredit=120500"
+    auto: DB-assisted
+    db: "Assert PayrollJournalLines has exactly 10 rows, none referencing the VariablePaySettlement id or the VariablePayAward id; assert TotalDebit=TotalCredit=120500 (the settled 30000 bonus is neither added to nor causes an imbalance in the total)"
+    cr: [CR-289]

@@ -1,0 +1,383 @@
+sheet: Leave_Balance
+submodule: Leave Balance self-service read and Opening Balance / Balance Import
+defaults:
+  role: EMPLOYEE
+  perm: "Leave.BalanceViewOwn"
+  tenant: A
+  pre: "Tenant A signed in."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LEAVE-BAL-001
+    func: [F-LEAVE-108]
+    sc: GetMineAsync reports Allocated/Unlimited/NoBalanceRequired LeaveTypes correctly
+    t: Allocated types show all four quantities, Unlimited shows only entitlementMode, NoBalanceRequired is omitted entirely
+    src: ["LeaveBalanceSummaryReader.GetMineAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/leave-balances/mine] As an employee with an Allocated CL balance, an Unlimited Sabbatical policy, and a NoBalanceRequired Bereavement policy => [200] CL shows granted/reserved/consumed/available; Sabbatical shows entitlementMode='Unlimited' with all quantities null; Bereavement is entirely absent from the response"
+    auto: API
+
+  - id: LEAVE-BAL-002
+    func: [F-LEAVE-109]
+    sc: Available is always Granted-Reserved-Consumed, computed live
+    t: After a reservation, Available drops by exactly the reserved amount with no separate cached field to drift
+    src: ["LeaveBalanceSummaryReader.GetMineAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/leave-balances/mine] Before any request => Available = Granted"
+      - "[Setup] Submit a 2-day leave request (reserves 2) => test preconditions are established for the steps below"
+      - "[GET /api/leave-balances/mine] => Available = Granted - 2, Reserved = 2"
+    auto: API
+
+  - id: LEAVE-BAL-003
+    func: [F-LEAVE-110]
+    sc: An Allocated LeaveType with no balance row yet is simply absent, not synthesized as zero
+    t: A never-accrued/imported Allocated LeaveType does not appear in the response at all
+    src: ["LeaveBalanceSummaryReader.GetMineAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/leave-balances/mine] For a LeaveType with a Published Allocated policy but zero EmployeeLeaveBalances rows for this employee => [200] this LeaveType is entirely missing from the response, not a zero-quantity row"
+    auto: API
+
+  - id: LEAVE-BAL-004
+    func: [F-LEAVE-111]
+    sc: A fully-consumed/reserved balance reports Available=0, and negative balances cannot be persisted
+    t: Available never goes negative; the accounting service itself rejects any operation that would drive it below zero
+    src: ["LeaveBalanceAccountingService.ApplyProjection"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Reserve+Consume the ENTIRE Granted balance for a LeaveType => test preconditions are established for the steps below"
+      - "[GET /api/leave-balances/mine] => Available=0 for this LeaveType, never negative"
+    auto: API
+
+  - id: LEAVE-BAL-005
+    func: [F-LEAVE-112]
+    sc: There is no 'allow negative balance' policy switch - every path hard-rejects an over-drawing operation
+    t: Attempting to reserve more than Available is Conflict, with no configuration anywhere permitting an override
+    src: ["LeaveBalanceAccountingService.ApplyProjection"]
+    type: Contract
+    tags: [Configuration]
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests] Requesting more days than Available, for any policy configuration => [409] 'InsufficientLeaveBalance' - confirmed with every combination of entitlement fields; no field anywhere permits negative balances"
+    auto: API
+
+  - id: LEAVE-BAL-006
+    func: [F-LEAVE-113]
+    sc: Multiple LeaveTypes maintain fully independent balances
+    t: Reserving against Casual Leave never touches Sick Leave's own Granted/Reserved/Consumed
+    src: ["LeaveBalanceSummaryReader.GetMineAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] Submit a request against Casual Leave => test preconditions are established for the steps below"
+      - "[GET /api/leave-balances/mine] => Sick Leave's Reserved/Consumed are unchanged; only Casual Leave's Reserved increased"
+    auto: API
+
+  - id: LEAVE-BAL-007
+    func: [F-LEAVE-114]
+    sc: A balance is scoped to exactly one LeavePeriod
+    t: The same LeaveType shows separate rows for FY27 and FY28 once both periods have their own balance
+    src: ["LeaveBalanceSummaryReader.GetMineAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/leave-balances/mine] After a carry-forward into FY28 => two distinct rows for the SAME LeaveType, one per LeavePeriodName"
+    auto: API
+
+  - id: LEAVE-BAL-008
+    func: [F-LEAVE-115]
+    sc: "There is no HR-wide 'view any employee's balance' endpoint - Leave.BalanceView is a dead permission (CR-80)"
+    t: GET /api/leave-balances/mine is self-only by construction; no {employeeId} parameter or alternate route exists
+    src: ["LeaveBalanceSummaryController.GetMine"]
+    type: Authorization
+    pri: P1
+    role: HR_ADMIN
+    perm: "n/a"
+    steps:
+      - "[GET /api/leave-balances/mine] As HRAdmin (who holds no Leave.BalanceView grant either, since no role does) => [200] returns only the caller's OWN balance, never another employee's - there is no route parameter to even attempt it"
+    auto: API
+    cr: [CR-80]
+
+  - id: LEAVE-IMPORT-001
+    func: [F-LEAVE-116]
+    sc: Download the fixed CSV template
+    t: GET .../import/template returns the exact fixed header row
+    src: ["LeaveBalanceImportsController.Template"]
+    type: Positive
+    pri: P2
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[GET /api/leave-balances/import/template] => [200] text/csv body exactly 'EmployeeCode,LeaveTypeCode,LeavePeriod,OpeningBalance,EffectiveDate,Remarks'"
+    auto: API
+
+  - id: LEAVE-IMPORT-002
+    func: [F-LEAVE-117]
+    sc: Upload and validate a fully-valid CSV
+    t: A well-formed multi-row CSV validates with InvalidRows=0 and Status=Validated
+    src: ["LeaveBalanceImportService.ValidateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    data: "3-row CSV: EMP001/CL/FY27/12.000/2027-01-01; EMP002/CL/FY27/10.500/2027-01-01; EMP003/SL/FY27/8.000/2027-01-01"
+    steps:
+      - "[POST /api/leave-balances/import/validate] Upload the 3-row CSV => [200] {status:'Validated', totalRows:3, validRows:3, invalidRows:0}"
+    auto: API
+
+  - id: LEAVE-IMPORT-003
+    func: [F-LEAVE-118]
+    sc: A non-.csv file extension is rejected before parsing
+    t: Uploading a .xlsx or .txt file fails 400 immediately
+    src: ["LeaveBalanceImportService.ValidateAsync"]
+    type: Negative
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[POST /api/leave-balances/import/validate] Upload 'balances.xlsx' => [400] 'Only CSV balance-import files are supported'"
+    auto: API
+
+  - id: LEAVE-IMPORT-004
+    func: [F-LEAVE-119]
+    sc: An empty file or a header-only file is rejected
+    t: A file with zero bytes, and a file with only a header row, both fail 400
+    src: ["LeaveBalanceImportService.ValidateAsync/ParseAsync"]
+    type: Negative
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[POST /api/leave-balances/import/validate] Upload an empty file => [400] 'A non-empty CSV file is required'"
+      - "[POST /api/leave-balances/import/validate] Upload a header-only CSV (no data rows) => [400] 'The import file contains no data rows'"
+    auto: API
+
+  - id: LEAVE-IMPORT-005
+    func: [F-LEAVE-120]
+    sc: A missing required header column rejects the whole file
+    t: Omitting OpeningBalance from the header row fails 400 before any per-row validation
+    src: ["LeaveBalanceImportService.ParseAsync"]
+    type: Negative
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    data: "Header: EmployeeCode,LeaveTypeCode,LeavePeriod,EffectiveDate,Remarks (OpeningBalance omitted)"
+    steps:
+      - "[POST /api/leave-balances/import/validate] Upload the malformed-header CSV => [400] 'CSV must contain EmployeeCode, LeaveTypeCode, LeavePeriod, OpeningBalance, and EffectiveDate columns'"
+    auto: API
+
+  - id: LEAVE-IMPORT-006
+    func: [F-LEAVE-121]
+    sc: A duplicate row combination within the same file is flagged on the second occurrence
+    t: Two rows for the same (EmployeeCode,LeaveTypeCode,LeavePeriod) are one Valid + one Invalid, not silently merged
+    src: ["LeaveBalanceImportService.ValidateAsync"]
+    type: Negative
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    data: "Row 1: EMP001/CL/FY27/12.000/2027-01-01; Row 2 (duplicate): EMP001/CL/FY27/5.000/2027-02-01"
+    steps:
+      - "[POST /api/leave-balances/import/validate] Upload the 2-row duplicate CSV => [200] {validRows:1, invalidRows:1}; Row 2's error is 'The EmployeeCode, LeaveTypeCode, and LeavePeriod combination is duplicated in this file'"
+    auto: API
+
+  - id: LEAVE-IMPORT-007
+    func: [F-LEAVE-122]
+    sc: An unknown or inactive EmployeeCode is flagged per-row
+    t: A nonexistent code and an inactive employee's code both fail with a specific message
+    src: ["LeaveBalanceImportService.ValidateAsync"]
+    type: Negative
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[POST /api/leave-balances/import/validate] Row with EmployeeCode='NOEXIST' => [200] row Invalid, 'EmployeeCode was not found or is inactive in this tenant'"
+      - "[POST /api/leave-balances/import/validate] Row with a valid code belonging to a Terminated (Status!=Active) employee => [200] row Invalid, same message"
+    auto: API
+
+  - id: LEAVE-IMPORT-008
+    func: [F-LEAVE-123]
+    sc: An unknown or inactive LeaveTypeCode is flagged per-row
+    t: A nonexistent code and a deactivated LeaveType's code both fail
+    src: ["LeaveBalanceImportService.ValidateAsync"]
+    type: Negative
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[POST /api/leave-balances/import/validate] Row with LeaveTypeCode='ZZ' => [200] row Invalid, 'LeaveTypeCode was not found or is inactive in this tenant'"
+      - "[POST /api/leave-balances/import/validate] Row with a code belonging to a deactivated (IsActive=false) LeaveType => [200] row Invalid, same message"
+    auto: API
+
+  - id: LEAVE-IMPORT-009
+    func: [F-LEAVE-124]
+    sc: An unknown or ambiguous LeavePeriod code is flagged with distinct messages
+    t: A nonexistent code fails 'not found'; two active periods sharing a code (a data anomaly) fail 'ambiguous'
+    src: ["LeaveBalanceImportService.ValidateAsync"]
+    type: Negative
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[POST /api/leave-balances/import/validate] Row with LeavePeriod='NOFY' => [200] row Invalid, 'LeavePeriod was not found in this tenant'"
+      - "[Manual/DB] Force two active LeavePeriod rows sharing the same Code => the forced/simulated state is established for the steps below"
+      - "[POST /api/leave-balances/import/validate] Row referencing that shared code => [200] row Invalid, 'LeavePeriod is ambiguous in this tenant'"
+    auto: DB-assisted
+
+  - id: LEAVE-IMPORT-010
+    func: [F-LEAVE-125]
+    sc: OpeningBalance must be positive with at most 3 decimal places
+    t: Zero, negative, and 4-decimal values are all rejected
+    src: ["LeaveBalanceImportService.ValidateAsync"]
+    type: Boundary
+    pri: P0
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[POST /api/leave-balances/import/validate] Row with OpeningBalance='0' => [200] row Invalid"
+      - "[POST /api/leave-balances/import/validate] Row with OpeningBalance='-5' => [200] row Invalid"
+      - "[POST /api/leave-balances/import/validate] Row with OpeningBalance='12.3456' => [200] row Invalid, 'at most three decimal places'"
+      - "[POST /api/leave-balances/import/validate] Row with OpeningBalance='12.345' => [200] row Valid"
+    auto: API
+
+  - id: LEAVE-IMPORT-011
+    func: [F-LEAVE-126]
+    sc: EffectiveDate must be well-formed and fall within the resolved LeavePeriod's own range
+    t: A malformed date and a date outside the period's range both fail
+    src: ["LeaveBalanceImportService.ValidateAsync"]
+    type: Boundary
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[POST /api/leave-balances/import/validate] Row with EffectiveDate='01/01/2027' (wrong format) => [200] row Invalid, 'must use yyyy-MM-dd format'"
+      - "[POST /api/leave-balances/import/validate] Row with EffectiveDate='2026-12-31' but LeavePeriod=FY27 ('2027-01-01'..'2027-12-31') => [200] row Invalid, 'EffectiveDate must belong to LeavePeriod'"
+    auto: API
+
+  - id: LEAVE-IMPORT-012
+    func: [F-LEAVE-127]
+    sc: A previously-imported opening balance cannot be re-imported
+    t: Committing a batch once, then re-uploading the identical row, flags it Invalid on the second validate pass
+    src: ["LeaveBalanceImportService.ValidateAsync"]
+    type: Negative
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[Setup] Validate+Commit a batch crediting EMP001/CL/FY27 => test preconditions are established for the steps below"
+      - "[POST /api/leave-balances/import/validate] Upload the SAME row again in a new file => [200] row Invalid, 'An opening balance has already been imported for this employee, LeaveType, and LeavePeriod'"
+    auto: API
+
+  - id: LEAVE-IMPORT-013
+    func: [F-LEAVE-128]
+    sc: A mixed valid/invalid batch cannot be committed until every row is valid
+    t: Commit rejects a batch with any InvalidRows; the UI's Commit action is disabled meanwhile
+    src: ["LeaveBalanceImportService.CommitAsync"]
+    type: Negative
+    pri: P0
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[POST /api/leave-balances/import/validate] Upload a 3-row file with 1 invalid row => [200] {validRows:2, invalidRows:1, status:'Invalid'}"
+      - "[POST /api/leave-balances/import/{batchId}/commit] => [409] 'Only a fully valid import batch can be committed'"
+    auto: API
+
+  - id: LEAVE-IMPORT-014
+    func: [F-LEAVE-129]
+    sc: Commit is atomic - a mid-commit failure rolls back the whole batch
+    t: If one row's poster call fails partway through Commit, NO row in that batch is left imported
+    src: ["LeaveBalanceImportService.CommitAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[Setup] Validate a 5-row fully-valid batch; force the poster to fail on row 4 (e.g. inject a transient failure) => test preconditions are established for the steps below"
+      - "[POST /api/leave-balances/import/{batchId}/commit] => [409] 'The import could not be committed; no opening balances were changed'"
+      - "[GET /api/leave-balances/mine] For rows 1-3's employees => their balances show NO credit from this batch - the transaction rolled back completely"
+    auto: API
+
+  - id: LEAVE-IMPORT-015
+    func: [F-LEAVE-130]
+    sc: Committing an already-committed batch is idempotent
+    t: A second Commit call on the same batch succeeds without re-posting
+    src: ["LeaveBalanceImportService.CommitAsync"]
+    type: Contract
+    tags: [Idempotency]
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[POST /api/leave-balances/import/{batchId}/commit] First call => [200] Status=Committed"
+      - "[POST /api/leave-balances/import/{batchId}/commit] Second call, same batchId => [200] 'The import batch was already committed' - no double-credit"
+    auto: API
+
+  - id: LEAVE-IMPORT-016
+    func: [F-LEAVE-131]
+    sc: List import history and a batch's own invalid-row detail
+    t: History returns the 100 most recent batches; Errors returns only that batch's Invalid rows
+    src: ["LeaveBalanceImportService.HistoryAsync/ErrorsAsync"]
+    type: Positive
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceViewImportHistory"
+    steps:
+      - "[GET /api/leave-balances/import/history] => [200] batches ordered by UploadedAtUtc desc"
+      - "[GET /api/leave-balances/import/{batchId}/errors] => [200] only rows with Status=Invalid for that batch"
+    auto: API
+
+  - id: LEAVE-IMPORT-017
+    func: [F-LEAVE-132]
+    sc: Every committed row posts a fully attributable Opening transaction
+    t: The posted LeaveBalanceTransaction records ActorType=User, ActorUserId=uploader, SourceType=BalanceImport
+    src: ["LeaveBalanceImportService.CommitAsync"]
+    type: Positive
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[Manual/DB] After Commit => [200] each LeaveBalanceTransaction row for this batch has TransactionType=Opening, ActorType=User, ActorUserId=<the uploader's own user id>, SourceType=BalanceImport"
+    auto: DB-assisted
+
+  - id: LEAVE-IMPORT-018
+    func: [F-LEAVE-133]
+    sc: "Balance Import mutation/history requires SuperAdmin/TenantAdmin - no other role holds it (CR-78)"
+    t: An HRAdmin (or any other non-Super/TenantAdmin role) is rejected 403 on every Balance Import action
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P0
+    role: HR_ADMIN
+    perm: "n/a"
+    steps:
+      - "[POST /api/leave-balances/import/validate] As HRAdmin => [403]"
+      - "[POST /api/leave-balances/import/{batchId}/commit] As HRAdmin => [403]"
+      - "[GET /api/leave-balances/import/history] As HRAdmin => [403]"
+    auto: API
+    cr: [CR-78]
+
+  - id: LEAVE-IMPORT-019
+    func: [F-LEAVE-134]
+    sc: "Cross-tenant employee code is never credited by Tenant A's import, even absent an explicit filter (CR-85)"
+    t: Uploading a row whose EmployeeCode matches Tenant B's own employee (not Tenant A's) fails 'not found' - the shard boundary holds
+    src: ["LeaveBalanceImportService.ValidateAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    tenant: A
+    steps:
+      - "[Setup] Tenant B has an employee with EmployeeCode='XCODE'; Tenant A does not => test preconditions are established for the steps below"
+      - "[POST /api/leave-balances/import/validate] As Tenant A, row with EmployeeCode='XCODE' => [200] row Invalid, 'EmployeeCode was not found or is inactive in this tenant' - Tenant B's employee is never matched"
+    auto: API
+    cr: [CR-85]

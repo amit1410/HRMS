@@ -1,0 +1,441 @@
+# Module 14 QA-risk register. Numbering continues after Module 13's CR-238 (qa/13-statutory-compliance/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. Classification starts 'Open - awaiting decision'.
+# CR-239, CR-241, CR-242, CR-245, CR-248, CR-250, CR-253, and CR-254 are exceptions: they document
+# confirmed source-level/frontend defects, not merely design ambiguities, and are classified accordingly.
+
+clarifications:
+  - id: CR-239
+    title: "HEADLINE FINDING - CONFIRMED DEFECT: TaxDeclarationService.SubmitOwnAsync crashes with an unhandled exception instead of a Result error when an employee has more than one declaration"
+    observation: >
+      SubmitOwnAsync's own declaration lookup is
+      `db.EmployeeTaxDeclarations.Include(...).SingleOrDefaultAsync(x => x.TenantId == subject.Value.TenantId && x.EmployeeId == subject.Value.EmployeeId, ct)`
+      - it filters only by tenant and employee, with no TaxDeclarationCycleId and no Status predicate
+      anywhere in the query. CreateOwnAsync's own uniqueness guard is scoped per (TenantId, EmployeeId,
+      TaxDeclarationCycleId) only (CR-240), so nothing prevents the same employee from holding two (or
+      more) EmployeeTaxDeclaration rows simultaneously - one per open cycle. EF Core's SingleOrDefaultAsync
+      throws InvalidOperationException ("Sequence contains more than one element") when its predicate
+      matches more than one row, and this call site has no try/catch around it - the exception propagates
+      as an unhandled 500 rather than any of the module's usual Conflict/Invalid Result outcomes.
+    risk: >
+      Every employee-initiated submission is one bad tenant-configuration decision away from throwing a
+      500 instead of a normal submission failure: any tenant that ever opens a second declaration cycle
+      (e.g. a correction cycle, or two overlapping financial-year cycles both left Open) while an
+      employee's earlier declaration is still Draft/ResubmissionRequired will crash that employee's
+      Submit call. ResubmitOwnAsync (declarationId-scoped) delegates to this same unguarded method, so
+      the crash is reachable from both entry points.
+    source: "Backend/HRMS.Application/Services/TaxDeclarationService.cs (SubmitOwnAsync, full method read - line ~103); CreateOwnAsync (uniqueness guard scope)"
+    classification: Confirmed defect
+
+  - id: CR-240
+    title: "Nothing prevents two or more TaxDeclarationCycles from being simultaneously Status=Open/ProofSubmissionOpen, which is the precondition that makes CR-239 reachable"
+    observation: >
+      CreateCycleAsync's only uniqueness check is on Code (TenantId+Code). There is no check of
+      FinancialYear, Status, or date-range overlap against any other existing cycle - two cycles with
+      different codes can be created with identical or overlapping FinancialYear/DeclarationOpenDate/
+      DeclarationCloseDate and both left at Status=Open at the same time, entirely through normal admin
+      use of CreateCycleAsync (no misuse or direct DB edit required).
+    risk: >
+      Beyond enabling CR-239's crash, an employee facing two simultaneously open cycles has no product
+      guidance on which one is "the" current declaration - GetOwnAsync (CR-nothing, by design) simply
+      returns whichever was created most recently. Confirm whether cycle overlap should be rejected the
+      same way qa/13-statutory-compliance's own version-overlap rules are enforced for its configuration
+      versions.
+    source: "Backend/HRMS.Application/Services/TaxDeclarationService.cs (CreateCycleAsync, full method - no overlap query)"
+    classification: Open - awaiting decision
+
+  - id: CR-241
+    title: "HEADLINE FINDING - CONFIRMED FRONTEND DEFECT: MyTaxDeclarationsPage calls a route that does not exist on the backend, so every real page load 404s"
+    observation: >
+      Frontend/HRMS.Web/src/api/taxDeclarations.ts's getMyTaxDeclaration() calls
+      `GET /api/me/tax-declarations/current`. MyTaxDeclarationsController's real (and only) GET action
+      is declared `[HttpGet, HasPermission(Permissions.Payroll.TaxDeclarationViewOwn)]` with NO route
+      segment beyond the controller's own `api/me/tax-declarations` base route - there is no `/current`
+      suffix anywhere in the controller (full grep for "current" returns zero matches). Every actual
+      network call this page makes against a running backend therefore 404s.
+      MyTaxDeclarationsPage.test.tsx always mocks getMyTaxDeclaration via `vi.mock(...)`, so the test
+      suite never exercises the real URL and has never caught this.
+    risk: >
+      The employee self-service tax declaration page - the only tax-declarations UI that exists at all
+      (CR-253) - is non-functional against a real backend. An employee attempting to view or manage their
+      declaration through the product UI receives a 404/error state instead of their declaration, with
+      no code path in the current frontend that would ever succeed.
+    source: "Frontend/HRMS.Web/src/api/taxDeclarations.ts (getMyTaxDeclaration, line 8); Backend/HRMS.API/Controllers/TaxDeclarationsController.cs (MyTaxDeclarationsController.Get, full route grep); Frontend/HRMS.Web/src/pages/payroll/MyTaxDeclarationsPage.test.tsx (mock, confirms masking)"
+    classification: Confirmed defect
+
+  - id: CR-242
+    title: "CONFIRMED FRONTEND DEFECT: there is no UI path to create a declaration, add a line, or add an initial proof - MyTaxDeclarationsPage only edits what already exists"
+    observation: >
+      Frontend/HRMS.Web/src/api/taxDeclarations.ts (full file, 6 exported functions) has no client
+      function for CreateOwnAsync, AddLineOwnAsync, or AddProofOwnAsync - only
+      get/submit/updateLine/deleteLine/replaceProof/resubmit exist. MyTaxDeclarationsPage.tsx's own
+      render is entirely conditioned on `!value` (declaration.data) already being present; when it is
+      not, the page shows only "No active declaration was found." with no button, form, or link to start
+      one. Existing lines can be edited/deleted and an existing rejected proof can be replaced, but there
+      is no way to add a brand-new line or a brand-new proof either.
+    risk: >
+      Combined with CR-241 (the one read call that DOES exist also 404s), the employee self-service
+      declaration workflow is not usable end-to-end through the shipped UI at all - not just broken, but
+      incomplete even if CR-241 were fixed, since an employee still could not start a declaration or add
+      its first line/proof.
+    source: "Frontend/HRMS.Web/src/api/taxDeclarations.ts (full file); Frontend/HRMS.Web/src/pages/payroll/MyTaxDeclarationsPage.tsx (full component)"
+    classification: Confirmed defect
+
+  - id: CR-243
+    title: "No update or status-transition endpoint exists for TaxDeclarationCycle, TaxDeclarationCategory, or TaxDeclarationItem after creation"
+    observation: >
+      A full grep of TaxDeclarationService.cs for db.TaxDeclarationCycles/db.TaxDeclarationCategories/
+      db.TaxDeclarationItems shows exactly one write site each (the corresponding CreateXAsync's own
+      .Add call). There is no PUT/PATCH route on TaxDeclarationsController for any of the three, and no
+      service method to change Name/Status/Active/dates/DisplayOrder after creation. A cycle's Status in
+      particular is the sole real gate on employee declaration creation (F-TAXDCL-017) and can never be
+      advanced (e.g. Draft to Open, or Open to ProofSubmissionOpen) once set.
+    risk: >
+      A cycle created with Status=Draft (the request DTO's own default) can never be opened for
+      employees at all through this API - it would have to be created directly at Status=Open, and even
+      then can never be closed/locked afterward. A typo in a category/item Name, or a RequiresProof flag
+      that needs correcting, is permanent; the only remedy is creating a brand-new row with a different
+      Code, leaving the original in place and still selectable wherever nothing else deactivates it.
+    source: "Backend/HRMS.Application/Services/TaxDeclarationService.cs (full grep for db.TaxDeclarationCycles/Categories/Items - 1 write site each); Backend/HRMS.API/Controllers/TaxDeclarationsController.cs (full route list - no PUT/PATCH)"
+    classification: Open - awaiting decision
+
+  - id: CR-244
+    title: "TaxDeclarationCycle's own DeclarationOpenDate/CloseDate and ProofSubmissionOpenDate/CloseDate are validated only for internal ordering at creation and never compared against the current date anywhere"
+    observation: >
+      CreateCycleAsync's only validation of these four dates is `DeclarationCloseDate < DeclarationOpenDate`
+      and `ProofSubmissionCloseDate < ProofSubmissionOpenDate`. Neither CreateOwnAsync (which gates only
+      on cycle.Status), AddProofOwnAsync, nor ReplaceProofOwnAsync ever reads clock.GetUtcNow() and
+      compares it to any of these four fields (full grep of all three methods). The real gate for
+      creating a declaration is Status is Open/ProofSubmissionOpen (F-TAXDCL-017); the real gate for
+      adding/replacing a proof is the declaration's own Status is Draft/ResubmissionRequired
+      (F-TAXDCL-033/036) - neither ever checks whether "today" actually falls inside the cycle's declared
+      window.
+    risk: >
+      An administrator who sets ProofSubmissionCloseDate to a date in the past, expecting proof uploads
+      to stop, has configured nothing that is actually enforced - proofs can still be added or replaced
+      for as long as the declaration itself remains in an editable Status, regardless of the calendar
+      date. The four date fields are effectively read-only display metadata (returned on
+      TaxDeclarationCycleDto) rather than active controls.
+    source: "Backend/HRMS.Application/Services/TaxDeclarationService.cs (CreateOwnAsync, AddProofOwnAsync, ReplaceProofOwnAsync - full method reads, zero ProofSubmission*Date/DeclarationOpenDate/DeclarationCloseDate comparison anywhere)"
+    classification: Open - awaiting decision
+
+  - id: CR-245
+    title: "CONFIRMED DEFECT: reviewing a single line on an already-Approved declaration silently regresses the whole declaration's Status back to UnderReview"
+    observation: >
+      ReviewLineAsync's only blocked-status guard is `declaration.Status is Draft or Locked -> Conflict`.
+      Approved is not in that set. ReviewLineAsync's own final assignment,
+      `declaration.Status = EmployeeTaxDeclarationStatus.UnderReview`, runs unconditionally after
+      processing any line decision - including on a declaration that is currently Approved (and not yet
+      Locked). A single further ReviewLineAsync call therefore demotes a fully-approved declaration back
+      to UnderReview with no explicit re-approval step required to arrive at that state, and with no
+      distinct audit action recording "an approved declaration was reopened for line review" (only the
+      per-line LineApproved/LinePartiallyApproved/LineRejected action is recorded).
+    risk: >
+      A reviewer can unintentionally (or deliberately, without a distinguishable audit trail) revert an
+      Approved declaration's overall status by reviewing just one more line, e.g. after noticing a stray
+      earlier line they want to adjust - the declaration then requires a fresh ApproveAsync call to
+      return to Approved, and any downstream process gating on Status=Approved (such as
+      YearEndTaxService.CalculateAsync's own source filter) would stop seeing this declaration until
+      that happens, with no explicit warning that this occurred.
+    source: "Backend/HRMS.Application/Services/TaxDeclarationService.cs (ReviewLineAsync, full method - blocked-status set and unconditional Status=UnderReview assignment)"
+    classification: Confirmed defect
+
+  - id: CR-246
+    title: "ApproveAsync does not verify that every individual line has reached a terminal per-line review decision before approving the whole declaration"
+    observation: >
+      TransitionAsync's Approved branch only checks
+      `declaration.Status is Submitted or UnderReview or PartiallyApproved`. It never inspects
+      declaration.Lines for any per-line Status at all - a declaration can be moved to Approved while one
+      or more lines remain at Status=Draft or Status=Submitted (never individually reviewed via
+      ReviewLineAsync).
+    risk: >
+      An unreviewed line's DeclaredAmount and null ApprovedAmount pass straight through to
+      YearEndTaxService.CalculateAsync's own filter, which only requires the LINE's own Status to be
+      Approved/PartiallyApproved (F-TAXDCL-080) - a never-reviewed line (Status=Draft/Submitted) is
+      correctly excluded there, so the immediate financial impact is contained, but the declaration-level
+      Approved status itself can misleadingly suggest every line was reviewed when some were not.
+    source: "Backend/HRMS.Application/Services/TaxDeclarationService.cs (TransitionAsync, Approved branch - no per-line Status check)"
+    classification: Open - awaiting decision
+
+  - id: CR-247
+    title: "ITaxDeclarationService.ResolveApprovedAsync is dead code in production and diverges from its own design doc, which claims YearEndTax reads approved declarations 'through the existing declaration service'"
+    observation: >
+      A full grep of Backend/HRMS.Application and Backend/HRMS.API (excluding Backend/HRMS.Tests) for
+      ResolveApprovedAsync finds no caller anywhere outside the interface/implementation themselves -
+      every real invocation is inside a test file. YearEndTaxService.CalculateAsync, the one place that
+      actually needs "approved declaration inputs for an employee/financial-year," instead queries
+      db.EmployeeTaxDeclarations directly and re-implements equivalent (but not identical, see the proof
+      filter divergence below) approved/proof-status filtering inline.
+      docs/phase-7u-employee-tax-declarations-investment-proofs.md states under "Payroll handoff":
+      "ITaxDeclarationService.ResolveApprovedAsync returns approved declaration items... for a tenant,
+      employee, financial year, and effective date," and
+      docs/phase-7w-year-end-tax-processing.md states under "Sources and reconciliation": "Approved/
+      accepted Phase 7U declarations and proofs are read through the existing declaration service." Per
+      CLAUDE.md, current code wins over docs wherever they diverge - the code does not call the
+      declaration service's resolver at all.
+    risk: >
+      A future maintainer reading either design doc would reasonably believe ResolveApprovedAsync is the
+      integration seam between TaxDeclarations and YearEndTax; in reality the two services' approved-input
+      logic can silently drift apart (see CR-249's sibling finding on the proof-status filter difference)
+      with no compiler or test signal, since the "real" resolver method is exercised only by tests that
+      call it directly and never by the actual annual-tax consumer.
+    source: "Backend/HRMS.Application (full grep for ResolveApprovedAsync outside Backend/HRMS.Tests); Backend/HRMS.Application/Services/YearEndTaxService.cs (CalculateAsync's own inline declaration query, line ~53); docs/phase-7u-employee-tax-declarations-investment-proofs.md, docs/phase-7w-year-end-tax-processing.md"
+    classification: Open - awaiting decision
+
+  - id: CR-248
+    title: "CONFIRMED DEFECT: YearEndTaxEmployee.ProjectedRemainingTaxableIncome is a declared, mapped field that CalculateAsync never assigns - it is permanently 0"
+    observation: >
+      ProjectedRemainingTaxableIncome is declared on the YearEndTaxEmployee entity, mapped with
+      (18,2) precision by YearEndTaxConfiguration, and exposed on YearEndTaxEmployeeDto. A full read of
+      CalculateAsync's row-construction statement shows every other monetary field assigned explicitly
+      except this one - it is never referenced anywhere in the method (full grep confirms zero
+      assignment sites).
+    risk: >
+      Any caller reading YearEndTaxEmployeeDto.ProjectedRemainingTaxableIncome (or the equivalent
+      database column) receives 0 for every row this service has ever produced, with nothing in the API
+      response distinguishing "genuinely zero remaining projected income" from "this field was never
+      populated" - a silent, always-wrong value rather than an omitted one.
+    source: "Backend/HRMS.Application/Services/YearEndTaxService.cs (CalculateAsync, row initializer - full method read, no ProjectedRemainingTaxableIncome assignment); Backend/HRMS.Domain/Entities/YearEndTaxProcessing.cs (YearEndTaxEmployee.ProjectedRemainingTaxableIncome declaration)"
+    classification: Confirmed defect
+
+  - id: CR-249
+    title: "ProjectedAnnualTaxableIncome/FinalTaxableIncome and ProjectedAnnualTax/FinalTaxLiability are assigned identical values in every CalculateAsync pass - the schema distinguishes 'projected' from 'final' in name only"
+    observation: >
+      CalculateAsync's row initializer sets both `ProjectedAnnualTaxableIncome = taxable` and
+      `FinalTaxableIncome = taxable` from the same local variable in the same statement, and likewise
+      both `ProjectedAnnualTax = annualTax` and `FinalTaxLiability = annualTax`. A single calculation
+      pass never actually computes two different numbers for either pair - the only way these values
+      could ever legitimately differ across time is by re-running CalculateAsync at a later point with
+      more finalized payroll periods in scope (which then overwrites BOTH the "projected" and "final"
+      fields identically again, per the destructive-rebuild pattern), not by any within-a-run
+      projected-vs-actual computation.
+    risk: >
+      The DTO/entity naming implies two distinct concepts (a mid-year projection versus a year-end
+      actual) that the current single-pass calculation never actually differentiates - a report or UI
+      built against this API that expects to show "projected" alongside a differing "final" figure within
+      the same run would show identical numbers in both columns, which may be surprising rather than
+      informative. Confirm whether an actual projected-vs-final split (e.g. projecting remaining months'
+      pay for an in-progress tax year versus reconciling only completed months) is intended for a future
+      phase.
+    source: "Backend/HRMS.Application/Services/YearEndTaxService.cs (CalculateAsync, row initializer)"
+    classification: Open - awaiting decision
+
+  - id: CR-250
+    title: "CONFIRMED DEFECT: previous-employer inputs can never actually be picked up by a calculation through this API, because nothing can ever advance one to Status=Approved"
+    observation: >
+      YearEndTaxPreviousEmployerStatus declares Draft/Submitted/Approved/Rejected. AddPreviousEmployerAsync
+      always creates a row at Status=Submitted (never Draft, despite the enum declaring it - F-TAXDCL-096).
+      A full grep of YearEndTaxService.cs for `YearEndTaxPreviousEmployerStatus.Approved` assignment finds
+      zero matches - there is no review/approve/reject endpoint of any kind for this entity.
+      UpdatePreviousEmployerAsync itself resets Status back to Submitted on every edit. CalculateAsync's
+      own previous-employer source query is strictly `x.Status == YearEndTaxPreviousEmployerStatus.Approved`
+      - the one status value this API can never actually produce.
+    risk: >
+      Every previous-employer input an operator adds through this API is permanently invisible to
+      CalculateAsync - PreviousEmployerTaxableIncome/TaxDeducted/EligibleDeductionAmount are silently 0
+      for every employee in every run today, regardless of how many previous-employer records were
+      submitted, with no error or warning surfaced anywhere in the calculation response.
+    source: "Backend/HRMS.Application/Services/YearEndTaxService.cs (AddPreviousEmployerAsync, UpdatePreviousEmployerAsync, CalculateAsync's previous query - full grep for Status=Approved assignment, zero matches)"
+    classification: Confirmed defect
+
+  - id: CR-251
+    title: "SuperHR holds zero of the 15 TaxDeclaration/YearEndTax permissions despite an otherwise broad seeded Payroll surface"
+    observation: >
+      A grep of SeedData.cs's RolePermissionMap[RoleNames.SuperHR] array shows a wide Payroll grant -
+      SalaryComponent, SalaryStructure, EmployeeSalary, Period, Controls, and Run permissions, all at
+      Manage/Approve/Finalize level - but zero matches for any Payroll.TaxDeclaration* or
+      Payroll.YearEndTax* constant. By contrast, HRAdmin gets all 15, HRManager gets a scoped
+      view/review subset, and Employee gets self-service-only.
+    risk: >
+      A tenant relying on SuperHR as its privileged payroll operator role (the seeded description calls it
+      "Privileged tenant HR administrator") would find that role unable to view or manage tax declarations
+      or year-end tax at all out of the box, despite being able to run and finalize payroll itself -
+      confirm whether this is an intentional narrower scope for SuperHR or an oversight, the same shape
+      of open question as several other payroll sub-modules' role-seeding gaps in qa/10-13.
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[RoleNames.SuperHR], full array grep)"
+    classification: Open - awaiting decision
+
+  - id: CR-252
+    title: "TaxDeclarationService's own ApproveAsync has no self-approval guard of any kind, unlike YearEndTaxService's Approve which at least has an opt-in one"
+    observation: >
+      A full grep of TaxDeclarationService.cs for PayrollApprovalGuard/IPayrollApprovalGuard returns zero
+      matches - TransitionAsync's Approved branch performs no maker-checker or self-approval check at
+      all, not even an opt-in one. YearEndTaxService.ApproveAsync, by contrast, does call the shared
+      PayrollApprovalGuard (gated on the tenant's own PayrollControlConfiguration, opt-in only - the
+      identical shape to qa/13-statutory-compliance's CR-233).
+    risk: >
+      A reviewer holding both Payroll.TaxDeclaration.Review and Payroll.TaxDeclaration.Approve can review
+      and approve their own reviewed lines (or, since ReviewedByUserId is stamped but never compared
+      against anything, even a declaration they themselves influenced earlier) with no control available
+      to prevent it at all - not even the opt-in one that exists for the sibling YearEndTax workflow.
+    source: "Backend/HRMS.Application/Services/TaxDeclarationService.cs (full grep for PayrollApprovalGuard - zero matches); contrast with YearEndTaxService.ApproveAsync"
+    classification: Open - awaiting decision
+
+  - id: CR-253
+    title: "CONFIRMED FRONTEND DEFECT: the entire reviewer/admin side of tax declarations has zero UI anywhere"
+    observation: >
+      TaxDeclarationsController exposes 12 actions: cycles (list/create), categories (create), items
+      (create), review (list), ReviewLine, ReviewProof, Approve, RequestResubmission, Lock, Reopen, and
+      Audit. A full grep of Frontend/HRMS.Web/src/pages for any reference to these routes or an
+      equivalent client function finds none - src/api/taxDeclarations.ts contains only the 6 employee
+      self-service functions (CR-242). There is no cycle/category/item configuration page and no
+      reviewer queue/approval page anywhere in the frontend.
+    risk: >
+      Every reviewer-side action - configuring a declaration cycle, reviewing a submitted line, approving
+      or rejecting proofs, approving/locking/reopening a whole declaration, or viewing its audit trail -
+      is reachable only via a direct API call (Swagger, Postman, or a script); there is no product UI
+      surface for the Payroll.TaxDeclaration.Review/Approve/Reopen/Configure/ViewAudit permission holders
+      to do their job at all, a more severe version of the "missing lifecycle actions" shape already
+      documented for other payroll sub-modules (e.g. qa/13-statutory-compliance's CR-235) - here the gap
+      is total, not partial.
+    source: "Frontend/HRMS.Web/src (full grep for tax-declarations review/approve/cycle/category/item routes - zero matches beyond MyTaxDeclarationsPage's own self-service surface)"
+    classification: Confirmed defect
+
+  - id: CR-254
+    title: "CONFIRMED FRONTEND DEFECT: YearEndTaxPage's Previous Employer Inputs tab is a non-functional static stub"
+    observation: >
+      The 'previous' tab in YearEndTaxPage.tsx renders exactly two hardcoded paragraphs of explanatory
+      text and no form, input, or button. addPreviousEmployerInput already exists as a fully working
+      client function in src/api/yearEndTax.ts (calling the real backend route), but a full grep of
+      YearEndTaxPage.tsx finds it is never called anywhere in the component.
+    risk: >
+      An operator cannot add or view a previous-employer input through this UI at all, despite the
+      backend endpoint and even the frontend client function both being real and working - the same
+      "the wiring exists but the page never uses it" shape as CR-247's TaxDeclaration-side resolver
+      finding, here on the frontend instead of the backend.
+    source: "Frontend/HRMS.Web/src/pages/payroll/YearEndTaxPage.tsx ('previous' tab render, full grep for addPreviousEmployerInput - zero call sites); Frontend/HRMS.Web/src/api/yearEndTax.ts (addPreviousEmployerInput, unused)"
+    classification: Confirmed defect
+
+  - id: CR-255
+    title: "(frontend) src/api/yearEndTax.ts is missing client functions for 6 of the controller's 14 routes: Cancel, Handoff, History, Export, single-Employee GET, and UpdatePreviousEmployerInput"
+    observation: >
+      A full read of src/api/yearEndTax.ts shows exactly 8 exported functions
+      (list/create/calculate/submit/approve/close/getEmployees/addPreviousEmployerInput). No function
+      exists for POST .../cancel, POST .../adjustments/handoff, GET .../history, GET .../export/{kind},
+      GET .../employees/{employeeId} (single), or PUT .../previous-employer/{inputId}.
+    risk: >
+      Even if the missing UI (CR-254) were built out, the frontend has no client-side plumbing yet to
+      cancel a Draft run, hand a recommended adjustment off to Payroll, show lifecycle history, download
+      any of the 4 CSV export kinds, or edit an existing previous-employer input - each of these requires
+      both a new client function and new UI, not UI alone.
+    source: "Frontend/HRMS.Web/src/api/yearEndTax.ts (full file - 8 of 14 backend routes exposed)"
+    classification: Open - awaiting decision
+
+  - id: CR-256
+    title: "(frontend) Neither My Tax Declarations nor Year-End Tax has a navigation.ts entry - both are reachable only by typing the exact URL"
+    observation: >
+      A full grep of Frontend/HRMS.Web/src/layout/navigation.ts for "tax" (case-insensitive) returns zero
+      matches. Both /payroll/my-tax-declarations and /payroll/year-end-tax are registered, permission-gated
+      routes in App.tsx with real (if incomplete, per CR-242/CR-253/CR-254) backend integration, but
+      neither has a sidebar/menu entry of any kind - a more severe version of
+      qa/13-statutory-compliance's own CR-236 (which still left one of its three pages discoverable).
+    risk: >
+      No user, including a permission-holding administrator, can discover either page through normal
+      in-app navigation - both are reachable only by already knowing the exact URL, on top of the
+      functional gaps each page already has.
+    source: "Frontend/HRMS.Web/src/layout/navigation.ts (full grep for 'tax'); Frontend/HRMS.Web/src/App.tsx (both route registrations)"
+    classification: Open - awaiting decision
+
+  - id: CR-257
+    title: "(frontend, low severity) MyTaxDeclarationsPage has no permission gating on any of its buttons"
+    observation: >
+      MyTaxDeclarationsPage.tsx has no useAuth import and no can() call anywhere in the component (full
+      read) - its Resubmit/Edit/Save/Delete/Replace-proof buttons all render unconditionally for any
+      user who can reach the page at all. YearEndTaxPage, by contrast, does gate its mutating buttons via
+      useAuth().can(...) (F-TAXDCL-153).
+    risk: >
+      Low severity, since [HasPermission] is the real backend authorization gate per CLAUDE.md (frontend
+      checks are cosmetic only) - but a user without Payroll.TaxDeclaration.ManageOwn would only discover
+      this from a 403 response after clicking, rather than a disabled-button affordance, the identical
+      low-severity shape as qa/13-statutory-compliance's own CR-237.
+    source: "Frontend/HRMS.Web/src/pages/payroll/MyTaxDeclarationsPage.tsx (full component - no useAuth/can() usage); contrast with YearEndTaxPage.tsx"
+    classification: Open - awaiting decision
+
+  - id: CR-258
+    title: "(informational) YearEndTax's provider-acceptance coverage is organized as one shared class with two methods, not two separate SqlServer*/MySql* classes the way TaxDeclarations and qa/13-statutory-compliance's own areas are organized"
+    observation: >
+      Backend/HRMS.Tests/PayrollYearEndProviderAcceptance.cs contains both
+      MySql_payroll_year_end_provider_acceptance and SqlServer_payroll_year_end_provider_acceptance as
+      methods on the same class. TaxDeclarations, by contrast, has two fully separate classes
+      (SqlServerPayrollTaxDeclarationsIntegrationTests, MySqlPayrollTaxDeclarationsIntegrationTests).
+    risk: >
+      Purely organizational - both provider paths are still exercised and both are still opt-in/
+      env-var-gated per the repository-wide convention - but the inconsistency is worth flagging so a
+      future reviewer does not assume "no SqlServer*/MySql*-named class exists" means no SQL
+      Server-specific coverage exists for this area, the way it correctly would for a genuinely missing
+      area (see CR-238 in qa/13-statutory-compliance for the shape of a genuine gap).
+    source: "Backend/HRMS.Tests/PayrollYearEndProviderAcceptance.cs; Backend/HRMS.Tests/SqlServerPayrollTaxDeclarationsIntegrationTests.cs, MySqlPayrollTaxDeclarationsIntegrationTests.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-259
+    title: "EmployeeTaxDeclarationLineStatus.ProofRequired is a declared enum member that no method ever assigns"
+    observation: >
+      A full grep of TaxDeclarationService.cs for `EmployeeTaxDeclarationLineStatus.ProofRequired` finds
+      zero assignment sites. A line whose proof is missing at submission time is instead blocked entirely
+      at SubmitOwnAsync (Conflict, the whole submission fails) rather than ever being tagged with this
+      specific per-line status - the identical "declared-but-dead enum member" shape as
+      qa/13-statutory-compliance's CR-214-family findings (F-STAT-014/026).
+    risk: >
+      Low severity - the actual enforcement (blocking submission) works correctly - but any future code
+      or reporting that expects to distinguish "this line is missing its required proof" as a queryable
+      per-line state (e.g. to build a "what's outstanding" report before submission) has no data to work
+      from, since the status is never set.
+    source: "Backend/HRMS.Application/Services/TaxDeclarationService.cs (full grep for EmployeeTaxDeclarationLineStatus.ProofRequired - zero matches)"
+    classification: Open - awaiting decision
+
+  - id: CR-260
+    title: "YearEndTaxAdjustmentStatus.Resolved/Cancelled and YearEndTaxHistoryEvent.Recalculated are all declared enum members that no method ever assigns"
+    observation: >
+      A full grep of YearEndTaxService.cs finds zero assignment sites for
+      YearEndTaxAdjustmentStatus.Resolved, YearEndTaxAdjustmentStatus.Cancelled, or
+      YearEndTaxHistoryEvent.Recalculated. An adjustment's own lifecycle through this service only ever
+      reaches Recommended or HandoffCreated; any further resolution/cancellation would happen entirely
+      inside the separate PayrollAdjustment workflow with no write-back to YearEndTaxAdjustment.Status.
+      Every CalculateAsync call - first-time or a subsequent recalculation of an already-Calculated run -
+      records the same plain Calculated history event, never the more specific Recalculated value.
+    risk: >
+      An operator inspecting YearEndTaxAdjustment.Status can never see Resolved/Cancelled through this
+      API even after the underlying PayrollAdjustment has been fully processed elsewhere - the
+      year-end-side record silently stops reflecting reality once a handoff completes. Separately, a
+      run's own history cannot distinguish its first calculation from a later recalculation without
+      cross-referencing timestamps/counts manually.
+    source: "Backend/HRMS.Application/Services/YearEndTaxService.cs (full grep for YearEndTaxAdjustmentStatus.Resolved/.Cancelled and YearEndTaxHistoryEvent.Recalculated - zero assignment matches for any of the three)"
+    classification: Open - awaiting decision
+
+  - id: CR-261
+    title: "No GET route exists for a persisted YearEndTaxStatement; the 'statements' CSV export is actually an alias of the same rows as the 'employees' export, not the statement's own SnapshotJson"
+    observation: >
+      A full grep of YearEndTaxController.cs finds no route referencing YearEndTaxStatement at all.
+      ExportAsync's own switch routes both `"statements"` and `"employees"` through the identical
+      EmployeeCsv helper over the same YearEndTaxEmployee rows - the only difference is the output file
+      name. The persisted YearEndTaxStatement.SnapshotJson (a fuller point-in-time JSON snapshot created
+      once per employee per calculation, per F-TAXDCL-112) is never read back by any export or GET route.
+    risk: >
+      A caller requesting the "statements" export reasonably expects the persisted per-employee
+      statement snapshot (which includes generation timestamp and statement reference, per
+      YearEndTaxStatementDto) but instead receives the same live reconciliation-row CSV as "employees" -
+      the StatementReference/GeneratedAtUtc fields are not retrievable through any API route at all today.
+    source: "Backend/HRMS.API/Controllers/YearEndTaxController.cs (full route grep); Backend/HRMS.Application/Services/YearEndTaxService.cs (ExportAsync's 'statements'/'employees' branches, both routed to EmployeeCsv)"
+    classification: Open - awaiting decision
+
+  - id: CR-262
+    title: "Three separate app-level-only uniqueness/overlap guards (declaration creation, previous-employer-input creation, and year-end-run creation) share the same uncaught-DbUpdateException race-loser shape"
+    observation: >
+      CreateOwnAsync's declaration-uniqueness AnyAsync check, AddPreviousEmployerAsync's
+      (RunId,EmployeeId,EmployerReference)-uniqueness AnyAsync check, and CreateAsync's own
+      TaxYear-uniqueness-plus-date-overlap checks are each an app-level pre-check with no surrounding
+      try/catch around their own SaveChangesAsync call (unlike UpdateLineOwnAsync/ReviewLineAsync/
+      TransitionAsync/UpdatePreviousEmployerAsync, which all do catch DbUpdateConcurrencyException around
+      their edits). Two concurrent calls that both pass the AnyAsync check before either commits would
+      have the race loser fail at SaveChangesAsync with an unhandled DbUpdateException for the two cases
+      backed by a DB unique index (declaration, previous-employer input); the year-end run's own
+      date-overlap rule (CR-240's counterpart for YearEndTaxRuns) has no DB-level backstop of any kind for
+      that specific check, only the (TenantId,TaxYear) unique index for the exact-duplicate-year case.
+    risk: >
+      A genuine concurrent-request race (e.g. a double-click submit, or two admins independently creating
+      the same resource) surfaces as an unhandled exception (likely a 500) rather than the module's usual
+      graceful Conflict Result for these three specific creation paths, even though the equivalent
+      concurrency handling elsewhere in both services is done correctly with a caught exception and a
+      proper Conflict message.
+    source: "Backend/HRMS.Application/Services/TaxDeclarationService.cs (CreateOwnAsync); Backend/HRMS.Application/Services/YearEndTaxService.cs (AddPreviousEmployerAsync, CreateAsync) - all three lack a try/catch DbUpdateException around their own creation SaveChangesAsync"
+    classification: Open - awaiting decision

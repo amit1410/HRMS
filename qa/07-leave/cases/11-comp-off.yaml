@@ -1,0 +1,412 @@
+sheet: Leave_CompOff
+submodule: Comp Off earning, approval, expiry, correction, operational query, and Leave-integration (Reserve/Consume/Release/Restore)
+defaults:
+  role: TENANT_ADMIN
+  perm: "Attendance.CompOff.Manage"
+  tenant: A
+  pre: "Tenant A signed in; an effective CompOffPolicy exists for the work date unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LEAVE-COMPOFF-001
+    func: [F-LEAVE-215]
+    sc: A Comp-Off policy's full field set can be configured
+    t: Create a policy with every documented knob and read it back unchanged
+    src: ["CompOffService.CreatePolicyAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/attendance/comp-off/policies] {code:'STD-CO', allowWeekOff:true, allowHoliday:true, allowOvertimeSource:false, minimumWorkedMinutes:240, creditRatio:1.0, roundingMode:'Nearest', roundingMinutes:30, maximumCreditMinutesPerDay:480, maximumCreditMinutesPerMonth:2400, expiryDays:90, requireCreditApproval:true, benefitMode:'CompOffOnly'} => [201]"
+    auto: API
+
+  - id: LEAVE-COMPOFF-002
+    func: [F-LEAVE-216]
+    sc: Earning requires a RESOLVED authoritative Attendance day
+    t: An Incomplete/NotProcessed Attendance day is rejected; a Resolved one with matching source-type gate succeeds
+    src: ["CompOffService.EarnAsync"]
+    type: Negative
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/comp-off/earnings] {employeeId, attendanceDayId: incompleteDayId} => [409] 'Comp-Off requires a resolved authoritative Attendance day'"
+      - "[POST /api/attendance/comp-off/earnings] {employeeId, attendanceDayId: resolvedWeekOffDayId} Policy AllowWeekOff=true, day.RosterDayType=WeeklyOff => [201] earning created"
+    auto: API
+
+  - id: LEAVE-COMPOFF-003
+    func: [F-LEAVE-216]
+    sc: Source-type gate mismatch is rejected
+    t: A Holiday-sourced day is rejected when AllowHoliday=false, even if AllowWeekOff=true
+    src: ["CompOffService.EarnAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/comp-off/earnings] Policy AllowHoliday=false; day.RosterDayType=Holiday => [409] source-type not permitted by policy"
+    auto: API
+
+  - id: LEAVE-COMPOFF-004
+    func: [F-LEAVE-217]
+    sc: OvertimeOnly BenefitMode always denies Comp-Off credit
+    t: A policy configured BenefitMode=OvertimeOnly rejects every Earn call regardless of source type
+    src: ["CompOffService.EarnAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/comp-off/earnings] Policy BenefitMode=OvertimeOnly => [409] 'DoubleBenefitDenied'"
+    auto: API
+
+  - id: LEAVE-COMPOFF-005
+    func: [F-LEAVE-217]
+    sc: A source already tied to a monetary Overtime snapshot is denied unless DualBenefit
+    t: SourceOvertimeSnapshotId non-null blocks Comp-Off earning under any BenefitMode except DualBenefit
+    src: ["CompOffService.EarnAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/comp-off/earnings] Day already has a SourceOvertimeSnapshotId; policy BenefitMode=CompOffOnly => [409] 'DoubleBenefitDenied'"
+      - "[POST /api/attendance/comp-off/earnings] Same day; policy BenefitMode=DualBenefit => [201] earning created despite the existing Overtime snapshot"
+    auto: API
+
+  - id: LEAVE-COMPOFF-006
+    func: [F-LEAVE-218]
+    sc: Credit calculation applies the ratio, rounding, and both caps in the documented order
+    t: Manually-calculated example - eligible=241min, threshold=240 (all-or-nothing, full 241 credited), CreditRatio=1.0, RoundingMode=Nearest/30min rounds to 240, MaximumCreditMinutesPerDay=480 (no clip), MaximumCreditMinutesPerMonth headroom=200 (clips final credit to 200)
+    src: ["CompOffService.EarnAsync/Round"]
+    type: Boundary
+    pri: P0
+    data: "sourceMinutes=241, MinimumWorkedMinutes=240, CreditRatio=1.0, RoundingMode=Nearest, RoundingMinutes=30, MaximumCreditMinutesPerDay=480, prior same-month non-Rejected credits sum=2200, MaximumCreditMinutesPerMonth=2400 (headroom=200)"
+    steps:
+      - "[POST /api/attendance/comp-off/earnings] sourceMinutes=241 => [201] CreditedMinutes=200 - rounded-to-240 by the ratio/rounding step, then clipped to the remaining 200 minutes of monthly headroom"
+    auto: API
+
+  - id: LEAVE-COMPOFF-007
+    func: [F-LEAVE-218]
+    sc: Below-threshold worked minutes credit zero, all-or-nothing (not partial)
+    t: sourceMinutes one minute below MinimumWorkedMinutes credits 0, not (sourceMinutes - threshold)
+    src: ["CompOffService.EarnAsync"]
+    type: Boundary
+    pri: P1
+    data: "sourceMinutes=239, MinimumWorkedMinutes=240"
+    steps:
+      - "[POST /api/attendance/comp-off/earnings] sourceMinutes=239 => [409] 'below the configured threshold' - eligible=0, not 239 minus some partial credit"
+      - "[POST /api/attendance/comp-off/earnings] Same policy, sourceMinutes=240 (exactly at threshold) => [201] full 240 minutes eligible for the ratio/rounding calculation"
+    auto: API
+
+  - id: LEAVE-COMPOFF-008
+    func: [F-LEAVE-218]
+    sc: Daily cap and monthly cap produce distinct error messages
+    t: Exceeding MaximumCreditMinutesPerDay alone gives a different message than exceeding the monthly cap
+    src: ["CompOffService.EarnAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/attendance/comp-off/earnings] Computed credit exceeds MaximumCreditMinutesPerDay with monthly headroom still available => [409] daily-cap message, distinct wording from the monthly-cap message"
+      - "[POST /api/attendance/comp-off/earnings] Different day, monthly headroom already exhausted by prior credits => [409] monthly-cap message"
+    auto: API
+
+  - id: LEAVE-COMPOFF-009
+    func: [F-LEAVE-219]
+    sc: A duplicate Earn for the identical source is idempotent, not a duplicate credit
+    t: Two Earn calls for the same AttendanceDayId+AttendanceVersion return the SAME earning, no second ledger Credit
+    src: ["CompOffService.EarnAsync"]
+    type: Contract
+    tags: [Idempotency]
+    pri: P0
+    steps:
+      - "[POST /api/attendance/comp-off/earnings] First call => [201] earningId=X"
+      - "[POST /api/attendance/comp-off/earnings] Identical (employeeId, attendanceDayId, attendanceVersion) => [200] 'The source credit already exists', SAME earningId=X returned"
+      - "[GET /api/attendance/comp-off/ledger] => [200] exactly ONE Credit entry for this source, not two"
+    auto: API
+
+  - id: LEAVE-COMPOFF-010
+    func: [F-LEAVE-220]
+    sc: RequireCreditApproval routes to PendingApproval with no immediate ledger credit
+    t: A policy with RequireCreditApproval=true creates a PendingApproval earning invisible to balance until approved
+    src: ["CompOffService.EarnAsync", "CompOffService.DecideAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/attendance/comp-off/earnings] Policy RequireCreditApproval=true => [201] Status=PendingApproval"
+      - "[GET /api/attendance/comp-off/balance] As the employee => [200] available minutes unchanged - the pending credit is not yet counted"
+      - "[POST /api/attendance/comp-off/earnings/{earningId}/approve] => [200] Status=Approved"
+      - "[GET /api/attendance/comp-off/ledger] => [200] a Credit entry now exists, dated at approval time, not earn time"
+    auto: API
+    perm: "Attendance.CompOff.Approve"
+
+  - id: LEAVE-COMPOFF-011
+    func: [F-LEAVE-220, F-LEAVE-221]
+    sc: RequireCreditApproval=false credits immediately
+    t: A policy with RequireCreditApproval=false posts the ledger Credit at Earn time, Status=Approved immediately
+    src: ["CompOffService.EarnAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/attendance/comp-off/earnings] Policy RequireCreditApproval=false => [201] Status=Approved"
+      - "[GET /api/attendance/comp-off/ledger] => [200] a Credit entry already exists"
+    auto: API
+
+  - id: LEAVE-COMPOFF-012
+    func: [F-LEAVE-221]
+    sc: Rejecting a pending credit posts no ledger entry and cannot be re-decided
+    t: Reject leaves the earning permanently Rejected with zero balance impact; a second decide call fails
+    src: ["CompOffService.DecideAsync"]
+    type: Negative
+    pri: P1
+    perm: "Attendance.CompOff.Approve"
+    steps:
+      - "[POST /api/attendance/comp-off/earnings/{earningId}/reject] Earning is PendingApproval => [200] Status=Rejected"
+      - "[GET /api/attendance/comp-off/balance] => [200] available minutes unaffected"
+      - "[POST /api/attendance/comp-off/earnings/{earningId}/approve] Same earning, now Rejected => [409] 'Only PendingApproval earnings can be decided' - not idempotently accepted"
+    auto: API
+
+  - id: LEAVE-COMPOFF-013
+    func: [F-LEAVE-222]
+    sc: Self-service balance/earnings/ledger have no employeeId parameter to reach another employee
+    t: There is no route shape through which a caller can request someone else's Comp-Off self-service data
+    src: ["CompOffController.Balance/Earnings/Ledger"]
+    type: Contract
+    pri: P1
+    role: EMPLOYEE
+    perm: "Attendance.CompOff.ViewSelf"
+    steps:
+      - "[GET /api/attendance/comp-off/balance] => [200] always the CALLER's own balance - the route accepts no employeeId query/path parameter at all to redirect elsewhere"
+    auto: API
+
+  - id: LEAVE-COMPOFF-014
+    func: [F-LEAVE-223]
+    sc: An unlinked account is rejected Unauthorized, not an empty balance
+    t: A caller with no linked employee identity gets a clear Unauthorized rather than a misleading zero balance
+    src: ["CompOffController.Balance"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Attendance.CompOff.ViewSelf"
+    steps:
+      - "[GET /api/attendance/comp-off/balance] As an account with no AccountEmployeeCurrentLink => [401] 'An employee identity is required.'"
+    auto: API
+
+  - id: LEAVE-COMPOFF-015
+    func: [F-LEAVE-224]
+    sc: Operations has no declarative permission - any authenticated user reaches the controller action
+    t: The controller-level [Authorize] alone gates entry; a plain Employee's call reaches CompOffService.BuildOperationalScopeAsync rather than 403ing at the framework layer
+    src: ["CompOffController.Operations"]
+    type: Security
+    pri: P0
+    smoke: true
+    role: EMPLOYEE
+    perm: "Attendance.CompOff.ViewSelf"
+    steps:
+      - "[GET /api/attendance/comp-off/operations] As a plain Employee holding only Attendance.CompOff.ViewSelf (none of ViewAll/ViewTeam/Manage/Approve/ViewHistory) => [403] rejected INSIDE BuildOperationalScopeAsync's own permission scan, not by a declarative [HasPermission] policy - confirm via response shape/timing that no [HasPermission]-style 403 fires before the service method runs"
+    auto: API
+    cr: [CR-82]
+
+  - id: LEAVE-COMPOFF-016
+    func: [F-LEAVE-225]
+    sc: An Employee-only caller is Forbidden by the service's own fallback
+    t: BuildOperationalScopeAsync's exhaustive permission try-chain still ends in Forbidden when none of the five match
+    src: ["CompOffService.BuildOperationalScopeAsync"]
+    type: Security
+    pri: P0
+    role: EMPLOYEE
+    perm: "Attendance.CompOff.ViewSelf"
+    steps:
+      - "[GET /api/attendance/comp-off/operations] As Employee => [403] 'Forbidden' - none of CompOffViewAll/ViewTeam/Manage/Approve/ViewHistory are held"
+    auto: API
+    cr: [CR-82]
+
+  - id: LEAVE-COMPOFF-017
+    func: [F-LEAVE-226]
+    sc: A Manager's Operations query is narrowed to self+direct-reports
+    t: An unrelated employee's Comp-Off rows never appear in a Manager's Operations result, even though the endpoint has no declarative gate
+    src: ["CompOffService.BuildOperationalScopeAsync"]
+    type: Positive
+    pri: P0
+    role: MANAGER
+    perm: "Attendance.CompOff.ViewTeam"
+    steps:
+      - "[GET /api/attendance/comp-off/operations] As a Manager with 2 direct reports (an unrelated employee elsewhere also has Comp-Off earnings) => [200] items contains only the 2 direct reports' rows"
+    auto: API
+    ex: ["xU:CompOffOperationalQueryTests.Manager_operational_query_returns_team_only", "xU:CompOffOperationalQueryTests.Manager_operational_query_excludes_non_team_employee"]
+
+  - id: LEAVE-COMPOFF-018
+    func: [F-LEAVE-227]
+    sc: An HRBP's Operations query respects their own dimension scope
+    t: HRBP scoped to Department=Engineering sees only Engineering employees' Comp-Off rows
+    src: ["CompOffService.BuildOperationalScopeAsync"]
+    type: Positive
+    pri: P1
+    role: HRBP
+    perm: "Attendance.CompOff.ViewAll"
+    steps:
+      - "[GET /api/attendance/comp-off/operations] As HRBP scoped to Department=Engineering => [200] items contains only Engineering employees' rows"
+    auto: API
+    ex: ["xU:CompOffOperationalQueryTests.HRBP_operational_query_respects_scope"]
+
+  - id: LEAVE-COMPOFF-019
+    func: [F-LEAVE-228]
+    sc: Comp-Off reservation allocates earliest-expiry-first across multiple earnings
+    t: A request larger than the single oldest earning's available minutes spans two earnings, oldest-expiry first
+    src: ["CompOffService.ApplyLeaveAsync"]
+    type: Positive
+    pri: P0
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Setup] Earning A (Approved, 240 min, expires soonest) and Earning B (Approved, 480 min, expires later) => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests] A Comp-Off leave request needing 600 minutes => [201] allocations show 240 from Earning A and 360 from Earning B"
+    auto: API
+    ex: ["xU:CompOffLeaveIntegrationTests.Multiple_earnings_allocate_earliest_expiry_first"]
+
+  - id: LEAVE-COMPOFF-020
+    func: [F-LEAVE-228]
+    sc: Insufficient total Comp-Off balance blocks the whole leave request
+    t: A request exceeding the sum of all Approved earnings' available minutes is rejected before any reservation
+    src: ["CompOffService.ApplyLeaveAsync"]
+    type: Negative
+    pri: P0
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests] Requested minutes exceed total available Comp-Off across all Approved earnings => [409] 'InsufficientCompOffBalance' - no LeaveRequest row and no allocation rows are created"
+    auto: API
+    ex: ["xU:CompOffLeaveIntegrationTests.Insufficient_comp_off_blocks_leave"]
+
+  - id: LEAVE-COMPOFF-021
+    func: [F-LEAVE-229]
+    sc: Approve/Reject/Withdraw/Cancel each drive the correct Comp-Off ledger transition
+    t: The full 4-state lifecycle mirrors standard Allocated leave through CompOffLedgerEntryType instead
+    src: ["CompOffService.TransitionLeaveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/leave-requests/{id}/approve] Comp-Off request => [200] ledger gains a Consume entry, Reserved->Consumed"
+      - "[POST /api/leave-requests/{otherId}/reject] A different PendingApproval Comp-Off request => [200] ledger gains a Release entry, Reserved released"
+      - "[POST /api/leave-requests/{approvedId}/cancel] A different, now-Approved Comp-Off request => [200] ledger gains a Restore entry, Consumed restored to available"
+    auto: API
+    ex: ["xU:CompOffLeaveIntegrationTests.Leave_approval_consumes_reserved_comp_off", "xU:CompOffLeaveIntegrationTests.Leave_cancellation_restores_comp_off"]
+
+  - id: LEAVE-COMPOFF-022
+    func: [F-LEAVE-229, F-LEAVE-319]
+    sc: Withdrawing a PendingApproval Comp-Off request has no dedicated CompOff release branch
+    t: Confirm whether the Reserved CompOffLeaveAllocation is actually released on Withdraw, or is left stranded
+    src: ["LeaveRequestWithdrawalService.AttemptAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/leave-requests] Submit a Comp-Off leave request => [201] Reserve allocation created, ledger Reserve entry posted"
+      - "[POST /api/leave-requests/{requestId}/withdraw] Withdraw while still PendingApproval => [200] Status=Withdrawn"
+      - "[GET /api/attendance/comp-off/ledger] => inspect whether a Release entry now exists for this leaveRequestId - if ABSENT, the CompOffLeaveAllocation remains 'Reserved' indefinitely, confirming CR-90's finding"
+      - "[GET /api/attendance/comp-off/balance] As the employee => confirm whether the withdrawn request's minutes are restored to available, or remain locked away"
+    auto: DB-assisted
+    cr: [CR-90]
+
+  - id: LEAVE-COMPOFF-023
+    func: [F-LEAVE-230]
+    sc: A repeated Reserve for the same LeaveRequestId is idempotent
+    t: Calling Reserve twice for one leaveRequestId does not double-reserve
+    src: ["CompOffService.ApplyLeaveAsync"]
+    type: Contract
+    tags: [Idempotency]
+    pri: P1
+    perm: "Attendance.CompOff.Manage"
+    steps:
+      - "[POST /api/attendance/comp-off/leave/{leaveRequestId}/reserve?employeeId={employeeId}&minutes=240] First call => [200] Reservation created"
+      - "[POST /api/attendance/comp-off/leave/{leaveRequestId}/reserve?employeeId={employeeId}&minutes=240] Second call, same leaveRequestId => [200] 'Reservation already exists' - no second allocation row"
+    auto: API
+
+  - id: LEAVE-COMPOFF-024
+    func: [F-LEAVE-230]
+    sc: Reserve accepts an employeeId unrelated to the leaveRequestId's own owner
+    t: The Reserve endpoint's employeeId/minutes query parameters are not cross-checked against the leaveRequestId's actual employee - parameter-tampering probe
+    src: ["CompOffController.Reserve", "CompOffService.ApplyLeaveAsync"]
+    type: Security
+    pri: P0
+    perm: "Attendance.CompOff.Manage"
+    steps:
+      - "[POST /api/attendance/comp-off/leave/{employeeAsLeaveRequestId}/reserve?employeeId={differentEmployeeId}&minutes=240] leaveRequestId belongs to Employee A, employeeId=Employee B => observe whether the reservation is created against Employee B's Comp-Off balance despite the leave request being Employee A's - confirm whether any pairing validation exists at all"
+    auto: API
+
+  - id: LEAVE-COMPOFF-025
+    func: [F-LEAVE-231]
+    sc: Expiry posts an Expire ledger entry per remaining-available earning as of the given date
+    t: An earning past its ExpiresOn with no active reservation is marked Expired and its available minutes debited
+    src: ["CompOffService.ExpireAsync"]
+    type: Positive
+    pri: P1
+    perm: "Attendance.CompOff.Manage"
+    steps:
+      - "[Setup] Earning with ExpiresOn=2027-01-31, 240 available minutes, zero Reserved => test preconditions are established for the steps below"
+      - "[POST /api/attendance/comp-off/expiry?asOfDate=2027-02-01] => [200] 1 earning expired"
+      - "[GET /api/attendance/comp-off/ledger] => [200] an Expire entry for 240 minutes; earning Status=Expired"
+    auto: API
+    ex: ["xU:CompOffLeaveIntegrationTests.Expired_comp_off_cannot_be_consumed"]
+
+  - id: LEAVE-COMPOFF-026
+    func: [F-LEAVE-231]
+    sc: An earning with an open reservation past its expiry keeps Status=Approved
+    t: Expiry drains available minutes to zero via a ledger entry but does not flip Status when Reserved>0
+    src: ["CompOffService.ExpireAsync"]
+    type: Boundary
+    pri: P2
+    perm: "Attendance.CompOff.Manage"
+    steps:
+      - "[Setup] Earning past ExpiresOn with 120 minutes still Reserved against a PendingApproval leave request => test preconditions are established for the steps below"
+      - "[POST /api/attendance/comp-off/expiry?asOfDate=<afterExpiry>] => [200]"
+      - "[GET /api/attendance/comp-off/operations] => [200] this earning's Status is STILL Approved, not Expired, because reserved minutes remain outstanding - verify whether this is surfaced clearly to the manager/HR reviewer"
+    auto: DB-assisted
+
+  - id: LEAVE-COMPOFF-027
+    func: [F-LEAVE-232]
+    sc: Correcting a source Attendance day supersedes the old earning and credits/debits the delta
+    t: An increased-credit correction posts a Credit on the new replacement earning; a decreased one posts a Reversal
+    src: ["CompOffService.CorrectSourceAsync"]
+    type: Positive
+    pri: P1
+    perm: "Attendance.CompOff.Manage"
+    steps:
+      - "[Setup] Earning credited 240 minutes from AttendanceVersion=1 => test preconditions are established for the steps below"
+      - "[Manual/DB] CorrectSourceAsync(earningId, correctedEligibleMinutes=300) => [200] old earning Status=Superseded, new earning created with AttendanceVersion=2, ledger gains a Credit entry for the +60 delta"
+    auto: DB-assisted
+    ex: ["xU:CompOffCorrectionEndToEndTests"]
+
+  - id: LEAVE-COMPOFF-028
+    func: [F-LEAVE-232]
+    sc: A correction cannot reduce credit below already-consumed minutes
+    t: Correcting credit downward past the consumed floor is rejected Conflict
+    src: ["CompOffService.CorrectSourceAsync"]
+    type: Negative
+    pri: P1
+    perm: "Attendance.CompOff.Manage"
+    steps:
+      - "[Setup] Earning credited 240 minutes, 200 already Consumed via an approved Comp-Off leave request => test preconditions are established for the steps below"
+      - "[Manual/DB] CorrectSourceAsync(earningId, correctedEligibleMinutes=150) => [409] 'CorrectionRequiresAdjustment' - cannot correct below the 200 already consumed"
+    auto: DB-assisted
+    ex: ["xU:CompOffConsumedCreditCorrectionTests"]
+
+  - id: LEAVE-COMPOFF-029
+    func: [F-LEAVE-233]
+    sc: Tenant isolation - Comp-Off data never crosses tenants
+    t: Tenant B's session sees zero of Tenant A's Comp-Off earnings/ledger/policies
+    src: ["CompOffService"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    perm: "Attendance.CompOff.ViewSelf"
+    steps:
+      - "[GET /api/attendance/comp-off/balance] As a Tenant B employee => [200] balance reflects only Tenant B's own earnings, never Tenant A's"
+    auto: API
+
+  - id: LEAVE-COMPOFF-030
+    func: [F-LEAVE-215]
+    sc: CompOffPolicy.EligibilityMode is an unconstrained free-text field
+    t: An arbitrary, non-'None' string is accepted and behaves identically to the documented default 'All'
+    src: ["CompOffService.EarnAsync"]
+    type: Boundary
+    pri: P2
+    perm: "Attendance.CompOff.Manage"
+    steps:
+      - "[POST /api/attendance/comp-off/policies] {eligibilityMode: 'SomeTypoValue'} => [201] accepted with no validation error"
+      - "[POST /api/attendance/comp-off/earnings] Against this policy => [201] succeeds exactly as if eligibilityMode were 'All' - only the literal string 'None' (case-insensitive) is ever special-cased"
+    auto: API

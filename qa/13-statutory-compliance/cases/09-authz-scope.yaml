@@ -1,0 +1,149 @@
+sheet: Stat_Authz_Scope
+submodule: Authorization and Scope
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: STAT-AUTHZ-001
+    func: [F-STAT-111]
+    sc: StatutoryViewHistory is a declared, unroutable permission
+    t: No controller route requires or would ever check Payroll.Statutory.ViewHistory
+    src: "Backend/HRMS.Domain/Authorization/Permissions.cs; Backend/HRMS.API/Controllers/StatutoryPayrollController.cs"
+    type: Contract
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: Payroll.Statutory.ViewHistory
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of StatutoryPayrollController.cs for [HasPermission(Permissions.Payroll.StatutoryViewHistory)] => zero matches; the permission is declared in Permissions.cs and seedable but gates no actual endpoint"
+    auto: Manual only
+    cr: []
+
+  - id: STAT-AUTHZ-002
+    func: [F-STAT-112]
+    sc: StatutoryComplianceCancel and ViewHistory are declared, unroutable permissions
+    t: No controller route requires Payroll.StatutoryCompliance.Cancel or .ViewHistory
+    src: "Backend/HRMS.Domain/Authorization/Permissions.cs; PayrollOutputsController.cs (PayrollStatutoryComplianceController)"
+    type: Contract
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: Payroll.StatutoryCompliance.Cancel, Payroll.StatutoryCompliance.ViewHistory
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of PayrollOutputsController.cs's PayrollStatutoryComplianceController section for [HasPermission(...StatutoryComplianceCancel)] and [...StatutoryComplianceViewHistory)] => zero matches for either"
+    auto: Manual only
+    cr: [CR-231]
+
+  - id: STAT-AUTHZ-003
+    func: [F-STAT-113]
+    sc: StatutoryFilingViewHistory is the sole unroutable filing permission
+    t: Cancel and Export both have real routes; only ViewHistory has none
+    src: "Backend/HRMS.Domain/Authorization/Permissions.cs; StatutoryFilingsController.cs"
+    type: Contract
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: Payroll.StatutoryFiling.ViewHistory
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of StatutoryFilingsController.cs for each permission constant => StatutoryFilingCancel (runs/{id}/cancel) and StatutoryFilingExport (runs/{id}/download) both gate a real route, while StatutoryFilingViewHistory gates zero routes"
+    auto: Manual only
+
+  - id: STAT-AUTHZ-004
+    func: [F-STAT-114, F-STAT-115]
+    sc: CONFIRMED HEADLINE - no seeded role but SuperAdmin/TenantAdmin holds any of the 29 permissions
+    t: A freshly seeded HRAdmin/HRManager/SuperHR/Manager/Employee role cannot access any statutory endpoint out of the box, including viewing their own statutory profile
+    src: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs RolePermissionMap"
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    pre: A freshly seeded tenant with the standard role set, no custom permission grants
+    role: HRAdmin (freshly seeded, no explicit statutory grants)
+    perm: "any of the 29 Payroll.Statutory*/StatutoryCompliance*/StatutoryFiling* permissions"
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/statutory-configurations] as freshly-seeded HRAdmin => [403] Forbidden"
+      - "[GET /api/payroll/employees/{employeeId}/statutory-profile] as freshly-seeded HRAdmin for their OWN linked employee record => [403] Forbidden"
+      - "[GET /api/payroll/statutory-compliance/returns/{id}] as freshly-seeded HRManager => [403] Forbidden"
+      - "[GET /api/payroll/statutory-filings/runs] as freshly-seeded SuperHR => [403] Forbidden"
+      - "[Manual] grep SeedData.cs's RolePermissionMap for all 29 constants => zero matches inside any individual role's own array (only inside the PermissionIds dictionary and Permissions.All)"
+    secc: true
+    auto: API
+    cr: [CR-220]
+
+  - id: STAT-AUTHZ-005
+    func: [F-STAT-116]
+    sc: Combined Generate+Approve permission enables unguarded self-approval by default
+    t: A role holding both Generate and Approve for statutory compliance/filing can generate and approve its own artifact with the self-approval guard never firing by default
+    src: "Backend/HRMS.Application/Services/PayrollApprovalGuard.cs"
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    sev: High
+    pre: "A custom role R1 explicitly granted StatutoryCompliance.Generate + .Validate + .Approve, tenant has no PayrollControlConfiguration row"
+    role: Custom role R1
+    perm: Payroll.StatutoryCompliance.Generate, Payroll.StatutoryCompliance.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-compliance/periods/{id}/returns] as R1 => [201] Generated"
+      - "[POST /api/payroll/statutory-compliance/returns/{id}/validate] as R1 => [200] Validated"
+      - "[POST /api/payroll/statutory-compliance/returns/{id}/approve] as the SAME R1 user => [200] Approved - the guard never fires because the tenant has no RequireMakerChecker+PreventSelfApproval configuration"
+    secc: true
+    auto: API
+    cr: [CR-233]
+
+  - id: STAT-AUTHZ-006
+    func: [F-STAT-117]
+    sc: ManageConnections is correctly separated from Manage
+    t: A user holding only StatutoryFilingManage cannot manage connection profiles, and vice versa
+    src: "Backend/HRMS.API/Controllers/StatutoryFilingsController.cs"
+    type: Authorization
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Role R2 holds ONLY StatutoryFilingManage (not ManageConnections); role R3 holds ONLY ManageConnections"
+    role: Custom role R2, Custom role R3
+    perm: Payroll.StatutoryFiling.Manage, Payroll.StatutoryFiling.ManageConnections
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-filings/connections] as R2 (Manage only) => [403] Forbidden"
+      - "[POST /api/payroll/statutory-filings/runs] as R3 (ManageConnections only) => [403] Forbidden"
+    auto: API
+
+  - id: STAT-AUTHZ-007
+    func: [F-STAT-118]
+    sc: No anonymous route exists
+    t: Every action on all three statutory controllers requires authentication and a declared permission
+    src: "StatutoryPayrollController.cs, PayrollOutputsController.cs, StatutoryFilingsController.cs"
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: none
+    role: n/a (unauthenticated)
+    perm: "n/a"
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/statutory-configurations] with no Authorization header => [401] Unauthorized"
+      - "[GET /api/payroll/statutory-compliance/returns/{id}] with no Authorization header => [401] Unauthorized"
+      - "[GET /api/payroll/statutory-filings/runs] with no Authorization header => [401] Unauthorized"
+      - "[Manual] full grep of all three controllers for [AllowAnonymous] => zero matches"
+    secc: true
+    auto: API

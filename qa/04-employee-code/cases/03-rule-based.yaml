@@ -1,0 +1,543 @@
+sheet: EmployeeCode_Rules
+submodule: Rule-Based Generation - Rule CRUD, Matching, Segments, Preview
+defaults:
+  role: TENANT_ADMIN
+  perm: EmployeeCodeConfiguration.Manage
+  tenant: A
+  pre: "Tenant A has an active Auto/RuleBased Employee Code configuration version; caller holds EmployeeCodeConfiguration.Manage."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: CODE-RULE-001
+    func: [F-CODE-23]
+    sc: A rule cannot be created before any Employee Code configuration exists
+    t: Saving a rule for a tenant with zero EmployeeCodeConfig rows is rejected
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('Create Employee Code configuration before adding rules.')"]
+    type: Negative
+    pri: P1
+    tenant: fresh tenant, no configuration
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {name:'Default', priority:1, status:'Active', isDefault:true, segments:[{sequenceOrder:1, segmentType:'SequentialNumber', paddingLength:5}]} => [400] 'Create Employee Code configuration before adding rules.'"
+    auto: API
+
+  - id: CODE-RULE-002
+    func: [F-CODE-19, F-CODE-20]
+    sc: Creating a minimal Active default rule with one sequential-number segment succeeds
+    t: The simplest valid Rule-Based rule (default, no conditions, one SequentialNumber segment) saves
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {name:'Default Rule', priority:100, isDefault:true, status:'Active', conditions:[], segments:[{sequenceOrder:1, segmentType:'FixedText', fixedValue:'EMP'},{sequenceOrder:2, segmentType:'SequentialNumber', paddingLength:5}]} => [200] 'Employee Code rule saved.'"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Default_rule_keeps_all_output_segments_and_padding_after_reload"]
+
+  - id: CODE-RULE-003
+    func: [F-CODE-19]
+    sc: An Active rule requires at least one segment
+    t: Saving Active with an empty segment list is rejected
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('Active rules require at least one segment.')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {name:'Empty', priority:1, isDefault:true, status:'Active', segments:[]} => [400] 'Active rules require at least one segment.'"
+    auto: API
+
+  - id: CODE-RULE-004
+    func: [F-CODE-19]
+    sc: An Active rule must contain EXACTLY one sequential-number segment - zero is rejected
+    t: A rule with only master-code/fixed segments and no SequentialNumber segment is rejected
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('A rule must contain exactly one sequential-number segment.')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {name:'No Sequence', priority:1, isDefault:true, status:'Active', segments:[{sequenceOrder:1, segmentType:'FixedText', fixedValue:'EMP'}]} => [400] 'A rule must contain exactly one sequential-number segment.'"
+    auto: API
+
+  - id: CODE-RULE-005
+    func: [F-CODE-19]
+    sc: An Active rule must contain exactly one sequential-number segment - two is also rejected
+    t: A rule with two SequentialNumber segments is rejected just like zero
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync (sequenceSegments != 1)"]
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {name:'Two Sequences', priority:1, isDefault:true, status:'Active', segments:[{sequenceOrder:1, segmentType:'SequentialNumber', paddingLength:3},{sequenceOrder:2, segmentType:'SequentialNumber', paddingLength:5}]} => [400] 'A rule must contain exactly one sequential-number segment.'"
+    auto: API
+
+  - id: CODE-RULE-006
+    func: [F-CODE-19]
+    sc: FixedText and CustomConstant segments require a non-blank value
+    t: Each of the two literal segment types is rejected when its FixedValue is blank/whitespace
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('Fixed text and custom constant segments require a value.')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body includes segment {segmentType:'FixedText', fixedValue:'   '} => [400] 'Fixed text and custom constant segments require a value.'"
+      - "[POST /api/employee-code-configuration/rules] Body includes segment {segmentType:'CustomConstant', fixedValue:null} => [400] same message"
+    auto: API
+
+  - id: CODE-RULE-007
+    func: [F-CODE-10]
+    sc: Sequential-number segment padding accepts 0 through 12 and rejects outside that range
+    t: PaddingLength=-1 and PaddingLength=13 are rejected; 0 and 12 are accepted (server-side range, one digit wider than the Simple-mode config ceiling)
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('s.PaddingLength is < 0 or > 12')"]
+    type: Boundary
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Segment paddingLength=-1 => [400] 'Sequence padding must be between 0 and 12.'"
+      - "[POST /api/employee-code-configuration/rules] Segment paddingLength=13 => [400] same message"
+      - "[POST /api/employee-code-configuration/rules] Segment paddingLength=0 => [200] accepted"
+      - "[POST /api/employee-code-configuration/rules] Segment paddingLength=12 => [200] accepted, one digit beyond what the Simple-mode config field allows and beyond what the rule-builder UI's own input max permits"
+    auto: API
+    cr: [CR-39]
+
+  - id: CODE-RULE-008
+    func: [F-CODE-18]
+    sc: A Location condition is rejected because this model has no separate Location master
+    t: Any rule save that includes a condition on the Location field is refused before touching the database
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('Location conditions are unavailable because this model has no separate Location master.')"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Conditions include {field:'Location', referenceId:<any WorkLocation id>} => [400] 'Location conditions are unavailable because this model has no separate Location master.'"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Location_condition_is_rejected_when_no_separate_location_master_exists"]
+
+  - id: CODE-RULE-009
+    func: [F-CODE-18]
+    sc: A LocationCode segment is rejected for the same reason
+    t: Any rule save that includes a LocationCode segment is refused
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('Location code segments are unavailable because this model has no separate Location master.')"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Segments include {segmentType:'LocationCode'} => [400] 'Location code segments are unavailable because this model has no separate Location master.'"
+    auto: API
+
+  - id: CODE-RULE-010
+    func: [F-CODE-20]
+    sc: An Active, non-default rule requires at least one condition
+    t: A specific (isDefault=false) Active rule with zero conditions is rejected
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('Active specific rules require at least one matching condition.')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {isDefault:false, status:'Active', conditions:[], segments:[{segmentType:'SequentialNumber', paddingLength:5}]} => [400] 'Active specific rules require at least one matching condition.'"
+    auto: API
+
+  - id: CODE-RULE-011
+    func: [F-CODE-20]
+    sc: A default (fallback) rule cannot carry any conditions
+    t: isDefault=true with a non-empty conditions list is rejected regardless of status
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('Default fallback rules cannot contain conditions.')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {isDefault:true, conditions:[{field:'Department', referenceId:<id>}], segments:[{segmentType:'SequentialNumber', paddingLength:5}]} => [400] 'Default fallback rules cannot contain conditions.'"
+    auto: API
+
+  - id: CODE-RULE-012
+    func: [F-CODE-21]
+    sc: Only one Active default rule is allowed per configuration version
+    t: Saving a second Active default rule on the same version is rejected once one already exists
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('Only one active default Employee Code rule is allowed.')"]
+    type: Negative
+    pri: P0
+    pre: "Version V1 already has one Active default rule 'Default A'."
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {name:'Default B', isDefault:true, status:'Active', conditions:[], segments:[{segmentType:'SequentialNumber', paddingLength:5}], configurationVersionId: V1} => [409] 'Only one active default Employee Code rule is allowed.'"
+    auto: API
+
+  - id: CODE-RULE-013
+    func: [F-CODE-21]
+    sc: A second default rule IS allowed when it is Draft/Inactive, or targets a different version
+    t: The one-active-default rule only blocks a second ACTIVE default on the SAME version
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync (existingDefault query filters Status==Active)"]
+    type: Boundary
+    tags: [Positive]
+    pri: P2
+    pre: "Version V1 has one Active default rule."
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {name:'Draft Default', isDefault:true, status:'Draft', conditions:[], segments:[{segmentType:'SequentialNumber', paddingLength:5}], configurationVersionId: V1} => [200] saved (Draft default coexists with the Active one)"
+      - "[POST /api/employee-code-configuration/rules] Body {name:'Other Version Default', isDefault:true, status:'Active', conditions:[], segments:[{segmentType:'SequentialNumber', paddingLength:5}], configurationVersionId: <a different version V2>} => [200] saved (different version, independent default)"
+    auto: API
+
+  - id: CODE-RULE-014
+    func: [F-CODE-22]
+    sc: An Active rule cannot be attached to an inactive configuration version
+    t: Setting status=Active while targeting a version whose IsActive=false is rejected
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('An active rule cannot be attached to an inactive Employee Code configuration version.')"]
+    type: Negative
+    pri: P1
+    pre: "Version V-inactive exists with IsActive=false."
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {status:'Active', configurationVersionId: V-inactive, ...} => [409] 'An active rule cannot be attached to an inactive Employee Code configuration version.'"
+    auto: API
+
+  - id: CODE-RULE-015
+    func: [F-CODE-13]
+    sc: Rule condition matches by ReferenceId regardless of what stale Code string is stored on the condition row
+    t: Editing the stored condition.Value directly in the database to a wrong/old code does not change matching, because the matcher compares live reference ids, not the stored Value, whenever a ReferenceId is present
+    src: ["EmployeeCodeRuleMatcher.Matches (ReferenceId path); EmployeeCodeConfigurationService.CreateChangeAsync builds values/referenceIds fresh from current employment references"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Create a rule with a WorkLocation condition by ReferenceId => [200]"
+      - "[DB edit] Directly update the saved EmployeeCodeRuleCondition.Value to a bogus string => n/a"
+      - "[POST /api/employees/{id}/employment-history] Hire an employee at that WorkLocation => [200] the rule still matches and the code renders using the WorkLocation's CURRENT Code, not the stale stored Value"
+    auto: DB-assisted
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Rule_based_generation_matches_work_location_by_id_even_when_saved_code_is_stale"]
+
+  - id: CODE-RULE-016
+    func: [F-CODE-12]
+    sc: Rule matching picks the lowest-Priority matching rule when several rules could match
+    t: Two Active rules that would both match the same employment attributes resolve to the one with the smaller Priority number
+    src: ["EmployeeCodeRuleMatcher.Match (OrderBy Priority, ThenBy Id)"]
+    type: Positive
+    pri: P0
+    pre: "Rule 'High Priority' (Priority=1) and Rule 'Low Priority' (Priority=10) both have a condition that matches the same Department."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Hire into that Department => [200] the generated code follows 'High Priority' rule's segments, not 'Low Priority''s"
+    auto: API
+    ex: ["xU:EmployeeCodeRuleMatcherTests.Chooses_lowest_priority_matching_rule"]
+
+  - id: CODE-RULE-017
+    func: [F-CODE-12]
+    sc: When no specific rule matches, the single Active default rule is used as fallback
+    t: An employee hired with attributes matching no specific rule's conditions still receives a code from the default rule
+    src: ["EmployeeCodeRuleMatcher.Match (fallback SingleOrDefault(IsDefault))"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Hire with attributes matching no specific rule's conditions => [200] EmployeeCode rendered from the default rule's segments"
+    auto: API
+
+  - id: CODE-RULE-018
+    func: [F-CODE-36]
+    sc: When neither a specific rule nor a default rule matches, generation fails with a handled validation error
+    t: With only specific rules configured (no default) and no rule's conditions matching, the employment call is rejected, not silently assigned a null/blank code
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync ('No valid active Employee Code rule matches the selected Initial Employment values.')"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Hire with attributes that satisfy no rule's conditions, and no default rule exists => [400] 'No valid active Employee Code rule matches the selected Initial Employment values.'"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Failed_rule_generation_rolls_back_code_sequence_and_history"]
+
+  - id: CODE-RULE-019
+    func: [F-CODE-16]
+    sc: A rule condition on a hierarchical field is rejected when the selected value does not belong to the selected parent
+    t: A SubDepartment condition whose referenced record's real parent is NOT the Department condition on the same rule is refused at save time
+    src: ["EmployeeCodeConfigurationService.IsValidHierarchyAsync"]
+    type: Negative
+    pri: P1
+    pre: "SubDepartment 'SD-X' actually belongs to Department 'DEPT-OTHER', not 'DEPT-A'."
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Conditions: [{field:'Department', referenceId:<DEPT-A id>}, {field:'SubDepartment', referenceId:<SD-X id>}] => [400] 'condition' / 'The selected master value does not belong to the selected parent hierarchy.'"
+    auto: API
+
+  - id: CODE-RULE-020
+    func: [F-CODE-17]
+    sc: A hierarchical condition is accepted even without its parent condition present - the hierarchy check silently no-ops
+    t: A SubDepartment condition alone (no Department condition on the same rule) saves successfully
+    src: ["EmployeeCodeConfigurationService.IsValidHierarchyAsync (Parent() returns null -> '!departmentId.HasValue' short-circuits true)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Conditions: [{field:'SubDepartment', referenceId:<SD-X id>}] only, no Department condition => [200] saved without error"
+    auto: API
+    cr: [CR-42]
+
+  - id: CODE-RULE-021
+    func: [F-CODE-16]
+    sc: A cross-tenant reference id on a rule condition is rejected as invalid, indistinguishable from a nonexistent id
+    t: A Department id that belongs to Tenant B is rejected when saved as a condition by a Tenant A caller
+    src: ["EmployeeCodeConfigurationService.ResolveConditionCodeAsync (tenant-filtered lookup returns null for a foreign-tenant id)"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: High
+    tenant: A caller, B's department id
+    steps:
+      - "[POST /api/employee-code-configuration/rules] As Tenant A, condition {field:'Department', referenceId: <Tenant B's department id>} => [400] 'condition' / 'The selected master value is invalid or belongs to another tenant.'"
+    auto: API
+
+  - id: CODE-RULE-022
+    func: [F-CODE-16]
+    sc: A reference id for an INACTIVE master is rejected the same as an invalid one
+    t: Deactivating a Department after a rule references it does not retroactively invalidate the existing rule, but saving a NEW condition against that now-inactive id is rejected
+    src: ["EmployeeCodeConfigurationService.ResolveConditionCodeAsync (x.IsActive filter)"]
+    type: Negative
+    pri: P1
+    pre: "Department 'DEPT-OLD' has been deactivated (IsActive=false)."
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Condition {field:'Department', referenceId: <DEPT-OLD id>} => [400] 'condition' / 'The selected master value is invalid or belongs to another tenant.'"
+    auto: API
+    cm: "Cross-reference with qa/03-masters CR-28: a Department deactivated through the generic /api/masters route with no reference check could be one already used by an Active Employee Code rule condition; that existing rule is NOT retroactively broken (matching re-resolves the Code at employment time and would simply fail to match/produce a stale-but-still-active-flagged Code lookup) - confirm exact runtime behavior of an EXISTING Active rule whose referenced master has since been deactivated (see CODE-RULE-023). (CR-28 lives in qa/03-masters/clarifications.yaml, not this module's register, so it is not cited via the cr: field here.)"
+
+  - id: CODE-RULE-023
+    func: [F-CODE-13, F-CODE-14]
+    sc: An existing Active rule whose referenced master was later deactivated fails to match at employment time (not merely at rule-save time)
+    t: Employment-time matching re-resolves each condition's live Code by ReferenceId; once the referenced master is inactive, ResolvePreviewCodeAsync/the employment-time lookup (both filtered by IsActive) no longer returns a code for it, so the rule can never match again until the master is reactivated
+    src: ["EmployeeEmploymentService.CreateChangeAsync (values dictionary built from `references.Department?.Code` etc., which are themselves loaded only when IsActive per EmploymentReferences resolution)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    pre: "An Active rule has a condition {field:'Department', referenceId:<DEPT-X>}. DEPT-X is later deactivated."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Hire an employee whose DepartmentId is still DEPT-X (now inactive) => [400] the Department reference itself is rejected as 'inactive' before code generation is even reached (Initial Employment's own department validation runs first), OR falls through to the default/no-match path if department validation is lenient - confirm the ACTUAL observed error against current source rather than assuming"
+    auto: API
+    cm: "Related to qa/03-masters CR-28 (see CODE-RULE-022); not cited via cr: since CR-28 belongs to that module's own register."
+
+  - id: CODE-RULE-024
+    func: [F-CODE-24]
+    sc: Soft-deleting a rule sets IsDeleted/DeletedAt and excludes it from every subsequent listing and matching pass
+    t: A deleted rule disappears from GET rules and is never selected by the matcher again
+    src: ["EmployeeCodeConfigurationService.SoftDeleteRuleAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[DELETE /api/employee-code-configuration/rules/{id}] Call => [200] 'Employee Code rule deleted.'"
+      - "[GET /api/employee-code-configuration/rules] Call => [200] the deleted rule is absent from the list"
+      - "[POST /api/employees/{id}/employment-history] Hire an employee whose attributes would have matched the deleted rule => [200 or 400] the deleted rule no longer matches; a different rule or the default now applies (or 'no rule matches' if nothing else does)"
+    auto: API
+
+  - id: CODE-RULE-025
+    func: [F-CODE-24]
+    sc: The only Active default fallback rule cannot be soft-deleted while it remains the sole default
+    t: Deleting the last remaining Active default rule for a version is refused
+    src: ["EmployeeCodeConfigurationService.SoftDeleteRuleAsync ('Cannot delete the only active default fallback for this configuration version. Use an explicit replacement action first; no rule was changed.')"]
+    type: Negative
+    pri: P1
+    pre: "Version V1 has exactly one Active default rule and no other Active default."
+    steps:
+      - "[DELETE /api/employee-code-configuration/rules/{that rule's id}] Call => [409] 'Cannot delete the only active default fallback for this configuration version. Use an explicit replacement action first; no rule was changed.'"
+    auto: API
+
+  - id: CODE-RULE-026
+    func: [F-CODE-24]
+    sc: A second Active default rule CAN be deleted once another Active default exists for the same version
+    t: The delete guard only blocks removing the last one
+    src: ["EmployeeCodeConfigurationService.SoftDeleteRuleAsync (anotherFallback check)"]
+    type: Positive
+    pri: P2
+    pre: "Version V1 has two Active default rules (only possible via direct data manipulation, since SaveRuleAsync itself blocks creating a second one - see CODE-RULE-012); use this to test the delete guard's OTHER branch."
+    steps:
+      - "[DELETE /api/employee-code-configuration/rules/{first default's id}] Call => [200] deleted, because a second Active default still exists"
+    auto: DB-assisted
+
+  - id: CODE-RULE-027
+    func: [F-CODE-25]
+    sc: Editing an existing rule while a DIFFERENT configuration version is targeted creates a version-local copy, leaving the original historical rule untouched
+    t: The 'edited' rule gets a new Id under the new version; the old rule's Id and its own version linkage are unchanged
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync (rule.EmployeeCodeConfigVersionId != version.Id branch)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration/rules/{oldRule.id}] Body {configurationVersionId: <newVersion.id>, name:'Test', segments:[...copied from oldRule...]} => [200] returns a NEW rule id, distinct from oldRule.id"
+      - "[GET /api/employee-code-configuration/rules/{oldRule.id}] Call => [200] the original rule is still present, unmodified, still linked to its original version"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.New_active_version_on_2026_09_13_can_use_a_versioned_rule_and_generate_code"]
+
+  - id: CODE-RULE-028
+    func: [F-CODE-19]
+    sc: Rule name and a non-negative priority are required
+    t: A blank name or a negative priority is rejected before any other validation runs
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync ('Rule name and a non-negative priority are required.')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {name:'', priority:1, ...} => [400] 'Rule name and a non-negative priority are required.'"
+      - "[POST /api/employee-code-configuration/rules] Body {name:'X', priority:-1, ...} => [400] same message"
+    auto: API
+
+  - id: CODE-RULE-029
+    func: [F-CODE-19]
+    sc: A Draft-status rule is exempt from the segment/condition completeness checks that apply only to Active rules
+    t: A Draft rule with zero segments and zero conditions saves successfully, since every 'Active rules require...' check is conditioned on status==Active
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync (every completeness check guarded by 'request.Status == EmployeeCodeRuleStatus.Active')"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {name:'WIP', priority:1, isDefault:false, status:'Draft', conditions:[], segments:[]} => [200] saved despite having no conditions and no segments"
+    auto: API
+
+  - id: CODE-RULE-030
+    func: [F-CODE-30]
+    sc: GET/PUT/POST/DELETE rule endpoints all require EmployeeCodeConfiguration.Manage (write) or .View (read), and reject cross-tenant ids
+    t: Consolidated authorization + tenant-isolation sweep across the rule sub-resource
+    src: ["[HasPermission] on every EmployeeCodeConfigurationController rule action"]
+    type: Authorization
+    tags: [Tenant-Isolation, Security]
+    pri: P0
+    sev: Critical
+    tenant: A rule, B caller
+    steps:
+      - "[GET /api/employee-code-configuration/rules/{Tenant A's rule id}] As Tenant B (with View) => [404] not found (tenant-filtered lookup)"
+      - "[PUT /api/employee-code-configuration/rules/{Tenant A's rule id}] As Tenant B (with Manage) => [404]"
+      - "[DELETE /api/employee-code-configuration/rules/{Tenant A's rule id}] As Tenant B (with Manage) => [404]"
+      - "[GET /api/employee-code-configuration/rules] As an anonymous caller (no token) => [401]"
+    auto: API
+
+  - id: CODE-RULE-031
+    func: [F-CODE-26, F-CODE-27]
+    sc: Preview renders the sample code without reserving/advancing the underlying sequence
+    t: Calling Preview twice in a row returns the SAME previewSequence both times, and no EmployeeCodeSequences row is created
+    src: ["EmployeeCodeConfigurationService.PreviewAsync (Select, never Add/advance)"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employee-code-configuration/preview] Body {effectiveFrom, departmentId, ...matching a rule} => [200] previewSequence=1, sequenceReserved=false"
+      - "[POST /api/employee-code-configuration/preview] Repeat the identical call => [200] previewSequence is STILL 1 (unchanged - nothing was reserved by the first call)"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Preview_uses_the_same_rule_and_sequence_state_without_allocating"]
+
+  - id: CODE-RULE-032
+    func: [F-CODE-27]
+    sc: Preview requires an Auto + RuleBased active version - rejects Manual and Simple configurations
+    t: Calling Preview while the effective version is Manual, or Auto/Simple, is refused
+    src: ["EmployeeCodeConfigurationService.PreviewAsync ('generationMethod' / 'Preview is available only for an active Auto Rule-Based configuration.')"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/preview] Effective version is Manual => [400] 'generationMethod' / 'Preview is available only for an active Auto Rule-Based configuration.'"
+      - "[POST /api/employee-code-configuration/preview] Effective version is Auto/Simple => [400] same message"
+    auto: API
+
+  - id: CODE-RULE-033
+    func: [F-CODE-27]
+    sc: Preview with zero or multiple matching active versions for the requested date is rejected
+    t: A date with no effective version is Invalid; a date with two overlapping active versions (a data-integrity edge, since Save should have prevented it) is Conflict
+    src: ["EmployeeCodeConfigurationService.PreviewAsync"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/preview] effectiveFrom outside every version's range => [400] 'effectiveFrom' / 'No active Employee Code configuration is effective for the selected date.'"
+      - "[POST /api/employee-code-configuration/preview] effectiveFrom inside two overlapping active versions (constructed via direct data manipulation, since normal Save blocks this) => [409] 'Multiple active Employee Code configurations are effective for the selected date.'"
+    auto: DB-assisted
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Preview_rejects_missing_master_values_and_dates_outside_the_active_version"]
+
+  - id: CODE-RULE-034
+    func: [F-CODE-28]
+    sc: Preview rejects a supplied master id that is invalid, inactive, or cross-tenant, naming the specific field
+    t: Each of the 15 preview master-id fields, when given a bad id, reports Invalid on that field's own name
+    src: ["EmployeeCodeConfigurationService.ResolvePreviewCodeAsync"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/preview] departmentId=<random GUID not in Tenant A> => [400] 'Department' field, 'The selected master value is invalid, inactive, or belongs to another tenant.'"
+      - "[POST /api/employee-code-configuration/preview] workLocationId=<a deactivated Work Location's id> => [400] 'WorkLocation' field, same message"
+    auto: API
+
+  - id: CODE-RULE-035
+    func: [F-CODE-28, F-CODE-45]
+    sc: Preview is tenant-scoped even when the caller supplies another tenant's real master id
+    t: Tenant B calling Preview with Tenant A's Department id gets the same 'invalid' treatment as a nonexistent id - never Tenant A's data
+    src: ["EmployeeCodeConfigurationService.ResolvePreviewCodeAsync (tenant-filtered lookup)"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: High
+    tenant: A department id, B caller
+    steps:
+      - "[POST /api/employee-code-configuration/preview] As Tenant B, departmentId=<Tenant A's department id> => [400] rejected as invalid; response never contains any Tenant A master code (e.g. 'HC01')"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Preview_is_tenant_scoped_even_when_using_another_tenants_master_id"]
+
+  - id: CODE-RULE-036
+    func: [F-CODE-29]
+    sc: Preview requires an authenticated tenant
+    t: A caller with no resolvable tenant is unauthorized
+    src: ["EmployeeCodeConfigurationService.PreviewAsync"]
+    type: Negative
+    tags: [Security]
+    pri: P2
+    sev: Medium
+    role: "Authenticated user with no resolvable tenant"
+    steps:
+      - "[POST /api/employee-code-configuration/preview] Call => [401]"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Preview_requires_a_tenant_and_effective_active_version"]
+
+  - id: CODE-RULE-037
+    func: [F-CODE-12, F-CODE-13]
+    sc: A rule with multiple conditions requires ALL of them to match (AND semantics, not OR)
+    t: A rule with both a Department AND a Grade condition does not match an employee who satisfies only one of the two
+    src: ["EmployeeCodeRuleMatcher.Match ('r.Conditions.All(c => Matches(c, ...))')"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    pre: "Rule 'Senior IT' requires Department=IT AND Grade=G5."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Hire into Department=IT with Grade=G3 (Department matches, Grade does not) => [200 or 400] 'Senior IT' does NOT match; falls through to the next-priority rule or the default/no-match error"
+    auto: API
+
+  - id: CODE-RULE-038
+    func: [F-CODE-12]
+    sc: Renderer preserves configured segment order and formats padding correctly for a full master-code chain
+    t: A five-segment rule (HoldingCompany/Lob/Organisation/Department/Sequence) renders in that exact order, separator-joined
+    src: ["EmployeeCodeRenderer.Render"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Hire matching a rule with segments [HoldingCompanyCode, LobCode, OrganisationCode, DepartmentCode, SequentialNumber(pad 5)] and separator '/' => [200] EmployeeCode = 'HC01/LOB01/ORG01/IT/00001'"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Rule_based_generation_uses_explicit_master_code_mappings", "xU:EmployeeCodeRuleMatcherTests.Renderer_preserves_all_master_segment_order"]
+
+  - id: CODE-RULE-039
+    func: [F-CODE-12]
+    sc: Renderer rejects rendering when a required master-code segment has no configured code for this employee
+    t: A rule segment referencing a master field the hired employee has no value for (e.g. CostCenterCode when no Cost Center was selected) fails with a segment-specific error
+    src: ["EmployeeCodeRenderer.Render ('Employee Code cannot be generated because {segment} has no configured Code.')"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Hire matching a rule whose segments include CostCenterCode, with no CostCenterId supplied on the employment request => [400] 'employeeCode' / 'Employee Code cannot be generated because CostCenterCode has no configured Code.'"
+    auto: API
+    ex: ["xU:EmployeeCodeRuleMatcherTests.Renderer_rejects_missing_master_code"]
+
+  - id: CODE-RULE-040
+    func: [F-CODE-12]
+    sc: JoiningYear and JoiningMonth segments render from the employment's EffectiveFrom date, not today's date
+    t: A rule segmented by JoiningYear/JoiningMonth uses the Initial Employment's effective (joining) date even when saved on a different calendar day
+    src: ["EmployeeCodeRenderer.Render (context.JoiningDate.Year / .Month, sourced from EmployeeCodeGenerationContext built with request.EffectiveFrom)"]
+    type: Positive
+    pri: P1
+    data: "EffectiveFrom = 2026-03-15"
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Hire with EffectiveFrom=2026-03-15, matching a rule with segments [JoiningYear, JoiningMonth, SequentialNumber] => [200] EmployeeCode begins with '2026-03-' (year then 2-digit month)"
+    auto: API
+
+  - id: CODE-RULE-041
+    func: [F-CODE-15]
+    sc: The Operator field always behaves as Equals - no other value can be sent through the API contract
+    t: Sending an out-of-range integer for operator is either rejected by model binding or is silently treated as non-matching, never as some other comparison
+    src: ["EmployeeCodeConditionOperator (Equals=0 only); EmployeeCodeRuleMatcher.Matches ('condition.Operator != Equals -> return false')"]
+    type: Boundary
+    tags: [Contract]
+    pri: P3
+    sev: Low
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Condition {field:'Department', operator: 99, referenceId:<id>} => [200 or 400] record whether an out-of-enum-range operator value is accepted at the DTO layer at all, and if so, confirm it can never match (per source) rather than assuming"
+    auto: API
+    cr: [CR-43]

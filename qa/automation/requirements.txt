@@ -1,0 +1,12 @@
+# HRMS QA automation framework — dependencies.
+# Install with: pip install -r requirements.txt
+# Then install browser binaries with: playwright install chromium
+
+pytest>=8.0,<9
+pytest-playwright>=0.5.1
+playwright>=1.47
+allure-pytest>=2.13.5
+pytest-xdist>=3.6
+pytest-rerunfailures>=16.0
+python-dotenv>=1.0
+requests>=2.32

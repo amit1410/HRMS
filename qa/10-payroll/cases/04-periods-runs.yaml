@@ -1,0 +1,359 @@
+sheet: Payroll_PeriodsRuns
+submodule: Payroll Periods (lock/unlock state machine) and Payroll Runs (population prepare, transitions, readiness, operations dashboard, configuration/production health, integrity)
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Period.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-PR-001
+    func: [F-PAY-062]
+    sc: Create a valid payroll period
+    t: A well-formed monthly period is created in Draft
+    src: ["PayrollPeriodService.CreateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/periods] Code=2026-04, StartDate=2026-04-01, EndDate=2026-04-30, PayDate=2026-05-01 => [200/201] Status=Draft"
+    auto: API
+
+  - id: PAY-PR-002
+    func: [F-PAY-062]
+    sc: Period date validation
+    t: StartDate after EndDate and PayDate before StartDate are both rejected
+    src: ["PayrollPeriodService.Validate"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/periods] StartDate=2026-04-30, EndDate=2026-04-01 => [400] Start date cannot be later than end date."
+      - "[POST /api/payroll/periods] PayDate=2026-03-31, StartDate=2026-04-01 => [400] Pay date cannot be before the period start."
+    auto: API
+
+  - id: PAY-PR-003
+    func: [F-PAY-063]
+    sc: Code uniqueness and active-period date overlap
+    t: A duplicate code, and a second active period overlapping an existing active period's dates, are both Conflict
+    src: ["PayrollPeriodService.CreateAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/periods] Code=2026-04 (duplicate) => [409] A payroll period with this code already exists in this tenant."
+      - "[POST /api/payroll/periods] IsActive=true, dates overlapping the existing active 2026-04 period => [409] The payroll period overlaps an existing active period."
+    auto: API
+
+  - id: PAY-PR-004
+    func: [F-PAY-064]
+    sc: Closed/Locked periods cannot be edited
+    t: Updating a Closed or Locked period is Conflict
+    src: ["PayrollPeriodService.UpdateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Period is Closed => precondition established"
+      - "[PUT /api/payroll/periods/{id}] Name='Renamed' => [409] Closed or locked payroll periods cannot be edited."
+    auto: API
+
+  - id: PAY-PR-005
+    func: [F-PAY-065]
+    sc: Update honors ExpectedConcurrencyVersion
+    t: A stale version on update is Conflict
+    src: ["PayrollPeriodService.UpdateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[PUT /api/payroll/periods/{id}] ExpectedConcurrencyVersion=<stale> => [409] The payroll period was changed by another user."
+    auto: API
+
+  - id: PAY-PR-006
+    func: [F-PAY-066]
+    sc: Period transitions follow the declared order only
+    t: Draft->Open, Open->Closed, Closed->Locked succeed; Draft->Closed (skipping Open) is Conflict
+    src: ["PayrollPeriodService.TransitionAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/payroll/periods/{id}/open] => [200] Status=Open"
+      - "[POST /api/payroll/periods/{id}/close] => [200] Status=Closed"
+      - "[Setup] A fresh Draft period => precondition established"
+      - "[POST /api/payroll/periods/{id}/close] on the fresh Draft period => [409] The payroll period transition is not allowed."
+    auto: API
+
+  - id: PAY-PR-007
+    func: [F-PAY-067]
+    sc: Locking requires a reason and stamps lock metadata
+    t: Lock without a reason is Invalid; with a reason it stamps LockedAtUtc/LockedByUserId/LockReason
+    src: ["PayrollPeriodService.TransitionAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/periods/{id}/lock] no reason => [400] A lock reason is required."
+      - "[POST /api/payroll/periods/{id}/lock] reason='Month-end close' => [200] Status=Locked, LockReason='Month-end close'"
+    auto: API
+
+  - id: PAY-PR-008
+    func: [F-PAY-068]
+    sc: Unlock requires its own permission and a reason, and is blocked by an Approved/Finalized run
+    t: Unlock without Payroll.Period.Unlock is Forbidden; unlock while a run in the period is Approved is Conflict; a clean unlock returns the period to Closed
+    src: ["PayrollPeriodService.TransitionAsync (unlock branch)"]
+    type: Authorization
+    pri: P0
+    steps:
+      - "[POST /api/payroll/periods/{id}/unlock] reason='Correction' as a role WITHOUT Payroll.Period.Unlock => [403] Forbidden"
+      - "[Setup] The period has one Approved run => precondition established"
+      - "[POST /api/payroll/periods/{id}/unlock] reason='Correction' as HRAdmin (holds Unlock) => [409] A period with approved or finalized payroll cannot be unlocked."
+      - "[Setup] No run in the period is Approved/Finalized => precondition established"
+      - "[POST /api/payroll/periods/{id}/unlock] reason='Correction' => [200] Status=Closed (not Open)"
+    auto: API
+
+  - id: PAY-PR-009
+    func: [F-PAY-069]
+    sc: The generic transition route rejects the unlock action name
+    t: POSTing actionName=unlock to the generic transition endpoint is Forbidden regardless of permission held
+    src: ["PayrollPeriodsController.Transition"]
+    type: Security
+    pri: P1
+    steps:
+      - "[POST /api/payroll/periods/{id}/unlock] via the generic {actionName} route pattern with actionName literally 'unlock' => [403] Forbidden - unlock is reachable only via its own dedicated route"
+    auto: API
+
+  - id: PAY-PR-010
+    func: [F-PAY-070]
+    sc: Period history is append-only
+    t: Each transition appends a distinct PayrollPeriodHistory row
+    src: ["PayrollPeriodService.AddHistory"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/payroll/periods/{id}/history] => [200] one row per Created/Open/Closed/Locked transition, newest first"
+    auto: API
+
+  - id: PAY-PR-011
+    func: [F-PAY-073, F-PAY-074]
+    sc: Create a payroll run against an Open period
+    t: A run is created with an auto-generated RunNumber; creation against a Closed/Locked/inactive period is Conflict
+    src: ["PayrollRunService.CreateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Payroll.Run.Manage"
+    steps:
+      - "[POST /api/payroll/runs] PayrollPeriodId=<Open period>, RunType=Regular => [200/201] RunNumber matches PR-{fiscalYear}-{periodNumber}-{ordinal}"
+      - "[POST /api/payroll/runs] PayrollPeriodId=<Locked period> => [409] A closed, locked, or inactive period cannot receive a new payroll run."
+    auto: API
+
+  - id: PAY-PR-012
+    func: [F-PAY-075, F-PAY-079]
+    sc: Prepare builds the population with correct eligibility and exclusion reasons
+    t: An active employee with a current salary assignment is Eligible; one with none is Excluded with reason "No effective salary assignment"
+    src: ["PayrollRunService.PrepareAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Payroll.Run.Prepare"
+    steps:
+      - "[POST /api/payroll/runs/{id}/prepare] => [200] EmployeeCount = tenant's total employee count"
+      - "[GET /api/payroll/runs/{id}/employees] => [200] an employee with no salary assignment has IsEligible=false, ExclusionReason='No effective salary assignment'"
+    auto: API
+
+  - id: PAY-PR-013
+    func: [F-PAY-076]
+    sc: Prepare is Draft/Prepared-only and rejects a silent re-prepare
+    t: Re-preparing an already-Prepared run without rebuild=true is Conflict
+    src: ["PayrollRunService.PrepareAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/runs/{id}/prepare] second call, rebuild=false => [409] The run is already prepared; request an explicit rebuild."
+    auto: API
+
+  - id: PAY-PR-014
+    func: [F-PAY-077]
+    sc: Prepare snapshots Department/CostCenter from employment history as of the period end
+    t: An employee transferred mid-period shows the department that was effective on the period end date
+    src: ["PayrollRunService.PrepareAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/payroll/runs/{id}/employees] => [200] DepartmentId matches EmployeeEmploymentHistory as of PayrollPeriod.EndDate, not the employee's current department"
+    auto: API
+
+  - id: PAY-PR-015
+    func: [F-PAY-078]
+    sc: Rebuild fully replaces the prior population
+    t: Rebuilding after adding a new eligible employee produces a fresh, non-merged population
+    src: ["PayrollRunService.PrepareAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/payroll/runs/{id}/prepare?rebuild=true] => [200] prior PayrollRunEmployees rows removed, new set inserted, EmployeeCount reflects the fresh total"
+    auto: API
+
+  - id: PAY-PR-016
+    func: [F-PAY-080]
+    sc: Get the run's employee population, paged
+    t: GetEmployees pages the population ordered by employee code
+    src: ["PayrollRunService.GetEmployeesAsync"]
+    type: Positive
+    pri: P2
+    role: EMPLOYEE
+    perm: "Payroll.Run.View"
+    steps:
+      - "[GET /api/payroll/runs/{id}/employees?page=1&pageSize=25] => [200] paged, ordered by EmployeeCode"
+    auto: API
+
+  - id: PAY-PR-017
+    func: [F-PAY-081]
+    sc: Run transitions follow the declared order only
+    t: Prepared->Processing->Calculated->Approved->Finalized succeeds in sequence; skipping a step is Conflict
+    src: ["PayrollRunService.TransitionAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/payroll/runs/{id}/transition?target=Processing] on a Prepared run => [200] Status=Processing"
+      - "[POST /api/payroll/runs/{id}/transition?target=Approved] on the same run (skipping Calculated) => [409] The payroll run transition is not allowed."
+    auto: API
+
+  - id: PAY-PR-018
+    func: [F-PAY-082]
+    sc: Approve/Finalize invoke the approval guard's self-approval block
+    t: The user who prepared/started the run cannot approve or finalize it when PreventSelfApproval is on
+    src: ["PayrollRunService.TransitionAsync -> PayrollApprovalGuard.ValidateAsync"]
+    type: Security
+    pri: P0
+    steps:
+      - "[Setup] PayrollControlConfiguration.RequireMakerChecker=true, PreventSelfApproval=true => precondition established"
+      - "[POST /api/payroll/runs/{id}/transition?target=Approved] as the same user who called /prepare => [400] SelfApprovalNotAllowed: the user who created this payroll action cannot approve it."
+    auto: API
+    cr: [CR-167]
+
+  - id: PAY-PR-019
+    func: [F-PAY-083]
+    sc: Transitioning to Processing locks the run
+    t: LockedAtUtc/LockedByUserId are stamped on entering Processing
+    src: ["PayrollRunService.TransitionAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/payroll/runs/{id}/transition?target=Processing] => [200] LockedAtUtc set, LockedByUserId=caller"
+    auto: API
+
+  - id: PAY-PR-020
+    func: [F-PAY-081]
+    sc: A confirmed source-level bug - CompletedByUserId is stamped on every transition, not only Finalized/Cancelled
+    t: "PayrollRunService.TransitionAsync's unbraced if-statement means row.CompletedByUserId is set even when transitioning to Approved or Processing, while row.CompletedAtUtc correctly stays null until Finalized/Cancelled"
+    src: ["PayrollRunService.TransitionAsync"]
+    type: Boundary
+    pri: P1
+    sev: Medium
+    steps:
+      - "[POST /api/payroll/runs/{id}/transition?target=Approved] => [200] CompletedByUserId is now set to the caller, but CompletedAtUtc remains null"
+      - "[GET /api/payroll/runs/{id}] => [200] the mismatched pair (CompletedByUserId set, CompletedAtUtc null) is directly observable"
+    auto: API
+    cr: [CR-172]
+
+  - id: PAY-PR-021
+    func: [F-PAY-084]
+    sc: Run history is append-only across the full lifecycle
+    t: Prepared/PopulationGenerated/Approved/Finalized/Cancelled each append a distinct row
+    src: ["PayrollRunService.AddHistory"]
+    type: Positive
+    pri: P2
+    perm: "Payroll.Run.ViewHistory"
+    steps:
+      - "[GET /api/payroll/runs/{id}/history] => [200] one row per lifecycle event, newest first"
+    auto: API
+
+  - id: PAY-PR-022
+    func: [F-PAY-085]
+    sc: Readiness reports every declared blocker/warning
+    t: A run with no eligible employees, a locked period, or a missing salary assignment reports the matching blocking check; a Finalized run reports the non-blocking informational warning
+    src: ["PayrollReadinessService.CheckAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Run has zero eligible employees => precondition established"
+      - "[GET /api/payroll/runs/{id}/readiness] => [200] IsReady=false, one check Code=NoEligibleEmployees, Blocking=true"
+      - "[Setup] Run is Finalized => precondition established"
+      - "[GET /api/payroll/runs/{id}/readiness] => [200] Code=RunNotOpenForCalculation, Blocking=false"
+    auto: API
+
+  - id: PAY-PR-023
+    func: [F-PAY-086]
+    sc: Cross-tenant period/run ids are not reachable
+    t: Tenant B's period id and run id are both NotFound as Tenant A
+    src: ["PayrollPeriodService.cs, PayrollRunService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[GET /api/payroll/periods/{tenantBPeriodId}] As Tenant A => [404] Payroll period not found."
+      - "[GET /api/payroll/runs/{tenantBRunId}] As Tenant A => [404] Payroll run not found."
+    auto: API
+
+  - id: PAY-PR-024
+    func: [F-PAY-060, F-PAY-061, F-PAY-071, F-PAY-072]
+    sc: Period and run list/get-by-id read paths
+    t: List respects status/periodType/runType filters; get-by-id resolves the full detail
+    src: ["PayrollPeriodService.GetAsync", "PayrollRunService.GetAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Period.View"
+    steps:
+      - "[GET /api/payroll/periods?status=Open] => [200] only Open periods"
+      - "[GET /api/payroll/runs?payrollPeriodId={id}] => [200] only that period's runs"
+    auto: API
+
+  - id: PAY-PR-025
+    func: [F-PAY-087]
+    sc: Operations dashboard aggregates period/run counts
+    t: Open/Locked period counts and Prepared/Calculated run counts reflect current tenant data
+    src: ["PayrollOperationsService.GetOperationsDashboardAsync"]
+    type: Positive
+    pri: P2
+    perm: "Payroll.Run.View"
+    steps:
+      - "[GET /api/payroll/dashboard/operations] => [200] OpenPeriods/LockedPeriods/PreparedRuns/CalculatedRuns match direct DB counts"
+    auto: API
+
+  - id: PAY-PR-026
+    func: [F-PAY-088, F-PAY-089]
+    sc: Configuration health reports every category and the shared Salary/EmployeeReadiness gap
+    t: An active employee lacking a salary assignment produces an Error in BOTH the Salary and EmployeeReadiness categories from the same underlying count
+    src: ["PayrollOperationsService.SalaryHealthAsync / EmployeeReadinessHealthAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Payroll.Controls.View"
+    steps:
+      - "[Setup] One active employee has no active salary assignment => precondition established"
+      - "[GET /api/payroll/configuration-health] => [200] both the Salary and EmployeeReadiness categories report Status=Error with matching issue counts"
+    auto: API
+
+  - id: PAY-PR-027
+    func: [F-PAY-090]
+    sc: Production health rolls up the worst configuration-health severity
+    t: Any Error in configuration health surfaces the overall status as Critical
+    src: ["PayrollOperationsService.GetProductionHealthAsync"]
+    type: Positive
+    pri: P2
+    perm: "Payroll.Controls.View"
+    steps:
+      - "[GET /api/payroll/production-health] with at least one Error category => [200] Status=Critical"
+    auto: API
+
+  - id: PAY-PR-028
+    func: [F-PAY-091]
+    sc: Integrity checks detect duplicate current results and unbalanced journals
+    t: A duplicate IsCurrent PayrollResult for the same run+employee is flagged Critical
+    src: ["PayrollOperationsService.GetIntegrityAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Payroll.Controls.View"
+    steps:
+      - "[Setup] Two IsCurrent=true PayrollResults exist for the same PayrollRunId+EmployeeId (direct DB seeding) => precondition established"
+      - "[GET /api/payroll/integrity] => [200] DuplicatePayrollResults check Status=Critical, Count>=1"
+    auto: DB-assisted

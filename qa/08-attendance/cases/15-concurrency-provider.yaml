@@ -1,0 +1,168 @@
+sheet: Attendance_Concurrency
+submodule: Cross-cutting concurrency races and SQL Server / MySQL provider-parity matrix
+defaults:
+  role: HRADMIN
+  perm: "Attendance.Monthly.Process"
+  tenant: A
+  pre: "Tenant A; provider-gated cases require the corresponding HRMS_MYSQL_TEST_CONNECTION / HRMS_SQLSERVER_TEST_CONNECTION env vars, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-CONC-001
+    func: [F-ATT-323]
+    sc: Monthly/Period/AdminCorrection/PayrollSnapshot races hold on real MySQL, not just SQLite
+    t: The full close-vs-correction, process-vs-process, and finalize-vs-finalize race set, run against real MySQL
+    src: ["AttendanceMonthlyProcessor / AttendancePeriodLockService / AttendanceAdminCorrectionService"]
+    type: Integration-Concurrency
+    pri: P0
+    tags: [Environment]
+    steps:
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION set] Run the full monthly-processing/admin-correction concurrency scenario suite against a real, disposable MySQL database => process-vs-process, close-vs-correction, and duplicate-current-snapshot races all resolve with exactly one consistent winner"
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION NOT set] => NOT EXECUTED - environment unavailable; do not report PASS"
+    auto: DB-assisted
+    cr: [CR-101]
+
+  - id: ATT-CONC-002
+    func: [F-ATT-323]
+    sc: The same monthly/correction race set holds on real SQL Server
+    t: Independent provider confirmation
+    src: ["AttendanceMonthlyProcessor / AttendanceAdminCorrectionService"]
+    type: Integration-Concurrency
+    pri: P0
+    tags: [Environment]
+    steps:
+      - "[Environment: HRMS_SQLSERVER_TEST_CONNECTION set] Run the full monthly-processing/admin-correction concurrency scenario suite against a real, disposable SQL Server database => same one-winner guarantee as MySQL"
+      - "[Environment: HRMS_SQLSERVER_TEST_CONNECTION NOT set] => NOT EXECUTED - environment unavailable; do not report PASS"
+    auto: DB-assisted
+    cr: [CR-101]
+
+  - id: ATT-CONC-003
+    func: [F-ATT-323]
+    sc: A close-vs-correction race never leaves a Closed period with an orphaned correction, on a real provider
+    t: This specific interleaving has ONLY SQLite coverage per the research - a genuine provider-parity gap worth closing
+    src: ["AttendancePeriodLockService / AttendanceAdminCorrectionService"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Environment]
+    steps:
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION set] Fire POST periods/{id}/close and POST admin-corrections CONCURRENTLY against real MySQL for a date inside the period => the final state is EITHER (Closed, zero corrections) OR (ReadyToClose, exactly one correction) - never both"
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION NOT set] => NOT EXECUTED - environment unavailable; this specific race has no existing MySQL/SQL Server-provider test in the codebase at the time of this research, so a green SQLite-only run proves nothing about real-provider behavior here"
+    auto: DB-assisted
+
+  - id: ATT-CONC-004
+    func: [F-ATT-324, F-ATT-325]
+    sc: Regularization/On-Duty transitions and idempotent replay hold on real MySQL
+    t: A stale-transition rejection and a duplicate-approve replay, against real MySQL
+    src: ["AttendanceWorkflowService.TransitionRegularization/TransitionOnDuty"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Environment]
+    steps:
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION set] Approve an On-Duty request, then replay the identical approve call => [409] Conflict on the second call, exactly one Approved event recorded, against real MySQL's own concurrency-token semantics"
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION NOT set] => NOT EXECUTED - environment unavailable"
+    auto: DB-assisted
+
+  - id: ATT-CONC-005
+    func: [F-ATT-326]
+    sc: Overtime Approve-vs-Approve and Finalize-vs-Finalize races hold on both real providers
+    t: Shared provider-acceptance scenario code run against MySQL and SQL Server
+    src: ["OvertimeService"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Environment]
+    steps:
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION set] Run the Overtime provider-acceptance scenario (policy->request->submit->approve->finalize->reopen->refinalize->resolve, with induced races) against real MySQL => versioned snapshot semantics preserved, at most one IsCurrent snapshot per employee per period"
+      - "[Environment: HRMS_SQLSERVER_TEST_CONNECTION set] Same scenario against real SQL Server => same guarantee"
+      - "[Environment: neither var set] => NOT EXECUTED - environment unavailable"
+    auto: DB-assisted
+
+  - id: ATT-CONC-006
+    func: [F-ATT-328]
+    sc: Concurrent Comp-Off-earn and Overtime-create for the same attendance day - the module's one genuinely race-susceptible boundary
+    t: A manual concurrency test targeting the unconstrained DoubleBenefitDenied check
+    src: ["OvertimeService.CreateRequestAsync / CompOffService"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire POST /api/attendance/overtime/requests and POST /api/attendance/comp-off/earn CONCURRENTLY for the exact same SourceAttendanceDayId, from two independent requests => document whether BOTH can slip through simultaneously (since no DB unique constraint backs this specific exclusivity, only a pre-commit AnyAsync check) - this exact race has NO dedicated automated test anywhere in the codebase per the research, unlike every other race-sensitive boundary in this module"
+    auto: DB-assisted
+    cr: [CR-110]
+
+  - id: ATT-CONC-007
+    func: [F-ATT-327]
+    sc: Device mapping-create and duplicate-ingest races hold on both real providers
+    t: The device module's shared provider-acceptance scenario run against MySQL and SQL Server
+    src: ["AttendanceDeviceIntegrationService / AttendanceDeviceOperationsService"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Environment]
+    steps:
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION set] Run the shared device provider-acceptance scenario (14 intended scenarios) against real MySQL, including concurrent mapping-create and duplicate-ingestion races => exactly one winner per race"
+      - "[Environment: HRMS_SQLSERVER_TEST_CONNECTION set] Same scenario against real SQL Server => confirmed"
+      - "[Environment: neither var set] => NOT EXECUTED - environment unavailable"
+    auto: DB-assisted
+
+  - id: ATT-CONC-008
+    func: [F-ATT-327]
+    sc: The device sync-recovery/lease scenario (18 scenarios) holds on both real providers
+    t: Lease claim contention, expiry/reclaim, and stale-lease ingest denial, against real MySQL/SQL Server
+    src: ["AttendanceDeviceLeaseService / AttendanceDeviceSyncRecoveryService"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Environment]
+    steps:
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION set] Run the shared sync-recovery provider-acceptance scenario against real MySQL => lease claim/release/expiry/reclaim, stale-token denial, and DeviceSyncLeaseLost all behave identically to the SQLite-proven logic"
+      - "[Environment: HRMS_SQLSERVER_TEST_CONNECTION set] Same scenario against real SQL Server => confirmed"
+      - "[Environment: neither var set] => NOT EXECUTED - environment unavailable"
+    auto: DB-assisted
+
+  - id: ATT-CONC-009
+    func: [F-ATT-329]
+    sc: Punch idempotency and tenant-scoped uniqueness hold on real MySQL
+    t: Duplicate ExternalPunchId and same-id-different-tenant, against real MySQL
+    src: ["AttendancePunchIngestionService.IngestAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Environment]
+    steps:
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION set] Ingest a duplicate ExternalPunchId twice against real MySQL => one persisted punch, the second returns the existing punch"
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION set] Ingest the identical ExternalPunchId in a second tenant against the same MySQL instance => an independent second punch, tenant-scoped correctly"
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION NOT set] => NOT EXECUTED - environment unavailable"
+    auto: DB-assisted
+
+  - id: ATT-CONC-010
+    func: [F-ATT-330]
+    sc: A Leave-approval-vs-Attendance-correction cross-subsystem race - manual test filling a genuine coverage gap
+    t: Racing Leave approval (which reprocesses the Attendance day) against a concurrent admin correction on the same employee/date
+    src: ["LeaveRequestApprovalService.ApproveAsync / AttendanceAdminCorrectionService.CreateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire POST /api/leave-requests/{id}/approve (for a request covering employee E1/date D) and POST /api/attendance/admin-corrections (also for E1/D) CONCURRENTLY, on SQLite first, then on a real provider if available => document the resulting EmployeeAttendanceDay's final Status/effective-in-out and whether it is internally consistent (not a torn write mixing partial Leave-approval and partial correction state) - no existing automated test in the codebase exercises this specific cross-subsystem interleaving"
+    auto: DB-assisted
+
+  - id: ATT-CONC-011
+    func: [F-ATT-323]
+    sc: A schema inspection confirms no rowversion/binary(16) concurrency column exists on AttendancePeriods
+    t: Documents the architectural divergence directly against the live schema
+    src: ["AttendanceMonthlyProcessor"]
+    type: Contract
+    pri: P3
+    steps:
+      - "[Manual/DB] Inspect the AttendancePeriods table on both SQL Server and MySQL => ConcurrencyVersion is a plain int/integer column on both providers, with no native rowversion (SQL Server) or app-managed binary(16) token (MySQL) counterpart, unlike other Attendance concurrency-sensitive tables in the codebase"
+    auto: DB-assisted
+
+  - id: ATT-CONC-012
+    func: [F-ATT-329]
+    sc: Overnight punch business-date resolution is proven against real MySQL, not just SQLite
+    t: A crossing-midnight punch pair resolves to the same business date on real MySQL
+    src: ["AttendanceBusinessDateResolver / AttendancePunchIngestionService"]
+    type: Boundary
+    pri: P2
+    tags: [Environment]
+    steps:
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION set] Ingest an overnight In/Out pair (22:00 shift start, punches spanning midnight) against real MySQL => both punches resolve to the shift's start-day business date"
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION NOT set] => NOT EXECUTED - environment unavailable"
+    auto: DB-assisted

@@ -1,0 +1,295 @@
+sheet: Separation_ExitInterview
+submodule: Exit interview template configuration, assignment, employee questionnaire, and HR review workflow
+defaults:
+  role: HRADMIN
+  perm: "Separation.HrReview"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: SEP-EI-001
+    func: [F-SEP-190]
+    sc: Exit-interview status and question-type enum contract
+    t: Status/question-type values match the declared enums exactly
+    src: ["Backend/HRMS.Domain/Enums/SeparationExitInterviewEnums.cs"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Inspect SeparationExitInterviewStatus and SeparationExitInterviewQuestionType declarations => match documented values exactly"
+    auto: Manual only
+
+  - id: SEP-EI-002
+    func: [F-SEP-191]
+    sc: Template configuration is gated by ClearanceConfigure, not a dedicated permission
+    t: A role holding only ClearanceConfigure (no exit-interview-specific permission, because none exists) can configure exit-interview templates
+    src: ["ExitInterviewService.CreateTemplateAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.Clearance.Configure"
+    steps:
+      - "[POST /api/separation/exit-interview/templates] Code='STD-EI', Name='Standard Exit Interview' => [200/201] created - confirms the shared permission grants access to both feature areas"
+    auto: API
+    cr: [CR-147]
+
+  - id: SEP-EI-003
+    func: [F-SEP-192]
+    sc: Assign an exit interview - resolves the most-specific effective published version; rejects duplicates/ambiguity
+    t: A second active assignment for the same separation Conflicts; no effective version is Conflict; ambiguous configuration is Conflict
+    src: ["ExitInterviewService.AssignAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/separation/exit-interview/for/{id}/assign] => [200/201] assigned, Status=NotStarted/EmployeeInProgress"
+      - "[POST /api/separation/exit-interview/for/{id}/assign] second call, same active separation => [409] An active exit interview already exists for this separation."
+      - "[Setup] A different separation with no published exit-interview template version configured => precondition established"
+      - "[POST /api/separation/exit-interview/for/{id2}/assign] => [409] No effective published exit interview version is configured."
+    auto: API
+
+  - id: SEP-EI-004
+    func: [F-SEP-193]
+    sc: Exit-interview assignment is independent of Clearance and can run in parallel
+    t: Assigning an exit interview succeeds regardless of clearance state
+    src: ["ExitInterviewService.AssignAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] Case is Approved, clearance has NOT been started yet => precondition established"
+      - "[POST /api/separation/exit-interview/for/{id}/assign] => [200/201] succeeds despite clearance not being started"
+    auto: API
+
+  - id: SEP-EI-005
+    func: [F-SEP-194]
+    sc: HR-only questions are never sent to or accepted from the employee
+    t: The employee's question list excludes IsHrOnly questions entirely
+    src: ["ExitInterviewService.GetMineAsync"]
+    type: Security
+    pri: P0
+    smoke: true
+    role: EMPLOYEE
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[Setup] Template has 2 questions - Q1 employee-visible, Q2 IsHrOnly=true => precondition established"
+      - "[GET /api/separation/exit-interview/me] => [200] Questions list contains only Q1, never Q2"
+    auto: API
+
+  - id: SEP-EI-006
+    func: [F-SEP-195]
+    sc: Response validation is question-type-specific
+    t: Each question type enforces its own value shape - text, in-range numeric, boolean, exactly-1/at-least-1 choice
+    src: ["ExitInterviewService.SaveEmployeeAsync"]
+    type: Negative
+    pri: P1
+    role: EMPLOYEE
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[PUT /api/separation/exit-interview/for/{id}/my-responses] Rating question, NumericValue=99 (outside Min/Max) => [400] Response for {code} is invalid for its question type."
+      - "[PUT /api/separation/exit-interview/for/{id}/my-responses] SingleChoice question, 2 SelectedOptionCodes provided => [400] invalid"
+      - "[PUT /api/separation/exit-interview/for/{id}/my-responses] YesNo question, BooleanValue not provided => [400] invalid"
+    auto: API
+
+  - id: SEP-EI-007
+    func: [F-SEP-196]
+    sc: All required questions must be answered on submit
+    t: Submitting with a required question left blank names the missing question code
+    src: ["ExitInterviewService.SaveEmployeeAsync"]
+    type: Negative
+    pri: P0
+    role: EMPLOYEE
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[POST /api/separation/exit-interview/for/{id}/submit] With required question Q1 unanswered => [400] Required question Q1 must be answered."
+    auto: API
+
+  - id: SEP-EI-008
+    func: [F-SEP-197]
+    sc: Each response upsert creates an append-only revision snapshot of the previous value
+    t: Editing an answer twice produces two revision snapshots, never overwriting history
+    src: ["ExitInterviewService.SaveEmployeeAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[PUT /api/separation/exit-interview/for/{id}/my-responses] Q1='Initial answer' => [200] saved"
+      - "[PUT /api/separation/exit-interview/for/{id}/my-responses] Q1='Revised answer' => [200] saved"
+      - "[Manual/DB] Query SeparationExitInterviewResponseRevisions for Q1 => 1 revision row capturing 'Initial answer' as the prior value; the current response now shows 'Revised answer'"
+    auto: DB-assisted
+
+  - id: SEP-EI-009
+    func: [F-SEP-198]
+    sc: Re-submitting while status is exactly EmployeeSubmitted is idempotent
+    t: A second Submit call with the same status returns success with no re-validation error
+    src: ["ExitInterviewService.SaveEmployeeAsync"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[POST /api/separation/exit-interview/for/{id}/submit] first call, all required answered => [200] Status=EmployeeSubmitted"
+      - "[POST /api/separation/exit-interview/for/{id}/submit] second call, unchanged => [200] 'Employee submission already accepted.'"
+    auto: API
+
+  - id: SEP-EI-010
+    func: [F-SEP-199]
+    sc: An employee re-submitting while HR is HrInProgress silently resets status, discarding HR's review progress
+    t: The read-only guard does not catch a Submit call once status has moved past EmployeeSubmitted to HrInProgress
+    src: ["ExitInterviewService.SaveEmployeeAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/separation/exit-interview/for/{id}/submit] as Employee => [200] Status=EmployeeSubmitted"
+      - "[POST /api/separation/exit-interview/for/{id}/start-hr] as HRAdmin => [200] Status=HrInProgress"
+      - "[POST /api/separation/exit-interview/for/{id}/submit] as Employee, again, with a minor edit => [200] Status is SILENTLY RESET back to EmployeeSubmitted, discarding HR's in-progress review state"
+    auto: API
+    cr: [CR-148]
+
+  - id: SEP-EI-011
+    func: [F-SEP-200]
+    sc: Saving (not submitting) is read-only-blocked once submitted/completed
+    t: A plain save attempt after EmployeeSubmitted/Completed/CompletedWithoutEmployeeResponse is Conflict
+    src: ["ExitInterviewService.SaveEmployeeAsync"]
+    type: Negative
+    pri: P1
+    role: EMPLOYEE
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[Setup] Status=EmployeeSubmitted => precondition established"
+      - "[PUT /api/separation/exit-interview/for/{id}/my-responses] Q1='Edit attempt' => [409] Submitted responses are read-only until the interview is reopened."
+    auto: API
+
+  - id: SEP-EI-012
+    func: [F-SEP-201]
+    sc: HR starts the interview only from EmployeeSubmitted/EmployeeInProgress/Reopened
+    t: Starting from NotStarted or Completed is Conflict
+    src: ["ExitInterviewService.StartHrAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Status=Completed => precondition established"
+      - "[POST /api/separation/exit-interview/for/{id}/start-hr] => [409] Interview cannot be started in its current state."
+    auto: API
+
+  - id: SEP-EI-013
+    func: [F-SEP-202]
+    sc: Confidential HR notes are always IsConfidential and never appear in the employee DTO
+    t: An added note is invisible to the employee via any self-view endpoint, structurally not just UI-hidden
+    src: ["ExitInterviewService.AddHrNoteAsync"]
+    type: Security
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/separation/exit-interview/for/{id}/hr-note] NoteText='Confidential HR observation' => [200/201] note added, IsConfidential=true by default"
+      - "[GET /api/separation/exit-interview/me/{id}] As the employee => [200] the response DTO contains no HrNotes field at all - reflection-confirmed exclusion, not just a hidden UI element"
+    auto: API
+
+  - id: SEP-EI-014
+    func: [F-SEP-202]
+    sc: Add HR note requires non-blank text
+    t: An empty note is Invalid
+    src: ["ExitInterviewService.AddHrNoteAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/separation/exit-interview/for/{id}/hr-note] NoteText='' => [400] A note is required."
+    auto: API
+
+  - id: SEP-EI-015
+    func: [F-SEP-203]
+    sc: Complete requires prior employee submission unless CompletedWithoutEmployeeResponse is set with a reason
+    t: Completing without a submission and without the flag fails; setting the flag with a reason succeeds
+    src: ["ExitInterviewService.CompleteAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Status=NotStarted, no employee submission => precondition established"
+      - "[POST /api/separation/exit-interview/for/{id}/complete] CompletedWithoutEmployeeResponse=false => [409] Employee submission is required before completion."
+      - "[POST /api/separation/exit-interview/for/{id}/complete] CompletedWithoutEmployeeResponse=true, CompletionReason='' => [400] A reason is required when completing without employee response."
+      - "[POST /api/separation/exit-interview/for/{id}/complete] CompletedWithoutEmployeeResponse=true, CompletionReason='Employee unreachable' => [200] Status=CompletedWithoutEmployeeResponse"
+    auto: API
+
+  - id: SEP-EI-016
+    func: [F-SEP-204]
+    sc: Complete is reachable even without Start-HR ever having run
+    t: No client or server guard requires StartHr before Complete
+    src: ["ExitInterviewService.CompleteAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Status=EmployeeSubmitted, StartHr never called => precondition established"
+      - "[POST /api/separation/exit-interview/for/{id}/complete] => [200] Completed - succeeds without ever having called start-hr"
+    auto: API
+
+  - id: SEP-EI-017
+    func: [F-SEP-205]
+    sc: Reopen requires a reason, only applies to a Completed interview, and is blocked once the separation is Closed
+    t: Missing reason, non-Completed status, and Closed-separation are each rejected
+    src: ["ExitInterviewService.ReopenAsync"]
+    type: Negative
+    pri: P1
+    perm: "Separation.Manage"
+    steps:
+      - "[POST /api/separation/exit-interview/for/{id}/reopen] Reason='' => [400] A reason is required."
+      - "[Setup] Status=EmployeeInProgress (not Completed) => precondition established"
+      - "[POST /api/separation/exit-interview/for/{id2}/reopen] Reason='x' => [409] Only a completed interview can be reopened."
+      - "[Setup] Parent separation is Closed => precondition established"
+      - "[POST /api/separation/exit-interview/for/{id3}/reopen] Reason='x' => [409] SeparationAlreadyClosed"
+    auto: API
+    cr: [CR-137]
+
+  - id: SEP-EI-018
+    func: [F-SEP-206]
+    sc: RehireRecommendation is input-only and drives no other transition
+    t: Setting the recommendation does not stamp FinalizedAtUtc or force any status change
+    src: ["ExitInterviewService.CompleteAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/separation/exit-interview/for/{id}/complete] RehireRecommendation=NotRecommended => [200] Completed - RehireRecommendation stored, no additional automated workflow triggered"
+    auto: API
+
+  - id: SEP-EI-019
+    func: [F-SEP-207]
+    sc: HR inbox is paged, status/employee-filterable, and analytics aggregates counts
+    t: The inbox correctly pages and filters; analytics returns correct aggregate counts
+    src: ["ExitInterviewService.GetInboxAsync", "GetAnalyticsAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/separation/exit-interview/inbox] Status=EmployeeSubmitted, page=1, pageSize=25 => [200] correctly filtered/paged"
+      - "[GET /api/separation/exit-interview/analytics] => [200] aggregate counts by status match the underlying data"
+    auto: API
+
+  - id: SEP-EI-020
+    func: [F-SEP-208]
+    sc: Tenant isolation across every exit-interview query and mutation
+    t: A Tenant B caller referencing a Tenant A interview id gets NotFound/Forbidden with no side effect
+    src: ["ExitInterviewService.cs"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/separation/exit-interview/for/{tenantAId}] As Tenant B => [404]"
+      - "[POST /api/separation/exit-interview/for/{tenantAId}/complete] As Tenant B holding HrReview => [404] - no side effect on Tenant A's interview"
+    auto: API
+
+  - id: SEP-EI-021
+    func: [F-SEP-209]
+    sc: HRManager can run the day-to-day inbox/complete/note workflow but cannot configure templates or reopen
+    t: HRManager (holding HrReview but not ClearanceConfigure/Manage) succeeds at inbox/complete/note and fails at template config/reopen
+    src: ["SeedData.cs RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    role: HRMANAGER
+    perm: "Separation.HrReview"
+    steps:
+      - "[GET /api/separation/exit-interview/inbox] As HRManager => [200] succeeds"
+      - "[POST /api/separation/exit-interview/for/{id}/complete] As HRManager => [200] succeeds"
+      - "[POST /api/separation/exit-interview/templates] As HRManager (lacks ClearanceConfigure) => [403] Forbidden"
+      - "[POST /api/separation/exit-interview/for/{id}/reopen] As HRManager (lacks Manage) => [403] Forbidden"
+    auto: API
+    cr: [CR-135]

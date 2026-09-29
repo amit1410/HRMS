@@ -1,0 +1,1384 @@
+# Functionality registry for Module 14 - Tax Declarations & Year-End Tax (phases 7U "Employee Tax
+# Declarations & Investment Proofs" and 7W "Year-End Tax Processing & Annual Reconciliation"):
+# tenant-scoped declaration cycles/categories/items, the employee self-service declaration/line/proof
+# workflow, the reviewer approve/partial-approve/reject/resubmission/lock/reopen workflow, declaration
+# audit history, the (never-called-in-production) approved-input resolver, the year-end tax run
+# lifecycle over finalized payroll + approved declarations + previous-employer inputs, the annual
+# taxable-income/slab-based tax-liability calculation engine, previous-employer inputs, the
+# PayrollAdjustment handoff boundary, statements/history/CSV export, Authorization/Scope, Tenant
+# Isolation, Audit/History, Concurrency/Idempotency, SQL Server/MySQL Provider Parity, Large
+# Data/Paging, and Frontend.
+# Every test case references one or more of these ids; the builder fails the build if a
+# functionality has zero cases or a case references an unknown id. IDs are allocated in one global
+# sequence (F-TAXDCL-001...) in the order the groups below were authored - group boundaries are
+# noted with a comment banner.
+#
+# SCOPE NOTE (read before extending this module): this module is the module qa/13-statutory-compliance
+# explicitly scoped OUT - its README/functionalities.yaml state that "the full annual income-tax/TDS
+# computation engine - regime selection, investment declarations and proof verification, Form 16,
+# year-end reconciliation (YearEndTaxService.cs, TaxDeclarations.cs, phases 7U/7W) - is a separate,
+# self-contained concern with its own design doc," and module 13's F-STAT-050 documents that
+# StatutoryType.IncomeTax's slab-based MONTHLY withholding inside StatutoryPayrollService/
+# PayrollCalculationEngine never calls, and is never called by, this module's own annual engine. This
+# module independently source-verifies that same boundary from this module's own side (F-TAXDCL-084)
+# and additionally documents that YearEndTaxService.CalculateAsync READS PayrollStatutoryResults rows
+# of StatutoryType.IncomeTax (the monthly-withholding output) purely as an already-deducted-YTD-tax
+# input to its own annual reconciliation - it never writes to, or triggers, the monthly engine.
+# Out of scope for this module (present and real elsewhere, not covered here): the monthly
+# StatutoryType.IncomeTax slab calculation itself (qa/13-statutory-compliance's own surface),
+# Separation/full-and-final settlement processing (grep-verified zero references to TaxDeclaration/
+# YearEndTax anywhere in SeparationService.cs - no code-level integration exists to test), and the
+# general PayrollAdjustment approval/application workflow that a year-end handoff's Draft adjustment
+# must separately pass through before it reaches a real payroll run (a distinct, already-existing
+# Phase 7R concern, tested at the boundary only - F-TAXDCL-104/105).
+#
+# Discovered implementation (authoritative source, read directly - not assumed from any design doc;
+# docs/phase-7u-employee-tax-declarations-investment-proofs.md and
+# docs/phase-7w-year-end-tax-processing.md were read for scope framing only; current code wins
+# wherever a doc and the code diverge, per CLAUDE.md - see F-TAXDCL-062 for one confirmed divergence):
+#   Backend/HRMS.API/Controllers/TaxDeclarationsController.cs (MyTaxDeclarationsController under
+#     api/me/tax-declarations, TaxDeclarationsController under api/payroll/tax-declarations - every
+#     route read)
+#   Backend/HRMS.API/Controllers/YearEndTaxController.cs (every route under
+#     api/payroll/year-end-tax read)
+#   Backend/HRMS.Application/Services/TaxDeclarationService.cs (read in full)
+#   Backend/HRMS.Application/Services/YearEndTaxService.cs (read in full)
+#   Backend/HRMS.Application/Abstractions/ITaxDeclarationService.cs, IYearEndTaxService.cs (read in full)
+#   Backend/HRMS.Application/DTOs/Payroll/TaxDeclarationDtos.cs, YearEndTaxDtos.cs (read in full)
+#   Backend/HRMS.Domain/Entities/TaxDeclarations.cs (7 entities, read in full)
+#   Backend/HRMS.Domain/Entities/YearEndTaxProcessing.cs (5 entities, read in full)
+#   Backend/HRMS.Domain/Enums/TaxDeclarationEnums.cs, YearEndTaxEnums.cs (read in full)
+#   Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll.TaxDeclaration*/YearEndTax* block, 15
+#     permissions total, read in full)
+#   Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap for every seeded
+#     role, grep-verified for every one of the 15 permission constants above)
+#   Backend/HRMS.Infrastructure/Persistence/Configurations/TaxDeclarationConfiguration.cs,
+#     YearEndTaxConfiguration.cs (all indexes and concurrency-token configuration read in full)
+#   Migration pairs AddPayrollTaxDeclarationsPhase7U and AddYearEndTaxProcessingPhase7W confirmed
+#     present in both Backend/HRMS.Infrastructure/Persistence/Migrations (SQL Server) and
+#     Backend/HRMS.Infrastructure.MySqlMigrations/Migrations (MySQL)
+#   Frontend/HRMS.Web/src/pages/payroll/MyTaxDeclarationsPage.tsx (+ its .test.tsx),
+#     YearEndTaxPage.tsx, src/api/taxDeclarations.ts, src/api/yearEndTax.ts (all read in full);
+#     App.tsx and layout/navigation.ts grepped for every route/nav registration
+#   Existing xUnit inventory (TaxDeclarationWorkflowTests, TaxDeclarationConcurrencyTests,
+#     TaxDeclarationLargeDataTests, TaxDeclarationDedicatedWorkflowTests,
+#     SqlServerPayrollTaxDeclarationsIntegrationTests, MySqlPayrollTaxDeclarationsIntegrationTests,
+#     PayrollTaxDeclarationsProviderAcceptance, YearEndTaxServiceTests,
+#     PayrollYearEndConcurrencyRetryTests, PayrollYearEndLargeDataTests,
+#     PayrollYearEndProviderAcceptance - 11 files, referenced narratively per the qa/8-13 precedent,
+#     not individually classified)
+#
+# -- Headline findings that shape this whole module's cases (see clarifications.yaml for full detail) --
+# CR-239: CONFIRMED DEFECT - YearEndTaxService.SubmitAsync's declaration lookup (via TransitionAsync
+# is unaffected, but TaxDeclarationService.SubmitOwnAsync itself) queries EmployeeTaxDeclarations
+# with SingleOrDefaultAsync filtered ONLY by TenantId+EmployeeId - no cycle or status filter - so an
+# employee who has ever been allowed two simultaneous declarations (nothing prevents two concurrently
+# Open/ProofSubmissionOpen cycles) throws an unhandled InvalidOperationException on Submit instead of
+# a graceful Result error.
+# CR-241: CONFIRMED DEFECT - the frontend's getMyTaxDeclaration() calls GET
+# /api/me/tax-declarations/current, a route that does not exist anywhere in
+# MyTaxDeclarationsController (the real, only GET route is api/me/tax-declarations with no suffix) -
+# every real load of the My Tax Declaration page 404s; the page's own unit test always mocks
+# getMyTaxDeclaration, so this was never caught.
+# CR-244: TaxDeclarationCycle.DeclarationOpenDate/CloseDate and ProofSubmissionOpenDate/CloseDate are
+# validated only for internal ordering at creation and are never compared against "today" anywhere -
+# gating is 100% through the manually-set Status enum, which nothing ever auto-transitions and which
+# has no update/transition API at all after creation (CR-243).
+functionalities:
+  # =========================== A. DECLARATION CYCLES, CATEGORIES & ITEMS (CONFIGURATION) ===========================
+  - id: F-TAXDCL-001
+    name: GetCyclesAsync returns every declaration cycle for the tenant, newest financial year first, with NO pagination at all
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    api: "GET /api/payroll/tax-declarations/cycles"
+    service: "TaxDeclarationService.GetCyclesAsync"
+    permission: "Payroll.TaxDeclaration.Review"
+    db: TaxDeclarationCycles
+
+  - id: F-TAXDCL-002
+    name: CreateCycleAsync requires a non-blank Code and DeclarationCloseDate>=DeclarationOpenDate and ProofSubmissionCloseDate>=ProofSubmissionOpenDate, else Invalid
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    api: "POST /api/payroll/tax-declarations/cycles"
+    service: "TaxDeclarationService.CreateCycleAsync"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationCycles
+
+  - id: F-TAXDCL-003
+    name: Code must be unique per tenant (trimmed, case-sensitive as stored), else Conflict
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    service: "TaxDeclarationService.CreateCycleAsync"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationCycles (unique index TenantId+Code)
+
+  - id: F-TAXDCL-004
+    name: "Status has an explicit default of Draft on the request DTO but the caller may set any TaxDeclarationCycleStatus value directly at creation - there is no server-side restriction to Draft-only on create"
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    service: "TaxDeclarationCycleRequest.Status (default Draft, caller-overridable); TaxDeclarationService.CreateCycleAsync"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationCycles.Status
+
+  - id: F-TAXDCL-005
+    name: "CONFIRMED GAP - no update/status-transition endpoint exists anywhere for TaxDeclarationCycle after creation (full grep of TaxDeclarationService.cs for db.TaxDeclarationCycles - only the GetCyclesAsync read, the CreateCycleAsync insert, and CreateOwnAsync's read-only lookup); Name/dates/Status are permanently fixed at whatever values CreateCycleAsync was called with"
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    service: "TaxDeclarationService.cs (full grep for db.TaxDeclarationCycles - 4 matches, zero writes beyond Add)"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationCycles
+
+  - id: F-TAXDCL-006
+    name: "Nothing prevents two or more cycles from being simultaneously Status=Open/ProofSubmissionOpen with overlapping or identical FinancialYear/date ranges - CreateCycleAsync's only uniqueness check is on Code, not on financial year, status, or date overlap"
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    service: "TaxDeclarationService.CreateCycleAsync (full method - no overlap query of any kind)"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationCycles
+
+  - id: F-TAXDCL-007
+    name: CreateCategoryAsync requires Code to be unique per tenant across ALL categories (not scoped per CategoryType), else Conflict
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    api: "POST /api/payroll/tax-declarations/categories"
+    service: "TaxDeclarationService.CreateCategoryAsync"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationCategories (unique index TenantId+Code)
+
+  - id: F-TAXDCL-008
+    name: "CategoryType is an open, code-defined tag (Investment/Insurance/Housing/Donation/Education/Rent/LoanInterest/Other) - not an Indian IT-Act section number; the module makes no claim to any specific statutory section mapping beyond this tag and the optional free-text PayrollTaxInputCode/StatutoryMappingCode on TaxDeclarationItem"
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    service: "Backend/HRMS.Domain/Enums/TaxDeclarationEnums.cs (TaxDeclarationCategoryType, 8 members)"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationCategories.CategoryType
+
+  - id: F-TAXDCL-009
+    name: "CONFIRMED GAP - no update/deactivate endpoint exists for TaxDeclarationCategory either; Active/RequiresProof/AllowsMultipleEntries/DisplayOrder are permanently fixed after CreateCategoryAsync (full grep - CreateCategoryAsync is the only db.TaxDeclarationCategories write site)"
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    service: "TaxDeclarationService.cs (full grep for db.TaxDeclarationCategories - 3 matches, 1 write)"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationCategories
+
+  - id: F-TAXDCL-010
+    name: CreateItemAsync requires the owning category to exist in the tenant, else NotFound
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    api: "POST /api/payroll/tax-declarations/items"
+    service: "TaxDeclarationService.CreateItemAsync"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationCategories (existence + TenantId filter)
+
+  - id: F-TAXDCL-011
+    name: CreateItemAsync requires Code to be unique within the item's own category (TenantId+CategoryId+Code), else Conflict - the same Code may be reused across two different categories
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    service: "TaxDeclarationService.CreateItemAsync"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationItems (unique index TenantId+CategoryId+Code)
+
+  - id: F-TAXDCL-012
+    name: "An item's own RequiresProof is set independently of its parent category's RequiresProof flag - the item-level flag is the one actually enforced at submission (F-TAXDCL-021), the category-level flag is display-only metadata never read by any enforcement path"
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    service: "TaxDeclarationService.CreateItemAsync; TaxDeclarationService.SubmitOwnAsync (proof-required check reads line.Item!.RequiresProof only)"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationItems.RequiresProof, TaxDeclarationCategories.RequiresProof
+
+  - id: F-TAXDCL-013
+    name: "CONFIRMED GAP - no update/deactivate endpoint exists for TaxDeclarationItem either, the identical shape as F-TAXDCL-005/009; AllowsAmount/AllowsReferenceNumber/AllowsDate are declared entity fields that are set to their hardcoded defaults (true) at creation and are never exposed on TaxDeclarationItemRequest at all - the request DTO has no field for them, so they can never be set to false through this API"
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    service: "TaxDeclarationItemRequest (no AllowsAmount/AllowsReferenceNumber/AllowsDate fields); TaxDeclarationService.CreateItemAsync (full grep for db.TaxDeclarationItems - 1 write site)"
+    permission: "Payroll.TaxDeclaration.Configure"
+    db: TaxDeclarationItems.AllowsAmount, AllowsReferenceNumber, AllowsDate
+
+  - id: F-TAXDCL-014
+    name: Cross-tenant cycle/category ids are NotFound, not Forbidden, on every configuration read/write
+    group: Declaration Cycles, Categories & Items
+    status: Implemented
+    service: "TaxDeclarationService.cs (TenantId filter on every configuration query)"
+    permission: "Payroll.TaxDeclaration.Configure, Payroll.TaxDeclaration.Review"
+    db: TaxDeclarationCycles, TaxDeclarationCategories (TenantId filter)
+
+  # =========================== B. EMPLOYEE DECLARATION LIFECYCLE ===========================
+  - id: F-TAXDCL-015
+    name: "GetOwnAsync resolves the calling user's employee identity through IEmployeeIdentityResolver (the same account-to-employee current-link resolver used tenant-wide, NOT by email/username/id matching) and returns the MOST RECENTLY CREATED declaration if the employee has more than one - not necessarily the one for the currently-Open cycle"
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    api: "GET /api/me/tax-declarations"
+    service: "TaxDeclarationService.GetOwnAsync"
+    permission: "Payroll.TaxDeclaration.ViewOwn"
+    db: EmployeeTaxDeclarations
+
+  - id: F-TAXDCL-016
+    name: CreateOwnAsync requires the target cycle to exist in the tenant, else NotFound
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    api: "POST /api/me/tax-declarations?cycleId="
+    service: "TaxDeclarationService.CreateOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: TaxDeclarationCycles (TenantId filter)
+
+  - id: F-TAXDCL-017
+    name: CreateOwnAsync requires the cycle to be Status=Open or Status=ProofSubmissionOpen, else Conflict
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    service: "TaxDeclarationService.CreateOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: TaxDeclarationCycles.Status
+
+  - id: F-TAXDCL-018
+    name: "CreateOwnAsync rejects a duplicate (TenantId, EmployeeId, TaxDeclarationCycleId), Conflict - but nothing prevents the same employee from creating declarations for TWO DIFFERENT simultaneously-open cycles (see F-TAXDCL-006), which is the precondition for the CR-239 Submit crash"
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    service: "TaxDeclarationService.CreateOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarations (unique index TenantId+EmployeeId+CycleId)
+
+  - id: F-TAXDCL-019
+    name: A newly created declaration starts at Status=Draft, Version=1, ConcurrencyVersion=1, and records a Created audit event
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    service: "TaxDeclarationService.CreateOwnAsync -> AddAudit(Created)"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarations, TaxDeclarationAuditEvents
+
+  - id: F-TAXDCL-020
+    name: AddLineOwnAsync only accepts a line for the caller's OWN declaration and only when that declaration's Status is Draft or ResubmissionRequired, else Conflict
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    api: "POST /api/me/tax-declarations/lines"
+    service: "TaxDeclarationService.AddLineOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarations.Status
+
+  - id: F-TAXDCL-021
+    name: AddLineOwnAsync requires the referenced Item to exist, belong to the stated Category, and be Active, else NotFound - an inactive item can never be added to a new line
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    service: "TaxDeclarationService.AddLineOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: TaxDeclarationItems (TenantId+CategoryId+Active filter)
+
+  - id: F-TAXDCL-022
+    name: "A new line always starts at Status=Draft with ApprovedAmount left null - DeclaredAmount itself has NO validation at all on AddLineOwnAsync (unlike UpdateLineOwnAsync's negative-amount check, F-TAXDCL-024) - a negative DeclaredAmount can be added via AddLineOwnAsync but not later saved via UpdateLineOwnAsync"
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    service: "TaxDeclarationService.AddLineOwnAsync (no DeclaredAmount validation, contrast with UpdateLineOwnAsync)"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarationLines.DeclaredAmount
+
+  - id: F-TAXDCL-023
+    name: "AddLineOwnAsync does not increment the parent declaration's Version or ConcurrencyVersion, unlike UpdateLineOwnAsync/DeleteLineOwnAsync/SubmitOwnAsync which all do - adding a first line is therefore not itself an optimistic-concurrency-guarded write against a concurrent submit/delete"
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    service: "TaxDeclarationService.AddLineOwnAsync (no declaration.ConcurrencyVersion++/Version++)"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarations.ConcurrencyVersion
+
+  - id: F-TAXDCL-024
+    name: UpdateLineOwnAsync is editable only when the declaration is Draft, or ResubmissionRequired AND the specific line's own Status is Rejected or ResubmissionRequired - editing one rejected line does not unlock a sibling line that was Approved
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    api: "PUT /api/me/tax-declarations/{declarationId}/lines/{lineId}"
+    service: "TaxDeclarationService.UpdateLineOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarationLines.Status
+
+  - id: F-TAXDCL-025
+    name: UpdateLineOwnAsync rejects a negative DeclaredAmount, Invalid, and resets the line's own Status back to Draft on every successful edit (even during a ResubmissionRequired-scoped edit of a previously Rejected line)
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    service: "TaxDeclarationService.UpdateLineOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarationLines.DeclaredAmount, Status
+
+  - id: F-TAXDCL-026
+    name: UpdateLineOwnAsync increments both declaration.Version and declaration.ConcurrencyVersion and is guarded by a compare-and-swap SaveChangesAsync that surfaces DbUpdateConcurrencyException as Conflict, not a 500
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    service: "TaxDeclarationService.UpdateLineOwnAsync (try/catch DbUpdateConcurrencyException)"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarations.ConcurrencyVersion (EF concurrency token)
+
+  - id: F-TAXDCL-027
+    name: DeleteLineOwnAsync only permits deletion while the parent declaration is Status=Draft - a ResubmissionRequired declaration's lines can never be deleted, only edited/replaced-proof
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    api: "DELETE /api/me/tax-declarations/{declarationId}/lines/{lineId}"
+    service: "TaxDeclarationService.DeleteLineOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarationLines, EmployeeTaxDeclarations.Status
+
+  - id: F-TAXDCL-028
+    name: SubmitOwnAsync requires Status is Draft or ResubmissionRequired, at least one line (else Invalid), and every RequiresProof line to have at least one proof whose Status is neither Rejected nor Replaced, else Conflict
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    api: "POST /api/me/tax-declarations/submit"
+    service: "TaxDeclarationService.SubmitOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarationLines, TaxDeclarationProofs
+
+  - id: F-TAXDCL-029
+    name: "CONFIRMED DEFECT (headline, CR-239) - SubmitOwnAsync's own declaration lookup is SingleOrDefaultAsync(x => x.TenantId==... && x.EmployeeId==...) with NO cycle id and NO status filter; if the employee has 2+ declarations (F-TAXDCL-018's unguarded precondition), this throws InvalidOperationException (an unhandled 500), not a Result error"
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    service: "TaxDeclarationService.SubmitOwnAsync (SingleOrDefaultAsync predicate, full method read)"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarations
+
+  - id: F-TAXDCL-030
+    name: On successful submit, every line's Status becomes Submitted, the declaration's own Status becomes Submitted, SubmittedAtUtc/SubmittedByUserId are stamped, Version/ConcurrencyVersion increment, and a Submitted (first time) or Resubmitted (from ResubmissionRequired) audit event is recorded
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    service: "TaxDeclarationService.SubmitOwnAsync -> AddAudit"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarations, EmployeeTaxDeclarationLines, TaxDeclarationAuditEvents
+
+  - id: F-TAXDCL-031
+    name: ResubmitOwnAsync(declarationId) only succeeds when that SPECIFIC declaration id belongs to the caller AND is Status=ResubmissionRequired, else Conflict - and internally delegates to the same (unguarded-for-multiplicity, F-TAXDCL-029) SubmitOwnAsync
+    group: Employee Declaration Lifecycle
+    status: Implemented
+    api: "POST /api/me/tax-declarations/{declarationId}/resubmit"
+    service: "TaxDeclarationService.ResubmitOwnAsync -> SubmitOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarations.Status
+
+  # =========================== C. PROOFS, PROOF REVIEW & SUBMISSION CUT-OFFS ===========================
+  - id: F-TAXDCL-032
+    name: AddProofOwnAsync only accepts a proof for a line on the CALLER'S OWN declaration, resolved via a single query joining Line->Declaration->EmployeeId, else NotFound
+    group: "Proofs, Proof Review & Cut-Offs"
+    status: Implemented
+    api: "POST /api/me/tax-declarations/proofs"
+    service: "TaxDeclarationService.AddProofOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarationLines (join to Declaration.EmployeeId)
+
+  - id: F-TAXDCL-033
+    name: AddProofOwnAsync only succeeds while the parent declaration is Status=Draft or ResubmissionRequired, else Conflict - proof metadata cannot be added at any other lifecycle stage
+    group: "Proofs, Proof Review & Cut-Offs"
+    status: Implemented
+    service: "TaxDeclarationService.AddProofOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarations.Status
+
+  - id: F-TAXDCL-034
+    name: "CONFIRMED - AddProofOwnAsync/ReplaceProofOwnAsync never read or compare TaxDeclarationCycle.ProofSubmissionOpenDate/ProofSubmissionCloseDate against the current date anywhere (full grep of both methods) - the cycle's own declared submission-window fields are decorative; the ONLY real gate is the declaration's own Status"
+    group: "Proofs, Proof Review & Cut-Offs"
+    status: Implemented
+    service: "TaxDeclarationService.AddProofOwnAsync, ReplaceProofOwnAsync (full method read - zero ProofSubmission*Date reference)"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: TaxDeclarationCycles.ProofSubmissionOpenDate, ProofSubmissionCloseDate
+
+  - id: F-TAXDCL-035
+    name: A proof stores FileName/ContentType/FileSize/StorageReference/DocumentType/Hash as opaque metadata only - no file bytes are persisted in this schema, and Status defaults to Submitted
+    group: "Proofs, Proof Review & Cut-Offs"
+    status: Implemented
+    service: "TaxDeclarationService.AddProofOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: TaxDeclarationProofs
+
+  - id: F-TAXDCL-036
+    name: ReplaceProofOwnAsync only succeeds while the parent declaration is EXACTLY Status=ResubmissionRequired (not Draft, unlike AddProofOwnAsync) and only when the specific proof being replaced is itself Status=Rejected, else Conflict
+    group: "Proofs, Proof Review & Cut-Offs"
+    status: Implemented
+    api: "POST /api/me/tax-declarations/{declarationId}/lines/{lineId}/proofs/{proofId}/replace"
+    service: "TaxDeclarationService.ReplaceProofOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: TaxDeclarationProofs.Status, EmployeeTaxDeclarations.Status
+
+  - id: F-TAXDCL-037
+    name: "A replaced proof is marked Status=Replaced (never deleted, preserving historical evidence per the design doc's own statement); the replacement line's own Status becomes ResubmissionRequired and the parent declaration's Version/ConcurrencyVersion increment under a compare-and-swap SaveChangesAsync"
+    group: "Proofs, Proof Review & Cut-Offs"
+    status: Implemented
+    service: "TaxDeclarationService.ReplaceProofOwnAsync"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: TaxDeclarationProofs.Status, EmployeeTaxDeclarationLines.Status
+
+  - id: F-TAXDCL-038
+    name: ReviewProofAsync's Decision is restricted to Accepted or Rejected only - passing Submitted or Replaced is Invalid
+    group: "Proofs, Proof Review & Cut-Offs"
+    status: Implemented
+    api: "POST /api/payroll/tax-declarations/{id}/lines/{lineId}/proofs/{proofId}/review"
+    service: "TaxDeclarationService.ReviewProofAsync"
+    permission: "Payroll.TaxDeclaration.Review"
+    db: TaxDeclarationProofs.Status
+
+  - id: F-TAXDCL-039
+    name: ReviewProofAsync is blocked once the parent declaration is Status=Locked or Status=Approved, else Conflict; a Rejected decision additionally demotes the OWNING LINE's own Status to ResubmissionRequired (not the whole declaration)
+    group: "Proofs, Proof Review & Cut-Offs"
+    status: Implemented
+    service: "TaxDeclarationService.ReviewProofAsync"
+    permission: "Payroll.TaxDeclaration.Review"
+    db: TaxDeclarationProofs, EmployeeTaxDeclarationLines.Status
+
+  - id: F-TAXDCL-040
+    name: "EmployeeTaxDeclarationLineStatus.ProofRequired is a declared enum member that no method anywhere ever assigns (full grep of TaxDeclarationService.cs) - the identical dead-enum-state shape as qa/13-statutory-compliance's CR-214-family findings; a proof-required-but-missing line is instead simply blocked at Submit time (F-TAXDCL-028) rather than ever being tagged with this status"
+    group: "Proofs, Proof Review & Cut-Offs"
+    status: Implemented
+    service: "TaxDeclarationService.cs (full grep for EmployeeTaxDeclarationLineStatus.ProofRequired - zero assignment matches)"
+    permission: "n/a"
+    db: EmployeeTaxDeclarationLines.Status
+
+  # =========================== D. REVIEW, APPROVAL, LOCK & REOPEN ===========================
+  - id: F-TAXDCL-041
+    name: GetReviewAsync is a tenant-scoped, server-paged queue filterable by CycleId/Status/EmployeeId, ordered by Status then CreatedDate
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    api: "GET /api/payroll/tax-declarations/review"
+    service: "TaxDeclarationService.GetReviewAsync"
+    permission: "Payroll.TaxDeclaration.Review"
+    db: EmployeeTaxDeclarations
+
+  - id: F-TAXDCL-042
+    name: "GetReviewAsync builds each page's rows by calling the single-declaration GetAsync once PER matched id (an N+1 query pattern) rather than projecting the page in one query - a correctness-neutral but real performance characteristic worth noting for the large-data area"
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    service: "TaxDeclarationService.GetReviewAsync (foreach id -> GetAsync)"
+    permission: "Payroll.TaxDeclaration.Review"
+    db: EmployeeTaxDeclarations
+
+  - id: F-TAXDCL-043
+    name: ReviewLineAsync is blocked only when the declaration's own Status is Draft or Locked, else Conflict - every other status (Submitted, UnderReview, PartiallyApproved, Rejected, ResubmissionRequired, and notably Approved) is reviewable
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    api: "POST /api/payroll/tax-declarations/{id}/review"
+    service: "TaxDeclarationService.ReviewLineAsync"
+    permission: "Payroll.TaxDeclaration.Review"
+    db: EmployeeTaxDeclarations.Status
+
+  - id: F-TAXDCL-044
+    name: "CONFIRMED DEFECT - because Approved is not in ReviewLineAsync's blocked-status set (F-TAXDCL-043), reviewing a single line on an already-Approved (but not yet Locked) declaration unconditionally sets declaration.Status back to UnderReview - an approval can be silently regressed by a single further line review with no explicit re-approval step required to return it to Approved"
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    service: "TaxDeclarationService.ReviewLineAsync (unconditional declaration.Status = UnderReview at the end of every call)"
+    permission: "Payroll.TaxDeclaration.Review"
+    db: EmployeeTaxDeclarations.Status
+
+  - id: F-TAXDCL-045
+    name: ReviewLineAsync requires 0<=ApprovedAmount<=DeclaredAmount when ApprovedAmount is supplied, else Invalid; a Rejected decision forces ApprovedAmount to exactly 0 regardless of what was supplied, and an omitted ApprovedAmount on a non-Rejected decision defaults to the full DeclaredAmount
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    service: "TaxDeclarationService.ReviewLineAsync"
+    permission: "Payroll.TaxDeclaration.Review"
+    db: EmployeeTaxDeclarationLines.ApprovedAmount
+
+  - id: F-TAXDCL-046
+    name: ReviewLineAsync stamps declaration.ReviewedByUserId/ReviewedAtUtc on every call (even a PartiallyApproved/Rejected decision on a single line, not only a whole-declaration approval) and is guarded by a compare-and-swap that surfaces a lost race as Conflict
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    service: "TaxDeclarationService.ReviewLineAsync"
+    permission: "Payroll.TaxDeclaration.Review"
+    db: EmployeeTaxDeclarations.ReviewedByUserId, ReviewedAtUtc, ConcurrencyVersion
+
+  - id: F-TAXDCL-047
+    name: ApproveAsync (whole-declaration) requires Status is Submitted, UnderReview, or PartiallyApproved, else Conflict - it does NOT itself verify that every individual line has actually been reviewed/approved first
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    api: "POST /api/payroll/tax-declarations/{id}/approve"
+    service: "TaxDeclarationService.ApproveAsync -> TransitionAsync"
+    permission: "Payroll.TaxDeclaration.Approve"
+    db: EmployeeTaxDeclarations.Status
+
+  - id: F-TAXDCL-048
+    name: "CONFIRMED - ApproveAsync can be called on a declaration where some or all lines are still Status=Draft/Submitted (never individually reviewed) as long as the declaration's OWN Status is one of the three eligible values - there is no server-side check that every line has a terminal per-line decision before whole-declaration approval succeeds"
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    service: "TaxDeclarationService.TransitionAsync (Approved branch - no per-line Status verification)"
+    permission: "Payroll.TaxDeclaration.Approve"
+    db: EmployeeTaxDeclarationLines.Status (unchecked)
+
+  - id: F-TAXDCL-049
+    name: RequestResubmissionAsync moves the declaration to Status=ResubmissionRequired from any current status (TransitionAsync applies no required-status guard for this specific transition) and records the reviewer's optional comment on the audit event
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    api: "POST /api/payroll/tax-declarations/{id}/request-resubmission"
+    service: "TaxDeclarationService.RequestResubmissionAsync -> TransitionAsync"
+    permission: "Payroll.TaxDeclaration.Review"
+    db: EmployeeTaxDeclarations.Status
+
+  - id: F-TAXDCL-050
+    name: LockAsync requires Status=Approved exactly, else Conflict, and additionally stamps LockedAtUtc/LockedByUserId (a second, dedicated pair of fields beyond the shared ReviewedAtUtc/ReviewedByUserId)
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    api: "POST /api/payroll/tax-declarations/{id}/lock"
+    service: "TaxDeclarationService.LockAsync -> TransitionAsync"
+    permission: "Payroll.TaxDeclaration.Approve"
+    db: EmployeeTaxDeclarations.Status, LockedAtUtc, LockedByUserId
+
+  - id: F-TAXDCL-051
+    name: ReopenAsync requires Status=Locked exactly, else Conflict, and moves the declaration to ResubmissionRequired (not back to Approved) - reopening effectively restarts the resubmission cycle rather than simply unlocking
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    api: "POST /api/payroll/tax-declarations/{id}/reopen"
+    service: "TaxDeclarationService.ReopenAsync -> TransitionAsync"
+    permission: "Payroll.TaxDeclaration.Reopen"
+    db: EmployeeTaxDeclarations.Status
+
+  - id: F-TAXDCL-052
+    name: "Reopen uses a DIFFERENT dedicated permission (Payroll.TaxDeclaration.Reopen) than Approve/Lock (Payroll.TaxDeclaration.Approve) and RequestResubmission/Review (Payroll.TaxDeclaration.Review) - the four review-side mutating actions are split across three distinct permission constants, not one coarse Review permission"
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    service: "Backend/HRMS.Domain/Authorization/Permissions.cs (TaxDeclaration.Approve/Reopen/Review as three distinct constants)"
+    permission: "Payroll.TaxDeclaration.Reopen, Payroll.TaxDeclaration.Approve, Payroll.TaxDeclaration.Review"
+    db: "n/a"
+
+  - id: F-TAXDCL-053
+    name: Every TransitionAsync-routed call (Approve/RequestResubmission/Lock/Reopen) is guarded by a compare-and-swap SaveChangesAsync that surfaces DbUpdateConcurrencyException as Conflict("The declaration changed while the command was in progress.")
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    service: "TaxDeclarationService.TransitionAsync"
+    permission: "Payroll.TaxDeclaration.Approve, Reopen, Review"
+    db: EmployeeTaxDeclarations.ConcurrencyVersion
+
+  - id: F-TAXDCL-054
+    name: A cross-tenant declaration id on any review-side action (Review/ReviewLine/ReviewProof/Approve/RequestResubmission/Lock/Reopen/Audit) is NotFound, not Forbidden
+    group: Review, Approval, Lock & Reopen
+    status: Implemented
+    service: "TaxDeclarationService.cs (TenantId filter on every review-side query)"
+    permission: "Payroll.TaxDeclaration.Review, Approve, Reopen, ViewAudit"
+    db: EmployeeTaxDeclarations (TenantId filter)
+
+  # =========================== E. DECLARATION AUDIT & APPROVED-INPUT RESOLUTION ===========================
+  - id: F-TAXDCL-055
+    name: GetAuditAsync returns every TaxDeclarationAuditEvent for the declaration in chronological (OccurredAtUtc ascending) order, tenant-scoped
+    group: Declaration Audit & Approved-Input Resolution
+    status: Implemented
+    api: "GET /api/payroll/tax-declarations/{id}/audit"
+    service: "TaxDeclarationService.GetAuditAsync"
+    permission: "Payroll.TaxDeclaration.ViewAudit"
+    db: TaxDeclarationAuditEvents
+
+  - id: F-TAXDCL-056
+    name: "Audit events are append-only - no method anywhere updates or deletes a TaxDeclarationAuditEvent row once written (full grep) - and every one of the 18 declared TaxDeclarationAuditAction members is assigned somewhere in the service except LineDeleted's sibling actions being consistently paired 1:1 with their triggering method"
+    group: Declaration Audit & Approved-Input Resolution
+    status: Implemented
+    service: "TaxDeclarationService.cs (AddAudit is the sole write path, always .Add, never .Update/.Remove)"
+    permission: "n/a"
+    db: TaxDeclarationAuditEvents
+
+  - id: F-TAXDCL-057
+    name: An audit event records Action/ActorUserId/OccurredAtUtc/OldValue/NewValue/Comment, but proof file bytes are never logged (only FileName as the NewValue string on ProofUploaded/ProofReplaced events) - matching the design doc's own stated intent to keep secrets and file contents out of history
+    group: Declaration Audit & Approved-Input Resolution
+    status: Implemented
+    service: "TaxDeclarationService.AddAudit; AddProofOwnAsync/ReplaceProofOwnAsync call sites"
+    permission: "n/a"
+    db: TaxDeclarationAuditEvents.OldValue, NewValue
+
+  - id: F-TAXDCL-058
+    name: ResolveApprovedAsync returns only lines whose Status is Approved or PartiallyApproved AND ApprovedAmount>0, from the single most-recent-by-Version Approved/PartiallyApproved/Locked declaration for the given employee/financial-year/as-of-date window
+    group: Declaration Audit & Approved-Input Resolution
+    status: Implemented
+    service: "TaxDeclarationService.ResolveApprovedAsync"
+    permission: "n/a (internal Application-layer method, no controller route)"
+    db: EmployeeTaxDeclarations, EmployeeTaxDeclarationLines
+
+  - id: F-TAXDCL-059
+    name: "CONFIRMED - ResolveApprovedAsync has NO controller route anywhere (full grep of TaxDeclarationsController.cs/MyTaxDeclarationsController.cs) and is called by NO production Application-layer code (full grep of Backend/HRMS.Application and HRMS.API excluding Backend/HRMS.Tests) - every real call site is inside a test file"
+    group: Declaration Audit & Approved-Input Resolution
+    status: Implemented
+    service: "Backend/HRMS.Application, HRMS.API (full grep for ResolveApprovedAsync outside Backend/HRMS.Tests - zero matches beyond the interface/implementation themselves)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-060
+    name: "CONFIRMED DIVERGENCE FROM THE DESIGN DOC - docs/phase-7u-employee-tax-declarations-investment-proofs.md states approved declaration inputs are 'read through the existing declaration service' by Payroll, but YearEndTaxService.CalculateAsync (the only real annual-tax consumer of declaration data) queries db.EmployeeTaxDeclarations DIRECTLY and duplicates equivalent approved/proof-accepted filtering logic inline rather than calling ITaxDeclarationService.ResolveApprovedAsync at all"
+    group: Declaration Audit & Approved-Input Resolution
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (direct db.EmployeeTaxDeclarations query, line ~53); docs/phase-7u-employee-tax-declarations-investment-proofs.md ('Payroll handoff' section)"
+    permission: "n/a"
+    db: EmployeeTaxDeclarations
+
+  - id: F-TAXDCL-061
+    name: ResolveApprovedAsync's own proof-acceptance gate differs subtly from YearEndTaxService's inline equivalent - ResolveApprovedAsync includes a line whenever the item does NOT require proof OR the line has ANY proof, with no cross-check of the FIRST proof's Status, while YearEndTaxService's own inline logic specifically requires an Accepted-status proof
+    group: Declaration Audit & Approved-Input Resolution
+    status: Implemented
+    service: "TaxDeclarationService.ResolveApprovedAsync vs YearEndTaxService.CalculateAsync (side-by-side proof-filter comparison)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-062
+    name: A cross-tenant employeeId on ResolveApprovedAsync (were it ever invoked from a route) would return an empty list via the TenantId-filtered query rather than any NotFound/Forbidden signal, since the method has no single-entity existence check
+    group: Declaration Audit & Approved-Input Resolution
+    status: Implemented
+    service: "TaxDeclarationService.ResolveApprovedAsync (TenantId filter, FirstOrDefaultAsync returning null -> empty list)"
+    permission: "n/a"
+    db: EmployeeTaxDeclarations (TenantId filter)
+
+  # =========================== F. YEAR-END TAX RUN LIFECYCLE ===========================
+  - id: F-TAXDCL-063
+    name: GetRunsAsync is tenant-scoped, server-paged (page size clamped to PagedQuery.MaxPageSize=100), ordered by TaxYear descending then CreatedAtUtc descending
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    api: "GET /api/payroll/year-end-tax/runs"
+    service: "YearEndTaxService.GetRunsAsync"
+    permission: "Payroll.YearEndTax.View"
+    db: YearEndTaxRuns
+
+  - id: F-TAXDCL-064
+    name: CreateAsync requires TaxYear>0, EndDate>=StartDate, and a non-blank TaxYearCode, else Invalid
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    api: "POST /api/payroll/year-end-tax/runs"
+    service: "YearEndTaxService.CreateAsync"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxRuns
+
+  - id: F-TAXDCL-065
+    name: CreateAsync rejects a duplicate TaxYear for the tenant regardless of status (including Cancelled runs - there is no reuse path here unlike qa/13-statutory-compliance's Cancelled-slot-reuse rule), Conflict
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    service: "YearEndTaxService.CreateAsync"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxRuns (unique index TenantId+TaxYear)
+
+  - id: F-TAXDCL-066
+    name: CreateAsync additionally rejects any date-range overlap against every OTHER non-Cancelled run for the tenant (a second, independent guard beyond the TaxYear uniqueness check), Conflict
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    service: "YearEndTaxService.CreateAsync (overlap query, Status != Cancelled)"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxRuns.StartDate, EndDate
+
+  - id: F-TAXDCL-067
+    name: A newly created run starts at Status=Draft and records a Created history event
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    service: "YearEndTaxService.CreateAsync -> AddHistory(Created)"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxRuns.Status, YearEndTaxHistories
+
+  - id: F-TAXDCL-068
+    name: CalculateAsync (recalculation) is only permitted while Status is Draft or Calculated, else Conflict - it is blocked outright once ANY adjustment for the run has reached Status=HandoffCreated, even if the run itself is still nominally Draft/Calculated
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    api: "POST /api/payroll/year-end-tax/runs/{id}/calculate"
+    service: "YearEndTaxService.CalculateAsync"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: YearEndTaxRuns.Status, YearEndTaxAdjustments.Status
+
+  - id: F-TAXDCL-069
+    name: "Recalculation is destructive-and-rebuilt, not incremental - CalculateAsync deletes EVERY existing YearEndTaxEmployee/YearEndTaxAdjustment/YearEndTaxStatement row for the run before recomputing from scratch, so a prior manual adjustment edit (if any existed) or a since-cancelled adjustment is unconditionally wiped by any recalculation that is still permitted at all"
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (RemoveRange of oldStatements/oldAdjustments/oldEmployees before rebuilding)"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: YearEndTaxEmployees, YearEndTaxAdjustments, YearEndTaxStatements
+
+  - id: F-TAXDCL-070
+    name: SubmitAsync requires Status=Calculated exactly (via the shared TransitionAsync helper), else Conflict, and stamps SubmittedByUserId/SubmittedAtUtc
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    api: "POST /api/payroll/year-end-tax/runs/{id}/submit"
+    service: "YearEndTaxService.SubmitAsync -> TransitionAsync"
+    permission: "Payroll.YearEndTax.Submit"
+    db: YearEndTaxRuns.Status, SubmittedByUserId, SubmittedAtUtc
+
+  - id: F-TAXDCL-071
+    name: ApproveAsync requires Status=Submitted (via TransitionAsync's own required-status check) AND runs the shared PayrollApprovalGuard self-approval check against run.SubmittedByUserId - blocked only when the tenant has BOTH RequireMakerChecker and PreventSelfApproval enabled on PayrollControlConfiguration (the identical opt-in-only shape as qa/13-statutory-compliance's CR-233)
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    api: "POST /api/payroll/year-end-tax/runs/{id}/approve"
+    service: "YearEndTaxService.ApproveAsync -> PayrollApprovalGuard.ValidateAsync -> TransitionAsync"
+    permission: "Payroll.YearEndTax.Approve"
+    db: YearEndTaxRuns.Status, ApprovedByUserId, ApprovedAtUtc
+
+  - id: F-TAXDCL-072
+    name: TransitionAsync additionally blocks the Approved transition outright when run.BlockingIssueCount>0, regardless of maker-checker configuration - this specific guard is NOT opt-in
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    service: "YearEndTaxService.TransitionAsync (next==Approved && run.BlockingIssueCount>0 check)"
+    permission: "Payroll.YearEndTax.Approve"
+    db: YearEndTaxRuns.BlockingIssueCount
+
+  - id: F-TAXDCL-073
+    name: CloseAsync requires Status=Approved exactly (checked directly, NOT via the shared TransitionAsync helper - its own bespoke method) AND BlockingIssueCount==0, else Conflict; a closed run's Status becomes permanently Closed with ClosedByUserId/ClosedAtUtc stamped
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    api: "POST /api/payroll/year-end-tax/runs/{id}/close"
+    service: "YearEndTaxService.CloseAsync"
+    permission: "Payroll.YearEndTax.Close"
+    db: YearEndTaxRuns.Status, ClosedByUserId, ClosedAtUtc
+
+  - id: F-TAXDCL-074
+    name: CancelAsync requires Status=Draft exactly (via TransitionAsync) - a run can only ever be cancelled BEFORE its first calculation, never once Calculated/Submitted/Approved
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    api: "POST /api/payroll/year-end-tax/runs/{id}/cancel"
+    service: "YearEndTaxService.CancelAsync -> TransitionAsync"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxRuns.Status
+
+  - id: F-TAXDCL-075
+    name: GetAsync/GetRunsAsync/CreateAsync/CalculateAsync/SubmitAsync/ApproveAsync/CloseAsync/CancelAsync/AddPreviousEmployerAsync/UpdatePreviousEmployerAsync/HandoffAdjustmentAsync/GetHistoryAsync/ExportAsync are all tenant-scoped and return NotFound (not Forbidden) for a cross-tenant run id
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    service: "YearEndTaxService.cs (TenantId filter on every run query)"
+    permission: "Payroll.YearEndTax.View, Manage, Calculate, Submit, Approve, Close"
+    db: YearEndTaxRuns (TenantId filter)
+
+  - id: F-TAXDCL-076
+    name: Every lifecycle transition (Submit/Approve/Cancel via TransitionAsync, Close via its own method) increments ConcurrencyVersion and is guarded by a compare-and-swap that surfaces DbUpdateConcurrencyException as Conflict rather than a 500
+    group: Year-End Tax Run Lifecycle
+    status: Implemented
+    service: "YearEndTaxService.TransitionAsync, CloseAsync"
+    permission: "Payroll.YearEndTax.Submit, Approve, Close, Manage"
+    db: YearEndTaxRuns.ConcurrencyVersion
+
+  # =========================== G. YEAR-END CALCULATION ENGINE ===========================
+  - id: F-TAXDCL-077
+    name: "The payroll-YTD source is scoped to PayrollResults with Status=Calculated AND IsCurrent=true belonging to Finalized PayrollRuns whose PayrollPeriod overlaps the run's own [StartDate,EndDate] window - draft, cancelled, unapproved, stale-attempt (IsCurrent=false), or non-Finalized-run results are all correctly excluded, matching the design doc's stated intent"
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (PayrollResults query)"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: PayrollResults, PayrollRuns, PayrollPeriods
+
+  - id: F-TAXDCL-078
+    name: YtdTaxableIncome sums PayrollResultComponents flagged both IsTaxable and IsEarning, minus the sum of components flagged both IsTaxable and IsDeduction, across every in-scope PayrollResult for the employee
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: PayrollResultComponents.IsTaxable, IsEarning, IsDeduction
+
+  - id: F-TAXDCL-079
+    name: "YtdTaxDeducted is sourced entirely from PayrollStatutoryResults.EmployeeAmount rows of StatutoryType.IncomeTax matching the in-scope PayrollResult ids - this is qa/13-statutory-compliance's own monthly-withholding output, read here purely as an already-deducted-YTD-tax input; this module never writes to or triggers that monthly engine (confirming module 13's F-STAT-050 from this module's own side)"
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (PayrollStatutoryResults query, StatutoryType.IncomeTax filter)"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: PayrollStatutoryResults.EmployeeAmount, StatutoryType
+
+  - id: F-TAXDCL-080
+    name: DeclaredAmount/ProofAmount for the run are sourced from Approved-or-PartiallyApproved-or-Locked EmployeeTaxDeclarations matching the run's own TaxYear as the declaration cycle's FinancialYear, summing ApprovedAmount on lines that are themselves Approved or PartiallyApproved
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: EmployeeTaxDeclarations, EmployeeTaxDeclarationLines
+
+  - id: F-TAXDCL-081
+    name: ApprovedProofAmount further restricts ApprovedDeclarationAmount to only lines where the item does not require proof OR at least one of the line's proofs is Status=Accepted - a line with only a Rejected/Submitted (never-Accepted) proof contributes to ApprovedDeclarationAmount but NOT to ApprovedProofAmount
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (proof variable computation)"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: TaxDeclarationProofs.Status
+
+  - id: F-TAXDCL-082
+    name: FinalTaxableIncome = max(0, YtdTaxableIncome + PreviousEmployerTaxableIncome - ApprovedProofAmount - PreviousEmployerEligibleDeductionAmount) - only PROOF-BACKED declaration amounts reduce taxable income, not merely-approved-but-unproven amounts
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (taxable computation)"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: "n/a (in-memory computation)"
+
+  - id: F-TAXDCL-083
+    name: "CONFIRMED - ProjectedAnnualTaxableIncome and FinalTaxableIncome are assigned the IDENTICAL computed value ('taxable') in the same statement, and likewise ProjectedAnnualTax/FinalTaxLiability both receive the identical 'annualTax' value - the entity/DTO distinguishes 'projected' from 'final' in name only; a single CalculateAsync pass never actually computes two different numbers for these pairs"
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (row initializer - ProjectedAnnualTaxableIncome and FinalTaxableIncome both set to 'taxable')"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: YearEndTaxEmployees.ProjectedAnnualTaxableIncome, FinalTaxableIncome, ProjectedAnnualTax, FinalTaxLiability
+
+  - id: F-TAXDCL-084
+    name: "CONFIRMED - ProjectedRemainingTaxableIncome is a declared, mapped (18,2)-precision entity field and DTO field that CalculateAsync's own row initializer NEVER assigns - it is permanently 0 for every YearEndTaxEmployee row this service has ever produced (full grep confirms no assignment site anywhere)"
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (row initializer - no ProjectedRemainingTaxableIncome assignment, full method read)"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: YearEndTaxEmployees.ProjectedRemainingTaxableIncome
+
+  - id: F-TAXDCL-085
+    name: ResolveTax selects the single most-recently-effective EmployeeStatutoryProfile for the employee and requires it to exist AND have IncomeTaxApplicable=true, else the employee's whole row is IssueCode=TAX_PROFILE_MISSING with Tax=null
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.ResolveTax"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: EmployeeStatutoryProfiles.IncomeTaxApplicable
+
+  - id: F-TAXDCL-086
+    name: "ResolveTax matches StatutoryConfiguration by JurisdictionCode equality and (StateCode is null OR equals the profile's StateCode) - reusing the same matching predicate shape as qa/13-statutory-compliance's monthly engine (F-STAT-034) but querying the ANNUAL configuration/version/slab tables independently"
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.ResolveTax"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: StatutoryConfigurations.JurisdictionCode, StateCode
+
+  - id: F-TAXDCL-087
+    name: A tie for the highest Version.Priority among eligible Active, date-covering configuration versions is IssueCode=TAX_CONFIGURATION_AMBIGUOUS - a blocking issue on that one employee's row only, NOT a whole-run failure (unlike qa/13-statutory-compliance's F-STAT-036 which fails the whole employee's PAYROLL calculation)
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.ResolveTax"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: "n/a"
+
+  - id: F-TAXDCL-088
+    name: "Zero matching configuration/version is IssueCode=TAX_CONFIGURATION_MISSING; zero matching StatutorySlab (FromAmount<=taxable<=ToAmount-or-null, OptionalMonth must be null - this engine never matches an OptionalMonth-restricted slab at all, unlike the monthly engine) is IssueCode=TAX_SLAB_MISSING - both are per-employee blocking issues, incrementing run.BlockingIssueCount, not silent skips (a materially different failure mode than qa/13-statutory-compliance's F-STAT-037/044 silent-continue)"
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.ResolveTax"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: StatutorySlabs.OptionalMonth (excluded by == null filter)
+
+  - id: F-TAXDCL-089
+    name: A matched slab's tax is PayrollRoundingPolicy.RoundMoney(FixedAmount + taxable*Rate/100) - the identical rounding policy and formula shape as the monthly engine's own slab math, applied here to the FULL annual taxable income in one shot rather than per-period
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.ResolveTax"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: StatutorySlabs.FixedAmount, Rate
+
+  - id: F-TAXDCL-090
+    name: "EstimatedTaxDue=max(0, annualTax-YtdTaxDeducted-PreviousEmployerTaxDeducted) and EstimatedExcessTax=max(0, YtdTaxDeducted+PreviousEmployerTaxDeducted-annualTax) are mutually exclusive by construction - a single employee row can show a nonzero value in at most one of the two fields, never both"
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: YearEndTaxEmployees.EstimatedTaxDue, EstimatedExcessTax
+
+  - id: F-TAXDCL-091
+    name: "An employee row's Status is BlockingIssue if any tax-resolution issue occurred (regardless of EstimatedTaxDue), else AdjustmentRecommended if EstimatedTaxDue>0, else Reconciled - EstimatedExcessTax alone never drives a distinct Status value (an all-excess, zero-due employee is still classified Reconciled, the same as an exactly-matched employee)"
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (Status ternary)"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: YearEndTaxEmployees.Status
+
+  - id: F-TAXDCL-092
+    name: "CalculateAsync auto-creates exactly one YearEndTaxAdjustment (Status=Recommended, Direction=Deduction) for every employee where EstimatedTaxDue>0 AND there is no blocking issue - a blocked employee never gets an auto-recommended adjustment even if a due amount could theoretically be inferred"
+    group: Year-End Calculation Engine
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (taxDue>0 && issue is null branch)"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: YearEndTaxAdjustments
+
+  # =========================== H. PREVIOUS EMPLOYER INPUTS ===========================
+  - id: F-TAXDCL-093
+    name: AddPreviousEmployerAsync requires the target run to exist in the tenant and NOT be Approved/Closed/Cancelled, else NotFound/Conflict
+    group: Previous Employer Inputs
+    status: Implemented
+    api: "POST /api/payroll/year-end-tax/runs/{id}/previous-employer"
+    service: "YearEndTaxService.AddPreviousEmployerAsync"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxRuns.Status
+
+  - id: F-TAXDCL-094
+    name: AddPreviousEmployerAsync requires a non-blank EmployerName and non-negative TaxableIncome/TaxDeducted/EligibleDeductionAmount, else Invalid, and requires the employee to exist in the tenant, else NotFound
+    group: Previous Employer Inputs
+    status: Implemented
+    service: "YearEndTaxService.AddPreviousEmployerAsync"
+    permission: "Payroll.YearEndTax.Manage"
+    db: Employees (TenantId filter)
+
+  - id: F-TAXDCL-095
+    name: A duplicate (TenantId, RunId, EmployeeId, EmployerReference) combination is Conflict - two entries with EmployerReference both left null for the SAME employee/run are treated as equal by the unique index and the second insert fails at the DB layer, surfacing as an unhandled constraint violation rather than the application-level AnyAsync-style Conflict message used elsewhere in this module
+    group: Previous Employer Inputs
+    status: Implemented
+    service: "YearEndTaxService.AddPreviousEmployerAsync (AnyAsync app-level pre-check; DB unique index as the real backstop)"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxPreviousEmployerInputs (unique index TenantId+RunId+EmployeeId+EmployerReference)
+
+  - id: F-TAXDCL-096
+    name: A newly added previous-employer input starts at Status=Submitted (never Draft, despite YearEndTaxPreviousEmployerStatus declaring a Draft member) and records a PreviousEmployerAdded run-level history event
+    group: Previous Employer Inputs
+    status: Implemented
+    service: "YearEndTaxService.AddPreviousEmployerAsync -> AddHistory"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxPreviousEmployerInputs.Status, YearEndTaxHistories
+
+  - id: F-TAXDCL-097
+    name: "CONFIRMED GAP - YearEndTaxPreviousEmployerStatus.Approved/Rejected are declared enum members that NO method anywhere ever assigns (full grep of YearEndTaxService.cs) - there is no review/approve/reject endpoint for a previous-employer input at all, yet CalculateAsync's own source query filters strictly to Status=Approved (F-TAXDCL-098), meaning NO previous-employer input can ever actually be picked up by a calculation through this API today"
+    group: Previous Employer Inputs
+    status: Implemented
+    service: "YearEndTaxService.cs (full grep for YearEndTaxPreviousEmployerStatus.Approved assignment - zero matches; CalculateAsync's own previous-employer query requires it)"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxPreviousEmployerInputs.Status
+
+  - id: F-TAXDCL-098
+    name: CalculateAsync's previous-employer source query is strictly Status=Approved - Submitted (the only status this API can actually produce, per F-TAXDCL-097) rows are silently excluded from every calculation
+    group: Previous Employer Inputs
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (previous query, Status==Approved filter)"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: YearEndTaxPreviousEmployerInputs.Status
+
+  - id: F-TAXDCL-099
+    name: UpdatePreviousEmployerAsync requires the run to be NOT Approved/Closed/Cancelled and non-negative monetary fields, resets Status back to Submitted on every edit, increments ConcurrencyVersion, and is guarded by a compare-and-swap surfacing Conflict on a lost race
+    group: Previous Employer Inputs
+    status: Implemented
+    api: "PUT /api/payroll/year-end-tax/runs/{id}/previous-employer/{inputId}"
+    service: "YearEndTaxService.UpdatePreviousEmployerAsync"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxPreviousEmployerInputs
+
+  - id: F-TAXDCL-100
+    name: A cross-tenant runId/inputId/employeeId on any previous-employer action is NotFound, not Forbidden
+    group: Previous Employer Inputs
+    status: Implemented
+    service: "YearEndTaxService.cs (TenantId filter)"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxPreviousEmployerInputs (TenantId filter)
+
+  # =========================== I. TDS / PAYROLL INTEGRATION & ADJUSTMENT HANDOFF ===========================
+  - id: F-TAXDCL-101
+    name: "CONFIRMED - the monthly StatutoryType.IncomeTax withholding (qa/13-statutory-compliance's own surface, computed by StatutoryPayrollService.CalculateAsync inside PayrollCalculationEngine) and this module's own annual ResolveTax engine are two entirely separate calculation paths that never call each other in either direction (full grep of both service files for cross-references) - the only relationship is YearEndTaxService reading PayrollStatutoryResults as a YTD-already-deducted-tax INPUT (F-TAXDCL-079)"
+    group: TDS / Payroll Integration & Adjustment Handoff
+    status: Implemented
+    service: "StatutoryPayrollService.cs, YearEndTaxService.cs, PayrollCalculationEngine.cs (full cross-grep)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-102
+    name: Year-end reconciliation never writes to, mutates, or re-triggers a finalized PayrollResult/PayrollRun - CalculateAsync's ONLY writes are to the YearEndTax* aggregate tables, confirmed by a full grep for db.PayrollResults writes inside YearEndTaxService.cs (zero matches, read-only AsNoTracking throughout)
+    group: TDS / Payroll Integration & Adjustment Handoff
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (full grep - db.PayrollResults appears only in AsNoTracking reads)"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: PayrollResults (read-only)
+
+  - id: F-TAXDCL-103
+    name: HandoffAdjustmentAsync requires a non-blank ComponentCode, the target YearEndTaxAdjustment to exist for the run, and the run's own Status to be Approved or Closed, else Invalid/NotFound/Conflict
+    group: TDS / Payroll Integration & Adjustment Handoff
+    status: Implemented
+    api: "POST /api/payroll/year-end-tax/runs/{id}/adjustments/handoff"
+    service: "YearEndTaxService.HandoffAdjustmentAsync"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxAdjustments, YearEndTaxRuns.Status
+
+  - id: F-TAXDCL-104
+    name: "CONFIRMED - a successful handoff creates a NEW PayrollAdjustment at Status=Draft (AdjustmentType=TaxAdjustment, TaxTreatment=TaxAdjustmentOnly, StatutoryTreatment=IncludeInIncomeTax, SettlementMethod=Payroll) - PayrollCalculationEngine's own adjustment-sourcing query (grep-verified) only ever picks up PayrollAdjustments at Status=Approved or Status=Scheduled, so a freshly handed-off adjustment CANNOT be picked up by any payroll run until it separately passes through the existing, out-of-scope PayrollAdjustment approval workflow"
+    group: TDS / Payroll Integration & Adjustment Handoff
+    status: Implemented
+    service: "YearEndTaxService.HandoffAdjustmentAsync (Status=Draft at creation); PayrollCalculationEngine.cs (adjustments query, Status==Approved||Scheduled filter)"
+    permission: "Payroll.YearEndTax.Manage"
+    db: PayrollAdjustments.Status
+
+  - id: F-TAXDCL-105
+    name: Handoff is idempotent by source identity - calling it a second time on an adjustment that already has a non-null PayrollAdjustmentId returns Success with the existing link and message "Adjustment handoff was already completed." rather than creating a second PayrollAdjustment or erroring
+    group: TDS / Payroll Integration & Adjustment Handoff
+    status: Implemented
+    service: "YearEndTaxService.HandoffAdjustmentAsync (early-return branch on row.PayrollAdjustmentId is { } existing)"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxAdjustments.PayrollAdjustmentId
+
+  - id: F-TAXDCL-106
+    name: "A DbUpdateException during handoff (e.g. a concurrent duplicate) is caught and surfaced as Conflict('The year-end adjustment handoff conflicted with an existing source adjustment.') rather than a 500 - the row's own Status is left at Recommended (not advanced to HandoffCreated) on this failure path"
+    group: TDS / Payroll Integration & Adjustment Handoff
+    status: Implemented
+    service: "YearEndTaxService.HandoffAdjustmentAsync (try/catch DbUpdateException)"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxAdjustments.Status
+
+  - id: F-TAXDCL-107
+    name: "YearEndTaxAdjustmentStatus.Resolved/Cancelled are declared enum members that NO method anywhere in YearEndTaxService.cs ever assigns (full grep) - an adjustment's own lifecycle only ever reaches Recommended or HandoffCreated through this service; any further resolution/cancellation would have to happen entirely inside the separate, out-of-scope PayrollAdjustment workflow with no reciprocal write-back to YearEndTaxAdjustment.Status"
+    group: TDS / Payroll Integration & Adjustment Handoff
+    status: Implemented
+    service: "YearEndTaxService.cs (full grep for YearEndTaxAdjustmentStatus.Resolved/.Cancelled - zero assignment matches)"
+    permission: "n/a"
+    db: YearEndTaxAdjustments.Status
+
+  - id: F-TAXDCL-108
+    name: "The adjustment's own AdjustmentNumber is built as 'YET/{TaxYear}/{EmployeeId:N}' truncated to 60 characters - a per-employee-per-year identity, not a globally sequential human-auditable counter, the identical shape as qa/13-statutory-compliance's F-STAT-069 BatchNumber finding"
+    group: TDS / Payroll Integration & Adjustment Handoff
+    status: Implemented
+    service: "YearEndTaxService.HandoffAdjustmentAsync"
+    permission: "Payroll.YearEndTax.Manage"
+    db: PayrollAdjustments.AdjustmentNumber
+
+  # =========================== J. STATEMENTS, HISTORY & REPORTS ===========================
+  - id: F-TAXDCL-109
+    name: GetHistoryAsync requires the run to exist in the tenant, else NotFound, and returns every YearEndTaxHistory row chronologically
+    group: Statements, History & Reports
+    status: Implemented
+    api: "GET /api/payroll/year-end-tax/runs/{id}/history"
+    service: "YearEndTaxService.GetHistoryAsync"
+    permission: "Payroll.YearEndTax.ViewHistory"
+    db: YearEndTaxHistories
+
+  - id: F-TAXDCL-110
+    name: History is append-only (AddHistory is the sole write path, always .Add) and every lifecycle transition (Created/Calculated/Submitted/Approved/Closed/Cancelled/PreviousEmployerAdded/PreviousEmployerUpdated/AdjustmentHandedOff) is recorded with PreviousStatus/NewStatus - a richer transition record than this module's own TaxDeclarationAuditEvent, which has no equivalent typed status-pair fields
+    group: Statements, History & Reports
+    status: Implemented
+    service: "YearEndTaxService.AddHistory"
+    permission: "n/a"
+    db: YearEndTaxHistories.PreviousStatus, NewStatus
+
+  - id: F-TAXDCL-111
+    name: "YearEndTaxHistoryEvent.Recalculated is a declared enum member that NO call site ever assigns - CalculateAsync always records plain Calculated regardless of whether the run had never been calculated before or is being recalculated from an already-Calculated state, so history alone cannot distinguish a first calculation from a recalculation"
+    group: Statements, History & Reports
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (always AddHistory(..., Calculated, ...); full grep for .Recalculated - zero matches)"
+    permission: "n/a"
+    db: YearEndTaxHistories.Event
+
+  - id: F-TAXDCL-112
+    name: A YearEndTaxStatement per employee is (re)created on every successful CalculateAsync, keyed by StatementReference="YTS/{TaxYear}/{EmployeeId:N}" (truncated to 100 chars) and holding a JSON snapshot of every reconciliation field at calculation time
+    group: Statements, History & Reports
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync (YearEndTaxStatements.Add)"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: YearEndTaxStatements
+
+  - id: F-TAXDCL-113
+    name: "There is no dedicated GET route to list/fetch a YearEndTaxStatement directly (full grep of YearEndTaxController.cs) - the only way to retrieve statement-shaped data through the API is the 'statements' CSV export kind, which is actually an ALIAS for the same per-employee reconciliation rows as the 'employees' export kind (both routed through the identical EmployeeCsv helper), NOT the persisted YearEndTaxStatement.SnapshotJson itself"
+    group: Statements, History & Reports
+    status: Implemented
+    service: "YearEndTaxController.cs (full route grep); YearEndTaxService.ExportAsync ('statements'/'employees' share one EmployeeCsv branch)"
+    permission: "Payroll.YearEndTax.Export"
+    db: YearEndTaxStatements (unreachable via any GET route)
+
+  - id: F-TAXDCL-114
+    name: ExportAsync supports exactly 4 kinds - summary, exceptions, statements, employees (case-insensitive, trimmed) - any other value is Invalid("kind", ...) surfaced as a 400, not a 404
+    group: Statements, History & Reports
+    status: Implemented
+    api: "GET /api/payroll/year-end-tax/runs/{id}/export/{kind}"
+    service: "YearEndTaxService.ExportAsync"
+    permission: "Payroll.YearEndTax.Export"
+    db: "n/a"
+
+  - id: F-TAXDCL-115
+    name: "The 'exceptions' export is filtered strictly to rows with a non-null BlockingIssueCode - an employee with EstimatedExcessTax>0 but no blocking issue (a Reconciled row) never appears in the exceptions file even though excess tax is arguably worth an operator's attention"
+    group: Statements, History & Reports
+    status: Implemented
+    service: "YearEndTaxService.ExportAsync ('exceptions' branch)"
+    permission: "Payroll.YearEndTax.Export"
+    db: YearEndTaxEmployees.BlockingIssueCode
+
+  - id: F-TAXDCL-116
+    name: All 4 CSV kinds are produced via the shared CsvBuilder with money fields formatted to exactly 2 decimal places and no formula-triggering characters - matching the module's own stated "no spreadsheet formula execution" design intent
+    group: Statements, History & Reports
+    status: Implemented
+    service: "YearEndTaxService.SummaryCsv, EmployeeCsv, Money"
+    permission: "Payroll.YearEndTax.Export"
+    db: "n/a"
+
+  # =========================== K. AUTHORIZATION & SCOPE ===========================
+  - id: F-TAXDCL-117
+    name: "CONFIRMED POSITIVE - unlike every payroll sub-module surveyed in qa/10 through qa/13 (loans, variable pay, statutory compliance), HRAdmin is seeded with ALL 15 TaxDeclaration/YearEndTax permissions, HRManager gets a genuinely scoped view/review-only subset (Review, ViewAudit, View, ViewHistory), and Employee gets exactly the two self-service permissions (ViewOwn, ManageOwn) needed to use MyTaxDeclarationsController out of the box"
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs RolePermissionMap (grep-verified for HRAdmin, HRManager, Employee)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-118
+    name: "SuperHR - otherwise granted a broad Payroll surface (SalaryComponent/SalaryStructure/EmployeeSalary/Period/Controls/Run, all Manage-level) - holds ZERO of the 15 TaxDeclaration/YearEndTax permissions (grep-verified against its own RolePermissionMap array), unlike HRAdmin/HRManager/Employee which each get a meaningful subset"
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs RolePermissionMap[RoleNames.SuperHR] (full array grep - zero TaxDeclaration/YearEndTax matches)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-119
+    name: Manager, HRBP, AccountLinkAdministrator/Auditor, and EmployeeRelationshipOfficer are also seeded with zero TaxDeclaration/YearEndTax permissions - only SuperAdmin/TenantAdmin (via Permissions.All), HRAdmin, HRManager (partial), and Employee (self-service only) hold any of the 15
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs RolePermissionMap (grep for every remaining seeded role)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-120
+    name: "Every mutating route on TaxDeclarationsController/MyTaxDeclarationsController/YearEndTaxController declares [HasPermission(...)] with no [AllowAnonymous] anywhere (full grep of all three controller classes) - an unauthenticated caller is 401 on every route"
+    group: Authorization & Scope
+    status: Implemented
+    service: "TaxDeclarationsController.cs, YearEndTaxController.cs (full grep for [AllowAnonymous] - zero matches)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-121
+    name: "The employee self-service surface (ViewOwn/ManageOwn) and the reviewer/admin surface (Review/Approve/Reopen/Configure/ViewAudit) are enforced by entirely distinct permission constants and, for the employee side, by RESOLVED IDENTITY (IEmployeeIdentityResolver) rather than a client-supplied employeeId anywhere in MyTaxDeclarationsController - an employee cannot access another employee's declaration by manipulating a request body/route id, because none of the ...OwnAsync methods accept one"
+    group: Authorization & Scope
+    status: Implemented
+    service: "MyTaxDeclarationsController.cs (no employeeId parameter on any action); TaxDeclarationService.Subject -> IEmployeeIdentityResolver.ResolveCurrentAsync"
+    permission: "Payroll.TaxDeclaration.ViewOwn, ManageOwn"
+    db: "n/a"
+
+  - id: F-TAXDCL-122
+    name: "YearEndTax's own self-approval guard (F-TAXDCL-071) protects only the run-level Approve action; there is no equivalent guard anywhere comparing HandoffAdjustmentAsync's caller to any prior actor, and TaxDeclaration's ApproveAsync has NO self-approval guard of any kind at all (no PayrollApprovalGuard call site in TaxDeclarationService.cs, full grep) - a reviewer with both Review and Approve permissions can review and approve their own declaration-review chain unconditionally, with no opt-in maker-checker control available for this specific workflow"
+    group: Authorization & Scope
+    status: Implemented
+    service: "TaxDeclarationService.cs (full grep for PayrollApprovalGuard/IPayrollApprovalGuard - zero matches)"
+    permission: "Payroll.TaxDeclaration.Review, Approve"
+    db: "n/a"
+
+  - id: F-TAXDCL-123
+    name: TaxDeclarationConfigure (cycles/categories/items) and TaxDeclarationReview/Approve/Reopen are distinct permission constants - a role holding only Configure cannot review or approve, and vice versa
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/TaxDeclarationsController.cs (permission attribute per route)"
+    permission: "Payroll.TaxDeclaration.Configure, Review, Approve"
+    db: "n/a"
+
+  - id: F-TAXDCL-124
+    name: YearEndTax's 8 permissions (View/Manage/Calculate/Submit/Approve/Close/ViewHistory/Export) map to 8 distinct routes-groups with no coarse catch-all - Manage alone covers Create/AddPreviousEmployer/UpdatePreviousEmployer/Cancel/Handoff, a broader single bucket than the equivalently-scoped TaxDeclaration side
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/YearEndTaxController.cs (permission attribute per route)"
+    permission: "Payroll.YearEndTax.Manage"
+    db: "n/a"
+
+  # =========================== L. TENANT ISOLATION ===========================
+  - id: F-TAXDCL-125
+    name: Every TaxDeclarationService/YearEndTaxService entity query is filtered by TenantId derived from ITenantContext (server-resolved, never client-supplied) - grep-verified across both service files for any query missing this filter (none found beyond the read-only ResolveTax helper's caller-scoped inputs)
+    group: Tenant Isolation
+    status: Implemented
+    service: "TaxDeclarationService.cs, YearEndTaxService.cs (full TenantId-filter audit)"
+    permission: "n/a"
+    db: "All tax declaration and year-end tax tables"
+
+  - id: F-TAXDCL-126
+    name: A cross-tenant TaxDeclarationCategoryId/TaxDeclarationItemId used on a same-tenant CreateItemAsync/AddLineOwnAsync call is NotFound, not silently accepted, because the composite (TenantId, Id) principal-key foreign keys enforce it at the query level
+    group: Tenant Isolation
+    status: Implemented
+    service: "TaxDeclarationService.CreateItemAsync, AddLineOwnAsync"
+    permission: "Payroll.TaxDeclaration.Configure, ManageOwn"
+    db: TaxDeclarationCategories, TaxDeclarationItems (composite TenantId+Id key)
+
+  - id: F-TAXDCL-127
+    name: A cross-tenant employeeId used on YearEndTaxService.AddPreviousEmployerAsync is NotFound via the Employees existence check, not a foreign-key exception, and the same employee id cannot be reused across two tenants' runs to leak data between them
+    group: Tenant Isolation
+    status: Implemented
+    service: "YearEndTaxService.AddPreviousEmployerAsync"
+    permission: "Payroll.YearEndTax.Manage"
+    db: Employees (TenantId filter)
+
+  - id: F-TAXDCL-128
+    name: CalculateAsync's own PayrollResults/PayrollStatutoryResults/EmployeeStatutoryProfiles/StatutoryConfigurations source queries are all TenantId-filtered independently - a tenant's year-end run can never aggregate another tenant's finalized payroll or statutory data even transitively
+    group: Tenant Isolation
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: PayrollResults, PayrollStatutoryResults, EmployeeStatutoryProfiles, StatutoryConfigurations (TenantId filter)
+
+  - id: F-TAXDCL-129
+    name: GetOwnAsync/CreateOwnAsync/AddLineOwnAsync/etc. resolve the employee identity from the authenticated principal's own tenant-scoped account link - a caller cannot pass a foreign tenant's employee id to any ...Own method because none of them accept an employeeId parameter at all (reinforcing F-TAXDCL-121 from the tenant-isolation angle)
+    group: Tenant Isolation
+    status: Implemented
+    service: "MyTaxDeclarationsController.cs, TaxDeclarationService.Subject"
+    permission: "Payroll.TaxDeclaration.ViewOwn, ManageOwn"
+    db: "n/a"
+
+  - id: F-TAXDCL-130
+    name: Export/History/Audit reads (ExportAsync, GetHistoryAsync, GetAuditAsync) all re-verify tenant-scoped existence of the parent run/declaration before returning any row, rather than trusting a previously-resolved id
+    group: Tenant Isolation
+    status: Implemented
+    service: "YearEndTaxService.ExportAsync, GetHistoryAsync; TaxDeclarationService.GetAuditAsync"
+    permission: "Payroll.YearEndTax.Export, ViewHistory; Payroll.TaxDeclaration.ViewAudit"
+    db: YearEndTaxRuns, EmployeeTaxDeclarations (TenantId filter)
+
+  # =========================== M. CONCURRENCY & IDEMPOTENCY ===========================
+  - id: F-TAXDCL-131
+    name: EmployeeTaxDeclaration.ConcurrencyVersion is a real EF IsConcurrencyToken() column, and UpdateLineOwnAsync/DeleteLineOwnAsync/SubmitOwnAsync/ReviewLineAsync/ReviewProofAsync/TransitionAsync all catch DbUpdateConcurrencyException and surface it as Conflict rather than letting it propagate as a 500
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "TaxDeclarationService.cs (7 distinct catch sites, grep-verified)"
+    permission: "n/a"
+    db: EmployeeTaxDeclarations.ConcurrencyVersion (IsConcurrencyToken)
+
+  - id: F-TAXDCL-132
+    name: YearEndTaxRun/YearEndTaxPreviousEmployerInput/YearEndTaxEmployee both declare ConcurrencyVersion as IsConcurrencyToken(), and TransitionAsync/CloseAsync/UpdatePreviousEmployerAsync all catch DbUpdateConcurrencyException as Conflict
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "YearEndTaxService.cs (3 distinct catch sites)"
+    permission: "n/a"
+    db: YearEndTaxRuns.ConcurrencyVersion, YearEndTaxPreviousEmployerInputs.ConcurrencyVersion
+
+  - id: F-TAXDCL-133
+    name: "CreateOwnAsync's own duplicate-declaration guard (F-TAXDCL-018) is an app-level AnyAsync pre-check backed only by a real DB-level UNIQUE index (TenantId, EmployeeId, TaxDeclarationCycleId) as the genuine backstop - two concurrent CreateOwnAsync calls for the SAME employee+cycle both racing past the AnyAsync check would have the loser fail at SaveChangesAsync with an unhandled DbUpdateException (not caught anywhere in CreateOwnAsync), a materially different (uncaught) failure mode than the module's own Update/Review/Transition concurrency handling"
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "TaxDeclarationService.CreateOwnAsync (no try/catch DbUpdateException around this specific SaveChangesAsync)"
+    permission: "Payroll.TaxDeclaration.ManageOwn"
+    db: EmployeeTaxDeclarations (unique index, DB-enforced backstop; app-level race window still exists up to that point)
+
+  - id: F-TAXDCL-134
+    name: HandoffAdjustmentAsync's idempotency (F-TAXDCL-105) is a genuine application-level short-circuit on PayrollAdjustmentId, backed by the same DB-level uniqueness the caught DbUpdateException (F-TAXDCL-106) protects against for the concurrent-race case
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "YearEndTaxService.HandoffAdjustmentAsync"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxAdjustments.PayrollAdjustmentId
+
+  - id: F-TAXDCL-135
+    name: Retrying CalculateAsync on an already-Calculated run (before Submit) is safe and idempotent by design - the destructive-rebuild pattern (F-TAXDCL-069) means a repeated call with no underlying data change reproduces the identical employee/adjustment/statement set
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "YearEndTaxService.CalculateAsync"
+    permission: "Payroll.YearEndTax.Calculate"
+    db: YearEndTaxEmployees, YearEndTaxAdjustments, YearEndTaxStatements
+
+  - id: F-TAXDCL-136
+    name: Retrying Submit/Approve/Close after a successful prior call correctly fails Conflict on the second attempt (the run is no longer in the required prior state) rather than silently double-processing
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "YearEndTaxService.TransitionAsync, CloseAsync (required-status guard)"
+    permission: "Payroll.YearEndTax.Submit, Approve, Close"
+    db: YearEndTaxRuns.Status
+
+  - id: F-TAXDCL-137
+    name: AddPreviousEmployerAsync's own uniqueness guard (F-TAXDCL-095) has the identical app-level-AnyAsync-plus-DB-unique-index shape as F-TAXDCL-133, with the same uncaught-DbUpdateException race-loser behavior for two concurrent adds of the identical (RunId, EmployeeId, EmployerReference)
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "YearEndTaxService.AddPreviousEmployerAsync (no try/catch DbUpdateException around this SaveChangesAsync)"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxPreviousEmployerInputs (unique index)
+
+  - id: F-TAXDCL-138
+    name: CreateAsync's own overlap-plus-uniqueness guard (F-TAXDCL-065/066) is app-level-only (two AnyAsync/CountAsync-shaped checks), backed only by the (TenantId, TaxYear) unique index for the exact-duplicate case - the date-overlap check itself has no DB-level backstop of any kind, a genuine race window for two concurrent CreateAsync calls with distinct-but-overlapping TaxYear/date ranges
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "YearEndTaxService.CreateAsync (overlap AnyAsync, no unique index covers date-range overlap)"
+    permission: "Payroll.YearEndTax.Manage"
+    db: YearEndTaxRuns (unique index covers TaxYear only, not the date-overlap rule)
+
+  # =========================== N. SQL SERVER/MYSQL PROVIDER PARITY ===========================
+  - id: F-TAXDCL-139
+    name: Both AddPayrollTaxDeclarationsPhase7U and AddYearEndTaxProcessingPhase7W migrations exist in both the SQL Server chain (Backend/HRMS.Infrastructure/Persistence/Migrations) and the MySQL tenant chain (Backend/HRMS.Infrastructure.MySqlMigrations/Migrations), confirmed present by directory listing
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "Migration directory listing, both chains"
+    permission: "n/a"
+    db: "All tax declaration and year-end tax tables, both providers"
+
+  - id: F-TAXDCL-140
+    name: "TaxDeclarations has a dedicated SqlServer/MySql-specific integration test PAIR (SqlServerPayrollTaxDeclarationsIntegrationTests, MySqlPayrollTaxDeclarationsIntegrationTests), each with its own single repeatable-provider-acceptance test method, PLUS a separate provider-agnostic PayrollTaxDeclarationsProviderAcceptance.cs"
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "Backend/HRMS.Tests (file inventory)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-141
+    name: "YearEndTax's own provider coverage is organized differently - ONE class, PayrollYearEndProviderAcceptance.cs, containing both a MySql_payroll_year_end_provider_acceptance and a SqlServer_payroll_year_end_provider_acceptance test method side by side, rather than two separate SqlServer*/MySql* classes the way TaxDeclarations and qa/13-statutory-compliance's own Calculation Framework/Compliance Returns areas are organized"
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "Backend/HRMS.Tests/PayrollYearEndProviderAcceptance.cs (both methods, same file)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-142
+    name: Both provider-acceptance areas are opt-in and skip silently when HRMS_SQLSERVER_TEST_CONNECTION/HRMS_MYSQL_TEST_CONNECTION env vars are absent, per the repository-wide testing convention documented in CLAUDE.md - a green default-suite run is not evidence of either provider's parity on its own
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "Backend/HRMS.Tests (env-var-gated provider fixtures, repository-wide convention)"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== O. LARGE DATA & PAGING ===========================
+  - id: F-TAXDCL-143
+    name: "GetCyclesAsync and GetAuditAsync (declaration side) and GetHistoryAsync (year-end side) return their FULL result set with NO pagination of any kind - only GetReviewAsync, GetRunsAsync, and GetEmployeesAsync are paged (via PagedQuery/query.Page/query.PageSize, clamped to MaxPageSize=100 by GetRunsAsync/GetEmployeesAsync specifically; GetReviewAsync clamps via the query object's own bounds)"
+    group: Large Data & Paging
+    status: Implemented
+    service: "TaxDeclarationService.GetCyclesAsync, GetAuditAsync; YearEndTaxService.GetHistoryAsync (all unpaginated, full grep)"
+    permission: "n/a"
+    db: TaxDeclarationCycles, TaxDeclarationAuditEvents, YearEndTaxHistories
+
+  - id: F-TAXDCL-144
+    name: GetEmployeesAsync additionally supports EmployeeId/Status/HasTaxDue/HasBlockingIssue filters composed onto the same paged, TenantId+RunId-scoped query, ordered by Employee.EmployeeCode then Id for stable pagination
+    group: Large Data & Paging
+    status: Implemented
+    api: "GET /api/payroll/year-end-tax/runs/{id}/employees"
+    service: "YearEndTaxService.GetEmployeesAsync"
+    permission: "Payroll.YearEndTax.View"
+    db: YearEndTaxEmployees (composite filter + stable order)
+
+  - id: F-TAXDCL-145
+    name: "The existing PayrollYearEndLargeDataTests.cs and TaxDeclarationLargeDataTests.cs fixtures exercise 10,000 and 1,000-employee scale respectively (per their own test names/docstrings) - confirming both areas have SOME dedicated scale coverage already, referenced narratively per the qa/8-13 precedent (no ex: reference cited)"
+    group: Large Data & Paging
+    status: Implemented
+    service: "Backend/HRMS.Tests/PayrollYearEndLargeDataTests.cs, TaxDeclarationLargeDataTests.cs"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-146
+    name: ExportAsync's CSV generation (all 4 kinds) is not itself paged - it materializes every YearEndTaxEmployee row for the run into memory via ToListAsync before building the CSV, so export performance scales linearly with the run's own EmployeeCount with no server-side chunking
+    group: Large Data & Paging
+    status: Implemented
+    service: "YearEndTaxService.ExportAsync"
+    permission: "Payroll.YearEndTax.Export"
+    db: YearEndTaxEmployees (full materialization)
+
+  # =========================== P. FRONTEND ===========================
+  - id: F-TAXDCL-147
+    name: "CONFIRMED DEFECT (headline, CR-241) - MyTaxDeclarationsPage's getMyTaxDeclaration() calls GET /api/me/tax-declarations/current, a route that does not exist anywhere on MyTaxDeclarationsController (whose real GET route has no path suffix) - every real page load 404s; MyTaxDeclarationsPage.test.tsx always mocks getMyTaxDeclaration and therefore never exercises the real URL, so the mismatch was never caught by the existing frontend test"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/api/taxDeclarations.ts (getMyTaxDeclaration URL); Backend/HRMS.API/Controllers/TaxDeclarationsController.cs (MyTaxDeclarationsController.Get route)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-148
+    name: "CONFIRMED DEFECT (headline, frontend) - src/api/taxDeclarations.ts has NO client function for CreateOwnAsync, AddLineOwnAsync, or AddProofOwnAsync at all (full file read - only get/submit/updateLine/deleteLine/replaceProof/resubmit exist) - MyTaxDeclarationsPage renders only when a declaration ALREADY exists and offers no way to create one, add a line, or add an initial proof; an employee can only ever edit/delete an existing line, replace a REJECTED proof, or resubmit - there is no UI path to start a declaration from zero"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/api/taxDeclarations.ts (full file - 6 functions, missing create/addLine/addProof); MyTaxDeclarationsPage.tsx (full component)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-149
+    name: "CONFIRMED GAP (frontend) - the entire reviewer/admin side of TaxDeclarationsController (cycles list/create, category/item create, review queue, ReviewLine, ReviewProof, Approve, RequestResubmission, Lock, Reopen, Audit - 10 of the controller's 12 actions) has ZERO frontend page anywhere (full grep of Frontend/HRMS.Web/src/pages for any reference to these routes/functions) - only the employee self-service side has any UI at all"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src (full grep - no admin-side tax-declarations page or api client functions beyond taxDeclarations.ts's 6 self-service functions)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-150
+    name: "CONFIRMED GAP (frontend) - YearEndTaxPage's 'Previous Employer Inputs' tab renders only two static paragraphs with no form, input, or button of any kind; addPreviousEmployerInput already exists as a working client function in src/api/yearEndTax.ts but is called from NOWHERE in the page (full grep) - an operator cannot add a previous-employer input through this UI despite the backend and client function both being real"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/YearEndTaxPage.tsx ('previous' tab, full render); src/api/yearEndTax.ts (addPreviousEmployerInput, unused)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-151
+    name: "CONFIRMED GAP (frontend) - src/api/yearEndTax.ts has NO client function for Cancel, Handoff, History, Export, GetEmployee(single), or UpdatePreviousEmployerInput at all (full file read - only list/create/calculate/submit/approve/close/getEmployees/addPreviousEmployerInput exist, 8 of the controller's 14 routes) - the page cannot cancel a Draft run, hand an adjustment off to payroll, view lifecycle history, or export any CSV through the UI"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/api/yearEndTax.ts (full file - 8 of 14 backend routes exposed)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-152
+    name: "No navigation.ts entry exists for either My Tax Declarations or Year-End Tax (full grep for 'tax' case-insensitive - zero matches) - both routes are registered, permission-gated App.tsx routes with no sidebar/menu discovery path at all, a more severe version of qa/13-statutory-compliance's own CR-236 partial nav gap (that module had at least one of its three pages discoverable)"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/layout/navigation.ts (full grep for 'tax'); App.tsx (both route registrations)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-153
+    name: YearEndTaxPage DOES permission-gate its mutating buttons via useAuth().can(...) for Manage/Calculate/Submit/Approve/Close - a genuinely-enforced frontend affordance, unlike qa/13-statutory-compliance's CR-237 finding for StatutoryCompliancePage
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/YearEndTaxPage.tsx (can() calls on every mutating button)"
+    permission: "Payroll.YearEndTax.Manage, Calculate, Submit, Approve, Close"
+    db: "n/a"
+
+  - id: F-TAXDCL-154
+    name: "CONFIRMED GAP (frontend) - MyTaxDeclarationsPage has NO useAuth/can() usage anywhere (full read) - its Resubmit/Edit/Save/Delete/Replace-proof buttons all render unconditionally for any user who can reach the page at all, the identical shape as qa/13-statutory-compliance's CR-237 finding for StatutoryCompliancePage; low severity since [HasPermission] is the real backend gate per CLAUDE.md"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/MyTaxDeclarationsPage.tsx (full component - no useAuth import)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-155
+    name: MyTaxDeclarationsPage.test.tsx covers the 4 scenarios its own mocked data drives (partially-approved read-only view, empty state, draft edit/delete, resubmission-required replace/resubmit) - all through a fully mocked api/taxDeclarations.ts module (confirmed source of the CR-241 masking effect, F-TAXDCL-147)
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/MyTaxDeclarationsPage.test.tsx (full file read)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-TAXDCL-156
+    name: YearEndTaxPage has no dedicated .test.tsx file of its own (full glob of Frontend/HRMS.Web/src/pages/payroll for YearEndTaxPage.test.tsx - no match), unlike MyTaxDeclarationsPage which has one
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll (directory glob)"
+    permission: "n/a"
+    db: "n/a"

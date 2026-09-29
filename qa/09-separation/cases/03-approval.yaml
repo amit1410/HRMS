@@ -1,0 +1,257 @@
+sheet: Separation_Approval
+submodule: Manager and HR approval workflow - authority resolution, maker-checker, concurrency, and inbox scope
+defaults:
+  role: MANAGER
+  perm: "Separation.ManagerReview"
+  tenant: A
+  pre: "Tenant A signed in as a Manager holding Separation.ManagerReview, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: SEP-APPR-001
+    func: [F-SEP-068]
+    sc: Manager approval authority is resolved as of the separation's RequestDate, not today
+    t: Only the manager who was effective on the RequestDate can approve, even if the manager has since changed
+    src: ["SeparationService.ManagerApproveAsync"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Employee E1 was managed by Manager X through 2026-06-30, then Manager Y from 2026-07-01; a resignation request has RequestDate=2026-06-15 (under X's tenure) => precondition established"
+      - "[POST /api/separation/{id}/manager-approve] As Manager Y (current manager, not manager as of RequestDate) => [403] You are not the effective manager for this separation."
+      - "[POST /api/separation/{id}/manager-approve] As Manager X (was effective on 2026-06-15) => [200] Status=HrReview"
+    auto: API
+
+  - id: SEP-APPR-002
+    func: [F-SEP-069]
+    sc: An employee cannot manager-approve or manager-reject their own separation
+    t: Self-review is blocked even if the employee somehow also holds ManagerReview permission
+    src: ["SeparationService.ManagerApproveAsync", "ManagerRejectAsync"]
+    type: Security
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/separation/{ownCaseId}/manager-approve] As the case's own employee, holding Separation.ManagerReview => [403] An employee cannot review their own separation."
+      - "[POST /api/separation/{ownCaseId}/manager-reject] As the same employee => [403] You are not authorized to reject this separation."
+    auto: API
+
+  - id: SEP-APPR-003
+    func: [F-SEP-070]
+    sc: Manager reject requires a non-blank reason
+    t: An empty Comments field is Invalid
+    src: ["SeparationService.ManagerRejectAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/separation/{id}/manager-reject] Comments='' => [400] A rejection reason is required."
+    auto: API
+
+  - id: SEP-APPR-004
+    func: [F-SEP-071]
+    sc: HR maker-checker - the case's own initiator cannot HR-approve or HR-reject it
+    t: The InitiatedByUserId is blocked from performing final HR approval/rejection, even holding HrReview
+    src: ["SeparationService.HrApproveAsync", "HrRejectAsync"]
+    type: Security
+    pri: P0
+    smoke: true
+    role: HRADMIN
+    perm: "Separation.HrReview"
+    steps:
+      - "[POST /api/separation/employees/{empId}] As HRAdmin U1 => [200/201] Draft, InitiatedByUserId=U1"
+      - "[POST /api/separation/{id}/submit] => [200] HrReview"
+      - "[POST /api/separation/{id}/hr-approve] As the SAME user U1 who initiated it => [403] The maker cannot perform final approval."
+      - "[POST /api/separation/{id}/hr-reject] As U1 => [403] The maker cannot perform final rejection."
+    auto: API
+
+  - id: SEP-APPR-005
+    func: [F-SEP-072]
+    sc: HR approval requires an existing EmployeeEmployment record
+    t: A case whose employee has no EmployeeEmployment row at all Conflicts at HR approval
+    src: ["SeparationService.HrApproveAsync"]
+    type: Negative
+    pri: P1
+    role: HRADMIN
+    perm: "Separation.HrReview"
+    steps:
+      - "[Setup] Employee has zero EmployeeEmployment rows => precondition established"
+      - "[POST /api/separation/{id}/hr-approve] => [409] An employment record is required before approval."
+    auto: DB-assisted
+
+  - id: SEP-APPR-006
+    func: [F-SEP-073]
+    sc: HR reject requires a non-blank reason
+    t: An empty Comments field is Invalid
+    src: ["SeparationService.HrRejectAsync"]
+    type: Negative
+    pri: P1
+    role: HRADMIN
+    perm: "Separation.HrReview"
+    steps:
+      - "[POST /api/separation/{id}/hr-reject] Comments='' => [400] A rejection reason is required."
+    auto: API
+
+  - id: SEP-APPR-007
+    func: [F-SEP-074]
+    sc: Employer-initiated cases skip Manager Review entirely on Submit
+    t: An HR-initiated case never passes through ManagerReview status - Submit routes it straight to HrReview
+    src: ["SeparationService.SubmitCoreAsync"]
+    type: Boundary
+    pri: P1
+    role: HRADMIN
+    perm: "Separation.Initiate"
+    steps:
+      - "[POST /api/separation/employees/{empId}] => [200/201] Draft, SeparationType=EmployerInitiated"
+      - "[POST /api/separation/{id}/submit] => [200] Status=HrReview (never ManagerReview)"
+    auto: API
+
+  - id: SEP-APPR-008
+    func: [F-SEP-075]
+    sc: No multi-stage approval beyond Manager->HR and no return/rework transition exists
+    t: A Rejected case has no "resubmit" or "return for rework" endpoint - it is fully terminal
+    src: ["SeparationService.cs"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Case is Rejected => precondition established"
+      - "[Manual/Code] Full grep of SeparationController.cs's action list for any route that accepts a Rejected case => none exists"
+    auto: Manual only
+
+  - id: SEP-APPR-009
+    func: [F-SEP-076]
+    sc: Manager-stage approval has no InitiatedByUserId maker-checker, unlike the HR stage
+    t: A manager who is ALSO the case's initiator (e.g. dual-role test account) can still manager-approve, since only self-review-as-subject is checked, not initiator identity
+    src: ["SeparationService.ManagerApproveAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Case initiated by user U1, U1 is also the effective manager of a DIFFERENT test employee's case (not their own) => precondition established"
+      - "[POST /api/separation/{differentCaseId}/manager-approve] As U1 => [200] succeeds - only employee==subject self-review is checked, not initiator identity"
+    auto: API
+
+  - id: SEP-APPR-010
+    func: [F-SEP-077]
+    sc: HR approval's DB transaction covers both the separation row and EmployeeEmployment atomically
+    t: (cross-reference to SEP-NOT-025 in the Notice/LWD file for the full rollback scenario)
+    src: ["SeparationService.HrApproveAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    role: HRADMIN
+    perm: "Separation.HrReview"
+    steps:
+      - "[Manual/DB] Cross-reference SEP-NOT-025's forced-failure/rollback/retry sequence => proves atomicity across EmployeeSeparations and EmployeeEmployments"
+    auto: DB-assisted
+
+  - id: SEP-APPR-011
+    func: [F-SEP-078]
+    sc: Concurrent manager-approve vs manager-reject resolves to exactly one success
+    t: Two racing calls on the same ManagerReview case never both succeed
+    src: ["SeparationService.cs"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire manager-approve and manager-reject concurrently against the same ManagerReview case => results.Count(Succeeded)==1; final status is one of {HrReview, Rejected}; event count in [0,3]"
+    auto: DB-assisted
+
+  - id: SEP-APPR-012
+    func: [F-SEP-078]
+    sc: Concurrent manager-approve vs employee-withdraw resolves to exactly one success
+    t: A race between the manager and the initiating employee never both succeed
+    src: ["SeparationService.cs"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire manager-approve and withdraw concurrently against the same ManagerReview case => results.Count(Succeeded)==1; final status is one of {HrReview, Withdrawn}"
+    auto: DB-assisted
+
+  - id: SEP-APPR-013
+    func: [F-SEP-078]
+    sc: Concurrent hr-approve vs hr-reject, hr-approve vs LWD-revision, hr-approve vs employee-withdraw, and hr-approve vs hr-approve each resolve to exactly one success
+    t: Four additional HR-stage races each produce exactly one winner and a bounded event count
+    src: ["SeparationService.cs"]
+    type: Integration-Concurrency
+    pri: P1
+    role: HRADMIN
+    perm: "Separation.HrReview"
+    steps:
+      - "[Manual/DB] Race hr-approve vs hr-reject on the same HrReview case => exactly 1 success, final status in {Approved, Rejected}"
+      - "[Manual/DB] Race hr-approve vs revise-lwd on the same HrReview case => exactly 1 success"
+      - "[Manual/DB] Race hr-approve vs employee-withdraw on the same HrReview case => exactly 1 success, final status in {Approved, Withdrawn}"
+      - "[Manual/DB] Race two concurrent hr-approve calls on the same HrReview case => exactly 1 success, event count bounded [0,3]"
+    auto: DB-assisted
+
+  - id: SEP-APPR-014
+    func: [F-SEP-034]
+    sc: Stale-request handling - a repeated action after a race's loser returns a clean Conflict
+    t: The losing call in any of the above races returns [409] with a clean 'must be in status' or 'changed by another operation' message, never a raw exception
+    src: ["SeparationService.cs"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Manual/DB] Inspect the losing result from any race above => [409] Conflict with a human-readable message, no stack trace or 500"
+    auto: DB-assisted
+
+  - id: SEP-APPR-015
+    func: [F-SEP-079]
+    sc: Manager and HR review queues surface only in-scope pending requests
+    t: An unrelated employee's request never appears in a manager's queue; the HR inbox is tenant-wide
+    src: ["SeparationService.GetManagerInboxAsync", "GetHrInboxAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[GET /api/separation/inbox/manager] As a manager with 2 direct reports (one ManagerReview case, one unrelated employee's case elsewhere) => [200] only the direct report's case is present"
+      - "[GET /api/separation/inbox/hr] As HRAdmin holding HrReview => [200] tenant-wide, capped at 500"
+    auto: API
+
+  - id: SEP-APPR-016
+    func: [F-SEP-080]
+    sc: Manager-scope date asymmetry between the team/inbox listing and the actual approval check
+    t: A manager change between RequestDate and today can make a case visible in the NEW manager's inbox yet fail their approval attempt (or the reverse for the OLD manager)
+    src: ["SeparationService.GetTeamAsync", "ManagerApproveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee E1 managed by X through 2026-06-30, then Y from 2026-07-01; case RequestDate=2026-06-15 (evaluated against X); today is after 2026-07-01 => precondition established"
+      - "[GET /api/separation/inbox/manager] As Y (current manager, resolved as-of TODAY) => [200] E1's case IS listed"
+      - "[POST /api/separation/{id}/manager-approve] As Y => [403] You are not the effective manager for this separation. - the listing and the action check disagree"
+    auto: DB-assisted
+    cr: [CR-132]
+
+  - id: SEP-APPR-017
+    func: [F-SEP-081]
+    sc: GetTeamAsync/manager-inbox have no role-scope (HRBP/SuperHR) fallback
+    t: An HRBP holding only role-scope permissions (no direct manager relationship) sees nothing extra via /team - it is purely IEmployeeManagerResolver-based
+    src: ["SeparationService.GetTeamAsync"]
+    type: Boundary
+    pri: P2
+    role: HRBP
+    perm: "Separation.ViewTeam"
+    steps:
+      - "[GET /api/separation/team] As an HRBP who is not the direct manager of any employee => [200] empty list, despite holding a broad HR role - no role-scope widening exists in this endpoint"
+    auto: API
+
+  - id: SEP-APPR-018
+    func: [F-SEP-278]
+    sc: A genuine effective manager holding zero Separation permissions is still denied
+    t: Relationship alone never substitutes for the declared permission
+    src: ["SeparationController.cs"]
+    type: Authorization
+    pri: P0
+    perm: "n/a"
+    steps:
+      - "[GET /api/separation/inbox/manager] As the employee's genuine effective manager, holding NO Separation permissions at all => [403] Forbidden - relationship alone never substitutes for permission"
+    auto: API
+
+  - id: SEP-APPR-019
+    func: [F-SEP-024]
+    sc: Cross-tenant approval attempts have zero side effects
+    t: A Tenant B manager/HR user referencing a Tenant A case id gets NotFound with no data change
+    src: ["SeparationService.LoadForActionAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[POST /api/separation/{tenantACaseId}/manager-approve] As a Tenant B manager holding ManagerReview => [404] Separation case not found. - no side effect on Tenant A's case"
+      - "[POST /api/separation/{tenantACaseId}/hr-approve] As a Tenant B HR user holding HrReview => [404]"
+    auto: API

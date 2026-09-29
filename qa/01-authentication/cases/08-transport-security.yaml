@@ -1,0 +1,438 @@
+sheet: Auth_Transport_Security
+submodule: Rate Limiting, CORS, Headers, Error Handling
+defaults:
+  role: Anonymous
+  perm: "None (anonymous/infrastructure endpoint; see individual case for authenticated variants)"
+  tenant: A
+  pre: "QA stack running against a disposable QA tenant so throttling does not disrupt other suites."
+  data: "No credentials required beyond what each step states; login attempts use disposable QA test accounts."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: AUTH-RATE-001
+    func: [F-SEC-01]
+    sc: Requests under the threshold succeed
+    t: Login attempts under the configured limit are never throttled
+    src: ["RateLimitingPolicies.Authentication", "AuthenticationRateLimitSettings (default 20/60s)"]
+    type: Positive
+    pri: P0
+    sev: High
+    steps:
+      - "[POST /api/auth/login] Send (PermitLimit - 1) wrong-password attempts within the window from one IP/tenant => all [401], none [429]"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Repeated_sign_in_attempts_are_throttled"]
+
+  - id: AUTH-RATE-002
+    func: [F-SEC-01]
+    sc: Threshold boundary
+    t: The PermitLimit-th request succeeds (as a normal auth failure); the next one is throttled
+    src: ["FixedWindowRateLimiterOptions.PermitLimit"]
+    type: Boundary
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/auth/login] Send exactly PermitLimit wrong-password requests within the window => all evaluated normally (e.g. [401]), none [429]"
+      - "[POST /api/auth/login] Send one more request in the same window => [429] 'Too many attempts. Please wait a moment and try again.' with a Retry-After header"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Repeated_sign_in_attempts_are_throttled"]
+
+  - id: AUTH-RATE-003
+    func: [F-SEC-01]
+    sc: Recovery after the window
+    t: Requests succeed again once the fixed window elapses
+    src: ["FixedWindowRateLimiterOptions.Window"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/auth/login] Exhaust the limit to get a [429] => [429] observed"
+      - "Wait for WindowSeconds to elapse => window resets"
+      - "[POST /api/auth/login] Send one more request => evaluated normally, not [429]"
+    auto: API
+
+  - id: AUTH-RATE-004
+    func: [F-SEC-01]
+    sc: Partition by organization and IP
+    t: Exhausting the limit for Tenant A does not throttle the same IP at Tenant B, and a different IP at Tenant A is unaffected
+    src: ["RateLimitPartition key: tenant.TenantId + remote IP"]
+    type: Tenant-Isolation
+    tags: [Positive]
+    pri: P1
+    tenant: A/B
+    steps:
+      - "[POST /api/auth/login] From IP X, exhaust the limit at the Tenant A host => [429] on the next attempt at A"
+      - "[POST /api/auth/login] From the SAME IP X, immediately call the Tenant B host => evaluated normally (separate partition), not [429]"
+      - "[POST /api/auth/login] From a DIFFERENT IP (or via a forwarded-header test double) at the Tenant A host => evaluated normally, not [429]"
+    auto: API
+    ex: ["xU:ForwardedHeadersTests.The_rate_limiter_partitions_on_the_forwarded_client_address"]
+
+  - id: AUTH-RATE-005
+    func: [F-SEC-01, F-TEN-05]
+    sc: Unresolved host falls back to IP-only partition
+    t: Requests to an unknown host are rate-limited by IP alone
+    src: ["RateLimitingPolicies (tenant is null => address only)"]
+    type: Boundary
+    pri: P2
+    sev: Medium
+    tenant: None
+    steps:
+      - "[POST /api/auth/login] From one IP, exhaust the limit against an unknown host => [429] on the boundary request, same as a resolved host"
+    auto: API
+
+  - id: AUTH-RATE-006
+    func: [F-SEC-02]
+    sc: Password-recovery rate limiting is a separate budget
+    t: Exhausting the login rate limit does not affect the forgot-password budget and vice versa
+    src: ["RateLimitingPolicies.PasswordRecovery is a distinct policy from Authentication"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/auth/login] Exhaust the auth policy limit => [429] on login"
+      - "[POST /api/auth/forgot-password] Immediately call, same IP/tenant => evaluated normally under its own budget, not [429]"
+    auto: API
+    ex: ["xU:PasswordRecoveryRateLimitTests.All_forgot_password_endpoints_use_the_password_recovery_policy"]
+
+  - id: AUTH-RATE-007
+    func: [F-SEC-01]
+    sc: 429 response contract
+    t: The 429 body follows the standard envelope and carries Retry-After
+    src: ["RateLimitingServiceCollectionExtensions.OnRejected"]
+    type: Contract
+    tags: [Security]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/auth/login] Trigger a [429] => body {success:false, message:'Too many attempts. Please wait a moment and try again.'}; header Retry-After present with a positive integer of seconds"
+    auto: API
+
+  - id: AUTH-CORS-001
+    func: [F-SEC-03]
+    sc: Allowed exact origin
+    t: A configured exact origin receives an allow response with credentials
+    src: ["CorsOriginPolicy exact origins", "Cors:AllowedOrigins"]
+    type: Positive
+    pri: P0
+    role: N/A (browser-origin check)
+    steps:
+      - "[OPTIONS /api/auth/login] Preflight with Origin: http://localhost:5173, Access-Control-Request-Method: POST => [200/204] Access-Control-Allow-Origin: http://localhost:5173; Access-Control-Allow-Credentials: true"
+      - "[POST /api/auth/login] Actual request with the same Origin header => response carries the same CORS headers"
+    auto: API
+    ex: ["xU:CorsPolicyTests.Preflight_from_the_dev_client_is_allowed_with_credentials"]
+
+  - id: AUTH-CORS-002
+    func: [F-SEC-03]
+    sc: Allowed workspace-template origin
+    t: A workspace-labelled origin under the configured template is allowed
+    src: ["WorkspaceOriginPattern", "Cors:WorkspaceOriginTemplates"]
+    type: Positive
+    pri: P0
+    tenant: A
+    steps:
+      - "[OPTIONS /api/auth/login] Preflight with Origin: http://demo01.localhost:5173 (or the QA tenant's workspace origin) => [200/204] allow-origin echoes it back exactly"
+    auto: API
+
+  - id: AUTH-CORS-003
+    func: [F-SEC-03]
+    sc: Refused origin
+    t: An origin outside every configured pattern gets no CORS headers
+    src: ["CorsOriginPolicy.IsAllowed (deny by default)"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[OPTIONS /api/auth/login] Preflight with Origin: https://evil.example => response carries NO Access-Control-Allow-Origin header"
+      - "[OPTIONS /api/auth/login] Preflight with Origin: http://evil-hrms.localhost:5173 (suffix confusion attempt against a workspace template) => refused, no allow-origin header"
+      - "[OPTIONS /api/auth/login] Preflight with Origin: http://sub.demo01.localhost:5173 (nested subdomain of a valid workspace) => refused (one-label-deep rule)"
+    sec: "Denies both unrelated origins and crafted look-alikes; nested subdomains never inherit trust."
+    auto: API
+    ex: ["xU:CorsPolicyTests.A_refused_preflight_grants_nothing", "xU:CorsOriginPolicyTests.A_label_may_be_as_long_as_dns_allows_and_no_longer"]
+
+  - id: AUTH-CORS-004
+    func: [F-SEC-03]
+    sc: Null origin refused
+    t: The literal 'null' Origin header (sandboxed iframe / local file) is refused
+    src: ["CorsOriginPolicy.TryParseOrigin (rejects 'null')"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    steps:
+      - "[OPTIONS /api/auth/login] Preflight with Origin: null => refused, no allow-origin header"
+    auto: API
+
+  - id: AUTH-CORS-005
+    func: [F-SEC-03]
+    sc: No Origin header (non-browser or same-origin call)
+    t: A request with no Origin header is answered normally, untouched by CORS
+    src: ["CorsPolicyTests.A_request_with_no_origin_is_untouched_by_the_policy"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/auth/login] Call with no Origin header at all (e.g. server-to-server or curl) => normal business response, no CORS headers added or required"
+    auto: API
+    ex: ["xU:CorsPolicyTests.A_request_with_no_origin_is_untouched_by_the_policy"]
+
+  - id: AUTH-CORS-006
+    func: [F-SEC-03]
+    sc: Exposed headers for downloads
+    t: Content-Disposition is exposed so a CORS-fetched export keeps its filename
+    src: ["WithExposedHeaders('Content-Disposition')"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Medium
+    role: A_HR
+    steps:
+      - "[GET /api/employees/export] Cross-origin call from an allowed origin with credentials => response headers expose Content-Disposition to client-side script (Access-Control-Expose-Headers includes it)"
+    auto: API
+    ex: ["xU:CorsPolicyTests.Content_disposition_is_exposed_so_the_export_keeps_its_filename"]
+
+  - id: AUTH-CORS-007
+    func: [F-SEC-03]
+    sc: Method and header flexibility within the allowed origin
+    t: Any method and any request header are permitted for an allowed origin (by design)
+    src: ["AllowAnyHeader().AllowAnyMethod()"]
+    type: Positive
+    tags: [Boundary]
+    pri: P3
+    sev: Low
+    steps:
+      - "[OPTIONS /api/employees/{id}] Preflight from an allowed origin requesting method DELETE and header X-Custom-Test => [200/204] allowed"
+    auto: API
+
+  - id: AUTH-CORS-008
+    func: [F-SEC-03]
+    sc: Case and punycode normalization of origins
+    t: Origin comparison is robust to scheme/host casing
+    src: ["CorsOriginPolicy.CanonicalKey (IdnHost, lower scheme)"]
+    type: Boundary
+    pri: P3
+    sev: Low
+    steps:
+      - "[OPTIONS /api/auth/login] Preflight with Origin: HTTP://LOCALHOST:5173 (if the configured origin is http://localhost:5173) => allowed, matching case-insensitively on scheme/host"
+    auto: API
+
+  - id: AUTH-SEC-001
+    func: [F-SEC-05]
+    sc: Unhandled exception does not leak internals in a non-Development environment
+    t: A forced 500 in a non-Development build returns the generic message only
+    src: ["ExceptionHandlingMiddleware"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    sev: High
+    pre: "Requires a QA deployment running with ASPNETCORE_ENVIRONMENT != Development; if only Development is available, mark environment-limited and record what Development shows instead."
+    steps:
+      - "Trigger a genuine server error (e.g. malformed downstream dependency call, if one can be forced safely) => [500] body message is exactly 'An unexpected error occurred. Please try again later.'; no stack trace, no exception type, no file path"
+      - "In a Development-mode QA instance, repeat => [500] message equals the real exception message (documented, Development-only behaviour)"
+    sec: "No internal detail reaches a non-Development caller."
+    auto: API
+    cm: "If no environment other than Development is available for QA, record as 'NOT EXECUTED - environment unavailable' for the non-Development leg specifically (Development leg still runs)."
+
+  - id: AUTH-SEC-002
+    func: [F-SEC-05]
+    sc: Swagger is Development-only
+    t: /swagger is unreachable outside Development
+    src: ["Program.cs (UseSwagger only if IsDevelopment)"]
+    type: Security
+    tags: [Negative]
+    pri: P2
+    sev: Medium
+    pre: "Requires a non-Development QA deployment; otherwise NOT EXECUTED - environment unavailable."
+    steps:
+      - "[GET /swagger/index.html] Call against a non-Development QA instance => [404]"
+      - "[GET /swagger/index.html] Call against the Development QA instance => [200]"
+    auto: API
+
+  - id: AUTH-SEC-003
+    func: [F-SEC-04]
+    sc: Security response headers present
+    t: Every response carries the standard hardening headers
+    src: ["Program.cs response-header middleware"]
+    type: Security
+    tags: [Configuration]
+    pri: P1
+    steps:
+      - "[GET /api/system/info] Call and inspect headers => X-Content-Type-Options: nosniff; X-Frame-Options: DENY; Referrer-Policy: strict-origin-when-cross-origin; no X-Powered-By"
+      - "[POST /api/auth/login] Repeat on an authenticated-domain endpoint => same headers present"
+      - "[GET /health] Repeat on the anonymous liveness probe => record whether headers are present (probe may bypass parts of the pipeline; note actual)"
+    sec: "Consistent hardening headers across the surface."
+    auto: API
+    cr: [CR-19]
+    cm: "The header middleware runs after UseAuthorization in Program.cs; confirm it still applies to 401/403/429/500 responses, not only 2xx (CR-19)."
+
+  - id: AUTH-SEC-004
+    func: [F-SEC-04]
+    sc: Security headers present on error responses too
+    t: 401, 403 and 429 responses also carry the hardening headers
+    src: ["Program.cs middleware order vs JwtBearerEvents/RateLimiter short-circuits"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    sev: High
+    role: Anonymous
+    steps:
+      - "[GET /api/employees] No token => [401]; inspect headers => X-Content-Type-Options/X-Frame-Options/Referrer-Policy present"
+      - "[POST /api/employees] Authenticated but unauthorized token => [403]; same header check"
+      - "[POST /api/auth/login] Trigger [429] => same header check"
+    auto: API
+    cr: [CR-19]
+    cm: "JwtBearerEvents.OnChallenge/OnForbidden and the rate limiter's OnRejected write the response directly; confirm they run late enough in the pipeline to still receive the header middleware's OnStarting callback."
+
+  - id: AUTH-SEC-005
+    func: [F-SEC-06]
+    sc: Liveness probe
+    t: /health reports OK without touching any database
+    src: ["Program.cs MapGet('/health')"]
+    type: Positive
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[GET /health] Call with no token, at any host including one that resolves to no organization => [200] {status:'Healthy', utc:<timestamp>}"
+    auto: API
+
+  - id: AUTH-SEC-006
+    func: [F-SEC-06]
+    sc: Readiness probe reflects catalog reachability
+    t: /ready reports Ready when the catalog is reachable and 503 otherwise
+    src: ["Program.cs MapGet('/ready')"]
+    type: Positive
+    tags: [Negative]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[GET /ready] Call against a healthy QA stack => [200] {status:'Ready'}"
+      - "Against a QA instance whose catalog connection is deliberately broken (isolated environment only) => [503] {status:'NotReady'}; if no such environment is available, record NOT EXECUTED - environment unavailable"
+    auto: API
+
+  - id: AUTH-SEC-007
+    func: [F-SEC-06]
+    sc: System info discloses only liveness outside Development
+    t: /api/system/info hides tenant counts and provider details outside Development
+    src: ["SystemController.Info (environment gating)"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    sev: High
+    role: Anonymous
+    pre: "Non-Development leg requires a non-Development QA deployment; otherwise NOT EXECUTED - environment unavailable."
+    steps:
+      - "[GET /api/system/info] Call against the Development QA instance => [200] includes tenant counts/provider/phase detail"
+      - "[GET /api/system/info] Call against a non-Development QA instance => [200] but WITHOUT tenant counts or per-tenant breakdown (liveness-only fields)"
+      - "[GET /api/system/info] Call from the apex host in Development => [200] still reports every organization (documented Development behaviour)"
+    sec: "Confirms the documented rationale: full detail would disclose platform size and customers outside Development."
+    auto: API
+    ex: ["xU:SystemControllerTests.Info_reports_only_liveness_outside_development", "xU:SystemControllerTests.Info_reports_every_organization_in_development_even_at_the_apex", "xU:SystemControllerTests.Info_reports_an_unreachable_shard_as_zero_rather_than_failing"]
+
+  - id: AUTH-SEC-008
+    func: [F-SEC-06]
+    sc: System info survives an unreachable shard
+    t: A shard that cannot be reached is reported as zero rather than failing the whole response
+    src: ["SystemControllerTests.Info_reports_an_unreachable_shard_as_zero_rather_than_failing"]
+    type: Boundary
+    pri: P2
+    sev: Medium
+    role: Anonymous
+    pre: "Development QA instance with at least one tenant whose shard is deliberately unreachable."
+    steps:
+      - "[GET /api/system/info] Call with one tenant's shard unreachable => [200] that tenant's counts are 0, other tenants unaffected, no 500"
+    auto: API
+    ex: ["xU:SystemControllerTests.Info_reports_an_unreachable_shard_as_zero_rather_than_failing"]
+
+  - id: AUTH-FE-001
+    func: [F-SEC-09]
+    sc: Login form asks only for credentials
+    t: The login form never asks the user to name an organization
+    src: ["LoginPage.tsx"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Medium
+    role: Anonymous
+    steps:
+      - "Load /login at the Tenant A host => form shows only identifier and password fields; no organization/tenant selector anywhere"
+    auto: UI
+    ex: ["V:pages/LoginPage.test.tsx::asks for the credentials only - never for an organization"]
+
+  - id: AUTH-FE-002
+    func: [F-SEC-09]
+    sc: Cannot submit twice while in flight
+    t: The submit button is disabled while a sign-in request is outstanding
+    src: ["LoginPage submitting state"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    role: A_EMP
+    steps:
+      - "Submit valid credentials and immediately attempt to click submit again before the response returns => second click has no effect; exactly one /api/auth/login request is sent"
+    auto: UI
+    ex: ["V:pages/LoginPage.test.tsx::cannot be submitted twice while a sign-in is in flight"]
+
+  - id: AUTH-FE-003
+    func: [F-SEC-09]
+    sc: Field-level validation errors
+    t: Client-side validation surfaces the same fields the server would reject
+    src: ["LoginPage.onSubmit"]
+    type: Negative
+    tags: [Validation]
+    pri: P2
+    sev: Medium
+    role: Anonymous
+    steps:
+      - "Submit the form with both fields empty => inline errors appear under identifier and password without a network call"
+      - "Submit with only password filled => inline error under identifier only"
+    auto: UI
+    ex: ["V:pages/LoginPage.test.tsx::puts validation failures under the fields they belong to"]
+
+  - id: AUTH-FE-004
+    func: [F-SEC-09]
+    sc: Workspace unavailable and branding failure states
+    t: The login page shows distinct states for branding-not-found, branding-unavailable and branding-neutral
+    src: ["LoginPage brandingError / branding===Neutral handling"]
+    type: Boundary
+    tags: [Negative]
+    pri: P2
+    sev: Medium
+    role: Anonymous
+    steps:
+      - "Navigate to an unregistered host's /login => 'Workspace not found' state, no login form rendered"
+      - "Simulate a branding fetch network failure => 'Workspace unavailable' state with a retry-suggesting message"
+      - "Navigate to a registered host with neutral/fallback branding => the login form itself renders normally with default styling"
+    auto: UI
+    ex: ["V:pages/LoginPage.test.tsx::shows the workspace-unavailable state when branding is neutral", "V:pages/LoginPage.test.tsx::shows an error when branding fetch fails", "V:pages/LoginPage.test.tsx::renders the login page when the server supplies fallback branding"]
+
+  - id: AUTH-FE-005
+    func: [F-SEC-08]
+    sc: Apex host shows the workspace picker, not a login form
+    t: The base domain with no workspace label renders WorkspacePickerPage
+    src: ["App.tsx isApexHost branch"]
+    type: Positive
+    pri: P1
+    role: Anonymous
+    tenant: None
+    steps:
+      - "Navigate to the configured apex host (e.g. localhost:5173 with a workspace template configured) => WorkspacePickerPage renders, not LoginPage"
+      - "Enter a valid workspace label and submit => navigated to that workspace's /login"
+      - "Enter an invalid label (uppercase, symbols, empty) => inline error, no navigation"
+      - "Paste a full workspace URL into the input => the workspace label is extracted and used"
+    auto: UI
+    ex: ["V:pages/WorkspacePickerPage.test.tsx"]
+
+  - id: AUTH-FE-006
+    func: [F-SEC-08]
+    sc: Host-aware API origin
+    t: A page served from a workspace host calls that workspace's API origin, never another tenant's
+    src: ["apiOrigin.ts resolveApiBaseUrl"]
+    type: Tenant-Isolation
+    tags: [Positive]
+    pri: P1
+    tenant: A
+    steps:
+      - "Load the app at the Tenant A workspace host and sign in => network calls target Tenant A's API origin exclusively (e.g. demo-a.localhost:5080), never Tenant B's"
+    auto: UI
+    ex: ["V:lib/apiOrigin.test.ts"]

@@ -1,0 +1,241 @@
+sheet: Employee_Personal
+submodule: Personal Details fields
+defaults:
+  role: HR_ADMIN
+  perm: Employee.Edit
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (Employee.Create, Employee.Edit, EmployeeSensitive.View, EmployeeSensitive.Edit); a draft employee EMP-PD-001 already exists."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: EMP-PD-001
+    func: [F-EMP-025]
+    sc: First and last name are required, max 100 characters
+    t: Blank/whitespace-only names and names over 100 characters are rejected; exactly 100 characters is accepted
+    src: ["EmployeePersonalDetailsRequestValidator"]
+    type: Boundary
+    tags: [Validation]
+    pri: P0
+    smoke: true
+    steps:
+      - "[PUT /api/employees/{id}/personal-details] firstName='' => [400] 'First name is required.'"
+      - "[PUT /api/employees/{id}/personal-details] lastName='   ' (whitespace only) => [400] 'Last name is required.'"
+      - "[PUT /api/employees/{id}/personal-details] firstName 101 characters => [400] 'First name must not exceed 100 characters.'"
+      - "[PUT /api/employees/{id}/personal-details] firstName exactly 100 characters => [200] accepted"
+    auto: API
+    ex: ["xU:EmployeePersonalDetailsTests.Update_updates_only_personal_fields_on_an_existing_employee"]
+
+  - id: EMP-PD-002
+    func: [F-EMP-027]
+    sc: Gender is validated as a recognized enum member
+    t: An unrecognized gender value is rejected
+    src: ["EmployeePersonalDetailsRequestValidator (Gender.IsInEnum())"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[PUT /api/employees/{id}/personal-details] gender=999 (not a defined member) => [400] 'Gender is not a recognized value.'"
+      - "[PUT /api/employees/{id}/personal-details] gender=Female => [200] accepted"
+    auto: API
+
+  - id: EMP-PD-003
+    func: [F-EMP-028]
+    sc: Date of joining bounds - required, max 1 year future, max 100 years past
+    t: Required check plus both boundary windows
+    src: ["EmployeePersonalDetailsRequestValidator"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/personal-details] dateOfJoining omitted (default) => [400] 'Date of joining is required.'"
+      - "[PUT /api/employees/{id}/personal-details] dateOfJoining = today + 1 year + 1 day => [400] 'Date of joining may not be more than 1 year(s) in the future.'"
+      - "[PUT /api/employees/{id}/personal-details] dateOfJoining = today + 1 year exactly => [200] accepted"
+      - "[PUT /api/employees/{id}/personal-details] dateOfJoining = today - 101 years => [400] 'Date of joining is too far in the past to be plausible.'"
+    auto: API
+
+  - id: EMP-PD-004
+    func: [F-EMP-029]
+    sc: Date of birth bounds and the 14-year minimum age at date of joining
+    t: DOB must be in the past, no more than 120 years ago, and the employee must be >=14 on the date of joining (not on today)
+    src: ["EmployeePersonalDetailsRequestValidator (MinimumAgeYears=14)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/personal-details] dateOfBirth = today (not in the past) => [400] 'Date of birth must be in the past.'"
+      - "[PUT /api/employees/{id}/personal-details] dateOfBirth = today - 121 years => [400] 'Date of birth is not plausible.'"
+      - "[PUT /api/employees/{id}/personal-details] dateOfBirth such that the employee is 13 years old on dateOfJoining => [400] 'An employee must be at least 14 years old on their date of joining.'"
+      - "[PUT /api/employees/{id}/personal-details] dateOfBirth such that the employee is exactly 14 on dateOfJoining => [200] accepted"
+    auto: API
+
+  - id: EMP-PD-005
+    func: [F-EMP-030]
+    sc: Aadhaar/PAN/UAN format validation, each optional
+    t: Aadhaar and UAN must be exactly 12 digits; PAN must be 5 letters + 4 digits + 1 letter; all three are valid when omitted
+    src: ["EmployeePersonalDetailsRequestValidator"]
+    type: Boundary
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/personal-details] aadhaarNumber='12345' (5 digits) => [400] 'Aadhaar number must be exactly 12 digits.'"
+      - "[PUT /api/employees/{id}/personal-details] aadhaarNumber='123456789012' (12 digits) => [200] accepted"
+      - "[PUT /api/employees/{id}/personal-details] panNumber='ABCDE12345' (5 digits instead of 4) => [400] 'PAN must be in the format ABCDE1234F...'"
+      - "[PUT /api/employees/{id}/personal-details] panNumber='ABCDE1234F' => [200] accepted"
+      - "[PUT /api/employees/{id}/personal-details] uanNumber='1234567890' (10 digits) => [400] 'UAN must be exactly 12 digits.'"
+      - "[PUT /api/employees/{id}/personal-details] aadhaarNumber/panNumber/uanNumber all omitted => [200] accepted (all optional)"
+    auto: API
+
+  - id: EMP-PD-006
+    func: [F-EMP-031]
+    sc: ESIC Number required only when ESIC Applicable is true
+    t: EsicApplicable=true without an EsicNumber is rejected; EsicApplicable=false leaves EsicNumber optional
+    src: ["EmployeePersonalDetailsRequestValidator"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/personal-details] esicApplicable=true, esicNumber omitted => [400] 'ESIC Number is required when ESIC is applicable.'"
+      - "[PUT /api/employees/{id}/personal-details] esicApplicable=true, esicNumber='ESIC-001' => [200] accepted"
+      - "[PUT /api/employees/{id}/personal-details] esicApplicable=false, esicNumber omitted => [200] accepted"
+    auto: API
+    ex: ["xU:EmployeePersonalDetailsTests.Create_requires_esic_number_when_esic_is_applicable"]
+
+  - id: EMP-PD-007
+    func: [F-EMP-032]
+    sc: Sensitive identifiers are masked on every ordinary read; a blank submitted value on update preserves the stored value
+    t: GET /api/employees/{id} never shows a raw Aadhaar/PAN/PF/UAN; submitting a blank field on update does not clear the previously-stored value
+    src: ["EmployeeDto masking", "EmployeeService.OverwriteOrKeep"]
+    type: Positive
+    tags: [Security]
+    pri: P0
+    smoke: true
+    pre: "EMP-PD-001 already has aadhaarNumber='123456789012' and panNumber='ABCDE1234F' stored."
+    steps:
+      - "[GET /api/employees/{id}] Call => [200] aadhaarNumber/panNumber are masked (e.g. only last 4 digits visible), never the raw stored value"
+      - "[PUT /api/employees/{id}/personal-details] aadhaarNumber='' (blank), panNumber omitted => [200] accepted"
+      - "[GET /api/employees/{id}/sensitive-details] Call => [200] aadhaarNumber and panNumber are UNCHANGED from what was stored before - blank did not clear them"
+    auto: API
+    ex: ["xU:EmployeePersonalDetailsEndToEndTests.Edit_with_blank_sensitive_ids_keeps_the_stored_values"]
+
+  - id: EMP-PD-008
+    func: [F-EMP-033]
+    sc: Raw sensitive identifiers require the additional EmployeeSensitive.View permission
+    t: A caller with Employee.View but not EmployeeSensitive.View is refused the sensitive-details endpoint; ordinary detail reads stay masked either way
+    src: ["EmployeeService.GetSensitiveDetailsAsync"]
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    role: HRBP
+    perm: Employee.View
+    pre: "Caller holds Employee.View only (no EmployeeSensitive.View)."
+    steps:
+      - "[GET /api/employees/{id}] Call => [200] masked values only"
+      - "[GET /api/employees/{id}/sensitive-details] Call => [403] Forbidden"
+    auto: API
+    ex: ["xU:EmployeeSensitiveDataEndpointsTests.General_reads_are_masked_and_raw_statutory_values_require_narrow_permissions"]
+
+  - id: EMP-PD-009
+    func: [F-EMP-034]
+    sc: The sensitive-details endpoint does not apply the row-level access-scope predicate
+    t: A scope-restricted Manager who cannot see an employee via GET /api/employees/{id} can still read that employee's raw sensitive data if granted EmployeeSensitive.View
+    src: ["EmployeeService.GetSensitiveDetailsAsync (no _accessScope call)"]
+    type: Security
+    tags: [Authorization]
+    pri: P1
+    role: MANAGER
+    perm: "Employee.View + EmployeeSensitive.View"
+    pre: "Manager M's scope excludes employee X (not a direct report); M is nonetheless granted EmployeeSensitive.View for this test."
+    steps:
+      - "[GET /api/employees/{X id}] As Manager M => [404] out of scope"
+      - "[GET /api/employees/{X id}/sensitive-details] As the same Manager M => [200] raw sensitive values are returned despite X being out of M's list/detail scope"
+    auto: API
+    cr: [CR-48]
+
+  - id: EMP-PD-010
+    func: [F-EMP-035]
+    sc: Personal Details update touches only the Personal Details field subset
+    t: Updating Personal Details does not alter department, designation, manager, contact, address, bank or employment data
+    src: ["EmployeeService.ApplyPersonalDetails"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/personal-details] Change firstName only => [200] accepted"
+      - "[GET /api/employees/{id}] Call => [200] departmentId/designationId/reportingManagerId are unchanged from before the update"
+    auto: API
+    ex: ["xU:EmployeePersonalDetailsTests.Update_updates_only_personal_fields_on_an_existing_employee"]
+
+  - id: EMP-PD-011
+    func: [F-EMP-036]
+    sc: Unicode names round-trip unchanged
+    t: Non-Latin scripts and diacritics in first/last/middle name are preserved exactly through create, update and read
+    src: ["EmployeeService.ApplyPersonalDetails (Trim only, no charset filter)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    steps:
+      - "[PUT /api/employees/{id}/personal-details] firstName='Renée', lastName='田中' => [200] accepted"
+      - "[GET /api/employees/{id}] Call => [200] firstName='Renée', lastName='田中' exactly as submitted"
+    auto: API
+
+  - id: EMP-PD-012
+    func: [F-EMP-037]
+    sc: Whitespace-only first/last name is rejected after trimming
+    t: A name consisting only of spaces/tabs fails NotEmpty because FluentValidation trims before checking
+    src: ["EmployeePersonalDetailsRequestValidator.FirstName/LastName NotEmpty()"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/employees/personal-details] firstName='   ' => [400] 'First name is required.'"
+    auto: API
+
+  - id: EMP-PD-013
+    func: [F-EMP-038]
+    sc: Personal Details GET/PUT on a cross-tenant employee id is a 404
+    t: A Tenant B id used against Tenant A's token (or vice versa) is not found, not forbidden
+    src: ["EmployeeService.UpdatePersonalDetailsAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[GET /api/employees/{Tenant B id}/personal-details] As Tenant A => [404] Not Found"
+      - "[PUT /api/employees/{Tenant B id}/personal-details] As Tenant A => [404] Not Found"
+    auto: API
+    ex: ["xU:EmployeePersonalDetailsTests.Update_of_another_tenants_employee_is_not_found"]
+
+  - id: EMP-PD-014
+    func: [F-EMP-039]
+    sc: Group Date of Joining, Date of Leaving and Job Status round-trip on Personal Details create/update
+    t: Every implemented Personal Details field survives a full create -> persist -> reload -> update cycle
+    src: ["EmployeeService.ApplyPersonalDetails"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/employees/personal-details] Every documented field populated (salutation, middleName, gender, bloodGroup, maritalStatus, religion, caste, citizenship, birth location, dateOfBirth, dateOfJoining, jobStatus) => [201] created"
+      - "[GET /api/employees/{id}] Call => [200] every submitted field reads back exactly as submitted"
+      - "[PUT /api/employees/{id}/personal-details] Change every field to a new valid value => [200] accepted"
+      - "[GET /api/employees/{id}] Call => [200] every field reflects the updated value"
+    auto: API
+    ex: ["xU:EmployeePersonalDetailsEndToEndTests.Every_personal_detail_field_creates_persists_reloads_and_updates"]
+
+  - id: EMP-PD-015
+    func: [F-EMP-040]
+    sc: Gratuity and Pension are plain booleans with no cross-field rule
+    t: Any combination of gratuity/pension true/false is accepted
+    src: ["EmployeeService.ApplyPersonalDetails"]
+    type: Positive
+    pri: P3
+    steps:
+      - "[PUT /api/employees/{id}/personal-details] gratuity=true, pension=false => [200] accepted"
+      - "[PUT /api/employees/{id}/personal-details] gratuity=false, pension=true => [200] accepted"
+    auto: API
+
+  - id: EMP-PD-016
+    func: [F-EMP-026]
+    sc: Optional free-text fields (middle name, salutation, religion, caste, citizenship, language known) accept blank and are normalized to null
+    t: Submitting an empty string for an optional field stores null, not an empty string
+    src: ["EmployeeService.ApplyPersonalDetails (Normalize)"]
+    type: Boundary
+    pri: P3
+    steps:
+      - "[PUT /api/employees/{id}/personal-details] religion='', caste='' => [200] accepted"
+      - "[GET /api/employees/{id}] Call => [200] religion and caste are null, not empty strings"
+    auto: API

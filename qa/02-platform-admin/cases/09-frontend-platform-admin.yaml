@@ -1,0 +1,356 @@
+sheet: Platform_Frontend
+submodule: Frontend Platform Administration UI
+defaults:
+  role: PLATFORM_ADMIN
+  perm: "PlatformTenant.View / Create / UpdateStatus (per action)"
+  tenant: None (platform identity domain)
+  pre: "QA platform.localhost stack; PLATFORM_ADMIN and a lower-privilege platform user available for permission-gated UI checks."
+  data: "n/a (UI interaction)."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: PLAT-FE-001
+    func: [F-PLAT-30]
+    sc: Platform login page renders and submits
+    t: The platform login form authenticates and navigates to the tenants page
+    src: ["PlatformLoginPage.tsx"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "Navigate to platform.localhost/platform/login => the split login layout renders with email/password fields and no organization selector"
+      - "Enter valid platform admin credentials and submit => navigated to /platform/tenants, replacing history (back button does not return to the login form)"
+    auto: UI
+    ex: ["V:pages/platform/PlatformLoginPage.test.tsx::renders the split platform administration login", "V:pages/platform/PlatformLoginPage.test.tsx::submits the existing platform authentication request and navigates"]
+
+  - id: PLAT-FE-002
+    func: [F-PLAT-30]
+    sc: Platform login validation and error display
+    t: Native required-field validation blocks empty submission, and server errors render in an accessible alert
+    src: ["PlatformLoginPage.tsx"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "Submit the form with both fields empty => the browser's native required-field validation blocks submission; no API call is made"
+      - "Submit with wrong credentials => an accessible role='alert' banner shows the server's error message"
+    auto: UI
+    ex: ["V:pages/platform/PlatformLoginPage.test.tsx::keeps native required-field validation before submitting", "V:pages/platform/PlatformLoginPage.test.tsx::renders API errors in a safe accessible alert"]
+
+  - id: PLAT-FE-003
+    func: [F-PLAT-30]
+    sc: Password visibility toggle
+    t: The password field can be toggled between masked and visible without losing its value
+    src: ["PlatformLoginPage.tsx passwordVisible state"]
+    type: Positive
+    tags: [Boundary]
+    pri: P3
+    sev: Low
+    steps:
+      - "Type a password, click the visibility toggle => the field switches from type=password to type=text showing the same value; toggling again re-masks it"
+    auto: UI
+    ex: ["V:pages/platform/PlatformLoginPage.test.tsx::toggles password visibility"]
+
+  - id: PLAT-FE-004
+    func: [F-PLAT-30]
+    sc: Platform credentials are not persisted in browser storage
+    t: The submitted email/password never land in localStorage/sessionStorage
+    src: ["PlatformLoginPage.tsx (no storage write for credentials)"]
+    type: Security
+    pri: P1
+    sev: High
+    steps:
+      - "Submit valid credentials and inspect localStorage/sessionStorage immediately after => no key contains the raw email or password; only the expected refresh-token key (hrms.platform.refreshToken.v1) appears, and it holds an opaque token, not credentials"
+    sec: "Matches the tenant LoginPage's posture from Module 1."
+    auto: UI
+    ex: ["V:pages/platform/PlatformLoginPage.test.tsx::does not persist platform credentials in browser storage"]
+
+  - id: PLAT-FE-005
+    func: [F-PLAT-28]
+    sc: Tenants page requires PlatformTenant.View to render anything
+    t: A platform user without PlatformTenant.View sees a permission-denied message instead of the table
+    src: ["PlatformTenantsPage.tsx (!can(PlatformPermissions.view))"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: PLATFORM_LIMITED
+    steps:
+      - "Sign in as PLATFORM_LIMITED and navigate to /platform/tenants => 'You do not have permission to view platform tenants.' renders; no table, no API call to list tenants fires"
+    auto: UI
+
+  - id: PLAT-FE-006
+    func: [F-PLAT-28]
+    sc: Summary cards reflect the loaded tenant list
+    t: Total/Active/MySQL/Pending counts are derived correctly from the list response
+    src: ["PlatformTenantsPage.tsx (total/mysql/pending/activeTenants computed values)"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "Load the tenants page with a known mixture (e.g. 3 Active including 2 MySQL, 1 Inactive) => Total Tenants=4, Active Tenants=3 (75%), MySQL Tenants=2, Pending/Inactive=1"
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::calculates summary cards from the loaded tenant list"]
+
+  - id: PLAT-FE-007
+    func: [F-PLAT-28]
+    sc: Search and status filter narrow the table without re-querying the API
+    t: Filtering is client-side over the already-loaded list
+    src: ["PlatformTenantsPage.tsx filteredTenants useMemo"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "Load the page, then type part of a tenant code into the search box => only matching rows remain; no new /api/platform/tenants request fires"
+      - "Select a status filter (e.g. 'Inactive') => only tenants with that status remain, combined with any active search text"
+      - "Clear both filters => the full list reappears"
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::filters tenant rows by search and status without changing the API request"]
+
+  - id: PLAT-FE-008
+    func: [F-PLAT-29]
+    sc: Create form is hidden without PlatformTenant.Create
+    t: A viewer-only platform user sees the table but not the create form
+    src: ["PlatformTenantsPage.tsx (can(PlatformPermissions.create) guards the create form)"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    role: PLATFORM_VIEWER (PlatformTenant.View only)
+    steps:
+      - "Sign in as PLATFORM_VIEWER and open /platform/tenants => the tenant table renders; the 'Create tenant' form section is entirely absent from the page"
+    auto: UI
+
+  - id: PLAT-FE-009
+    func: [F-PLAT-29]
+    sc: Create form renders required fields and a live database-name preview
+    t: The create form shows every field the API needs plus a non-authoritative preview of the resulting database name
+    src: ["PlatformTenantsPage.tsx create form; mysqlPreview"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "Open the create form => Tenant Name, Tenant Code, Host, Database Provider, Shard Key, Contact fields and Initial Administrator fields are all present; the pattern attribute on Tenant Code matches the backend's shape rule"
+      - "Type a shard key while Database Provider=MySql => the preview updates live to 'HRMS_<sharded key, lower-cased>'; switching Database Provider to SqlServer changes the preview to the shared-database label"
+      - "The preview text is marked '(preview only)' => confirmed, so an operator cannot mistake it for a guarantee"
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::renders the create form with required administrator fields and provider preview", "V:pages/platform/PlatformTenantsPage.test.tsx::updates the database preview and submits the existing normalized payload"]
+
+  - id: PLAT-FE-010
+    func: [F-PLAT-29]
+    sc: Create submits a normalized payload
+    t: TenantCode/Host/ShardKey are normalized client-side to match what the API expects, before submission
+    src: ["PlatformTenantsPage.tsx submit (tenantCode.toUpperCase/host.toLowerCase/shardKey.toLowerCase)"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Medium
+    steps:
+      - "Fill the form with a lower-case tenant code and an upper-case shard key, then submit => the outgoing request body carries the upper-cased tenant code and lower-cased host/shard key, matching the server's own normalization"
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::updates the database preview and submits the existing normalized payload"]
+
+  - id: PLAT-FE-011
+    func: [F-PLAT-29]
+    sc: Successful creation shows the tenant, its link, and any temporary password exactly once
+    t: The created-tenant banner surfaces the workspace URL and, when present, the one-time password
+    src: ["PlatformTenantsPage.tsx created banner"]
+    type: Positive
+    pri: P1
+    steps:
+      - "Submit a valid create form => a success banner appears naming the new tenant's code/provider/status, with an 'Open Tenant' link built from its host, and the temporary password in a distinct, copy-friendly element when the API returned one"
+      - "Submit another tenant afterward => the new banner replaces the old one; the previous tenant's temporary password is no longer displayed anywhere on the page"
+    sec: "The temporary password is not persisted anywhere in the DOM/state beyond the current banner (informational; see F-PLAT-23/CR-23 for the backend-side exposure question)."
+    auto: UI
+
+  - id: PLAT-FE-012
+    func: [F-PLAT-29]
+    sc: Duplicate tenant code produces an actionable, rewritten error
+    t: The generic 409 message is rewritten client-side into a hint pointing at Retry Provisioning
+    src: ["PlatformTenantsPage.tsx submit catch (apiError.message.includes('TenantCode is already in use'))"]
+    type: Negative
+    pri: P2
+    sev: Medium
+    steps:
+      - "Submit a create form whose TenantCode duplicates an existing Inactive tenant => the displayed error reads 'A tenant with this code already exists in Inactive state. Use Retry Provisioning instead of creating another tenant.' rather than the raw API message"
+    auto: UI
+
+  - id: PLAT-FE-013
+    func: [F-PLAT-29]
+    sc: Inspect Tenant opens as a read-only dialog
+    t: Inspect shows full detail without offering to edit, and closes without disturbing the underlying list
+    src: ["PlatformTenantsPage.tsx inspecting overlay"]
+    type: Positive
+    pri: P1
+    steps:
+      - "Click 'View / Inspect' on a tenant row => a modal dialog opens showing tenant name/host/provider/shard key/status/contact fields, with only a Close button (no Save)"
+      - "Press Escape => the dialog closes; the tenant table is unaffected and unfiltered"
+      - "Click the backdrop => the dialog also closes"
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::opens Inspect Tenant as a top-level dialog and closes it without removing the tenant list"]
+
+  - id: PLAT-FE-014
+    func: [F-PLAT-29, F-PLAT-14]
+    sc: Edit drawer keeps provisioning identity read-only
+    t: Tenant Code, Database Provider and Shard Key are displayed but not editable in the edit drawer
+    src: ["PlatformTenantsPage.tsx editing drawer (Field readOnly)"]
+    type: Positive
+    tags: [Security]
+    pri: P0
+    sev: High
+    steps:
+      - "Click 'Edit' on a tenant row => a drawer opens with Tenant Name/Host/Contact fields editable, and Tenant Code/Database Provider/Shard Key rendered as read-only fields with a note explaining they cannot be changed"
+      - "Attempt to type into the read-only fields => no change is accepted"
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::opens tenant actions and keeps provisioning identity read-only in the edit form", "V:pages/platform/PlatformTenantsPage.test.tsx::edits an inactive tenant and keeps provisioning fields read-only"]
+
+  - id: PLAT-FE-015
+    func: [F-PLAT-29]
+    sc: Only one major overlay is open at a time
+    t: Opening Edit while Inspect is open replaces it, rather than stacking dialogs
+    src: ["PlatformTenantsPage.tsx (setInspecting(null) inside onEdit; overlayOpen effect)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "Open Inspect on one row, then click Edit on (the same or another) row without closing Inspect first => the Inspect dialog closes and the Edit drawer opens; only one overlay is present in the DOM at a time"
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::opens Edit Tenant as a drawer and keeps only one major overlay open"]
+
+  - id: PLAT-FE-016
+    func: [F-PLAT-29]
+    sc: Edit save persists only editable metadata and surfaces errors inline
+    t: Saving the edit drawer sends only the editable fields and keeps the drawer open on failure
+    src: ["PlatformTenantsPage.tsx saveEdit"]
+    type: Positive
+    tags: [Negative]
+    pri: P1
+    steps:
+      - "Change Tenant Name and Host in the drawer, save => [200] the table row updates immediately; a success message appears; the drawer closes"
+      - "Repeat, but have the API reject the save (e.g. duplicate host) => the drawer stays open, an inline error appears, and no row in the table is changed"
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::saves only editable tenant metadata", "V:pages/platform/PlatformTenantsPage.test.tsx::keeps edit errors visible in the modal"]
+
+  - id: PLAT-FE-017
+    func: [F-PLAT-29]
+    sc: Status-change actions are permission-gated and status-gated
+    t: Activate/Deactivate only appear for a user with PlatformTenant.UpdateStatus, and only the action matching the current status is offered
+    src: ["PlatformTenantsPage.tsx TenantRow (canChangeStatus && tenant.status)"]
+    type: Authorization
+    tags: [Positive, Negative]
+    pri: P0
+    role: PLATFORM_ONBOARDER (PlatformTenant.Create only)
+    steps:
+      - "Sign in as PLATFORM_ONBOARDER (no PlatformTenant.UpdateStatus) and open a tenant's Actions menu => neither Activate nor Deactivate is present"
+      - "Sign in as PLATFORM_ADMIN (has UpdateStatus) and open an Active tenant's Actions menu => only 'Deactivate' is offered, not 'Activate'"
+      - "Open an Inactive tenant's Actions menu => only 'Activate' is offered"
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::offers Activate for inactive tenants and preserves the Development reset action", "V:pages/platform/PlatformTenantsPage.test.tsx::confirms deactivation and updates the row status and summary"]
+
+  - id: PLAT-FE-018
+    func: [F-PLAT-29]
+    sc: Deactivation confirmation updates the row and the summary cards together
+    t: Confirming deactivation refreshes both the row's status pill and the aggregate counts without a full reload
+    src: ["PlatformTenantsPage.tsx confirmStatusChange"]
+    type: Positive
+    pri: P1
+    steps:
+      - "Confirm deactivation on an Active tenant => the row's status pill becomes 'Inactive'; the Active Tenants summary card count decreases by one and the Pending/Inactive card increases by one, in the same render"
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::confirms deactivation and updates the row status and summary"]
+
+  - id: PLAT-FE-019
+    func: [F-PLAT-29]
+    sc: Retry provisioning is offered only for Inactive tenants held by an editor
+    t: The Retry action is visible only when canEdit is true and the tenant is Inactive
+    src: ["PlatformTenantsPage.tsx TenantRow (canEdit && tenant.status === 'Inactive')"]
+    type: Authorization
+    tags: [Positive, Negative]
+    pri: P1
+    steps:
+      - "Open an Active tenant's Actions menu as PLATFORM_ADMIN => no 'Retry provisioning' action is present"
+      - "Open an Inactive tenant's Actions menu as PLATFORM_ADMIN => 'Retry provisioning' is present"
+      - "Open an Inactive tenant's Actions menu as PLATFORM_VIEWER (no Create) => 'Retry provisioning' is absent"
+    auto: UI
+
+  - id: PLAT-FE-020
+    func: [F-PLAT-29]
+    sc: Retry provisioning requires an explicit browser confirmation naming the provider and database preview
+    t: The retry flow asks for a native confirm() before calling the API, showing the same non-authoritative preview as create
+    src: ["PlatformTenantsPage.tsx retry (window.confirm)"]
+    type: Positive
+    pri: P2
+    sev: Medium
+    steps:
+      - "Open Retry provisioning on an Inactive tenant, fill the administrator fields, submit => a native confirmation dialog names the tenant code, provider and shard key with a database preview; declining it makes no API call"
+      - "Accept the confirmation => the retry API call fires; on success the row updates to Active and the modal closes"
+    auto: UI
+
+  - id: PLAT-FE-021
+    func: [F-PLAT-29, F-PLAT-22]
+    sc: Reset Tenant Admin Password is Development-build-only and requires confirmation
+    t: The reset action appears only in a dev build for an Active tenant an editor can act on, and requires confirmation before calling the API
+    src: ["PlatformTenantsPage.tsx (import.meta.env.DEV && canEdit && tenant.status === 'Active')"]
+    type: Positive
+    tags: [Negative, Boundary]
+    pri: P1
+    steps:
+      - "In a dev-mode build, open an Active tenant's Actions menu as PLATFORM_ADMIN => 'Reset Tenant Admin Password' is present"
+      - "Open an Inactive tenant's Actions menu => the action is absent"
+      - "Click it, decline the native confirmation => no API call fires"
+      - "Click it, confirm, optionally enter an admin email, submit => on success a 'Temporary password' panel shows the tenant, admin email and password with a Copy button, and the underlying reset modal is gone"
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::requires confirmation before resetting", "V:pages/platform/PlatformTenantsPage.test.tsx::shows the returned password only in memory until the modal closes", "V:pages/platform/PlatformTenantsPage.test.tsx::offers Activate for inactive tenants and preserves the Development reset action"]
+
+  - id: PLAT-FE-022
+    func: [F-PLAT-29]
+    sc: The temporary password result panel does not persist beyond the current view
+    t: Closing the temporary-password panel clears it from component state
+    src: ["PlatformTenantsPage.tsx resetResult/closeResetResult"]
+    type: Security
+    tags: [Positive]
+    pri: P1
+    sev: High
+    steps:
+      - "Complete a password reset and view the temporary-password panel, then click Close => the panel is removed from the DOM; reopening any other dialog does not resurface the password"
+      - "Inspect component state/DOM afterward for the plaintext password => not present anywhere outside the (now-closed) panel while it was open"
+    sec: "Bounds the window during which the plaintext password is visible in the DOM to the operator's own explicit action."
+    auto: UI
+    ex: ["V:pages/platform/PlatformTenantsPage.test.tsx::shows the returned password only in memory until the modal closes"]
+
+  - id: PLAT-FE-023
+    func: [F-PLAT-31, F-PLAT-28]
+    sc: Tenant row and created-tenant links point at the tenant's real workspace
+    t: Row URLs and the created-tenant banner link use the tenant's host on the current origin's scheme/port
+    src: ["PlatformTenantsPage.tsx localTenantUrl"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Medium
+    steps:
+      - "Inspect a tenant row's URL link => it points at the current browser scheme/port with the tenant's own host substituted, matching what a browser at that address would actually reach"
+    auto: UI
+
+  - id: PLAT-FE-024
+    func: [F-PLAT-30]
+    sc: Platform session survives a reload
+    t: Reloading the tenants page while signed in restores the session rather than bouncing to login
+    src: ["PlatformAuthProvider restoration effect (Module 1 F-PLT-08)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "Sign in, then reload /platform/tenants => a brief 'Restoring platform session...' state is shown, then the tenant table renders without returning to the login page"
+    auto: UI
+    ex: ["V:auth/PlatformAuthProvider.test.tsx::waits while restoring and then restores the identity and permissions"]
+
+  - id: PLAT-FE-025
+    func: [F-PLAT-28]
+    sc: Sign-out from the platform admin header returns to login
+    t: The header's Sign out button ends the platform session and blocks further access
+    src: ["PlatformTenantsPage.tsx header (logout)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "Click Sign out in the header => navigated to /platform/login; a subsequent direct navigation to /platform/tenants redirects back to login"
+    auto: UI

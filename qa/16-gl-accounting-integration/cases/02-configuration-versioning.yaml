@@ -1,0 +1,194 @@
+sheet: GLAcc_Configuration_Versioning
+submodule: Accounting Configuration & Versioning
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-CFG-001
+    func: [F-GLACC-009]
+    sc: List configurations includes nested versions
+    t: ListConfigurationsAsync returns each configuration with its Versions, newest EffectiveFrom first
+    src: "PayrollAccountingService.ListConfigurationsAsync"
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    sev: Medium
+    pre: "Configuration CFG1 has 2 versions, EffectiveFrom 2026-01-01 and 2026-06-01"
+    role: HRAdmin (custom role holding Accounting.View)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/configurations] => [200] CFG1.versions ordered [2026-06-01, 2026-01-01]"
+    auto: API
+
+  - id: GLACC-CFG-002
+    func: [F-GLACC-010]
+    sc: Configuration code and duplicate validation
+    t: CreateConfigurationAsync requires non-blank code/name and rejects a duplicate tenant-scoped code
+    src: "PayrollAccountingService.CreateConfigurationAsync"
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P1
+    sev: Medium
+    pre: "CFG1 (code 'STD') already exists"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/configurations] {code:'', name:'X'} => [400] Invalid"
+      - "[POST /api/payroll/accounting/configurations] {code:'STD', name:'Duplicate'} => [409] Conflict"
+    auto: API
+
+  - id: GLACC-CFG-003
+    func: [F-GLACC-011]
+    sc: Version creation on a nonexistent or inactive configuration
+    t: CreateVersionAsync returns NotFound for a nonexistent configuration id or one with IsActive=false
+    src: "PayrollAccountingService.CreateVersionAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "CFG2 exists with IsActive=false"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/configurations/{randomGuid}/versions] {effectiveFrom:'2026-01-01'} => [404] NotFound"
+      - "[POST /api/payroll/accounting/configurations/{CFG2}/versions] {effectiveFrom:'2026-01-01'} => [404] NotFound (inactive configuration)"
+    auto: API
+
+  - id: GLACC-CFG-004
+    func: [F-GLACC-012]
+    sc: EffectiveTo before EffectiveFrom is rejected
+    t: CreateVersionAsync returns Invalid when EffectiveTo is earlier than EffectiveFrom
+    src: "PayrollAccountingService.CreateVersionAsync"
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P1
+    sev: Medium
+    pre: "CFG1 exists, IsActive=true"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: "effectiveFrom=2026-06-01, effectiveTo=2026-01-01"
+    steps:
+      - "[POST /api/payroll/accounting/configurations/{CFG1}/versions] {effectiveFrom:'2026-06-01', effectiveTo:'2026-01-01', aggregationMode:'Account'} => [400] Invalid"
+    auto: API
+
+  - id: GLACC-CFG-005
+    func: [F-GLACC-013]
+    sc: Overlapping version date ranges are rejected
+    t: A new version's date range cannot overlap an existing Active version of the same configuration
+    src: "PayrollAccountingService.CreateVersionAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "CFG1 has an Active version EffectiveFrom=2026-01-01, EffectiveTo=null (open-ended)"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: "new version effectiveFrom=2026-06-01, effectiveTo=null"
+    steps:
+      - "[POST /api/payroll/accounting/configurations/{CFG1}/versions] {effectiveFrom:'2026-06-01', aggregationMode:'Account'} => [409] Conflict (versions cannot overlap)"
+    auto: API
+
+  - id: GLACC-CFG-006
+    func: [F-GLACC-014]
+    sc: New version starts Active
+    t: A newly created version has Status=Active immediately, with no Draft-first step
+    src: "PayrollAccountingService.CreateVersionAsync"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "CFG1 exists with no version yet"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/configurations/{CFG1}/versions] {effectiveFrom:'2026-01-01', aggregationMode:'Account'} => [200] Status=='Active'"
+    auto: API
+
+  - id: GLACC-CFG-007
+    func: [F-GLACC-015]
+    sc: AggregationMode round-trips as requested
+    t: All 3 AggregationMode values are stored and returned verbatim
+    src: "PayrollAccountingService.CreateVersionAsync"
+    type: Contract
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: "CFG1 exists"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: "3 versions, non-overlapping date ranges, one per AggregationMode"
+    steps:
+      - "[POST /api/payroll/accounting/configurations/{CFG1}/versions] one per AggregationMode (Account/AccountAndCostCenter/EmployeeDetail) with non-overlapping dates => [200] all 3 created, AggregationMode echoed back verbatim"
+    auto: API
+
+  - id: GLACC-CFG-008
+    func: [F-GLACC-016]
+    sc: AggregationMode has zero effect on generated journal granularity
+    t: Generate produces the identical per-component line breakdown regardless of the resolved version's AggregationMode
+    src: "PayrollAccountingService.GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Two otherwise-identical tenants/configurations differ only in AggregationMode (Account vs EmployeeDetail) covering two equivalent payroll runs with the same employee/component data"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: "2 payroll runs, matching component data, differing only by which configuration version (AggregationMode) is active for each"
+    steps:
+      - "[POST /api/payroll/runs/{runAccountMode}/accounting/generate] => [200] journal with N lines"
+      - "[POST /api/payroll/runs/{runEmployeeDetailMode}/accounting/generate] => [200] journal with the identical N lines and identical per-account groupings as the Account-mode journal"
+    auto: DB-assisted
+    db: "Assert PayrollJournalLines shape (count, account grouping) is identical between the two journals despite differing AggregationMode"
+    cr: [CR-283]
+
+  - id: GLACC-CFG-009
+    func: [F-GLACC-017]
+    sc: Version resolution picks the latest matching EffectiveFrom
+    t: When 2 Active versions both cover the run's PayDate, the one with the later EffectiveFrom is used; when none matches, Generate is Conflict
+    src: "PayrollAccountingService.GenerateAsync (version resolution)"
+    type: Boundary
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "CFG1 has version V1 (EffectiveFrom=2025-01-01, open-ended) and version V2 (EffectiveFrom=2026-01-01, open-ended); a payroll run has PayDate 2026-03-01"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] => [200] journal generated using mappings from V2 (the later EffectiveFrom), not V1"
+      - "[Manual] set up a run with PayDate before any configured version's EffectiveFrom => [POST /api/payroll/runs/{runNoConfig}/accounting/generate] => [409] Conflict (No active accounting configuration applies)"
+    auto: DB-assisted
+    db: "Assert generated journal lines reference V2's mapped accounts"
+
+  - id: GLACC-CFG-010
+    func: [F-GLACC-018]
+    sc: No retire/deactivate endpoint exists for configurations or versions
+    t: A full interface read confirms there is no way to retire a configuration or a version, and PayrollAccountingConfigurationVersionStatus.Retired is never assigned by any code path
+    src: "Backend/HRMS.Application/Abstractions/IPayrollAccountingService.cs"
+    type: Contract
+    tags: []
+    pri: P3
+    sev: Low
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] read IPayrollAccountingService.cs's full 17-method interface => no retire-configuration or deactivate-version method exists"
+      - "[Manual] grep PayrollAccountingService.cs for PayrollAccountingConfigurationVersionStatus.Retired => zero assignments found"
+    auto: Manual only

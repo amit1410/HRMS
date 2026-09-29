@@ -1,0 +1,267 @@
+sheet: TaxDcl_Cycles_Categories_Items
+submodule: Declaration Cycles, Categories & Items
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-CFG-001
+    func: [F-TAXDCL-001]
+    sc: Cycle listing has no pagination
+    t: GetCyclesAsync returns every tenant cycle, newest financial year first, with no page/pageSize parameters accepted
+    src: "Backend/HRMS.Application/Services/TaxDeclarationService.cs GetCyclesAsync"
+    type: Boundary
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: "Tenant has 3 cycles across 2 financial years"
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Review
+    tenant: "T1 (DEMO01)"
+    data: 3 TaxDeclarationCycle rows, FY2025 and FY2026
+    steps:
+      - "[GET /api/payroll/tax-declarations/cycles] as HRAdmin => [200] all 3 cycles returned, ordered by FinancialYear descending then Code, no paging envelope"
+    auto: API
+
+  - id: TAXDCL-CFG-002
+    func: [F-TAXDCL-002, F-TAXDCL-003]
+    sc: CreateCycleAsync validation and code uniqueness
+    t: Cycle create rejects invalid date ordering and a duplicate Code
+    src: "TaxDeclarationService.cs CreateCycleAsync"
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P1
+    sev: Medium
+    pre: A cycle with Code=FY2026 already exists
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: "DeclarationCloseDate before DeclarationOpenDate; ProofSubmissionCloseDate before ProofSubmissionOpenDate; duplicate Code=FY2026"
+    steps:
+      - "[POST /api/payroll/tax-declarations/cycles] Code=FY2027, DeclarationCloseDate < DeclarationOpenDate => [400] Invalid, field=cycle"
+      - "[POST /api/payroll/tax-declarations/cycles] Code=FY2027, ProofSubmissionCloseDate < ProofSubmissionOpenDate => [400] Invalid"
+      - "[POST /api/payroll/tax-declarations/cycles] Code=FY2026 (duplicate, otherwise valid) => [409] Conflict"
+    auto: API
+
+  - id: TAXDCL-CFG-003
+    func: [F-TAXDCL-004]
+    sc: Cycle Status is caller-settable at creation, not forced to Draft
+    t: Creating a cycle with Status=Open explicitly bypasses the DTO's own Draft default
+    src: "TaxDeclarationDtos.cs TaxDeclarationCycleRequest.Status; TaxDeclarationService.cs CreateCycleAsync"
+    type: Contract
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: none
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: "Status=Open explicit"
+    steps:
+      - "[POST /api/payroll/tax-declarations/cycles] Status=Open => [201] cycle persisted with Status=Open (not Draft)"
+    auto: API
+
+  - id: TAXDCL-CFG-004
+    func: [F-TAXDCL-005, F-TAXDCL-017]
+    sc: CONFIRMED GAP - no cycle update/status-transition endpoint exists
+    t: A cycle created at Status=Draft can never be advanced to Open through this API
+    src: "TaxDeclarationService.cs (full grep for db.TaxDeclarationCycles writes - 1 site)"
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: A cycle exists at Status=Draft
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of TaxDeclarationsController.cs for a PUT/PATCH route on cycles => zero matches"
+      - "[POST /api/me/tax-declarations] employee attempts to create a declaration against the Draft cycle => [409] Conflict, cycle is not open"
+    auto: API
+    cr: [CR-243]
+
+  - id: TAXDCL-CFG-005
+    func: [F-TAXDCL-006]
+    sc: Two cycles can be simultaneously Open with overlapping financial years
+    t: CreateCycleAsync has no overlap/uniqueness check beyond Code
+    src: "TaxDeclarationService.cs CreateCycleAsync (full method - no overlap query)"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: High
+    pre: Cycle FY2026-A already exists at Status=Open, FinancialYear=2026
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: "Second cycle FY2026-B, same FinancialYear=2026, Status=Open, overlapping dates"
+    steps:
+      - "[POST /api/payroll/tax-declarations/cycles] Code=FY2026-B, FinancialYear=2026, Status=Open, dates identical to FY2026-A => [201] created, no Conflict raised"
+    auto: API
+    cr: [CR-240]
+
+  - id: TAXDCL-CFG-006
+    func: [F-TAXDCL-007]
+    sc: Category Code uniqueness spans all CategoryTypes
+    t: A category Code cannot be reused across two different CategoryTypes for the same tenant
+    src: "TaxDeclarationService.cs CreateCategoryAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: Category Code=INV exists with CategoryType=Investment
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: "Duplicate Code=INV, CategoryType=Insurance"
+    steps:
+      - "[POST /api/payroll/tax-declarations/categories] Code=INV, CategoryType=Insurance => [409] Conflict"
+    auto: API
+
+  - id: TAXDCL-CFG-007
+    func: [F-TAXDCL-008]
+    sc: CategoryType is an open tag, no statutory section mapping is claimed
+    t: All 8 CategoryType values are accepted with no cross-check against any statutory section table
+    src: "Backend/HRMS.Domain/Enums/TaxDeclarationEnums.cs TaxDeclarationCategoryType"
+    type: Contract
+    tags: [Positive]
+    pri: P3
+    sev: Low
+    pre: none
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: "CategoryType=LoanInterest"
+    steps:
+      - "[POST /api/payroll/tax-declarations/categories] CategoryType=LoanInterest, Code=LOANINT => [201] created; no statutory section value is validated or required anywhere"
+    auto: API
+
+  - id: TAXDCL-CFG-008
+    func: [F-TAXDCL-009, F-TAXDCL-013]
+    sc: CONFIRMED GAP - no update endpoint for category or item
+    t: A category's Active/RequiresProof flags and an item's AllowsAmount/AllowsReferenceNumber/AllowsDate fields are permanently fixed after creation
+    src: "TaxDeclarationService.cs (full grep for db.TaxDeclarationCategories/Items - 1 write site each); TaxDeclarationItemRequest (no Allows* fields)"
+    type: Contract
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: A category and item both exist
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of TaxDeclarationsController.cs for a PUT/PATCH route on categories/items => zero matches"
+      - "[Manual] TaxDeclarationItemRequest field list => AllowsAmount/AllowsReferenceNumber/AllowsDate are absent, so they can never be set to false through this API"
+    auto: Manual only
+    cr: [CR-243]
+
+  - id: TAXDCL-CFG-009
+    func: [F-TAXDCL-010]
+    sc: CreateItemAsync requires an existing tenant category
+    t: A non-existent or cross-tenant CategoryId is NotFound
+    src: "TaxDeclarationService.cs CreateItemAsync"
+    type: Negative
+    tags: [Tenant-Isolation]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: "CategoryId = random GUID"
+    steps:
+      - "[POST /api/payroll/tax-declarations/items] CategoryId=<random GUID> => [404] NotFound"
+    auto: API
+
+  - id: TAXDCL-CFG-010
+    func: [F-TAXDCL-011]
+    sc: Item Code uniqueness is scoped per category
+    t: The same Code may be reused across two different categories but not twice within one category
+    src: "TaxDeclarationService.cs CreateItemAsync"
+    type: Boundary
+    tags: [Positive, Negative]
+    pri: P1
+    sev: Medium
+    pre: "Category A has item Code=PF; Category B exists with no items"
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: "Item Code=PF under Category B (new); Item Code=PF under Category A again (duplicate)"
+    steps:
+      - "[POST /api/payroll/tax-declarations/items] CategoryId=B, Code=PF => [201] created (different category, same code allowed)"
+      - "[POST /api/payroll/tax-declarations/items] CategoryId=A, Code=PF (duplicate within A) => [409] Conflict"
+    auto: API
+
+  - id: TAXDCL-CFG-011
+    func: [F-TAXDCL-012]
+    sc: Item-level RequiresProof is the only one enforced at submission
+    t: A category with RequiresProof=false but an item with RequiresProof=true still blocks Submit when the item's own line has no proof
+    src: "TaxDeclarationService.cs SubmitOwnAsync (line.Item!.RequiresProof check only)"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Category RequiresProof=false; Item under it RequiresProof=true"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "Line for the RequiresProof=true item, no proof attached"
+    steps:
+      - "[POST /api/me/tax-declarations/submit] declaration has one line for the proof-required item, no proof => [409] Conflict, 'Every proof-required line must have a proof.'"
+    auto: API
+
+  - id: TAXDCL-CFG-012
+    func: [F-TAXDCL-014]
+    sc: Cross-tenant configuration reads/writes are NotFound
+    t: Category id from another tenant used on CreateItemAsync is NotFound, not Forbidden
+    src: "TaxDeclarationService.cs CreateItemAsync (TenantId filter)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Category exists in tenant T2 (DEMO02)"
+    role: HRAdmin (T1)
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: "CategoryId belonging to T2"
+    steps:
+      - "[POST /api/payroll/tax-declarations/items] CategoryId=<T2's category id> as T1 HRAdmin => [404] NotFound (not 403)"
+    auto: API
+    secc: true
+
+  - id: TAXDCL-CFG-013
+    func: [F-TAXDCL-002]
+    sc: Category and Code are required on cycle create
+    t: A blank Code is rejected before the date-ordering check runs
+    src: "TaxDeclarationService.cs CreateCycleAsync"
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: "Code = '' (blank)"
+    steps:
+      - "[POST /api/payroll/tax-declarations/cycles] Code='' => [400] Invalid, field=cycle"
+    auto: API
+
+  - id: TAXDCL-CFG-014
+    func: [F-TAXDCL-003]
+    sc: Cycle Code trimming
+    t: Code is trimmed before the uniqueness check and persistence
+    src: "TaxDeclarationService.cs CreateCycleAsync (request.Code.Trim())"
+    type: Boundary
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: none
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: "Code = '  FY2028  '"
+    steps:
+      - "[POST /api/payroll/tax-declarations/cycles] Code='  FY2028  ' => [201] created with Code='FY2028' (trimmed)"
+    auto: API

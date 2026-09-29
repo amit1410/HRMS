@@ -1,0 +1,263 @@
+sheet: Stat_Filing_Lifecycle
+submodule: Statutory Filing - Generate/Validate/Submit/Acknowledge Lifecycle
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: STAT-FRUN-001
+    func: [F-STAT-092, F-STAT-093]
+    sc: Generate - callable statuses and period parsing
+    t: GenerateAsync accepts Draft/Generated/Validated/Rejected/Failed and requires a yyyy-MM filing period
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs GenerateAsync"
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P1
+    sev: Medium
+    pre: "A Draft run with filingPeriod='2026-09'; a second run with filingPeriod='September 2026' (malformed)"
+    role: PayrollAdmin (with StatutoryFiling.Generate granted)
+    perm: Payroll.StatutoryFiling.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs/{id}/generate] on a malformed FilingPeriod => [400] Invalid, 'filingPeriod', 'Filing period must use yyyy-MM format.'"
+      - "[POST /api/payroll/statutory-filings/runs/{id}/generate] on the valid Draft run with no matching source rows => [409] Conflict, 'No finalized statutory source rows match the filing period.'"
+    auto: API
+
+  - id: STAT-FRUN-002
+    func: [F-STAT-094]
+    sc: Generate accepts a merely-Generated (not yet Validated/Approved) compliance return as its source
+    t: A filing package can be built from statutory register data that has never passed the compliance module's own Validate/Approve gate
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "A PayrollStatutoryReturnBatch at Status=Generated ONLY (never Validated/Approved) whose PeriodEnd falls within FilingPeriod=2026-09"
+    role: PayrollAdmin (with StatutoryFiling.Generate granted)
+    perm: Payroll.StatutoryFiling.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs/{id}/generate] => [200] Generated succeeds and produces a package sourced from the merely-Generated (unvalidated, unapproved) return batch - no check anywhere requires the source batch to be Validated or Approved first"
+    auto: API
+    cr: []
+
+  - id: STAT-FRUN-003
+    func: [F-STAT-095, F-STAT-096]
+    sc: Package content-hash deduplication and resubmission versioning
+    t: An unchanged repeat Generate reuses the same package; a Rejected/Failed run's regeneration always creates a new version even with identical content
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs GenerateAsync"
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: A Draft run with qualifying, unchanging source data
+    role: PayrollAdmin (with StatutoryFiling.Generate granted)
+    perm: Payroll.StatutoryFiling.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs/{id}/generate] first call => [200] package Version=1 created, PackageHash=H1"
+      - "[POST /api/payroll/statutory-filings/runs/{id}/generate] a second call with IDENTICAL source data (still Status=Generated) => [200] the SAME package row (Version=1, PackageHash=H1) is reused, deduplicated via the (TenantId, RunId, PackageHash) unique index - no Version=2 is created"
+      - "[Manual] progress the run to Rejected (per STAT-FRUN-006), then Generate again with the IDENTICAL source data => [200] a NEW package Version=2 is created despite PackageHash being identical to Version=1's, because resubmission always mints a new version; PreviousPackageId links Version=2 back to Version=1"
+    db: "StatutoryFilingPackages: two rows after resubmission, same hash, different Version"
+    auto: API
+
+  - id: STAT-FRUN-004
+    func: [F-STAT-097]
+    sc: A lost concurrency race during Generate degrades silently
+    t: A DbUpdateConcurrencyException/DbUpdateException during Generate returns the current persisted state instead of propagating an error
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs GenerateAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: A Draft run
+    role: PayrollAdmin (with StatutoryFiling.Generate granted)
+    perm: Payroll.StatutoryFiling.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] simulate two concurrent Generate calls on the same run such that the second SaveChangesAsync raises a DbUpdateConcurrencyException => the second call's HTTP response is [200] with the CURRENT (first call's) persisted state, not a [409] Conflict or [500] error - the caller has no signal that their own generate attempt was silently discarded in favor of the other one"
+    auto: Manual only
+
+  - id: STAT-FRUN-005
+    func: [F-STAT-098, F-STAT-099]
+    sc: Validate's sole rule is unreachable, and warnings never block
+    t: ValidateAsync's only implemented rule (MissingSource) cannot trigger against normally-generated data; only ValidationErrorCount blocks the transition
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs ValidateAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: A Generated run with normally-populated StatutoryFilingRunItems
+    role: PayrollAdmin (with StatutoryFiling.Validate granted)
+    perm: Payroll.StatutoryFiling.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs/{id}/validate] => [200] Validated; ValidationErrorCount=0 (GenerateAsync always assigns a non-blank SourceReference, so MissingSource can never fire against real data)"
+      - "[Manual] trace ValidateAsync's own guard logic => only ValidationErrorCount>0 blocks the Generated->Validated transition; ValidationWarningCount alone, even if nonzero, never blocks it"
+    auto: API
+    cr: [CR-230]
+
+  - id: STAT-FRUN-006
+    func: [F-STAT-100, F-STAT-101]
+    sc: SubmitForApproval and the opt-in self-approval guard on Approve
+    t: SubmitForApproval is a plain transition; Approve blocks self-approval only when the tenant opts in
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs SubmitForApprovalAsync, ApproveAsync"
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    sev: High
+    pre: A Validated run generated by user U1, holding both Generate and Approve permissions
+    role: PayrollAdmin (U1)
+    perm: Payroll.StatutoryFiling.SubmitForApproval, Payroll.StatutoryFiling.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs/{id}/submit-for-approval] => [200] Status=SubmittedForApproval"
+      - "[POST /api/payroll/statutory-filings/runs/{id}/approve] as U1 (the generator), with no PayrollControlConfiguration row for the tenant => [200] Approved - self-approval succeeds"
+      - "[Manual] with RequireMakerChecker=true and PreventSelfApproval=true configured, repeat on a new SubmittedForApproval run generated by U1 => [400] Invalid, 'SelfApprovalNotAllowed...'"
+    auto: API
+    cr: [CR-233]
+
+  - id: STAT-FRUN-007
+    func: [F-STAT-102]
+    sc: Submit idempotency for an already-submitted package
+    t: SubmitAsync returns the current state without re-submitting unless the prior submission Failed AND the run is Failed
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs SubmitAsync"
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: An Approved run already Submitted once (Outcome=Accepted) against its current package
+    role: PayrollAdmin (with StatutoryFiling.Submit granted)
+    perm: Payroll.StatutoryFiling.Submit
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs/{id}/submit] a second submit call for the same package/submission pair => [200] returns the current (already-Submitted) state without invoking the connector again"
+    auto: API
+
+  - id: STAT-FRUN-008
+    func: [F-STAT-103]
+    sc: CONFIRMED - retry is gated on one hardcoded response code
+    t: A Failed submission can only be retried when the prior attempt's ResponseCode is literally RETRYABLE_EXTERNAL_FAILURE
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs SubmitAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "An Approved run wired to the Test connector's connection profile with NonSecretConfigurationJson containing 'retryable' (ResponseCode=RETRYABLE_EXTERNAL_FAILURE on the failed attempt)"
+    role: PayrollAdmin (with StatutoryFiling.Submit granted)
+    perm: Payroll.StatutoryFiling.Submit
+    tenant: "T1 (DEMO01)"
+    data: "connection profile config containing 'retryable'"
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs/{id}/submit] first submit => [200] Outcome=Failed, ResponseCode='RETRYABLE_EXTERNAL_FAILURE', run Status=Failed"
+      - "[POST /api/payroll/statutory-filings/runs/{id}/submit] retry submit => [200] the connector is called again and a new attempt is recorded (AttemptNumber=2)"
+      - "[Manual] with a hypothetical connector reporting a DIFFERENT transient-failure response code (not the literal string RETRYABLE_EXTERNAL_FAILURE) => [409] Conflict, 'Only retryable failed submissions may be retried.' even though the underlying failure was equally transient"
+    auto: API
+    cr: [CR-232]
+
+  - id: STAT-FRUN-009
+    func: [F-STAT-104, F-STAT-105, F-STAT-106]
+    sc: Only two connectors ever exist, and ManualDownload's Submitted status is not real transmission
+    t: ManualDownload always reports Pending mapped to Submitted; Test is a scripted, config-string-driven connector
+    src: "Backend/HRMS.Application/Services/StatutoryFilingConnectors.cs; StatutoryFilingService.cs SubmitAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "An Approved run's definition linked to a ManualDownload-type connection profile"
+    role: PayrollAdmin (with StatutoryFiling.Submit granted)
+    perm: Payroll.StatutoryFiling.Submit
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs/{id}/submit] submit via the ManualDownload connector => [200] Outcome=Pending internally, but run.Status becomes Submitted immediately - NOTHING was actually transmitted anywhere; the response message reads '...ready for operator download and external portal submission.'"
+      - "[Manual] repeat against a Test-type profile whose NonSecretConfigurationJson contains the substring 'rejected' => [200] Outcome=Rejected is returned purely because of that substring match, proving the outcome is entirely scripted rather than derived from any real external system"
+      - "[Manual] full grep of the codebase for an EPFO/ESIC/GSTN/TRACES connector class => zero matches; only ManualDownloadStatutoryFilingConnector and TestStatutoryFilingConnector exist"
+    auto: API
+    cr: [CR-222, CR-223]
+
+  - id: STAT-FRUN-010
+    func: [F-STAT-107]
+    sc: Reject records its reason only in history, not on the run itself
+    t: RejectAsync requires Status=Submitted and its reason is queryable only via StatutoryFilingHistory
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs RejectAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: A Submitted run
+    role: PayrollAdmin (with StatutoryFiling.Approve granted)
+    perm: Payroll.StatutoryFiling.Approve
+    tenant: "T1 (DEMO01)"
+    data: "reason='EPFO portal rejected due to mismatched establishment code'"
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs/{id}/reject?reason=...] => [200] Status=Rejected"
+      - "[GET /api/payroll/statutory-filings/runs] => [200] the run DTO itself carries no Reason field anywhere - the reason text is retrievable only by inspecting StatutoryFilingHistories' message directly (not exposed by any GET route per F-STAT-113/CR CR-113-history-gap)"
+    db: "StatutoryFilingHistories.Message carries the reason; StatutoryFilingRun has no Reason column"
+    auto: API
+
+  - id: STAT-FRUN-011
+    func: [F-STAT-108]
+    sc: Acknowledge is idempotent and unconditional
+    t: AcknowledgeAsync is idempotent per (SubmissionId, ReferenceNumber) and force-acknowledges regardless of the submission's prior outcome
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs AcknowledgeAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "A run whose submission Outcome is currently Rejected"
+    role: PayrollAdmin (with StatutoryFiling.Submit granted)
+    perm: Payroll.StatutoryFiling.Submit
+    tenant: "T1 (DEMO01)"
+    data: "referenceNumber='EPFO-ACK-999'"
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs/{id}/acknowledgements] with a non-blank referenceNumber against a REJECTED submission => [200] Status forced to Acknowledged, submission Outcome forced to Acknowledged (no guard requires the prior outcome to be Accepted first)"
+      - "[POST /api/payroll/statutory-filings/runs/{id}/acknowledgements] a repeat call with the SAME referenceNumber => [200] idempotent no-op (DB-unique-index-backed) - no duplicate StatutoryFilingAcknowledgement row is created"
+      - "[POST /api/payroll/statutory-filings/runs/{id}/acknowledgements] with a blank referenceNumber => [400] Invalid, 'referenceNumber', 'Acknowledgement reference is required.'"
+    db: "StatutoryFilingAcknowledgements unique on (TenantId, SubmissionId, ReferenceNumber)"
+    auto: API
+
+  - id: STAT-FRUN-012
+    func: [F-STAT-109]
+    sc: Cancel only works from Draft
+    t: CancelAsync cannot cancel a run that has ever been Generated
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs CancelAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: A run currently at Status=Generated
+    role: PayrollAdmin (with StatutoryFiling.Cancel granted)
+    perm: Payroll.StatutoryFiling.Cancel
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs/{id}/cancel] on the Generated run => [409] Conflict, 'Run must be Draft.'"
+      - "[POST /api/payroll/statutory-filings/runs/{id}/cancel] on a freshly-created Draft run (never Generated) => [200] Status=Cancelled"
+    auto: API
+
+  - id: STAT-FRUN-013
+    func: [F-STAT-110]
+    sc: Package/download always return the latest version only
+    t: GetPackageAsync/DownloadAsync cannot retrieve a specific historical package version
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs GetPackageAsync, DownloadAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Medium
+    pre: A run with two package versions (per STAT-FRUN-003's resubmission scenario)
+    role: PayrollAdmin (with StatutoryFiling.View, StatutoryFiling.Export granted)
+    perm: Payroll.StatutoryFiling.View, Payroll.StatutoryFiling.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/statutory-filings/runs/{id}/package] => [200] returns Version=2 (the latest) - there is no parameter to request Version=1's exact content"
+      - "[GET /api/payroll/statutory-filings/runs/{id}/download] => [200] downloads the Version=2 file content; the earlier resubmission's exact original package content is not retrievable through this API once superseded"
+    auto: API

@@ -1,0 +1,244 @@
+sheet: PYA_Employee_Variance
+submodule: Employee Variance Analysis
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-VAR-001
+    func: [F-PYA-020]
+    sc: Variance happy path with an explicit comparison run
+    t: GetVarianceAsync joins current and comparison run results by EmployeeId and computes Gross/Deduction/Net deltas per employee
+    src: "PayrollAnalyticsController.Variance; PayrollAnalyticsService.GetVarianceAsync"
+    type: Positive
+    tags: []
+    pri: P0
+    sev: High
+    pre: "RUN-PREV (Gross 1000/employee) and RUN-CURR (Gross 1100/employee), same 3 employees in both"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, compareRunId=RUN-PREV"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?compareRunId={RUN-PREV}] => [200] 3 rows, each with BaseGross=1000, CurrentGross=1100, GrossDelta=100, GrossVariancePercent=10"
+    auto: API
+
+  - id: PYA-VAR-002
+    func: [F-PYA-021]
+    sc: Default comparison run selection when compareRunId is omitted
+    t: Omitting compareRunId selects the most recent OTHER non-Cancelled same-RunType run, ordered by PayrollPeriod.EndDate descending
+    src: "PayrollAnalyticsService.GetVarianceAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "3 Regular runs for the tenant: RUN-OLD (period ending 2026-07-31), RUN-MID (2026-08-31), RUN-CURR (2026-09-30, the requested run)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, no compareRunId"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance] (no compareRunId) => [200] BaseGross values match RUN-MID's results, not RUN-OLD's"
+    auto: API
+
+  - id: PYA-VAR-003
+    func: [F-PYA-021]
+    sc: Default comparison run only considers the same RunType
+    t: An OffCycle run more recent than the tenant's last Regular run is never selected as the default comparison for a Regular run's variance
+    src: "PayrollAnalyticsService.GetVarianceAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN-OFFCYCLE (OffCycle, period ending 2026-09-15) and RUN-REG-PREV (Regular, period ending 2026-08-31) both predate RUN-REG-CURR (Regular, period ending 2026-09-30)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-REG-CURR, no compareRunId"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-REG-CURR}/variance] (no compareRunId) => [200] BaseGross values match RUN-REG-PREV, not RUN-OFFCYCLE despite it being more recent"
+    auto: API
+
+  - id: PYA-VAR-004
+    func: [F-PYA-022]
+    sc: An explicit compareRunId from a different tenant is accepted with no cross-tenant validation
+    t: Supplying compareRunId belonging to another tenant does not error - it simply resolves to zero prior results for every employee (since Results() itself is tenant-scoped internally)
+    src: "PayrollAnalyticsService.GetVarianceAsync"
+    type: Security
+    tags: [Tenant-Isolation, Negative]
+    pri: P1
+    sev: Medium
+    pre: "RUN-CURR belongs to T1; RUN-T2-OTHER belongs to T2 (DEMO02) with its own persisted results"
+    role: HRAdmin (custom role holding Payroll.Analytics.View, tenant T1)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR (T1), compareRunId=RUN-T2-OTHER (T2)"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?compareRunId={RUN-T2-OTHER}] => [200] every row classifies Classification=NewValue with null Base* fields - T2's results are never leaked into T1's response"
+    auto: API
+    cr: [CR-302]
+
+  - id: PYA-VAR-005
+    func: [F-PYA-023]
+    sc: A new employee (absent from the comparison run) classifies NewValue
+    t: An employee present only in the current run gets Classification=NewValue, null Base* fields, and deltas computed against an implicit zero prior
+    src: "PayrollAnalyticsService.Variance (static helper)"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN-CURR has a new joiner E10 not present in RUN-PREV; E10's CurrentGross=5000"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, compareRunId=RUN-PREV"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?compareRunId={RUN-PREV}] => [200] E10's row has baseGross=null, classification='NewValue', grossDelta=5000"
+    auto: API
+
+  - id: PYA-VAR-006
+    func: [F-PYA-024]
+    sc: Percent() returns null for a zero prior base value, never Infinity or an error
+    t: An employee whose prior-period Gross was persisted as exactly 0 returns null (not Infinity/NaN) for GrossVariancePercent, even though a genuine (non-null) prior value exists
+    src: "PayrollAnalyticsService.Percent (static helper)"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN-PREV has employee E11 persisted with GrossEarnings=0; RUN-CURR has E11 with GrossEarnings=500"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, compareRunId=RUN-PREV"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?compareRunId={RUN-PREV}] => [200] E11's row has baseGross=0 (not null - a real prior result exists), grossDelta=500, and grossVariancePercent=null"
+    auto: API
+
+  - id: PYA-VAR-007
+    func: [F-PYA-024]
+    sc: Percent() rounds to 6 decimal places
+    t: A variance percent with a long repeating decimal is rounded to exactly 6 decimal places, not truncated or left at full precision
+    src: "PayrollAnalyticsService.Percent (static helper)"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "RUN-PREV has E12 with GrossEarnings=300; RUN-CURR has E12 with GrossEarnings=310 (delta 10/300 = 3.333333...%)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, compareRunId=RUN-PREV"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?compareRunId={RUN-PREV}] => [200] E12's grossVariancePercent=3.333333 (exactly 6 decimal places)"
+    auto: API
+
+  - id: PYA-VAR-008
+    func: [F-PYA-025]
+    sc: Free-text search matches EmployeeCode or EmployeeName, case-insensitively
+    t: search=johnson matches an employee named 'Johnson' regardless of case, and also matches an EmployeeCode containing the same substring
+    src: "PayrollAnalyticsService.GetVarianceAsync"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Medium
+    pre: "RUN-CURR has 5 employees, one named 'Alice Johnson' (code EMP-0001) and one coded 'JOHNSON-02'"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "search=johnson"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?search=johnson] => [200] returns exactly the 2 rows for Alice Johnson and JOHNSON-02, none of the other 3 employees"
+    auto: API
+
+  - id: PYA-VAR-009
+    func: [F-PYA-026]
+    sc: Variance list ignores sortBy and is always ordered by EmployeeCode ascending
+    t: Passing sortBy=grossDelta&sortDescending=true has no visible effect - rows remain ordered by EmployeeCode ascending
+    src: "PayrollAnalyticsService.GetVarianceAsync"
+    type: Negative
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "RUN-CURR has employees with codes EMP-003, EMP-001, EMP-002 and materially different GrossDelta values"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "sortBy=grossDelta, sortDescending=true"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?sortBy=grossDelta&sortDescending=true] => [200] rows are still returned EMP-001, EMP-002, EMP-003 (EmployeeCode ascending), NOT ordered by grossDelta"
+    auto: API
+    cr: [CR-300]
+
+  - id: PYA-VAR-010
+    func: [F-PYA-027]
+    sc: Flags is always empty and Classification never reflects variance magnitude
+    t: An employee with an extreme (e.g. 500%) gross-pay increase still reports Classification=NormalComparable and an empty Flags array, identically to an employee with a 0.5% increase
+    src: "PayrollAnalyticsService.Variance (static helper)"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN-PREV has E13 with GrossEarnings=1000; RUN-CURR has E13 with GrossEarnings=6000 (500% increase) and E14 with a 0.5% increase"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, compareRunId=RUN-PREV"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?compareRunId={RUN-PREV}] => [200] BOTH E13 and E14 report classification='NormalComparable' and flags=[] despite the 1000x difference in variance magnitude"
+    auto: API
+    cr: [CR-299]
+
+  - id: PYA-VAR-011
+    func: [F-PYA-028]
+    sc: Variance CSV export
+    t: VarianceCsv exports every matching row (not paged to the default 20) with the documented 15-column shape and filename
+    src: "PayrollAnalyticsService.ExportVarianceAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN-CURR from PYA-VAR-008 has 5 employees"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance.csv] => [200] filename payroll-variance-{RUN-CURR:N}.csv, 5 data rows (all employees, no 20-row default cap applied), header row matches the 15 documented columns"
+    auto: API
+
+  - id: PYA-VAR-012
+    func: [F-PYA-029]
+    sc: Variance requires the requested run to resolve for the caller's tenant
+    t: A runId belonging to a different tenant returns NotFound/Unauthorized regardless of which tenant compareRunId belongs to
+    src: "PayrollAnalyticsService.LoadRunAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "RUN-T2 exists under Tenant T2 (DEMO02)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View, tenant T1)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-T2"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-T2}/variance] (authenticated to T1) => [404] Payroll run not found"
+    auto: API
+
+  - id: PYA-VAR-013
+    func: [F-PYA-020]
+    sc: Zero comparison-run results in the default lookup produces an all-NewValue page, not an error
+    t: When the default comparison run resolves to a run with no persisted Calculated results at all (e.g. a Draft run), every current-run employee classifies NewValue rather than the call failing
+    src: "PayrollAnalyticsService.GetVarianceAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Medium
+    pre: "The tenant's only other same-RunType run more recent than none exists is a Draft run with zero persisted results"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, no compareRunId"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance] (no compareRunId, resolves to the Draft run) => [200] every row classifies NewValue; call succeeds rather than erroring"
+    auto: API
+    cr: [CR-302]

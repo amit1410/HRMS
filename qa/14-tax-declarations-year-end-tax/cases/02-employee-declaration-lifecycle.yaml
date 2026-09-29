@@ -1,0 +1,329 @@
+sheet: TaxDcl_Employee_Lifecycle
+submodule: Employee Declaration Lifecycle
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-DECL-001
+    func: [F-TAXDCL-015]
+    sc: GetOwnAsync resolves identity via the account-employee link, not by matching email/id
+    t: The current declaration is resolved for the caller's own linked employee, and the most recently created one wins when more than one exists
+    src: "TaxDeclarationService.cs GetOwnAsync, Subject"
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "EMP1 has declarations in cycle FY2025 (created first) and FY2026 (created second)"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ViewOwn
+    tenant: "T1 (DEMO01)"
+    data: two declarations for EMP1
+    steps:
+      - "[GET /api/me/tax-declarations] as EMP1 => [200] returns the FY2026 declaration (most recently created), not FY2025"
+    auto: API
+
+  - id: TAXDCL-DECL-002
+    func: [F-TAXDCL-015]
+    sc: No declaration exists yet
+    t: GetOwnAsync is NotFound when the employee has never created a declaration
+    src: "TaxDeclarationService.cs GetOwnAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: "EMP2 has no declaration"
+    role: Employee (EMP2)
+    perm: Payroll.TaxDeclaration.ViewOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/me/tax-declarations] as EMP2 => [404] NotFound, 'No tax declaration exists for the employee.'"
+    auto: API
+
+  - id: TAXDCL-DECL-003
+    func: [F-TAXDCL-016, F-TAXDCL-017]
+    sc: CreateOwnAsync gates on cycle existence and Open/ProofSubmissionOpen status
+    t: Create is rejected for a missing cycle and for a cycle that is Draft/Locked/Closed
+    src: "TaxDeclarationService.cs CreateOwnAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Cycle A is Status=Closed"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "cycleId=<random GUID>; cycleId=Cycle A (Closed)"
+    steps:
+      - "[POST /api/me/tax-declarations?cycleId=<random GUID>] as EMP1 => [404] NotFound"
+      - "[POST /api/me/tax-declarations?cycleId=<Cycle A id>] as EMP1, cycle Status=Closed => [409] Conflict, 'The declaration cycle is not open.'"
+      - "[POST /api/me/tax-declarations?cycleId=<Cycle B id>] as EMP1, cycle Status=ProofSubmissionOpen => [201] created (ProofSubmissionOpen is also acceptable, not just Open)"
+    auto: API
+
+  - id: TAXDCL-DECL-004
+    func: [F-TAXDCL-018]
+    sc: Duplicate declaration per cycle is rejected
+    t: A second CreateOwnAsync for the same employee+cycle is Conflict
+    src: "TaxDeclarationService.cs CreateOwnAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "EMP1 already has a declaration for Cycle A"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "cycleId=Cycle A (repeat)"
+    steps:
+      - "[POST /api/me/tax-declarations?cycleId=<Cycle A id>] as EMP1 (repeat) => [409] Conflict, 'A declaration already exists for this cycle.'"
+    auto: API
+
+  - id: TAXDCL-DECL-005
+    func: [F-TAXDCL-019]
+    sc: A new declaration starts at Draft/Version=1 with a Created audit event
+    t: Newly created declaration state and its first audit row
+    src: "TaxDeclarationService.cs CreateOwnAsync -> AddAudit(Created)"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Cycle B is Status=Open, EMP2 has none yet"
+    role: Employee (EMP2)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "cycleId=Cycle B"
+    steps:
+      - "[POST /api/me/tax-declarations?cycleId=<Cycle B id>] as EMP2 => [201] Status=Draft, Version=1"
+      - "[GET /api/payroll/tax-declarations/{id}/audit] as reviewer => [200] one event, Action=Created"
+    auto: API
+
+  - id: TAXDCL-DECL-006
+    func: [F-TAXDCL-020]
+    sc: AddLineOwnAsync only accepts a line on the caller's own Draft/ResubmissionRequired declaration
+    t: A line cannot be added once the declaration is Submitted/UnderReview/Approved/Locked
+    src: "TaxDeclarationService.cs AddLineOwnAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "EMP1's declaration is Status=Submitted"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "one CategoryId/ItemId pair"
+    steps:
+      - "[POST /api/me/tax-declarations/lines] as EMP1, declaration is Submitted => [409] Conflict, 'Only a draft or resubmission can be edited.'"
+    auto: API
+
+  - id: TAXDCL-DECL-007
+    func: [F-TAXDCL-021]
+    sc: AddLineOwnAsync requires an active item in the stated category
+    t: An inactive item, or an item/category mismatch, is NotFound
+    src: "TaxDeclarationService.cs AddLineOwnAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Item X is Active=false; declaration is Draft"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "ItemId=Item X (inactive)"
+    steps:
+      - "[POST /api/me/tax-declarations/lines] CategoryId=Item X's category, ItemId=Item X (Active=false) => [404] NotFound"
+    auto: API
+
+  - id: TAXDCL-DECL-008
+    func: [F-TAXDCL-022]
+    sc: DeclaredAmount is unvalidated on AddLineOwnAsync but validated on UpdateLineOwnAsync
+    t: A negative amount can be added but cannot subsequently be saved unchanged via update
+    src: "TaxDeclarationService.cs AddLineOwnAsync (no validation) vs UpdateLineOwnAsync (rejects negative)"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Declaration is Draft"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "DeclaredAmount = -500"
+    steps:
+      - "[POST /api/me/tax-declarations/lines] DeclaredAmount=-500 => [201] created, line persisted with DeclaredAmount=-500 (no server-side rejection)"
+      - "[PUT /api/me/tax-declarations/{declarationId}/lines/{lineId}] DeclaredAmount=-500 (resave same negative value) => [400] Invalid, field=declaredAmount"
+    auto: API
+
+  - id: TAXDCL-DECL-009
+    func: [F-TAXDCL-023]
+    sc: AddLineOwnAsync does not bump declaration Version/ConcurrencyVersion
+    t: Adding a first line leaves the parent declaration's optimistic-concurrency token unchanged
+    src: "TaxDeclarationService.cs AddLineOwnAsync (no declaration.ConcurrencyVersion++/Version++)"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "Declaration is Draft, Version=1, ConcurrencyVersion=1"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/me/tax-declarations/lines] add first line => [201]; [GET /api/me/tax-declarations] => Version still 1 (unchanged by AddLineOwnAsync)"
+    auto: API
+
+  - id: TAXDCL-DECL-010
+    func: [F-TAXDCL-024]
+    sc: UpdateLineOwnAsync editability scoping during ResubmissionRequired
+    t: Only a Rejected/ResubmissionRequired line is editable while the declaration is ResubmissionRequired; an Approved sibling line is not
+    src: "TaxDeclarationService.cs UpdateLineOwnAsync (editable predicate)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Declaration is ResubmissionRequired; Line A is Rejected, Line B is Approved"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "Line A (Rejected), Line B (Approved)"
+    steps:
+      - "[PUT /api/me/tax-declarations/{declarationId}/lines/{Line A id}] declaration=ResubmissionRequired, Line A Status=Rejected => [200] editable, succeeds"
+      - "[PUT /api/me/tax-declarations/{declarationId}/lines/{Line B id}] declaration=ResubmissionRequired, Line B Status=Approved => [409] Conflict, 'The declaration line is not editable in its current state.'"
+    auto: API
+
+  - id: TAXDCL-DECL-011
+    func: [F-TAXDCL-025]
+    sc: UpdateLineOwnAsync resets line Status to Draft on every edit
+    t: Editing a Rejected line during resubmission returns its Status to Draft, not directly to Submitted
+    src: "TaxDeclarationService.cs UpdateLineOwnAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Line is Status=Rejected, declaration=ResubmissionRequired"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "DeclaredAmount=60000"
+    steps:
+      - "[PUT /api/me/tax-declarations/{declarationId}/lines/{lineId}] DeclaredAmount=60000 => [200] line Status becomes Draft"
+    auto: API
+
+  - id: TAXDCL-DECL-012
+    func: [F-TAXDCL-026]
+    sc: Optimistic concurrency on line update
+    t: A stale ConcurrencyVersion (concurrent edit already applied) surfaces Conflict, not a 500
+    src: "TaxDeclarationService.cs UpdateLineOwnAsync (try/catch DbUpdateConcurrencyException)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Two concurrent UpdateLineOwnAsync calls for the same line"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[PUT /api/me/tax-declarations/{declarationId}/lines/{lineId}] request 1 commits first => [200] success"
+      - "[PUT /api/me/tax-declarations/{declarationId}/lines/{lineId}] request 2, same stale ConcurrencyVersion loaded before request 1 committed => [409] Conflict, 'The declaration changed while the line was being updated.'"
+    auto: API
+
+  - id: TAXDCL-DECL-013
+    func: [F-TAXDCL-027]
+    sc: DeleteLineOwnAsync only while Draft
+    t: A line cannot be deleted once the declaration has left Draft (including ResubmissionRequired)
+    src: "TaxDeclarationService.cs DeleteLineOwnAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Declaration is ResubmissionRequired"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[DELETE /api/me/tax-declarations/{declarationId}/lines/{lineId}] declaration=ResubmissionRequired => [409] Conflict, 'Only draft declaration lines can be deleted.'"
+      - "[DELETE /api/me/tax-declarations/{declarationId}/lines/{lineId}] declaration=Draft (separate declaration) => [200] deleted"
+    auto: API
+
+  - id: TAXDCL-DECL-014
+    func: [F-TAXDCL-028]
+    sc: SubmitOwnAsync requires eligible status, at least one line, and all required proofs
+    t: Submit fails Invalid with zero lines, fails Conflict with a missing required proof, and fails Conflict from an ineligible status
+    src: "TaxDeclarationService.cs SubmitOwnAsync"
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P0
+    sev: High
+    pre: "Three scenarios: empty declaration; declaration with an unproven proof-required line; declaration already Locked"
+    role: Employee (EMP1, EMP3, EMP4)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/me/tax-declarations/submit] declaration has zero lines => [400] Invalid, field=lines"
+      - "[POST /api/me/tax-declarations/submit] declaration has a proof-required line with no accepted proof => [409] Conflict, 'Every proof-required line must have a proof.'"
+      - "[POST /api/me/tax-declarations/submit] declaration Status=Locked => [409] Conflict"
+    auto: API
+
+  - id: TAXDCL-DECL-015
+    func: [F-TAXDCL-029]
+    sc: "CONFIRMED DEFECT - Submit crashes when the employee has 2 declarations"
+    t: SubmitOwnAsync's unscoped SingleOrDefaultAsync throws when more than one EmployeeTaxDeclaration row matches the caller
+    src: "TaxDeclarationService.cs SubmitOwnAsync (SingleOrDefaultAsync, tenant+employee only)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    pre: "EMP1 has two simultaneously open declarations, one per cycle (Cycle A and Cycle B both Status=Open)"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "EMP1 declarations for Cycle A and Cycle B, both Draft"
+    steps:
+      - "[POST /api/me/tax-declarations?cycleId=<Cycle A id>] as EMP1 => [201] created"
+      - "[POST /api/me/tax-declarations?cycleId=<Cycle B id>] as EMP1 => [201] created (second simultaneous declaration, allowed per F-TAXDCL-018)"
+      - "[POST /api/me/tax-declarations/submit] as EMP1 => EXPECTED [409/400] graceful error; ACTUAL: unhandled InvalidOperationException / 500 - CONFIRMED DEFECT"
+    secc: true
+    auto: API
+    cr: [CR-239]
+
+  - id: TAXDCL-DECL-016
+    func: [F-TAXDCL-030]
+    sc: Successful submit stamps status/timestamps and records Submitted/Resubmitted audit
+    t: A first-time submit records Submitted; a resubmission from ResubmissionRequired records Resubmitted instead
+    src: "TaxDeclarationService.cs SubmitOwnAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Declaration A is Draft (first submit); Declaration B is ResubmissionRequired (resubmit)"
+    role: Employee (EMP1, EMP2)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/me/tax-declarations/submit] Declaration A, Draft => [200] Status=Submitted, SubmittedAtUtc/SubmittedByUserId set"
+      - "[GET /api/payroll/tax-declarations/{A id}/audit] => Action=Submitted"
+      - "[POST /api/me/tax-declarations/{B id}/resubmit] Declaration B, ResubmissionRequired => [200] Status=Submitted"
+      - "[GET /api/payroll/tax-declarations/{B id}/audit] => Action=Resubmitted (not Submitted)"
+    auto: API
+
+  - id: TAXDCL-DECL-017
+    func: [F-TAXDCL-031]
+    sc: ResubmitOwnAsync is id- and status-scoped
+    t: Resubmit fails when the target id does not belong to the caller or is not ResubmissionRequired
+    src: "TaxDeclarationService.cs ResubmitOwnAsync"
+    type: Negative
+    tags: [Boundary, Tenant-Isolation]
+    pri: P1
+    sev: Medium
+    pre: "Declaration is Status=Draft (not ResubmissionRequired); a second declaration belongs to a different employee"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/me/tax-declarations/{own declarationId}/resubmit] declaration is Draft, not ResubmissionRequired => [409] Conflict"
+      - "[POST /api/me/tax-declarations/{another employee's declarationId}/resubmit] as EMP1 => [409] Conflict, 'Only your resubmission-required declaration can be resubmitted.'"
+    auto: API

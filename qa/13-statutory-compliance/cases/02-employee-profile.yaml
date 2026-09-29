@@ -1,0 +1,201 @@
+sheet: Stat_EmployeeProfile
+submodule: Employee Statutory Profile
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: STAT-PROF-001
+    func: [F-STAT-019, F-STAT-032]
+    sc: Getting an employee's statutory profile
+    t: GetProfileAsync returns the latest-EffectiveFrom row, which is not necessarily the one CalculateAsync would select for a given period
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs GetProfileAsync, CalculateAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Employee E1 has two profile rows: Row A (EffectiveFrom=2025-01-01, EffectiveTo=2025-12-31, IsActive=true) and Row B (EffectiveFrom=2026-01-01, EffectiveTo=null, IsActive=false)"
+    role: HRAdmin (with EmployeeStatutory.View granted)
+    perm: Payroll.EmployeeStatutory.View
+    tenant: "T1 (DEMO01)"
+    data: "employeeId=E1"
+    steps:
+      - "[GET /api/payroll/employees/{employeeId}/statutory-profile] => [200] returns Row B (the latest EffectiveFrom), even though it is IsActive=false and would never be selected by CalculateAsync for any period (F-STAT-030's own IsActive gate)"
+    auto: API
+
+  - id: STAT-PROF-002
+    func: [F-STAT-020]
+    sc: Saving a profile - employee must exist
+    t: SaveProfileAsync 404s when the target employee does not exist in the tenant
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs SaveProfileAsync"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (with EmployeeStatutory.Manage granted)
+    perm: Payroll.EmployeeStatutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "employeeId=random guid"
+    steps:
+      - "[PUT /api/payroll/employees/{randomEmployeeId}/statutory-profile] with a well-formed body against a non-existent employee id => [404] Employee not found."
+    auto: API
+
+  - id: STAT-PROF-003
+    func: [F-STAT-021]
+    sc: Saving a profile - date range validation
+    t: SaveProfileAsync rejects EffectiveTo earlier than EffectiveFrom
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs SaveProfileAsync"
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P1
+    sev: Medium
+    pre: Employee E1 exists
+    role: HRAdmin (with EmployeeStatutory.Manage granted)
+    perm: Payroll.EmployeeStatutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "effectiveFrom=2026-04-01, effectiveTo=2026-03-31"
+    steps:
+      - "[PUT /api/payroll/employees/{employeeId}/statutory-profile] with EffectiveTo before EffectiveFrom => [400] Invalid, 'Effective To cannot be earlier than Effective From.'"
+    auto: API
+
+  - id: STAT-PROF-004
+    func: [F-STAT-022]
+    sc: Saving a profile - append-only, no update
+    t: SaveProfileAsync always inserts a new row and rejects an overlapping date range with any existing row regardless of that row's IsActive flag
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs SaveProfileAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Employee E1 has an existing INACTIVE profile row covering 2026-01-01..2026-12-31"
+    role: HRAdmin (with EmployeeStatutory.Manage granted)
+    perm: Payroll.EmployeeStatutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "new profile request 2026-06-01..2027-05-31 (overlaps the inactive row)"
+    steps:
+      - "[PUT /api/payroll/employees/{employeeId}/statutory-profile] a new profile overlapping the existing INACTIVE row's date range => [409] Conflict, 'Employee statutory profiles cannot overlap.' (proves the overlap check applies even to an inactive row)"
+      - "[PUT /api/payroll/employees/{employeeId}/statutory-profile] a genuinely disjoint range 2027-01-01..null => [201] created as a brand-new row; the prior row is never updated or superseded"
+      - "[DB] query EmployeeStatutoryProfiles for the employee => both the original 2026 row and the new 2027 row still exist as separate records"
+    db: "EmployeeStatutoryProfiles accumulates rows, never updates one in place"
+    auto: API
+
+  - id: STAT-PROF-005
+    func: [F-STAT-024]
+    sc: Saving a profile - normalisation
+    t: JurisdictionCode/StateCode are trimmed and upper-cased on save
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs SaveProfileAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: Employee E2 has no existing profile
+    role: HRAdmin (with EmployeeStatutory.Manage granted)
+    perm: Payroll.EmployeeStatutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "jurisdictionCode=' in ', stateCode=' ka '"
+    steps:
+      - "[PUT /api/payroll/employees/{employeeId}/statutory-profile] with jurisdictionCode=' in ' and stateCode=' ka ' => [201] stored as 'IN' and 'KA' respectively"
+    auto: API
+
+  - id: STAT-PROF-006
+    func: [F-STAT-025, F-STAT-026]
+    sc: Saving a profile - audit history is always Created
+    t: SaveProfileAsync records an EmployeeStatutoryProfileHistory row that is always ChangeType=Created, even on a second (append-only) save
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs SaveProfileAsync"
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: Employee E3 has no existing profile
+    role: HRAdmin (with EmployeeStatutory.Manage granted)
+    perm: Payroll.EmployeeStatutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "first save 2026-01-01..2026-06-30, second (disjoint) save 2026-07-01..null"
+    steps:
+      - "[PUT /api/payroll/employees/{employeeId}/statutory-profile] first save => [201] created; history row ChangeType=Created with a JSON snapshot of the request"
+      - "[PUT /api/payroll/employees/{employeeId}/statutory-profile] second, disjoint save (a logical 'update' going forward) => [201] created; the SECOND history row is ALSO ChangeType=Created (Updated/Activated/Deactivated are never assigned anywhere in the service)"
+    db: "EmployeeStatutoryProfileHistories has two rows for the employee, both ChangeType=Created"
+    auto: DB-assisted
+    cr: []
+
+  - id: STAT-PROF-007
+    func: [F-STAT-027]
+    sc: Identifier divergence from Personal Details
+    t: EmployeeStatutoryProfile.Uan/EsiNumber never synchronise with Employee.UanNumber/EsicNumber
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs; Backend/HRMS.Domain/Entities/Employee.cs"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Employee E4's Personal Details record has UanNumber='100200300400'"
+    role: HRAdmin (with EmployeeStatutory.Manage granted)
+    perm: Payroll.EmployeeStatutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "profile.uan='999888777666' (deliberately different from Employee.UanNumber)"
+    steps:
+      - "[PUT /api/payroll/employees/{employeeId}/statutory-profile] save a profile with uan='999888777666' => [201] created; the profile's own Uan is stored as submitted"
+      - "[GET /api/payroll/employees/{employeeId}/statutory-profile] => [200] returns uan='999888777666'"
+      - "[Manual/DB] inspect Employee.UanNumber => unaffected, still '100200300400' - the two identifiers now silently diverge for the same employee, with no reconciliation anywhere"
+    db: "Employees.UanNumber unchanged; EmployeeStatutoryProfiles.Uan holds the divergent value"
+    auto: API
+    cr: [CR-225]
+
+  - id: STAT-PROF-008
+    func: [F-STAT-028]
+    sc: Frontend coverage for the statutory profile
+    t: No frontend page anywhere calls getEmployeeStatutoryProfile/saveEmployeeStatutoryProfile despite both client functions existing
+    src: "Frontend/HRMS.Web/src/api/payroll.ts; full grep of Frontend/HRMS.Web/src/pages"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: High
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] grep Frontend/HRMS.Web/src/pages for 'getEmployeeStatutoryProfile' and 'saveEmployeeStatutoryProfile' => zero matches in any page component"
+      - "[Manual] read src/api/payroll.ts lines 20 and 53 => both functions ARE exported and fully implemented; the gap is UI-only, not a missing client binding"
+    auto: Manual only
+    cr: [CR-234]
+
+  - id: STAT-PROF-009
+    func: [F-STAT-029]
+    sc: Cross-tenant profile access
+    t: A cross-tenant employeeId on profile get/save is NotFound, not Forbidden
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs GetProfileAsync, SaveProfileAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: Employee E-T2 exists only in tenant T2
+    role: HRAdmin (with EmployeeStatutory.View/Manage granted)
+    perm: Payroll.EmployeeStatutory.View, Payroll.EmployeeStatutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "employeeId=E-T2's id"
+    steps:
+      - "[GET /api/payroll/employees/{eT2Id}/statutory-profile] authenticated as T1 => [404] Employee statutory profile not found."
+      - "[PUT /api/payroll/employees/{eT2Id}/statutory-profile] authenticated as T1 => [404] Employee not found."
+    auto: API
+
+  - id: STAT-PROF-010
+    func: [F-STAT-030]
+    sc: IsActive correctly gates calculation eligibility
+    t: An IsActive=false profile is correctly excluded from CalculateAsync's own selection, unlike several dead flags found elsewhere in this module
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync (profile query includes x.IsActive)"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Employee E5 has ONE profile row, IsActive=false, otherwise eligible and effective for the payroll period"
+    role: n/a (internal calculation)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: "profile IsActive=false"
+    steps:
+      - "[Manual/DB] run payroll calculation for E5's period => the CalculateAsync profile lookup returns null (IsActive=false excludes the row even though its date range covers the period)"
+      - "[DB] query PayrollStatutoryResults for E5's PayrollResult => zero rows, matching F-STAT-031's documented no-profile-configured no-op path"
+    db: "PayrollStatutoryResults has zero rows for this PayrollResult"
+    auto: DB-assisted

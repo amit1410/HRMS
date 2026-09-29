@@ -1,0 +1,133 @@
+sheet: BankAdv_Validation_ErrorHandling
+submodule: Payment Validation Rules
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-VAL-001
+    func: [F-BANKADV-025]
+    sc: Zero or negative net pay
+    t: NetPay<=0 is Invalid with the exact "must be greater than zero" message
+    src: "BankAdviceService.ValidatePayment"
+    type: Boundary
+    tags: [Negative, Validation]
+    pri: P0
+    sev: High
+    pre: "EMP1's PayrollResult has NetPay = 0.00; EMP2's has NetPay = -500.00, both otherwise complete bank details"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 2 PayrollResult rows
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP1's payment ValidationStatus=Invalid, ValidationMessage=\"Net pay must be greater than zero.\""
+      - "[Manual] check EMP2's payment => ValidationStatus=Invalid, same message"
+    auto: API
+
+  - id: BANKADV-VAL-002
+    func: [F-BANKADV-026]
+    sc: No matching bank account
+    t: Zero matching accounts yields the exact "no active salary bank account" message
+    src: "BankAdviceService.ValidatePayment"
+    type: Negative
+    tags: [Validation]
+    pri: P0
+    sev: High
+    pre: "EMP4 has zero EmployeeBankDetail rows"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP4's payment ValidationMessage == \"No active salary bank account is effective for the pay date.\""
+    auto: API
+
+  - id: BANKADV-VAL-003
+    func: [F-BANKADV-027]
+    sc: Ambiguous multiple accounts
+    t: More than one matching account yields the exact "multiple active salary bank accounts" message
+    src: "BankAdviceService.ValidatePayment"
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    sev: Medium
+    pre: "EMP5 has two simultaneously matching accounts"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 2 EmployeeBankDetail rows
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP5's payment ValidationMessage == \"Multiple active salary bank accounts are effective for the pay date.\""
+    auto: API
+
+  - id: BANKADV-VAL-004
+    func: [F-BANKADV-028]
+    sc: Missing IFSC code
+    t: A resolved account with blank/null IfscCode is Invalid with the exact IFSC message
+    src: "BankAdviceService.ValidatePayment"
+    type: Negative
+    tags: [Validation]
+    pri: P0
+    sev: High
+    pre: "EMP8 has one matching account with IfscCode=null, AccountNumber populated"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 1 EmployeeBankDetail row
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP8's payment ValidationMessage == \"Bank routing/IFSC code is required.\""
+    auto: API
+
+  - id: BANKADV-VAL-005
+    func: [F-BANKADV-029]
+    sc: Missing account number
+    t: A resolved account with blank/null AccountNumber is Invalid with the exact account-number message
+    src: "BankAdviceService.ValidatePayment"
+    type: Negative
+    tags: [Validation]
+    pri: P0
+    sev: High
+    pre: "EMP9 has one matching account with AccountNumber=empty, IfscCode populated"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 1 EmployeeBankDetail row
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP9's payment ValidationMessage == \"Bank account number is required.\""
+    auto: API
+
+  - id: BANKADV-VAL-006
+    func: [F-BANKADV-030, F-BANKADV-031]
+    sc: A fully valid payment
+    t: An employee whose net pay and account details all pass validation is Valid/Ready with a null message
+    src: "BankAdviceService.ValidatePayment, GenerateAsync"
+    type: Positive
+    tags: []
+    pri: P0
+    sev: High
+    pre: "EMP1 has NetPay > 0, one complete matching salary account"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP1's payment ValidationStatus=Valid, ValidationMessage=null, PaymentStatus=Ready"
+    auto: API
+
+  - id: BANKADV-VAL-007
+    func: [F-BANKADV-032]
+    sc: First-failing-rule-wins ordering
+    t: A row violating both the net-pay rule and the account rule records only the NetPay message (evaluation order NetPay -> account-count -> IFSC -> account-number)
+    src: "BankAdviceService.ValidatePayment (sequential early-return checks)"
+    type: Boundary
+    tags: [Validation]
+    pri: P2
+    sev: Low
+    pre: "EMP10 has NetPay=0 AND zero matching bank accounts (violates two rules at once)"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP10's payment ValidationMessage == \"Net pay must be greater than zero.\" only, NOT the missing-account message"
+    auto: API

@@ -1,0 +1,453 @@
+sheet: Platform_Tenant_Create
+submodule: Tenant Onboarding (Create)
+defaults:
+  role: PLATFORM_ADMIN
+  perm: PlatformTenant.Create
+  tenant: None (platform identity domain)
+  pre: "QA platform.localhost stack running with SMTP/invitation configured as in Development (InitialAdministratorInvitationsConfigured=true); a disposable QA catalog and MySQL/SQL Server test databases; tenant codes/hosts/shard keys generated fresh per test run to avoid collisions."
+  data: "Fresh, unused TenantCode/Host/ShardKey per case; QA_PLATFORM_ADMIN token."
+  sev: High
+  reg: true
+
+cases:
+  - id: PLAT-CREATE-001
+    func: [F-PLAT-03, F-PLAT-06, F-PLAT-07, F-PLAT-08]
+    sc: Successful onboarding with SQL Server
+    t: A valid request creates an Active tenant with default branding and a working initial administrator
+    src: ["PlatformTenantService.CreateAsync"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "[POST /api/platform/tenants] Send a valid body (TenantCode='QAP01', Host='qap01.localhost', DatabaseProvider='SqlServer', ShardKey='qap01', InitialAdminEmail, FirstName, LastName) => [201] success=true, data.status='Active', data.id present"
+      - "Inspect data => adminEmail equals the submitted InitialAdminEmail; developmentTemporaryPassword is a non-empty string (Development QA stack)"
+      - "[GET /api/platform/tenants/{new id}] Re-fetch => [200] status='Active'"
+      - "[GET /api/tenants/current/branding] Call at the new tenant's host, anonymously => [200] displayName equals TenantName, primaryColor='#1D4ED8' (default)"
+      - "[POST /api/auth/login] Sign in at the new tenant's host using InitialAdminEmail and the returned temporary password => [200] roles contains TenantAdmin"
+    db: "Catalog Tenants (new row, Status=Active), Catalog TenantBranding (new row), tenant shard Users (1 row, IsActive=true), UserRoles (TenantAdmin)."
+    auto: API
+    ex: ["xU:TenantProvisioningTests.Each_organization_is_provisioned_into_its_own_database", "xU:TenantProvisioningTests.Every_shard_carries_the_full_reference_data"]
+
+  - id: PLAT-CREATE-002
+    func: [F-PLAT-03, F-PLAT-09]
+    sc: Successful onboarding with MySQL
+    t: A valid request with DatabaseProvider=MySql creates the tenant database on the trusted MySQL server
+    src: ["TenantProvisioningService.PrepareMySqlDatabaseAsync"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "[POST /api/platform/tenants] Send a valid body with DatabaseProvider='MySql', fresh ShardKey='qap02' => [201] status='Active'"
+      - "Confirm the MySQL server now has a database matching the configured naming convention (e.g. HRMS_qap02) with a populated __EFMigrationsHistory table => confirmed via QA DB access"
+      - "[POST /api/auth/login] Sign in at the new tenant's host with the returned credentials => [200]"
+    db: "New MySQL database created and migrated on the trusted MySQL server; Catalog Tenants.DatabaseProvider='MySql'."
+    auto: DB-assisted
+    ex: ["xU:MySqlTenantProvisioningConfigurationTests.Shard_key_resolves_to_the_expected_tenant_database_name", "xU:MySqlTenantProvisioningConfigurationTests.Current_history_is_idempotently_accepted"]
+
+  - id: PLAT-CREATE-003
+    func: [F-PLAT-03]
+    sc: Mandatory fields
+    t: Omitting any required field is rejected by validation with a field-scoped error
+    src: ["CreatePlatformTenantRequestValidator"]
+    type: Negative
+    tags: [Validation]
+    pri: P0
+    steps:
+      - "[POST /api/platform/tenants] Omit TenantName => [400] field 'tenantName'"
+      - "[POST /api/platform/tenants] Omit TenantCode => [400] field 'tenantCode'"
+      - "[POST /api/platform/tenants] Omit Host => [400] field 'host'"
+      - "[POST /api/platform/tenants] Omit ShardKey => [400] field 'shardKey'"
+      - "[POST /api/platform/tenants] Omit InitialAdminEmail => [400] field 'initialAdminEmail'"
+      - "[POST /api/platform/tenants] Omit FirstName => [400] field 'firstName'"
+      - "[POST /api/platform/tenants] Omit LastName => [400] field 'lastName'"
+    auto: API
+
+  - id: PLAT-CREATE-004
+    func: [F-PLAT-03]
+    sc: TenantCode shape
+    t: TenantCode must be 2-20 alphanumeric/underscore/hyphen characters (validator), further narrowed to letters/digits only by the service
+    src: ["CreatePlatformTenantRequestValidator (Matches ^[A-Za-z0-9_-]{2,20}$)", "PlatformTenantService.ValidateNormalizedValues (letters/digits only)"]
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants] TenantCode='A' (1 char) => [400]"
+      - "[POST /api/platform/tenants] TenantCode of exactly 20 valid characters => passes validator-level shape check"
+      - "[POST /api/platform/tenants] TenantCode of 21 characters => [400]"
+      - "[POST /api/platform/tenants] TenantCode='QA_01' (underscore, validator-legal) => record actual: service-level ValidateNormalizedValues requires letters/digits only, so this is rejected as 'TenantCode must contain only letters and digits.' despite passing the validator - confirms the two layers disagree on allowed characters"
+      - "[POST /api/platform/tenants] TenantCode='qa p1' (space) => [400] rejected by the validator's regex"
+    auto: API
+    ex: ["xU:PlatformTenantRequestValidatorTests.Valid_sql_server_request_passes_shape_validation"]
+    cr: [CR-21]
+    cm: "Exposes CR-21: the FluentValidation regex allows '_' and '-' in TenantCode, but PlatformTenantService.ValidateNormalizedValues then rejects anything but letters/digits, producing a confusing two-stage rejection for a value the client was told was shape-valid."
+
+  - id: PLAT-CREATE-005
+    func: [F-PLAT-03]
+    sc: TenantCode is upper-cased and compared case-insensitively
+    t: TenantCode is normalized to upper case before storage and duplicate-checked case-insensitively
+    src: ["PlatformTenantService.CreateAsync (tenantCode = request.TenantCode.Trim().ToUpperInvariant())"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants] TenantCode='qap03' (lower case) => [201] data reflects TenantCode='QAP03' when re-fetched via GET"
+      - "[POST /api/platform/tenants] Attempt a second tenant with TenantCode='QAP03' (already used, different case than first submission) => [409] 'TenantCode is already in use.'"
+    db: "Catalog Tenants.TenantCode stored as 'QAP03'."
+    auto: API
+
+  - id: PLAT-CREATE-006
+    func: [F-PLAT-03]
+    sc: Host shape and DNS validity
+    t: Host must be a syntactically valid DNS host name
+    src: ["PlatformTenantService.ValidateNormalizedValues (Uri.CheckHostName)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants] Host='' => [400] (also caught by NotEmpty)"
+      - "[POST /api/platform/tenants] Host='..bad..host' (consecutive dots) => [400] 'Host must be a valid DNS host name.'"
+      - "[POST /api/platform/tenants] Host='.leadingdot.localhost' => [400]"
+      - "[POST /api/platform/tenants] Host='trailingdot.localhost.' => [400]"
+      - "[POST /api/platform/tenants] Host of 254 characters (over the validator's 253 max) => [400]"
+    auto: API
+
+  - id: PLAT-CREATE-007
+    func: [F-PLAT-03]
+    sc: Development host format requirement
+    t: In a Development QA stack, the host must be a single-label <workspace>.localhost address
+    src: ["PlatformTenantService.ValidateNormalizedValues (developmentHostRequired)"]
+    type: Negative
+    tags: [Boundary, Configuration]
+    pri: P0
+    sev: High
+    steps:
+      - "[POST /api/platform/tenants] Host='qap04.localhost' (valid single-label form) => passes host validation"
+      - "[POST /api/platform/tenants] Host='qap04.example.com' (not .localhost) => [400] 'Development tenant hosts must use the supported <workspace>.localhost format.'"
+      - "[POST /api/platform/tenants] Host='sub.qap04.localhost' (two labels before .localhost) => [400] same message"
+      - "[POST /api/platform/tenants] Host='.localhost' (empty label) => [400] same message"
+    auto: API
+
+  - id: PLAT-CREATE-008
+    func: [F-PLAT-03, F-PLAT-25]
+    sc: Reserved platform host is not rejected on create
+    t: A tenant can be created with Host equal to the platform's own reserved host, which then becomes permanently unreachable
+    src: ["PlatformTenantService.CreateAsync (no IsReservedPlatformHost call, unlike UpdateInactiveAsync)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    steps:
+      - "[POST /api/platform/tenants] Host='platform.localhost' (the configured Platform:AllowedHosts entry), otherwise valid => record actual: current code accepts this and returns [201]"
+      - "[GET /api/tenants/current/branding] Call at platform.localhost afterward => [404] platform routing intercepts the host before any tenant resolution can reach the new row (the tenant is unreachable via its own host)"
+      - "[PUT /api/platform/tenants/{new id}] Attempt to correct the host afterward => [200] succeeds, since UpdateInactiveAsync does enforce the reserved-host check on the NEW host value being submitted, not the current one"
+    sec: "Confirms F-PLAT-25/CR-22: the create path has no defense the update path has; a wasted tenant slot rather than a security breach, since platform routing still wins."
+    auto: API
+    cr: [CR-22]
+
+  - id: PLAT-CREATE-009
+    func: [F-PLAT-04]
+    sc: Duplicate host
+    t: A second tenant cannot reuse an existing tenant's host
+    src: ["PlatformTenantService.CreateAsync (AnyAsync Host check)"]
+    type: Negative
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/platform/tenants] Send a request whose Host equals Tenant A's existing host (different TenantCode/ShardKey) => [409] 'Host is already in use.'"
+    db: "No new Catalog Tenants row inserted."
+    auto: API
+
+  - id: PLAT-CREATE-010
+    func: [F-PLAT-04]
+    sc: Duplicate shard key
+    t: A second tenant cannot reuse an existing tenant's shard key
+    src: ["PlatformTenantService.CreateAsync (AnyAsync ShardKey check)"]
+    type: Negative
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/platform/tenants] Send a request whose ShardKey equals Tenant A's existing shard key (different TenantCode/Host) => [409] 'ShardKey is already in use.'"
+    auto: API
+
+  - id: PLAT-CREATE-011
+    func: [F-PLAT-04]
+    sc: Duplicate tenant code
+    t: A second tenant cannot reuse an existing tenant's code (case-insensitive)
+    src: ["PlatformTenantService.CreateAsync (AnyAsync TenantCode check)"]
+    type: Negative
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/platform/tenants] Send a request whose TenantCode equals Tenant A's existing code in a different case (different Host/ShardKey) => [409] 'TenantCode is already in use.'"
+    auto: API
+
+  - id: PLAT-CREATE-012
+    func: [F-PLAT-04]
+    sc: Concurrent creation with the same identity races to one winner
+    t: Two simultaneous create requests for the same TenantCode/Host/ShardKey result in exactly one success
+    src: ["PlatformTenantService.CreateAsync (DbUpdateException fallback after the AnyAsync race window)"]
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: High
+    steps:
+      - "[POST /api/platform/tenants] Fire two concurrent requests with identical TenantCode/Host/ShardKey => exactly one returns [201]; the other returns [409] ('...already in use.' or 'Tenant identity already exists.')"
+      - "[GET /api/platform/tenants] Confirm only one tenant row exists for that identity => confirmed"
+    db: "Exactly one Catalog Tenants row for the contested identity."
+    auto: API
+
+  - id: PLAT-CREATE-013
+    func: [F-PLAT-03]
+    sc: ShardKey shape
+    t: ShardKey must start with a lowercase letter or digit and contain only lowercase letters, digits, '-' or '_'
+    src: ["PlatformTenantService.ValidateNormalizedValues (ShardKey rules)"]
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants] ShardKey='Qap05' (upper-case letter) => [400] 'ShardKey must start with a lowercase letter or digit...'"
+      - "[POST /api/platform/tenants] ShardKey='-qap05' (leading hyphen) => [400] same"
+      - "[POST /api/platform/tenants] ShardKey of 64 valid characters => passes shape validation"
+      - "[POST /api/platform/tenants] ShardKey of 65 characters => [400] 'ShardKey must be between 1 and 64 characters.'"
+      - "[POST /api/platform/tenants] ShardKey='demo 03' (space, validator-level) => [400] rejected by CreatePlatformTenantRequestValidator's regex before the service even runs"
+    auto: API
+    ex: ["xU:PlatformTenantRequestValidatorTests.Invalid_shard_key_fails_shape_validation"]
+
+  - id: PLAT-CREATE-014
+    func: [F-PLAT-03]
+    sc: ShardKey is lower-cased
+    t: A ShardKey submitted in mixed case is normalized to lower case before storage
+    src: ["PlatformTenantService.CreateAsync (shardKey = request.ShardKey.Trim().ToLowerInvariant())"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/platform/tenants] ShardKey='QAP06' => [201] (the normalized lower-case form 'qap06' must still satisfy the lowercase-only shape rule, since normalization happens before the shape check)"
+      - "[GET /api/platform/tenants/{new id}] Confirm shardKey='qap06' => confirmed"
+    auto: API
+
+  - id: PLAT-CREATE-015
+    func: [F-PLAT-03]
+    sc: DatabaseProvider must be one of the two supported values
+    t: An enum value outside SqlServer/MySql is rejected by the validator, and the service repeats the check
+    src: ["CreatePlatformTenantRequestValidator.Must", "PlatformTenantService.CreateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants] DatabaseProvider set to an out-of-range integer (e.g. 99) => [400] validator rejects an undefined enum member"
+    auto: API
+    ex: ["xU:PlatformTenantRequestValidatorTests.Unsupported_provider_value_fails_shape_validation"]
+
+  - id: PLAT-CREATE-016
+    func: [F-PLAT-03]
+    sc: InitialAdminEmail format and length
+    t: A malformed or oversized administrator email is rejected
+    src: ["CreatePlatformTenantRequestValidator (EmailAddress, MaximumLength(256))"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants] InitialAdminEmail='not-an-email' => [400]"
+      - "[POST /api/platform/tenants] InitialAdminEmail longer than 256 characters => [400]"
+      - "[POST /api/platform/tenants] InitialAdminEmail with a 256-character valid address => passes validation"
+    auto: API
+
+  - id: PLAT-CREATE-017
+    func: [F-PLAT-03]
+    sc: Optional contact fields
+    t: Email/Phone/Address are optional but validated when present; blank strings are stored as null
+    src: ["CreatePlatformTenantRequestValidator (When !IsNullOrWhiteSpace)", "PlatformTenantService.CreateAsync"]
+    type: Positive
+    tags: [Negative, Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/platform/tenants] Omit Email/Phone/Address entirely => [201] succeeds"
+      - "[GET /api/platform/tenants/{new id}] Confirm email/phone/address are null, not empty strings => confirmed"
+      - "[POST /api/platform/tenants] Send Email='not-an-email' (non-empty, invalid) => [400]"
+      - "[POST /api/platform/tenants] Send Phone longer than 50 characters => [400]"
+      - "[POST /api/platform/tenants] Send Address longer than 500 characters => [400]"
+      - "[POST /api/platform/tenants] Send Email='   ' (whitespace only) => [201] succeeds and stores null (treated as absent)"
+    auto: API
+
+  - id: PLAT-CREATE-018
+    func: [F-PLAT-03]
+    sc: Names are trimmed
+    t: Leading/trailing whitespace in TenantName/FirstName/LastName is trimmed before storage
+    src: ["PlatformTenantService.CreateAsync (.Trim() throughout)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P3
+    sev: Low
+    steps:
+      - "[POST /api/platform/tenants] TenantName='  QA Padded Co  ' => [201] stored TenantName='QA Padded Co'"
+    auto: API
+
+  - id: PLAT-CREATE-019
+    func: [F-PLAT-05]
+    sc: Onboarding is closed when invitations are not configured
+    t: Outside Development, with no SMTP invitation provider configured, create is refused before any catalog row is written
+    src: ["PlatformTenantService.InitialAdministratorInvitationsConfigured"]
+    type: Negative
+    tags: [Configuration]
+    pri: P1
+    sev: High
+    pre: "Requires a non-Development QA deployment with Email:Provider not set to Smtp; otherwise NOT EXECUTED - environment unavailable."
+    steps:
+      - "[POST /api/platform/tenants] Send an otherwise valid request against that instance => [400] 'Initial administrator invitations are not configured. Onboarding is unavailable until the SMTP invitation provider is configured.'"
+      - "[GET /api/platform/tenants] Confirm no new tenant row was created => confirmed"
+    auto: API
+
+  - id: PLAT-CREATE-020
+    func: [F-PLAT-11]
+    sc: Provisioning failure leaves the tenant Inactive for retry
+    t: A forced provisioning failure (e.g. unreachable MySQL server) leaves the catalog row Inactive rather than rolling it back
+    src: ["PlatformTenantService.CreateAsync (catch block)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Requires an isolated QA environment where the MySQL/SQL Server target can be made deliberately unreachable during the call; never disrupt a shared database to produce this condition."
+    steps:
+      - "[POST /api/platform/tenants] Send a valid request while the target database server is unreachable => [409] 'Tenant provisioning failed. The tenant remains Inactive for operator diagnosis and retry.'"
+      - "[GET /api/platform/tenants] Confirm a Catalog Tenants row now exists for that TenantCode with Status='Inactive' => confirmed"
+      - "[GET /api/platform/tenants/{id}] Confirm no initial administrator was created (a subsequent successful retry should be the first to create one) => confirmed via retry"
+    db: "Catalog Tenants row present, Status=Inactive; no tenant shard database reachable/created."
+    auto: DB-assisted
+    ex: ["xU:TenantProvisioningTests.An_unreachable_shard_is_skipped_and_the_others_are_provisioned"]
+
+  - id: PLAT-CREATE-021
+    func: [F-PLAT-11]
+    sc: Failure logs contain no secrets
+    t: A provisioning failure's log entry names tenant identity, provider, phase and a safe error code, never a connection string or password
+    src: ["PlatformTenantService.CreateAsync (_logger.LogError; SafeErrorCode)"]
+    type: Security
+    pri: P1
+    sev: High
+    pre: "Requires log access on the QA API instance; never inspect logs on a shared/production system."
+    steps:
+      - "Trigger PLAT-CREATE-020's failure and inspect the resulting log line => contains TenantId, TenantCode, Host, DatabaseProvider, ProvisioningPhase, ErrorCode; contains no connection string, password, or raw exception stack with credentials"
+    sec: "Matches the documented logging policy (tenant identity, provider, phase, exception type only)."
+    auto: Manual only
+
+  - id: PLAT-CREATE-022
+    func: [F-PLAT-07]
+    sc: Initial administrator receives exactly the TenantAdmin role
+    t: The created administrator has TenantAdmin and no other role, and can sign in immediately
+    src: ["PlatformTenantService.CreateInitialAdminAsync"]
+    type: Positive
+    tags: [Authorization]
+    pri: P0
+    steps:
+      - "[POST /api/platform/tenants] Onboard a fresh tenant => [201] adminEmail/developmentTemporaryPassword returned"
+      - "[POST /api/auth/login] Sign in at the new tenant's host with those credentials => [200] roles=['TenantAdmin'] exactly"
+      - "[GET /api/role-assignments] As the new admin, confirm they can reach role-management endpoints (TenantAdmin holds RoleManagement.* per SeedData) => [200]"
+    db: "Tenant shard UserRoles has exactly one row for the new user, RoleId=TenantAdmin."
+    auto: API
+
+  - id: PLAT-CREATE-023
+    func: [F-PLAT-07, F-PLAT-23]
+    sc: Temporary password is single-use knowledge
+    t: The generated temporary password is high-entropy and meets the tenant password policy
+    src: ["PlatformTenantService.GenerateTemporaryPassword"]
+    type: Security
+    tags: [Positive]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants] Onboard a fresh tenant, capture developmentTemporaryPassword => [201]"
+      - "Inspect the value => at least 24 bytes of entropy encoded as base64-url-safe text (length ~32 characters); no predictable pattern"
+      - "[POST /api/auth/login] Confirm it authenticates the new admin => [200]"
+      - "[POST /api/me/change-password] Confirm PasswordPolicy.IsValid would accept it as a 'current' password for a subsequent change (i.e. it satisfies upper/lower/digit/8-128) => the temporary password format ('Base64 with +/- and /→y substitutions') is checked against the policy; record whether it always satisfies upper/lower/digit"
+    auto: API
+    cr: [CR-23]
+    cm: "Exposes CR-23 (QA risk, not yet a defect): GenerateTemporaryPassword base64-encodes 24 random bytes; base64 output is not guaranteed to always contain a digit, an upper-case and a lower-case character, which PasswordPolicy.IsValid requires elsewhere. Confirm whether this can ever produce a temporary password that the user could not later reuse unchanged, or that fails an assumption elsewhere."
+
+  - id: PLAT-CREATE-024
+    func: [F-PLAT-04, F-PLAT-07]
+    sc: Existing-user reuse during onboarding
+    t: If the initial admin email already belongs to an active TenantAdmin in that (impossible, since it's brand new) - covered instead by the retry case; onboarding itself never finds an existing user in a freshly created tenant
+    src: ["PlatformTenantService.CreateInitialAdminAsync (existing branch is unreachable on first Create)"]
+    type: Boundary
+    pri: P3
+    sev: Low
+    steps:
+      - "[POST /api/platform/tenants] Onboard a brand-new tenant => [201] a new Users row is always created, since the tenant database has just been provisioned and holds no users yet"
+    auto: API
+    cm: "The 'existing user' branch in CreateInitialAdminAsync is exercised only by retry-provisioning (see PLAT-RETRY cases), never by a first-time Create; this case documents that fact rather than testing new behaviour."
+
+  - id: PLAT-CREATE-025
+    func: [F-PLAT-24]
+    sc: Create requires PlatformTenant.Create
+    t: A platform user holding only PlatformTenant.View cannot create a tenant
+    src: ["[PlatformPermission(PlatformPermissions.TenantCreate)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: PLATFORM_VIEWER (PlatformTenant.View only)
+    steps:
+      - "[POST /api/platform/tenants] As PLATFORM_VIEWER, send an otherwise valid body => [403]"
+      - "[GET /api/platform/tenants] As PLATFORM_VIEWER afterward => [200] (view still works, confirming this is a permission gap, not a broken token)"
+    auto: API
+
+  - id: PLAT-CREATE-026
+    func: [F-PLAT-03]
+    sc: Malformed and oversized request bodies
+    t: Non-JSON, wrong-typed and excessively large request bodies are refused without a 500
+    src: ["ValidationFilter / ApiBehaviorOptions"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants] Send malformed JSON => [400] 'The request could not be read.'"
+      - "[POST /api/platform/tenants] Send DatabaseProvider as a string instead of the expected representation the API accepts => [400]"
+      - "[POST /api/platform/tenants] Send a 5 MB Address value (exceeds the 500-character limit) => [400], not a timeout or 500"
+    auto: API
+
+  - id: PLAT-CREATE-027
+    func: [F-PLAT-03]
+    sc: Cache-Control on the create response
+    t: "The create response, which may carry a temporary password, sets Cache-Control: no-store"
+    src: ["PlatformTenantsController.Create (Response.Headers.CacheControl = 'no-store')"]
+    type: Security
+    tags: [Configuration]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/platform/tenants] Onboard a tenant and inspect response headers => Cache-Control: no-store"
+    auto: API
+
+  - id: PLAT-CREATE-028
+    func: [F-PLAT-03, F-PLAT-32]
+    sc: Create is unreachable at a tenant host
+    t: POST /api/platform/tenants at a customer host is blocked before authentication
+    src: ["PlatformRequestRoutingMiddleware"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    tenant: A
+    steps:
+      - "[POST /api/platform/tenants] Call at the Tenant A host with a valid platform token and a valid body => [404]"
+    auto: API
+
+  - id: PLAT-CREATE-029
+    func: [F-PLAT-09, F-PLAT-10]
+    sc: MySQL onboarding onto a pre-existing database with a foreign schema fails closed
+    t: If the target MySQL database name already exists with no recognizable migration history, onboarding refuses to proceed
+    src: ["TenantProvisioningService.PrepareMySqlDatabaseAsync (MySqlException 1146 / unreadable history)"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    sev: High
+    pre: "Requires an isolated QA MySQL server where a database matching the target naming convention can be pre-created with an unrelated table, outside any shared environment."
+    steps:
+      - "Pre-create a MySQL database named per the shard-key convention, containing an unrelated table and no __EFMigrationsHistory => prepared"
+      - "[POST /api/platform/tenants] Attempt to onboard a tenant whose ShardKey maps to that database name => [409] 'Tenant provisioning failed...'; no data in the foreign schema is touched or dropped"
+    sec: "Fail-closed behaviour prevents onboarding from silently adopting or overwriting an unrelated database."
+    auto: DB-assisted
+    ex: ["xU:MySqlTenantProvisioningConfigurationTests.Unknown_skipped_and_empty_history_fail_closed"]

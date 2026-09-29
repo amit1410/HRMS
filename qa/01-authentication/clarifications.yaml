@@ -1,0 +1,108 @@
+# Clarification / QA-Risk register for Module 1.
+# None of these are confirmed defects. Each is exposed by one or more test cases (see `cr:` field on cases).
+# `classification` starts as "Open - awaiting decision" and is updated by the product owner, never inferred.
+clarifications:
+  - id: CR-01
+    title: Seeded Employee role lacks several self-service permissions the UI routes require
+    observation: >
+      SeedData.RolePermissionMap grants the Employee role Attendance.MonthlyViewSelf, ExceptionViewSelf and
+      CompOffViewSelf, but not Attendance.View, RegularizationRequest, OnDutyRequest, OvertimeRequest,
+      Payroll.PayslipViewOwn, LoansRequest, ReimbursementsRequest or VariablePayView - all of which guard
+      routes the frontend exposes under /attendance/my-*, /payroll/my-payslips, /payroll/my-loans,
+      /payroll/my-reimbursements and /payroll/my-variable-pay.
+    risk: A freshly seeded Employee cannot reach several self-service screens the product otherwise ships routes for.
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs; Frontend/HRMS.Web/src/App.tsx"
+    classification: Open - awaiting decision
+
+  - id: CR-02
+    title: comp-off/operations is authorized only inside the service, not on the route
+    observation: >
+      GET /api/attendance/comp-off/operations carries [Authorize] but no [HasPermission]; authorization is
+      performed by CompOffService.BuildOperationalScopeAsync trying CompOffViewAll, then ViewTeam, then Manage.
+    risk: >
+      Inconsistent with the "permissions guard endpoints" convention documented in CLAUDE.md; a caller with
+      none of those permissions may get an empty 200 instead of a 403, misleading anyone auditing route
+      attributes alone.
+    source: "Backend/HRMS.API/Controllers/CompOffController.cs; CompOffService.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-03
+    title: Payroll adjustments list permission may not be scoped for self-service callers
+    observation: >
+      GET /api/payroll/adjustments (the HR-wide list) and GET /api/me/payroll-adjustments (self-service) both
+      declare Payroll.AdjustmentsView, which the Employee role also holds by seed default.
+    risk: >
+      If the HR-wide endpoint does not additionally scope by caller identity for non-HR roles, an Employee
+      holding only AdjustmentsView could read the tenant-wide adjustments list.
+    source: "Backend/HRMS.API/Controllers/PayrollAdjustmentsController.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-14
+    title: Access tokens remain valid after logout, deactivation or permission revocation until they expire
+    observation: >
+      Access tokens are stateless JWTs validated only by signature/expiry; AuthService.LogoutAsync revokes
+      only the refresh token, and permission/role changes are re-read only on the next login or refresh.
+    risk: >
+      A deactivated user, a revoked permission, or a "logged out" session remains partially effective for up
+      to Jwt:AccessTokenMinutes (default 60 minutes).
+    source: "AuthService.cs; AddJwtAuthentication (stateless JWT validation)"
+    classification: Open - awaiting decision
+
+  - id: CR-15
+    title: No dedicated FluentValidation validator found for PlatformLoginRequest
+    observation: >
+      HRMS.Application/Validators has validators for tenant LoginRequest, RefreshTokenRequest, password
+      recovery and set-password, but no PlatformLoginRequestValidator was found alongside them.
+    risk: Malformed platform login bodies may be handled only by default model binding, with a different error shape than tenant login.
+    source: "Backend/HRMS.Application/Validators (directory listing); PlatformAuthController.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-16
+    title: Platform refresh-token replay does not appear to revoke the whole session family
+    observation: >
+      AuthService.RefreshAsync (tenant) explicitly revokes every active refresh token for the user on replay
+      of a consumed token. PlatformAuthService.RefreshAsync performs the same conditional single-use update
+      but has no equivalent RevokeAll call.
+    risk: A stolen platform refresh token, if replayed after legitimate rotation, may not trigger the same theft response tenant sessions get.
+    source: "Backend/HRMS.Infrastructure/Persistence/PlatformAuthService.cs vs AuthService.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-17
+    title: Tenant access tokens have no server-side kill switch equivalent to platform SecurityRevision
+    observation: >
+      PlatformAuthService.GetCurrentUserAsync compares a security_revision claim against
+      PlatformUsers.SecurityRevision and rejects mismatches immediately. Tenant AuthService has no equivalent
+      mechanism; see CR-14.
+    risk: Platform identities can be revoked live; tenant identities cannot, widening the exposure window described in CR-14 specifically for tenant users.
+    source: "PlatformAuthService.cs vs AuthService.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-18
+    title: Platform login has no rate limiting
+    observation: >
+      AuthController.Login carries [EnableRateLimiting(RateLimitingPolicies.Authentication)];
+      PlatformAuthController.Login carries no such attribute.
+    risk: Platform admin accounts, which hold broad cross-tenant administrative power, may be more exposed to credential stuffing than tenant accounts.
+    source: "Backend/HRMS.API/Controllers/PlatformAuthController.cs; AuthController.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-19
+    title: Security response headers are registered after UseAuthorization; interaction with early-exit responses unconfirmed
+    observation: >
+      The X-Content-Type-Options/X-Frame-Options/Referrer-Policy middleware in Program.cs is registered after
+      UseAuthentication/UseAuthorization and uses Response.OnStarting, which should still fire for responses
+      written earlier in the pipeline (e.g. JwtBearerEvents, the rate limiter). Not independently confirmed by
+      an automated test at the time of this review.
+    risk: If the callback does not fire for short-circuited 401/403/429 responses, those responses would lack the hardening headers that 2xx responses get.
+    source: "Backend/HRMS.API/Program.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-20
+    title: Cache-Control on login/refresh responses not confirmed
+    observation: >
+      AuthController explicitly sets Response.Headers.CacheControl = "no-store" on set-password and every
+      forgot-password endpoint, but Login and Refresh (which also return token material) do not appear to
+      set it.
+    risk: A shared/intermediate cache could in principle retain a token-bearing response, though most such caches do not cache authenticated POST responses by default.
+    source: "Backend/HRMS.API/Controllers/AuthController.cs"
+    classification: Open - awaiting decision

@@ -1,0 +1,107 @@
+sheet: VPay_Concurrency_Provider
+submodule: Optimistic-concurrency races, idempotency backstops, SQL Server/MySQL provider parity, and large-data/paging
+defaults:
+  role: HRADMIN
+  perm: "Payroll.VariablePay.Approve"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with the relevant VariablePay permissions granted, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: VPAY-CONC-001
+    func: [F-VPAY-115]
+    sc: Approve/Submit/Reject/Cancel race safely via status-keyed compare-and-swap
+    t: Two concurrent transition attempts against the same award never double-apply; the loser gets a clean Conflict
+    src: ["VariablePayService.ApproveAsync, TransitionAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    tags: [Integration-Concurrency]
+    steps:
+      - "[Manual/Code] Fire two concurrent Approve requests against the same Calculated award => exactly one 200 (Status=Approved); the other 409 Variable-pay award was modified by another operation."
+    auto: DB-assisted
+
+  - id: VPAY-CONC-002
+    func: [F-VPAY-116]
+    sc: Settle races safely on SettledAmount, not only Status
+    t: Two concurrent partial settlements against the same award cannot both apply against a stale outstanding balance
+    src: ["VariablePayService.SettleAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    tags: [Integration-Concurrency]
+    steps:
+      - "[Manual/Code] Fire two concurrent Settle(Amount=600) requests against the same Approved(ApprovedAmount=1000) award => exactly one 200 (SettledAmount=600, Status=PartiallyPaid); the other 409 Variable-pay award was modified by another operation., total SettledAmount never exceeds 1000"
+    auto: DB-assisted
+
+  - id: VPAY-CONC-003
+    func: [F-VPAY-117]
+    sc: Override has no race protection because it never writes anything
+    t: Two concurrent Override calls both return apparent success with no Conflict, since neither is ever persisted
+    src: ["VariablePayService.OverrideAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Integration-Concurrency]
+    cr: [CR-201]
+    steps:
+      - "[Manual/Code] Fire two concurrent Override(OverrideAmount=1) and Override(OverrideAmount=2) requests against the same award => both return 200 with no Conflict; a subsequent GET shows the award's ORIGINAL pre-override value, confirming neither write was ever persisted"
+    auto: DB-assisted
+
+  - id: VPAY-CONC-004
+    func: [F-VPAY-118]
+    sc: Generate's idempotency is backed by a database unique index
+    t: A genuine race between two concurrent first-time Generate calls for the identical key leaves exactly one award row
+    src: ["VariablePayConfiguration.cs (VariablePayAwardConfiguration unique index)"]
+    type: Integration-Concurrency
+    pri: P0
+    tags: [Integration-Concurrency]
+    steps:
+      - "[Manual/Code] Fire two concurrent first-time Generate requests with identical (employeeId, PlanVersionId, AwardPeriodFrom, AwardPeriodTo) => exactly one VariablePayAwards row exists afterward (the loser either returns the same award via the pre-check or the DB unique index rejects a duplicate insert)"
+    auto: DB-assisted
+
+  - id: VPAY-CONC-005
+    func: [F-VPAY-119]
+    sc: Settlement duplicate-prevention is backed by a database unique index
+    t: A genuine race between two concurrent Settle calls carrying identical source keys leaves exactly one VariablePaySettlement row
+    src: ["VariablePayConfiguration.cs (VariablePaySettlementConfiguration unique index)"]
+    type: Integration-Concurrency
+    pri: P0
+    tags: [Integration-Concurrency]
+    steps:
+      - "[Manual/Code] Fire two concurrent Settle requests with identical (AwardId, SettlementType=Payroll, PayrollRunId=runX, FinalSettlementId=null) => exactly one VariablePaySettlements row exists afterward"
+    auto: DB-assisted
+
+  - id: VPAY-CONC-006
+    func: [F-VPAY-120]
+    sc: Provider acceptance covers the core lifecycle but not Override/Reject/Cancel/GenerateBulk/register/reports
+    t: A full read of PayrollVariablePayProviderAcceptance.RunAsync confirms its coverage scope and gaps
+    src: ["Backend/HRMS.Tests/PayrollVariablePayProviderAcceptance.cs (full read)"]
+    type: Contract
+    pri: P1
+    tags: [Configuration]
+    steps:
+      - "[Manual/Code] Read PayrollVariablePayProviderAcceptance.RunAsync in full => covers plan/version persistence, Preview vs Generate, award numbering, Approve, tax split, Final-Settlement-linked Settle, VariablePaySettlement persistence, and cross-tenant denial; contains zero calls to OverrideAsync, RejectAsync, CancelAsync, GenerateBulkAsync, GetAwardsAsync paging, or GetVariablePayAsync"
+    auto: Manual only
+
+  - id: VPAY-CONC-007
+    func: [F-VPAY-121]
+    sc: 100 awards across 100 employees reconcile and remain tenant-scoped
+    t: Page 1 of a 50-size page returns exactly 50 items with TotalCount=100 and the tenant-scoped CalculatedAmount sum matches
+    src: ["Backend/HRMS.Tests/VariablePayLargeDataTests.cs (full read)"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Integration-Concurrency]
+    steps:
+      - "[Manual/Code] Confirm VariablePayLargeDataTests generates 100 FixedAmount(100) awards for 100 employees => GetAwardsAsync(Page=1,PageSize=50).Items.Count==50, TotalCount==100, tenant-scoped Sum(CalculatedAmount)==10000, and a second tenant's register is empty"
+    auto: DB-assisted
+
+  - id: VPAY-CONC-008
+    func: [F-VPAY-122]
+    sc: Decimal-precision columns are configured identically across providers
+    t: All amount columns use HasPrecision(18,6) uniformly, and VariablePay uses its own app-managed int ConcurrencyVersion rather than EF rowversion, so no provider-specific concurrency-token divergence applies to this module
+    src: ["VariablePayConfiguration.cs (HasPrecision(18,6) throughout)"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Grep VariablePayConfiguration.cs for HasPrecision => every decimal/decimal? amount property across VariablePayPlanVersion/VariablePayAward/VariablePaySettlement is HasPrecision(18,6); grep for rowversion/RowVersion => zero matches (ConcurrencyVersion is a plain int)"
+    auto: Manual only

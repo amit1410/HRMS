@@ -1,0 +1,486 @@
+sheet: Masters_Generic_Create
+submodule: Generic Engine - Create (api/masters/{kind}) plus dedicated Department/Designation create
+defaults:
+  role: HR_ADMIN
+  perm: Geography.Manage
+  tenant: A
+  pre: "Tenant A signed in as a user holding the HRAdmin role (Geography.Manage)."
+  data: "kind=holding-companies unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: MASTER-CREATE-001
+    func: [F-MST-03]
+    sc: Minimal valid creation - code and name only
+    t: Creating with only Code and Name succeeds; Description is null and IsActive defaults to true
+    src: ["MasterManagementService.WriteAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC10', name: 'Tenth Holding'} => [201] code=HC10, name=Tenth Holding, description=null, isActive=true, parentId=null"
+    auto: API
+
+  - id: MASTER-CREATE-002
+    func: [F-MST-03]
+    sc: Full valid creation with description and explicit isActive
+    t: All fields, including an explicit isActive=false, are persisted as sent
+    src: ["MasterManagementService.WriteAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC11', name: 'Eleventh Holding', description: 'Created inactive on purpose', isActive: false} => [201] description matches, isActive=false"
+    auto: API
+
+  - id: MASTER-CREATE-003
+    func: [F-MST-03]
+    sc: Code is required
+    t: An empty or whitespace-only code is rejected
+    src: ["MasterManagementService.WriteAsync ('code.Length is 0')"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: '', name: 'No Code'} => [400] field 'code', 'Code is required and must be at most 20 characters.'"
+      - "[POST /api/masters/holding-companies] Body {code: '   ', name: 'Whitespace Code'} => [400] field 'code' (trimmed to empty)"
+    auto: API
+
+  - id: MASTER-CREATE-004
+    func: [F-MST-03]
+    sc: Name is required
+    t: An empty or whitespace-only name is rejected
+    src: ["MasterManagementService.WriteAsync ('name.Length is 0')"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC12', name: ''} => [400] field 'name', 'Name is required and must be at most 200 characters.'"
+      - "[POST /api/masters/holding-companies] Body {code: 'HC12', name: '   '} => [400] field 'name'"
+    auto: API
+
+  - id: MASTER-CREATE-005
+    func: [F-MST-03]
+    sc: Code length boundary - 20 characters accepted, 21 rejected
+    t: The 20-character maximum is inclusive
+    src: ["MasterManagementService.WriteAsync ('code.Length is > 20')"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: '12345678901234567890' (20 chars), name: 'Twenty Char Code'} => [201] code stored at full length"
+      - "[POST /api/masters/holding-companies] Body {code: '123456789012345678901' (21 chars), name: 'Twenty One'} => [400] field 'code'"
+    auto: API
+
+  - id: MASTER-CREATE-006
+    func: [F-MST-03, F-MST-40]
+    sc: Name length boundary - 200 characters accepted by validation, but exceeds every backing column's 100-char limit
+    t: A 200-character name passes MasterManagementService's own check even though it is twice the DB column's declared HasMaxLength(100)
+    src: ["MasterManagementService.WriteAsync ('name.Length is > 200')", "DepartmentConfiguration.cs (HasMaxLength(100), representative of all 15 generic tables)"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC13', name: <200-char string>} => [201 on SQLite test stack] record created with the full 200-character name persisted (SQLite enforces no column length)"
+      - "Repeat against a SQL Server or MySQL-backed environment (see docs/mysql-development.md) => document actual result: truncation, a provider error surfaced as 500, or an unexpected 201 - do not assume before observing"
+    auto: DB-assisted
+    cr: [CR-33]
+
+  - id: MASTER-CREATE-007
+    func: [F-MST-03]
+    sc: Code accepts letters, digits, and the four punctuation characters '.', '_', '-', '/'
+    t: A code combining all four allowed punctuation characters is accepted
+    src: ["MasterManagementService.WriteAsync (code.Any(c => !IsLetterOrDigit(c) && c is not ('.', '_', '-', '/')))"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC.14_A-B/C', name: 'Punctuation Code'} => [201] code stored exactly as sent"
+    auto: API
+
+  - id: MASTER-CREATE-008
+    func: [F-MST-03]
+    sc: Code rejects characters outside the allowed set
+    t: "Space, @, hash and percent characters in the code are all rejected"
+    src: ["MasterManagementService.WriteAsync"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC 15', name: 'Space In Code'} => [400] field 'code', 'Code may contain letters, digits, ., _, - and / only.'"
+      - "[POST /api/masters/holding-companies] Body {code: 'HC@15', name: 'At Sign'} => [400] field 'code'"
+      - "[POST /api/masters/holding-companies] Body {code: '<script>', name: 'XSS Attempt'} => [400] field 'code' (rejected by the charset rule before it could ever be stored or reflected)"
+    auto: API
+
+  - id: MASTER-CREATE-009
+    func: [F-MST-03]
+    sc: Leading/trailing whitespace on code and name is trimmed before validation and storage
+    t: "Leading/trailing spaces around code and name are stripped: '  HC16  ' / '  Sixteenth  ' become 'HC16' / 'Sixteenth'"
+    src: ["MasterManagementService.WriteAsync (request.Code.Trim(), request.Name.Trim())"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: '  HC16  ', name: '  Sixteenth  '} => [201] code='HC16', name='Sixteenth' (no surrounding whitespace)"
+    auto: API
+
+  - id: MASTER-CREATE-010
+    func: [F-MST-05]
+    sc: Exact-case duplicate code is rejected
+    t: Creating a second record with a code already in use in this tenant returns 409
+    src: ["MasterManagementService.Definition.HasConflict"]
+    type: Negative
+    pri: P0
+    pre: "Tenant A already has holding company HC01."
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC01', name: 'Duplicate Of HC01'} => [409] 'Code or name is already used in this organization.'"
+    auto: API
+
+  - id: MASTER-CREATE-011
+    func: [F-MST-05]
+    sc: Case-insensitive duplicate code is rejected
+    t: "'hc01' collides with the existing 'HC01'"
+    src: ["MasterManagementService.Definition.HasConflict (ToLower comparison)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'hc01', name: 'Lower Case Dup'} => [409]"
+    auto: API
+
+  - id: MASTER-CREATE-012
+    func: [F-MST-05]
+    sc: Case-insensitive duplicate name is rejected even with a distinct code
+    t: A different code cannot rescue a name collision
+    src: ["MasterManagementService.Definition.HasConflict"]
+    type: Negative
+    pri: P1
+    pre: "Tenant A already has a holding company named 'Tenth Holding' (HC10)."
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC17', name: 'tenth holding'} => [409]"
+    auto: API
+
+  - id: MASTER-CREATE-013
+    func: [F-MST-05]
+    sc: The same code is free to reuse in a different tenant
+    t: Uniqueness is scoped to (TenantId, Code), not global
+    src: ["MasterManagementService.Definition.HasConflict (per-tenant DbSet, EF query filter)"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[POST /api/masters/holding-companies] As a Tenant B HRAdmin, body {code: 'HC01', name: 'Tenant B Holding'} => [201] created successfully even though Tenant A already has an HC01"
+    auto: API
+    ex: ["xU:MasterManagementTests.Master_management_rejects_cross_tenant_parent_and_preserves_inactive_records"]
+
+  - id: MASTER-CREATE-014
+    func: [F-MST-03]
+    sc: Unicode text in Name is accepted and round-trips exactly
+    t: Non-Latin scripts and combining characters in Name are stored and returned unchanged
+    src: ["MasterManagementService.WriteAsync (no charset restriction on Name)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC18', name: '財務部 Финансы Ünïcödé'} => [201] name returned byte-for-byte identical to the request"
+    auto: API
+
+  - id: MASTER-CREATE-015
+    func: [F-MST-03]
+    sc: A whitespace-only description is normalized to null
+    t: Description is optional; blank input is stored as null rather than an empty string
+    src: ["MasterManagementService.WriteAsync (string.IsNullOrWhiteSpace(request.Description) ? null : Trim())"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC19', name: 'Nineteenth', description: '   '} => [201] description=null"
+    auto: API
+
+  - id: MASTER-CREATE-016
+    func: [F-MST-03]
+    sc: Description length is not validated by the generic engine, unlike the dedicated Department/Designation validators
+    t: A description well over the 500-character DB column limit is accepted by MasterManagementService with no length check at all
+    src: ["MasterManagementService.WriteAsync (no MaximumLength rule on Description, contrast DepartmentRequestValidator.Description MaximumLength(500))"]
+    type: Boundary
+    pri: P3
+    sev: Low
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC20', name: 'Twentieth', description: <600-char string>} => [201 on SQLite] full 600-character description accepted and returned"
+    auto: API
+    cr: [CR-33]
+    cm: "Same root cause as CR-33 (Name): the generic engine validates length only where WriteAsync explicitly checks it, and Description has no check at all, unlike the FluentValidation-backed dedicated Department/Designation writes."
+
+  - id: MASTER-CREATE-017
+    func: [F-MST-03]
+    sc: isActive=false on create is honored immediately
+    t: A record can be created already inactive, without a separate deactivate step
+    src: ["MasterManagementService.WriteAsync (Set(entity, 'IsActive', request.IsActive))"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC21', name: 'Born Inactive', isActive: false} => [201] isActive=false"
+      - "[GET /api/masters/holding-companies?isActive=true] Call => [200] items does not contain HC21"
+    auto: API
+
+  - id: MASTER-CREATE-018
+    func: [F-MST-03]
+    sc: Create requires Geography.Manage; Geography.View alone is refused
+    t: A read-only role (e.g. Employee, who has Geography.View only) cannot create a master record
+    src: ["[HasPermission(Permissions.Geography.Manage)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: EMPLOYEE
+    perm: Geography.View (held); Geography.Manage (missing)
+    steps:
+      - "[POST /api/masters/holding-companies] As EMPLOYEE, body {code: 'HC22', name: 'Should Be Refused'} => [403]"
+    auto: API
+
+  - id: MASTER-CREATE-019
+    func: [F-MST-09]
+    sc: Create is always rejected for the 'countries' kind, even with an otherwise-valid payload
+    t: POST /api/masters/countries returns 409 before any field validation runs
+    src: ["MasterManagementService.WriteAsync (kind == 'countries' short-circuit)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/masters/countries] Body {code: 'ZZ', name: 'New Country'} => [409] 'Countries are shared reference data and cannot be changed from the tenant Masters screen.'"
+    auto: API
+
+  - id: MASTER-CREATE-020
+    func: [F-MST-03]
+    sc: When both code and name are invalid, only the code error is returned first
+    t: WriteAsync validates code before name, so a request failing both rules surfaces a single field-level error, not an aggregate
+    src: ["MasterManagementService.WriteAsync (sequential if-return checks)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P3
+    sev: Low
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: '', name: ''} => [400] exactly one error, on field 'code' (the name check is never reached)"
+    auto: API
+
+  - id: MASTER-CREATE-021
+    func: [F-MST-06, F-MST-11]
+    sc: A required parent that is missing is rejected
+    t: Creating a sub-department without a parentId is refused, because Department is a required parent for Sub Department
+    src: ["MasterManagementService.WriteAsync (ParentRequired check)"]
+    type: Negative
+    pri: P0
+    data: "kind=sub-departments"
+    steps:
+      - "[POST /api/masters/sub-departments] Body {code: 'SUBDEPT02', name: 'Missing Parent'} (no parentId) => [400] field 'parentId', 'Department is required.'"
+    auto: API
+
+  - id: MASTER-CREATE-022
+    func: [F-MST-06, F-MST-10]
+    sc: An optional parent can be omitted
+    t: Creating a Line of Business with no Holding Company succeeds, because Holding Company is optional for LOB
+    src: ["MasterManagementService.WriteAsync (ParentRequired=false for lines-of-business)"]
+    type: Positive
+    pri: P1
+    data: "kind=lines-of-business"
+    steps:
+      - "[POST /api/masters/lines-of-business] Body {code: 'LOB01', name: 'Unparented LOB'} (no parentId) => [201] parentId=null, parentCode=null, parentName=null"
+    auto: API
+
+  - id: MASTER-CREATE-023
+    func: [F-MST-06]
+    sc: A parentId that matches no row is rejected as invalid
+    t: A random GUID as parentId is refused with the generic invalid-parent message
+    src: ["MasterManagementService.ParentExistsAsync (record is null)"]
+    type: Negative
+    pri: P1
+    data: "kind=sub-departments"
+    steps:
+      - "[POST /api/masters/sub-departments] Body {code: 'SUBDEPT03', name: 'Bad Parent', parentId: '{random GUID}'} => [400] field 'parentId', 'The selected parent is invalid, inactive, or belongs to another tenant.'"
+    auto: API
+
+  - id: MASTER-CREATE-024
+    func: [F-MST-06]
+    sc: An inactive parent is rejected as invalid
+    t: Selecting an inactive Department as a Sub Department's parent is refused, identically to a nonexistent parent
+    src: ["MasterManagementService.ParentExistsAsync ((bool)Value(record, 'IsActive'))"]
+    type: Negative
+    pri: P1
+    pre: "Tenant A has Department DEPT99 with IsActive=false."
+    data: "kind=sub-departments, parentId=DEPT99's id"
+    steps:
+      - "[POST /api/masters/sub-departments] Body {code: 'SUBDEPT04', name: 'Inactive Parent', parentId: '{DEPT99 id}'} => [400] field 'parentId' (same message as a nonexistent parent - the two are not distinguished)"
+    auto: API
+
+  - id: MASTER-CREATE-025
+    func: [F-MST-06, F-MST-35]
+    sc: A parent id belonging to another tenant is rejected as invalid, not reported as cross-tenant
+    t: Tenant B's department id, used as a parentId while creating a Tenant A sub-department, is refused with the same generic message as any other invalid parent
+    src: ["MasterManagementService.ParentExistsAsync (parent.Find is tenant-filtered)"]
+    type: Tenant-Isolation
+    tags: [Security, Negative]
+    pri: P0
+    sev: Critical
+    pre: "Tenant B has an active Department DEPTB1."
+    data: "kind=sub-departments, parentId=DEPTB1's id (belongs to Tenant B)"
+    steps:
+      - "[POST /api/masters/sub-departments] As Tenant A, body {code: 'SUBDEPT05', name: 'Cross Tenant Parent', parentId: '{DEPTB1 id}'} => [400] field 'parentId', identical message to MASTER-CREATE-023/024 (no information disclosed about DEPTB1 existing in another tenant)"
+    auto: API
+    ex: ["xU:MasterManagementTests.Master_management_rejects_cross_tenant_parent_and_preserves_inactive_records"]
+
+  - id: MASTER-CREATE-026
+    func: [F-MST-06, F-MST-14]
+    sc: A parentId supplied for a flat (non-hierarchical) kind is silently ignored
+    t: Sending a parentId when creating a Holding Company (which has no parent concept) does not error and is not persisted
+    src: ["MasterManagementService.WriteAsync (Set(entity, ParentProperty, ...) only runs when definition.ParentProperty is not null)"]
+    type: Boundary
+    tags: [Negative]
+    pri: P2
+    steps:
+      - "[POST /api/masters/holding-companies] Body {code: 'HC23', name: 'Flat With ParentId', parentId: '{any GUID}'} => [201] created successfully; parentId in the response is null (the value was never stored, and no validation of it was ever attempted)"
+    auto: API
+
+  - id: MASTER-CREATE-027
+    func: [F-MST-05]
+    sc: A uniqueness race lost to a concurrent insert is still reported as a conflict, not a server error
+    t: If two requests for the same new code commit concurrently, the loser's DbUpdateException is caught and re-checked, surfacing as 409 rather than 500
+    src: ["MasterManagementService catches no DbUpdateException itself (contrast DepartmentService/DesignationService, which explicitly retry-and-report); verify actual generic-engine behavior under a real race"]
+    type: Integration-Concurrency
+    pri: P3
+    sev: Low
+    steps:
+      - "Fire two POST /api/masters/holding-companies requests with the identical new code 'HC24' at effectively the same time => exactly one [201]; the other resolves to either [409] (if the pre-check catches it) or a raised DbUpdateException - confirm and record the actual outcome, since MasterManagementService.WriteAsync (unlike DepartmentService.CreateAsync) has no explicit try/catch DbUpdateException block around SaveChangesAsync"
+    auto: Manual only
+    cm: "MasterManagementService.WriteAsync has no catch(DbUpdateException) at all, unlike DepartmentService/DesignationService which explicitly retry the conflict check on that exception. A genuine race here may surface as an unhandled 500 rather than a 409 - this needs to be observed against a real concurrent race (SQLite's single-writer lock makes this hard to reproduce reliably in the default test stack)."
+
+  - id: MASTER-CREATE-028
+    func: [F-MST-03, F-MST-15]
+    sc: Coverage matrix - a SortOrder-bearing kind (Grade) still creates through the same generic contract, with SortOrder left at its default
+    t: Creating a Grade through the generic engine ignores the SortOrder concept entirely (there is no field for it on MasterManagementRequest)
+    src: ["MasterManagementRequest (no SortOrder property)", "GradeConfiguration.SortOrder HasDefaultValue(0)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P2
+    data: "kind=grades"
+    steps:
+      - "[POST /api/masters/grades] Body {code: 'G5', name: 'Grade Five'} => [201] created; the record's SortOrder is 0 (there is no request field to set otherwise), so it will sort last-by-SortOrder, first-by-Code among equal SortOrder values on the /api/master-data/grades lookup"
+    auto: API
+
+  - id: DEPT-CREATE-001
+    func: [F-MST-16]
+    sc: Dedicated Department create - valid creation stamps the caller's tenant
+    t: POST /api/departments creates a department owned by the authenticated tenant, independent of any request body tenant field
+    src: ["DepartmentService.CreateAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/departments] Body {code: 'ENG', name: 'Engineering', isActive: true} => [201] tenantId is never present in the response and cannot be supplied in the request; employeeCount=0"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Create_stamps_the_authenticated_tenant"]
+
+  - id: DEPT-CREATE-002
+    func: [F-MST-16]
+    sc: Dedicated Department create - description trimmed, blank treated as absent
+    t: A whitespace-only description is stored as null
+    src: ["DepartmentService.CreateAsync (Normalize)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    steps:
+      - "[POST /api/departments] Body {code: 'FIN', name: 'Finance', description: '   '} => [201] description=null"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Create_trims_input_and_treats_a_blank_description_as_absent"]
+
+  - id: DEPT-CREATE-003
+    func: [F-MST-16]
+    sc: Dedicated Department create - duplicate code rejected case-insensitively, with a field-level error
+    t: DepartmentService's own conflict check reports a structured field error distinct from the generic engine's flat message
+    src: ["DepartmentService.FindConflictAsync"]
+    type: Negative
+    pri: P0
+    pre: "Tenant A already has department ENG."
+    steps:
+      - "[POST /api/departments] Body {code: 'eng', name: 'Engineering Dup'} => [409] errors contains {field: 'code', message: 'This code is already in use.'}"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Create_rejects_a_duplicate_code_regardless_of_case"]
+
+  - id: DEPT-CREATE-004
+    func: [F-MST-16]
+    sc: Dedicated Department create - duplicate name rejected
+    t: A distinct code cannot rescue a name collision
+    src: ["DepartmentService.FindConflictAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/departments] Body {code: 'ENG2', name: 'Engineering'} => [409] errors contains {field: 'name', message: 'This name is already in use.'}"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Create_rejects_a_duplicate_name"]
+
+  - id: DEPT-CREATE-005
+    func: [F-MST-16]
+    sc: Dedicated Department create - a code the dedicated validator would allow but that starts with punctuation is rejected, unlike the generic engine
+    t: CodeFormats.Pattern requires the FIRST character to be a letter or digit; a code starting with '-' is refused here even though the generic engine's charset check has no such positional rule
+    src: ["Backend/HRMS.Application/Validators/Common/CodeFormats.cs ('^[A-Za-z0-9][A-Za-z0-9._\\-/]*$')"]
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    steps:
+      - "[POST /api/departments] Body {code: '-ENG', name: 'Leading Hyphen'} => [400] department code format error"
+      - "[POST /api/masters/departments] Repeat the identical body against the generic route as the same user => [201] accepted (MasterManagementService's charset check does not care about character position)"
+    auto: API
+    cr: [CR-29]
+
+  - id: DEPT-CREATE-006
+    func: [F-MST-16]
+    sc: Dedicated Department create requires Department.Create
+    t: A role with Department.View but not Department.Create cannot create a department through the dedicated endpoint
+    src: ["[HasPermission(Permissions.Department.Create)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: MANAGER
+    perm: Department.View (held); Department.Create (missing)
+    steps:
+      - "[POST /api/departments] As MANAGER, body {code: 'OPS', name: 'Operations'} => [403]"
+    auto: API
+
+  - id: DESIG-CREATE-001
+    func: [F-MST-18]
+    sc: Dedicated Designation create - valid creation stamps the caller's tenant
+    t: POST /api/designations creates a designation owned by the authenticated tenant
+    src: ["DesignationService.CreateAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/designations] Body {code: 'SE2', name: 'Software Engineer II'} => [201] employeeCount=0"
+    auto: API
+    ex: ["xU:DesignationServiceTests.Create_stamps_the_authenticated_tenant"]
+
+  - id: DESIG-CREATE-002
+    func: [F-MST-18]
+    sc: Dedicated Designation create - duplicate code and duplicate name both rejected
+    t: Mirrors Department's uniqueness behavior exactly
+    src: ["DesignationService.FindConflictAsync"]
+    type: Negative
+    pri: P0
+    pre: "Tenant A already has designation SE2 'Software Engineer II'."
+    steps:
+      - "[POST /api/designations] Body {code: 'se2', name: 'Different Name'} => [409] field 'code'"
+      - "[POST /api/designations] Body {code: 'SE3', name: 'software engineer ii'} => [409] field 'name'"
+    auto: API
+    ex: ["xU:DesignationServiceTests.Create_rejects_a_duplicate_code_regardless_of_case", "xU:DesignationServiceTests.Create_rejects_a_duplicate_name"]
+
+  - id: DESIG-CREATE-003
+    func: [F-MST-18]
+    sc: Dedicated Designation create requires Designation.Create
+    t: A role with only Designation.View cannot create a designation
+    src: ["[HasPermission(Permissions.Designation.Create)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: MANAGER
+    perm: Designation.View (held); Designation.Create (missing)
+    steps:
+      - "[POST /api/designations] As MANAGER, body {code: 'SE3', name: 'Software Engineer III'} => [403]"
+    auto: API

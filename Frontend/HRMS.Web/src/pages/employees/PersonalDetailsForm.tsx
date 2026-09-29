@@ -6,7 +6,7 @@ import {
   getEmployeeSensitiveDetails,
   updatePersonalDetails,
 } from '../../api/employees.ts'
-import { hasFieldErrors, toApiError, type ApiError } from '../../api/errors.ts'
+import { ApiError, hasFieldErrors, toApiError } from '../../api/errors.ts'
 import {
   BLOOD_GROUPS,
   GENDERS,
@@ -33,6 +33,7 @@ import {
   emptyPersonalDetailsValues,
   toPersonalDetailsRequest,
   toPersonalDetailsValues,
+  validateRequiredPersonalDetails,
   type PersonalDetailsValues,
 } from './personalDetailsValues.ts'
 import {
@@ -128,6 +129,13 @@ export function PersonalDetailsForm({ employeeId, onCreated }: PersonalDetailsFo
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     if (saving) return
+
+    const requiredErrors = validateRequiredPersonalDetails(values)
+    if (Object.keys(requiredErrors).length > 0) {
+      setError(new ApiError('Please fix the highlighted fields.', { fieldErrors: requiredErrors }))
+      setSuccess(null)
+      return
+    }
 
     const body = toPersonalDetailsRequest(values)
 

@@ -1,0 +1,138 @@
+sheet: PYA_Exports_CSV
+submodule: CSV Export Edge Cases (Escaping & Formula Injection)
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-CSV-001
+    func: [F-PYA-144]
+    sc: Findings CSV export happy path
+    t: FindingsCsv exports the same findings the JSON list would return, across all reconciliation versions
+    src: "PayrollAnalyticsController.FindingsCsv; PayrollAnalyticsService.ExportFindingsAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 from PYA-FIND-001 (2 reconciliation versions, 3 findings total)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/findings.csv] => [200] Content-Type text/csv, 3 data rows spanning both versions, header matches the 15 documented columns"
+    auto: API
+
+  - id: PYA-CSV-002
+    func: [F-PYA-144]
+    sc: A resolution note beginning with a formula-trigger character is neutralized with a leading apostrophe
+    t: A finding's ResolutionNote value of '=CMD(...)' (a classic CSV-injection payload) is exported as "'=CMD(...)" - the leading apostrophe prevents spreadsheet software from executing it as a formula
+    src: "PayrollAnalyticsService.ExportFindingsAsync -> CsvBuilder.EscapeField"
+    type: Security
+    tags: []
+    pri: P0
+    sev: High
+    pre: "FINDING1 was resolved with note=\"=CMD('/c calc')!A1\""
+    role: HRAdmin (custom role holding Payroll.Analytics.View + Payroll.Reconciliation.Resolve)
+    perm: "Payroll.Analytics.View, Payroll.Reconciliation.Resolve"
+    tenant: "T1 (DEMO01)"
+    data: "note=\"=CMD('/c calc')!A1\""
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING1}/resolve] {note:\"=CMD('/c calc')!A1\", reference:null} => [200] "
+      - "[GET /api/payroll/analytics/runs/{RUN1}/findings.csv] => [200] the ResolutionNote cell in the CSV body reads exactly \"'=CMD('/c calc')!A1\" (leading apostrophe prepended, quoted because it also contains a comma-adjacent apostrophe/quote)"
+    auto: API
+
+  - id: PYA-CSV-003
+    func: [F-PYA-011]
+    sc: RFC 4180 escaping of embedded commas, quotes, and newlines in exported free-text fields
+    t: A control totals/summary CSV export correctly quotes and doubles internal quote characters per RFC 4180
+    src: "PayrollAnalyticsService.ExportRunSummaryAsync -> CsvBuilder"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (RunNumber contains a comma, e.g. 'RUN-1, Sept 2026')"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/summary.csv] => [200] the comma-containing value round-trips correctly when parsed by a standard CSV parser (wrapped in double quotes)"
+    auto: API
+
+  - id: PYA-CSV-004
+    func: [F-PYA-028]
+    sc: Variance CSV on a run with zero variance rows still returns a header-only file, not an error
+    t: A run with zero employees produces a valid CSV containing only the header row
+    src: "PayrollAnalyticsService.ExportVarianceAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "RUN-EMPTY has zero persisted PayrollResults"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-EMPTY"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-EMPTY}/variance.csv] => [200] body is exactly a UTF-8 BOM plus the header row and CRLF, zero data rows"
+    auto: API
+
+  - id: PYA-CSV-005
+    func: [F-PYA-089]
+    sc: Exceptions CSV export escapes an anomaly Message containing embedded quotes
+    t: An anomaly's Message field containing a double-quote character exports with the quote correctly doubled per RFC 4180
+    src: "PayrollAnalyticsService.ExportExceptionsAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "An anomaly flag's Message reads: Persisted result has negative net pay (\"critical\")."
+    role: HRAdmin (custom role holding Payroll.Exceptions.View)
+    perm: Payroll.Exceptions.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/exceptions/export.csv] => [200] the Message cell reads exactly \"Persisted result has negative net pay (\"\"critical\"\").\" wrapped in double quotes with the internal quotes doubled"
+    auto: API
+
+  - id: PYA-CSV-006
+    func: [F-PYA-011, F-PYA-028, F-PYA-089, F-PYA-144]
+    sc: Every CSV export in this module requires the same permission as its JSON counterpart
+    t: A caller lacking the relevant View permission receives Forbidden on every CSV export endpoint, identically to the JSON endpoint
+    src: "PayrollAnalyticsController, PayrollExceptionsController"
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "A custom role holds no payroll permissions at all"
+    role: Employee (custom role holding zero Payroll.* permissions)
+    perm: "n/a (negative case)"
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/summary.csv] => [403] Forbidden"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/variance.csv] => [403] Forbidden"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/findings.csv] => [403] Forbidden"
+      - "[GET /api/payroll/exceptions/export.csv] => [403] Forbidden"
+    auto: API
+
+  - id: PYA-CSV-007
+    func: [F-PYA-145]
+    sc: CSV export failures always return 400, never the JSON endpoint's own mapped status code
+    t: Requesting variance.csv for a nonexistent runId returns 400 Bad Request, while the identical condition on the JSON /variance endpoint (already covered in F-PYA-029/PYA-VAR-012's sibling module) returns 404
+    src: "PayrollAnalyticsController.VarianceCsv (if (!result.Succeeded) return BadRequest(result.Message))"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=<random guid>"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RANDOM-GUID}/variance.csv] => [400] Payroll run not found. (NOT 404, despite GET .../variance for the identical id returning 404)"
+    auto: API
+    cr: [CR-305]
+

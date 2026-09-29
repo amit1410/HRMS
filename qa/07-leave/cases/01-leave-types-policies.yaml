@@ -1,0 +1,482 @@
+sheet: Leave_TypesPolicies
+submodule: Leave Type and Leave Policy master data, versions, and per-LeaveType rule sub-resources
+defaults:
+  role: TENANT_ADMIN
+  perm: "Leave.PolicyManage"
+  tenant: A
+  pre: "Tenant A signed in as TenantAdmin unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LEAVE-TYPE-001
+    func: [F-LEAVE-001]
+    sc: List Leave Types with search and isActive filter, paged
+    t: GET /api/leave-types returns a paged, Code-ordered list filterable by search text and IsActive
+    src: ["LeaveConfigurationService.GetLeaveTypesAsync"]
+    type: Positive
+    pri: P1
+    perm: "Leave.PolicyView"
+    steps:
+      - "[GET /api/leave-types?search=casual&isActive=true] Call as TenantAdmin => [200] items match the search text and are all IsActive=true, ordered by Code"
+    auto: API
+
+  - id: LEAVE-TYPE-002
+    func: [F-LEAVE-002]
+    sc: Get a single Leave Type by id
+    t: GET /api/leave-types/{id} returns the full LeaveType detail
+    src: ["LeaveConfigurationService.GetLeaveTypeAsync"]
+    type: Positive
+    pri: P2
+    perm: "Leave.PolicyView"
+    steps:
+      - "[GET /api/leave-types/{casualLeaveId}] Call as TenantAdmin => [200] returns Code/Name/DefaultUnit/IsPaid/IsCompOff/IsActive/ConcurrencyToken"
+    auto: API
+
+  - id: LEAVE-TYPE-003
+    func: [F-LEAVE-003]
+    sc: Create a Leave Type with all fields
+    t: POST /api/leave-types creates a new LeaveType with a unique Code
+    src: ["LeaveConfigurationService.CreateLeaveTypeAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/leave-types] {code:'SL', name:'Sick Leave', defaultUnit:'Day', isPaid:true, isCompOff:false, isActive:true} => [201] Location header points to the new LeaveType"
+    auto: API
+
+  - id: LEAVE-TYPE-004
+    func: [F-LEAVE-004]
+    sc: Duplicate Leave Type code (case-insensitive) is rejected
+    t: Creating a LeaveType whose Code differs only in case from an existing one is Conflict
+    src: ["LeaveConfigurationService.CreateLeaveTypeAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/leave-types] {code:'SL', name:'Sick Leave'} as an existing 'sl' code => [201] first create succeeds"
+      - "[POST /api/leave-types] {code:'sl', name:'Duplicate Sick Leave'} => [409] 'LeaveType code already exists'"
+    auto: API
+
+  - id: LEAVE-TYPE-005
+    func: [F-LEAVE-005]
+    sc: Update a Leave Type with a stale ConcurrencyToken is rejected
+    t: PUT /api/leave-types/{id} with an outdated ConcurrencyToken is Conflict; with the current token it succeeds
+    src: ["LeaveConfigurationService.UpdateLeaveTypeAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/leave-types/{id}] Fetch current ConcurrencyToken => [200]"
+      - "[PUT /api/leave-types/{id}] Another admin updates Name first (using the SAME token) => [200] token advances"
+      - "[PUT /api/leave-types/{id}] Original caller retries with the NOW-STALE token => [409] 'Configuration changed by another user'"
+    auto: API
+
+  - id: LEAVE-TYPE-006
+    func: [F-LEAVE-006]
+    sc: LeaveType code becomes immutable after a Published policy references it
+    t: Renaming a LeaveType's Code once ANY Published policy rule names it is rejected 400, even for a valid new code
+    src: ["LeaveConfigurationService.UpdateLeaveTypeAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Publish a policy version with an active rule for LeaveType 'SL' => test preconditions are established for the steps below"
+      - "[PUT /api/leave-types/{slId}] {code:'SICK', name:'Sick Leave'} => [400] 'LeaveType code cannot be changed after a Published policy references it'"
+    auto: API
+
+  - id: LEAVE-TYPE-007
+    func: [F-LEAVE-007, F-LEAVE-008]
+    sc: Deactivating a Leave Type removes it from future request options without touching history
+    t: IsActive=false on a LeaveType still referenced by history hides it from new-request availability but leaves existing requests/balances untouched; a new request against it fails 400
+    src: ["LeaveConfigurationService.UpdateLeaveTypeAsync", "LeaveRequestValidationService.ValidateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/leave-types/{clId}] {isActive:false, ...} => [200] LeaveType deactivated"
+      - "[GET /api/leave-types/available] As an employee => [200] the deactivated LeaveType is absent"
+      - "[POST /api/leave-requests/preview] {leaveTypeId: clId, ...} => [400] 'The requested LeaveType is inactive'"
+      - "[GET /api/leave-requests/{priorApprovedRequestId}] An earlier Approved request for this LeaveType => [200] unaffected"
+    auto: API
+
+  - id: LEAVE-TYPE-008
+    func: [F-LEAVE-009]
+    sc: An Hour-unit LeaveType is rejected at request time, not at creation
+    t: DefaultUnit=Hour is a legally creatable LeaveType, but Preview against it fails Unsupported
+    src: ["LeaveConfigurationService.CreateLeaveTypeAsync", "LeaveRequestValidationService.ValidateAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    steps:
+      - "[POST /api/leave-types] {code:'HR1', name:'Hourly Leave', defaultUnit:'Hour', isActive:true} => [201] created successfully"
+      - "[POST /api/leave-requests/preview] {leaveTypeId: hr1Id, startDate: today, endDate: today} as an employee => [400] 'UnsupportedConfiguration: Hourly or non-day LeaveTypes are not supported'"
+    auto: API
+
+  - id: LEAVE-TYPE-009
+    func: [F-LEAVE-010]
+    sc: IsCompOff routes balance accounting through CompOffService
+    t: Submitting leave against an IsCompOff LeaveType reserves Comp-Off minutes, not a standard LeaveBalance
+    src: ["LeaveRequestSubmissionService.SubmitAttemptAsync"]
+    type: Contract
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests] {leaveTypeId: compOffLeaveTypeId, startDate, endDate, idempotencyKey} with sufficient Comp-Off balance => [201] request created"
+      - "[GET /api/attendance/comp-off/ledger] => [200] a Reserve ledger entry now references this LeaveRequestId; GET /api/leave-balances/mine shows no EmployeeLeaveBalances row consumed for this LeaveType"
+    auto: API
+
+  - id: LEAVE-TYPE-010
+    func: [F-LEAVE-011]
+    sc: Leave Type endpoints require an authenticated tenant
+    t: A request with no bearer token against any Leave Type endpoint is rejected
+    src: ["HasPermissionAttribute"]
+    type: Authorization
+    pri: P1
+    role: NONE
+    perm: "n/a"
+    steps:
+      - "[GET /api/leave-types] No Authorization header => [401]"
+      - "[POST /api/leave-types] No Authorization header => [401]"
+    auto: API
+
+  - id: LEAVE-TYPE-011
+    func: [F-LEAVE-012]
+    sc: Tenant isolation - the same Code may exist independently in two tenants
+    t: Tenant A and Tenant B each create a LeaveType with Code 'CL' without conflict, and neither tenant's list shows the other's row
+    src: ["LeaveConfigurationService.CreateLeaveTypeAsync/GetLeaveTypesAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    steps:
+      - "[POST /api/leave-types] Tenant A: {code:'CL', name:'Casual Leave'} => [201]"
+      - "[POST /api/leave-types] Tenant B: {code:'CL', name:'Casual Leave (Tenant B)'} => [201] no Conflict - independent tenants"
+      - "[GET /api/leave-types] Tenant A => [200] the list contains only Tenant A's own 'CL' row/name"
+    auto: API
+    tags: [Tenant-Isolation]
+
+  - id: LEAVE-POLICY-001
+    func: [F-LEAVE-013]
+    sc: List Leave Policies with versionCount/currentVersionNumber/overlapCount
+    t: GET /api/leave-policies returns paged policies with version-summary fields
+    src: ["LeaveConfigurationService.GetPoliciesAsync"]
+    type: Positive
+    pri: P1
+    perm: "Leave.PolicyView"
+    steps:
+      - "[GET /api/leave-policies] Call as TenantAdmin => [200] each row reports versionCount, currentVersionNumber, overlapCount"
+    auto: API
+
+  - id: LEAVE-POLICY-002
+    func: [F-LEAVE-014]
+    sc: overlapCount is informational only and never blocks anything
+    t: Two Published versions of different policies overlapping on the same LeaveType/date range both remain fully usable; only the list's badge reflects the overlap
+    src: ["LeaveConfigurationService.GetPoliciesAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    steps:
+      - "[Setup] Publish Policy A and Policy B, both covering LeaveType 'CL' for overlapping date ranges, with the SAME priority but different applicability specificity => test preconditions are established for the steps below"
+      - "[GET /api/leave-policies] => [200] both policies show overlapCount>=1"
+      - "[GET /api/leave-policies/{policyAId}] => [200] Policy A itself remains Active and its version remains Published - no block occurred"
+    auto: API
+    cr: [CR-87]
+
+  - id: LEAVE-POLICY-003
+    func: [F-LEAVE-015, F-LEAVE-016]
+    sc: Create and update a Leave Policy
+    t: A Policy can be created with a unique Code and later updated (Name/Description/IsActive), gated by ConcurrencyToken
+    src: ["LeaveConfigurationService.CreatePolicyAsync/UpdatePolicyAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/leave-policies] {code:'STD-LEAVE', name:'Standard Leave Policy', isActive:true} => [201]"
+      - "[PUT /api/leave-policies/{id}] {code:'STD-LEAVE', name:'Standard Leave Policy v2', isActive:true, concurrencyToken:<current>} => [200] Name updated"
+    auto: API
+
+  - id: LEAVE-POLICY-004
+    func: [F-LEAVE-017]
+    sc: Policy code is immutable once ANY version has ever been Published
+    t: A Policy whose Draft version was published then Retired still blocks a Code rename
+    src: ["LeaveConfigurationService.UpdatePolicyAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Publish then Retire a version of Policy 'STD-LEAVE' => test preconditions are established for the steps below"
+      - "[PUT /api/leave-policies/{id}] {code:'STD-LEAVE-2', ...} => [400] 'LeavePolicy code cannot be changed after publication'"
+    auto: API
+
+  - id: LEAVE-POLICY-005
+    func: [F-LEAVE-018]
+    sc: Deactivating a Policy removes it from resolution even with a Published version
+    t: A Published, still-effective version stops resolving once its parent Policy is deactivated
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/leave-policies/{id}] {isActive:false, ...} => [200]"
+      - "[POST /api/leave-policies/test] {employeeId, leaveTypeId, date: today} => [200] Status=NoPolicy - the deactivated policy's own version is excluded"
+    auto: API
+
+  - id: LEAVE-POLICY-006
+    func: [F-LEAVE-019, F-LEAVE-021]
+    sc: Create a Draft version; EffectiveTo before EffectiveFrom is rejected
+    t: A new Draft version auto-increments VersionNumber; an inverted date range is rejected 400
+    src: ["LeavePolicyFoundationService.CreateDraftVersionAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/leave-policies/{id}/versions] {effectiveFrom:'2027-01-01', effectiveTo:null, priority:10} => [201] versionNumber = prior max + 1"
+      - "[POST /api/leave-policies/{id}/versions] {effectiveFrom:'2027-06-01', effectiveTo:'2027-01-01', priority:10} => [400] 'EffectiveTo must be on or after EffectiveFrom'"
+    auto: API
+
+  - id: LEAVE-POLICY-007
+    func: [F-LEAVE-020]
+    sc: Create a Draft version by copying rules/applicability from an existing version
+    t: copyFromVersionId duplicates the source version's rules and applicability into the new Draft
+    src: ["LeaveConfigurationService.CreateVersionAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/leave-policies/{id}/versions] {effectiveFrom:'2027-01-01', priority:10, copyFromVersionId:<v1Id>} => [201]"
+      - "[GET /api/leave-policies/{id}/versions/{newVersionId}/leave-types] => [200] the same LeaveType set as v1"
+    auto: API
+
+  - id: LEAVE-POLICY-008
+    func: [F-LEAVE-022, F-LEAVE-023]
+    sc: A Draft version's dates/priority are editable; allowedActions reflects Status server-side
+    t: PUT succeeds while Draft; the version DTO's allowedActions.canEdit is true for Draft and false once Published
+    src: ["LeaveConfigurationService.UpdateVersionAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/leave-policies/{id}/versions/{draftId}] => [200] allowedActions.canEdit=true"
+      - "[PUT /api/leave-policies/{id}/versions/{draftId}] {effectiveFrom:'2027-02-01', priority:20} => [200] updated"
+      - "[Setup] Publish the version => test preconditions are established for the steps below"
+      - "[GET /api/leave-policies/{id}/versions/{draftId}] => [200] allowedActions.canEdit=false"
+      - "[PUT /api/leave-policies/{id}/versions/{draftId}] {effectiveFrom:'2027-03-01', priority:20} => [409] a Published version's dates/priority cannot be changed"
+    auto: API
+
+  - id: LEAVE-POLICY-009
+    func: [F-LEAVE-024]
+    sc: BeginEdit returns an editable snapshot without mutating a Published version
+    t: POST .../edit does not itself change any persisted row
+    src: ["LeaveConfigurationService.BeginEditAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[POST /api/leave-policies/{id}/edit] => [200] returns the current editor snapshot"
+      - "[GET /api/leave-policies/{id}/versions/{currentVersionId}] => [200] Status/fields unchanged from before the edit call"
+    auto: API
+
+  - id: LEAVE-POLICY-010
+    func: [F-LEAVE-025]
+    sc: Assign LeaveTypes to a version; duplicate ids are rejected
+    t: SetVersionLeaveTypes accepts a distinct id set and rejects a request containing a duplicate
+    src: ["LeaveConfigurationService.SetVersionLeaveTypesAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[PUT /api/leave-policies/{id}/versions/{versionId}/leave-types] {leaveTypeIds:[clId, clId]} => [400] 'LeaveTypeIds must not contain duplicates'"
+      - "[PUT /api/leave-policies/{id}/versions/{versionId}/leave-types] {leaveTypeIds:[clId, slId]} => [200] both assigned"
+    auto: API
+
+  - id: LEAVE-POLICY-011
+    func: [F-LEAVE-026]
+    sc: A LeaveType may appear at most once as an active rule per version, enforced at Publish
+    t: Two active rules for the same LeaveType within one version block Publish
+    src: ["LeavePolicyFoundationService.ValidateForPublishAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] (Via direct data setup / a duplicated-rule reachable only through a data anomaly) two active LeavePolicyRule rows for the same LeaveTypeId in one Draft version => test preconditions are established for the steps below"
+      - "[POST /api/leave-policies/{id}/versions/{versionId}/publish] => [400] 'A LeaveType may appear only once as an active rule in a policy version'"
+    auto: DB-assisted
+
+  - id: LEAVE-POLICY-012
+    func: [F-LEAVE-027]
+    sc: Applicability groups scope a version; zero groups is tenant-wide
+    t: A version with an applicability group naming Department=Engineering applies only to Engineering employees; a version with none applies tenant-wide
+    src: ["LeaveConfigurationService.SetApplicabilityAsync", "LeavePolicyResolver.Matches"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/leave-policies/{id}/versions/{versionId}/applicability] {groups:[{departmentId: engineeringId}]} => [200]"
+      - "[POST /api/leave-policies/test] {employeeId: engineeringEmployeeId, leaveTypeId, date} => [200] this version is a candidate"
+      - "[POST /api/leave-policies/test] {employeeId: financeEmployeeId, leaveTypeId, date} => [200] this version is NOT a candidate (no matching applicability set)"
+    auto: API
+
+  - id: LEAVE-POLICY-013
+    func: [F-LEAVE-028]
+    sc: Applicability master references must belong to the tenant at Publish time
+    t: A Department id from another tenant (or nonexistent) blocks Publish
+    src: ["LeavePolicyFoundationService.MissingMasterErrorsAsync"]
+    type: Negative
+    pri: P1
+    tags: [Tenant-Isolation]
+    steps:
+      - "[PUT /api/leave-policies/{id}/versions/{versionId}/applicability] {groups:[{departmentId: tenantBDepartmentId}]} => [200] saved (not itself validated at save time)"
+      - "[POST /api/leave-policies/{id}/versions/{versionId}/publish] => [400] 'Every applicability master reference must belong to the tenant'"
+    auto: API
+
+  - id: LEAVE-POLICY-014
+    func: [F-LEAVE-029]
+    sc: Configure an Eligibility rule (MinimumService, Probation, NoticePeriod modes)
+    t: SaveEligibilityAsync persists EligibilityMode/MinimumServiceValue+Unit/ProbationMode/NoticePeriodMode
+    src: ["LeaveConfigurationService.SaveEligibilityAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/leave-policies/{id}/versions/{versionId}/leave-types/{clId}/eligibility] {eligibilityMode:'MinimumService', minimumServiceValue:90, minimumServiceUnit:'Days', probationMode:'NotAllowed', noticePeriodMode:'NotAllowed'} => [200]"
+      - "[GET /api/leave-policies/{id}/versions/{versionId}/leave-types/{clId}/eligibility] => [200] echoes the saved rule"
+    auto: API
+
+  - id: LEAVE-POLICY-015
+    func: [F-LEAVE-030]
+    sc: Configure an Entitlement rule (Allocated + Monthly accrual + carry forward)
+    t: SaveEntitlementAsync persists EntitlementMode/Source/quantity/AccrualFrequency/Timing/proration/MaximumAccumulation/CarryForward fields
+    src: ["LeaveConfigurationService.SaveEntitlementAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/leave-policies/{id}/versions/{versionId}/leave-types/{clId}/entitlement] {entitlementMode:'Allocated', entitlementSource:'PolicyAccrual', entitlementQuantity:1.5, accrualFrequency:'Monthly', accrualTiming:'StartOfPeriod', proratePartialPeriod:true, maximumAccumulation:30, carryForwardEnabled:true, maximumCarryForwardQuantity:10, carryForwardExpiryDays:90} => [200]"
+    auto: API
+
+  - id: LEAVE-POLICY-016
+    func: [F-LEAVE-031]
+    sc: Configure a Request rule (limits, backdating, per-period caps)
+    t: SaveRequestRuleAsync persists min/max quantity, max consecutive, advance notice, backdating mode/limit, per-period caps, PartialDayMode
+    src: ["LeaveConfigurationService.SaveRequestRuleAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/leave-policies/{id}/versions/{versionId}/leave-types/{clId}/request-rules] {minimumRequestQuantity:1, maximumRequestQuantity:15, maximumConsecutiveQuantity:10, minimumAdvanceNoticeDays:1, backdatedRequestMode:'NotAllowed', maximumRequestsPerPeriod:12, requestLimitPeriod:'LeavePeriod', partialDayMode:'FullDayOnly'} => [200]"
+    auto: API
+
+  - id: LEAVE-POLICY-017
+    func: [F-LEAVE-032]
+    sc: "Configure a Calendar rule including a non-Disabled SandwichMode - saved without warning, though it later blocks requests (CR-81)"
+    t: SaveCalendarRuleAsync accepts SandwichMode='Holiday' and ApplyToBetween=true with no error at save time
+    src: ["LeaveConfigurationService.SaveCalendarRuleAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    steps:
+      - "[PUT /api/leave-policies/{id}/versions/{versionId}/leave-types/{clId}/calendar] {holidayTreatment:'Exclude', weekOffTreatment:'Exclude', sandwichMode:'Holiday', applyToPrefix:false, applyToSuffix:false, applyToBetween:true} => [200] no validation error - the UI/API allow this configuration"
+    auto: API
+    cr: [CR-81]
+
+  - id: LEAVE-POLICY-018
+    func: [F-LEAVE-033]
+    sc: "Configure an Attachment rule requiring a document above a quantity threshold - saved without warning (CR-81)"
+    t: SaveAttachmentRuleAsync accepts AttachmentRequirement='RequiredAboveQuantity' with a threshold
+    src: ["LeaveConfigurationService.SaveAttachmentRuleAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    steps:
+      - "[PUT /api/leave-policies/{id}/versions/{versionId}/leave-types/{slId}/attachments] {attachmentRequirement:'RequiredAboveQuantity', thresholdQuantity:3, documentLabel:'Medical Certificate'} => [200] saved with no warning"
+    auto: API
+    cr: [CR-81]
+
+  - id: LEAVE-POLICY-019
+    func: [F-LEAVE-034]
+    sc: "Configure a Clubbing rule between two LeaveTypes - saved without warning that it will block all requests for both (CR-81)"
+    t: SaveClubbingAsync persists a NotAllowed relation between Sick Leave and Casual Leave rules
+    src: ["LeaveConfigurationService.SaveClubbingAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    steps:
+      - "[PUT /api/leave-policies/{id}/versions/{versionId}/clubbing] {rules:[{leaveTypeAId: slId, leaveTypeBId: clId, relation:'NotAllowed'}]} => [200] saved with no warning"
+    auto: API
+    cr: [CR-81]
+
+  - id: LEAVE-POLICY-020
+    func: [F-LEAVE-035]
+    sc: Configure a Cancellation rule (WithdrawAllowed/CancelAllowed/ModifyAllowed)
+    t: SaveCancellationRuleAsync persists the three boolean flags
+    src: ["LeaveConfigurationService.SaveCancellationRuleAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/leave-policies/{id}/versions/{versionId}/leave-types/{clId}/cancellation] {withdrawAllowed:true, cancelAllowed:true, modifyAllowed:false} => [200]"
+    auto: API
+
+  - id: LEAVE-POLICY-021
+    func: [F-LEAVE-036]
+    sc: Validate a Draft version on demand without publishing
+    t: POST .../validate returns isValid/errors/warnings and leaves Status=Draft
+    src: ["LeaveConfigurationService.ValidateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/leave-policies/{id}/versions/{versionId}/validate] => [200] {isValid:true, errors:[]}"
+      - "[GET /api/leave-policies/{id}/versions/{versionId}] => [200] Status still Draft"
+    auto: API
+
+  - id: LEAVE-POLICY-022
+    func: [F-LEAVE-037]
+    sc: Publish a valid Draft version end to end
+    t: A Draft with one active rule, resolvable applicability masters, and no same-policy overlap publishes successfully
+    src: ["LeavePolicyFoundationService.PublishAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/leave-policies/{id}/versions/{versionId}/publish] {} => [200] Status=Published"
+    auto: API
+
+  - id: LEAVE-POLICY-023
+    func: [F-LEAVE-037]
+    sc: Publish is blocked with zero active rules
+    t: A Draft version with no LeaveType rules assigned cannot be published
+    src: ["LeavePolicyFoundationService.ValidateForPublishAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/leave-policies/{emptyPolicyId}/versions/{emptyVersionId}/publish] {} => [400] 'At least one active LeavePolicyRule is required'"
+    auto: API
+
+  - id: LEAVE-POLICY-024
+    func: [F-LEAVE-038]
+    sc: acknowledgeOverlap bypasses same-policy overlap but has no cross-policy equivalent
+    t: Publishing a version that overlaps another Published version of the SAME policy fails without acknowledgeOverlap and succeeds with it; a cross-policy overlap has no such flag at all
+    src: ["LeavePolicyFoundationService.PublishAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/leave-policies/{id}/versions/{v2Id}/publish] {acknowledgeOverlap:false} overlapping v1's own Published range => [400] 'Published versions of one policy may not have overlapping effective dates'"
+      - "[POST /api/leave-policies/{id}/versions/{v2Id}/publish] {acknowledgeOverlap:true} => [200] published despite the overlap"
+    auto: API
+    cr: [CR-87]
+
+  - id: LEAVE-POLICY-025
+    func: [F-LEAVE-039]
+    sc: Only a Draft version can be Published; Retire is one-way
+    t: Publishing a non-Draft version is rejected; Retiring a Published version succeeds and cannot be un-retired
+    src: ["LeavePolicyFoundationService.PublishAsync", "LeaveConfigurationService.RetireAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/leave-policies/{id}/versions/{alreadyPublishedId}/publish] => [409] 'Only Draft policy versions can be published'"
+      - "[POST /api/leave-policies/{id}/versions/{alreadyPublishedId}/retire] => [200] Status=Retired"
+      - "[POST /api/leave-policies/{id}/versions/{alreadyPublishedId}/publish] (retry after retire) => [409] no path back to Published"
+    auto: API
+
+  - id: LEAVE-POLICY-026
+    func: [F-LEAVE-040]
+    sc: "HRAdmin cannot manage Leave Types/Policies/Periods/Publish/Import - only SuperAdmin/TenantAdmin can (CR-78)"
+    t: An HRAdmin session is rejected 403 on every Leave configuration mutation despite holding Leave.DashboardViewAll/ReportsView
+    src: ["SeedData.RolePermissionMap[HRAdmin]"]
+    type: Authorization
+    pri: P0
+    role: HR_ADMIN
+    perm: "n/a"
+    steps:
+      - "[POST /api/leave-types] As HRAdmin => [403]"
+      - "[POST /api/leave-policies] As HRAdmin => [403]"
+      - "[POST /api/leave-periods] As HRAdmin => [403]"
+      - "[POST /api/leave-policies/{id}/versions/{versionId}/publish] As HRAdmin => [403]"
+      - "[POST /api/leave-balances/import/validate] As HRAdmin => [403]"
+      - "[GET /api/leave-dashboard/hr-summary] As HRAdmin => [200] the ONE Leave surface HRAdmin CAN reach"
+    auto: API
+    cr: [CR-78, CR-88]

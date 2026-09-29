@@ -1,0 +1,101 @@
+sheet: PYA_Reconciliation_Retrieval_Versioning
+submodule: Reconciliation Retrieval, Versioning & Status
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-VER-001
+    func: [F-PYA-070]
+    sc: Get reconciliation by id, happy path
+    t: GetReconciliationAsync returns a reconciliation with all of its Findings included
+    src: "PayrollReconciliationController.Get; PayrollAnalyticsService.GetReconciliationAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RECON1 was generated with 2 findings"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.View)
+    perm: Payroll.Reconciliation.View
+    tenant: "T1 (DEMO01)"
+    data: "id=RECON1"
+    steps:
+      - "[GET /api/payroll/reconciliation/{RECON1}] => [200] response's Findings array has exactly 2 entries matching what was generated"
+    auto: API
+
+  - id: PYA-VER-002
+    func: [F-PYA-070, F-PYA-074]
+    sc: Get reconciliation - not found and cross-tenant not found
+    t: An unknown id returns NotFound; a real id belonging to another tenant also returns NotFound, not the other tenant's data
+    src: "PayrollAnalyticsService.GetReconciliationAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "RECON-T2 exists under Tenant T2 (DEMO02)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.View, tenant T1)
+    perm: Payroll.Reconciliation.View
+    tenant: "T1 (DEMO01)"
+    data: "id=<random guid>, id=RECON-T2"
+    steps:
+      - "[GET /api/payroll/reconciliation/{RANDOM-GUID}] => [404] Reconciliation not found"
+      - "[GET /api/payroll/reconciliation/{RECON-T2}] (authenticated to T1) => [404] Reconciliation not found"
+    auto: API
+
+  - id: PYA-VER-003
+    func: [F-PYA-071]
+    sc: Regeneration creates a new higher version, prior version remains fully readable
+    t: Generating post-payroll twice for the same run creates version 1 and version 2 rows, both independently retrievable by their own id with their own findings intact
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Positive
+    tags: []
+    pri: P0
+    sev: High
+    pre: "RUN1 has one post-payroll reconciliation already generated (version 1, RECON-V1)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate + Payroll.Reconciliation.View)
+    perm: "Payroll.Reconciliation.Generate, Payroll.Reconciliation.View"
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] (second call) => [200] Version=2, RECON-V2"
+      - "[GET /api/payroll/reconciliation/{RECON-V1}] => [200] still returns version 1's own original findings, unchanged"
+      - "[GET /api/payroll/reconciliation/{RECON-V2}] => [200] returns version 2 with its own newly-generated findings"
+    auto: API
+
+  - id: PYA-VER-004
+    func: [F-PYA-072]
+    sc: Check counts are derived once at generation time, not live-recomputed on later reads
+    t: Resolving one of a reconciliation's own findings after generation does not change that reconciliation's own PassedChecks/FailedChecks/WarningChecks/CriticalChecks on a later GET
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync (counts computed once)"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RECON1 was generated with TotalChecks=2, FailedChecks=1 (one Critical finding, one control passed)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.View + Payroll.Reconciliation.Resolve)
+    perm: "Payroll.Reconciliation.View, Payroll.Reconciliation.Resolve"
+    tenant: "T1 (DEMO01)"
+    data: "id=RECON1"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING1}/resolve] {} => [200] the finding's own Status becomes Resolved"
+      - "[GET /api/payroll/reconciliation/{RECON1}] => [200] TotalChecks/PassedChecks/FailedChecks/CriticalChecks are unchanged from generation time (still FailedChecks=1), even though the finding itself is now Resolved"
+    auto: API
+
+  - id: PYA-VER-005
+    func: [F-PYA-073]
+    sc: Reconciliation Status never leaves Generated
+    t: A reconciliation whose every finding has since been Resolved still reports Status=Generated, not Acknowledged; an older, superseded-by-a-newer-version reconciliation also still reports Status=Generated, not Superseded
+    src: "PayrollAnalyticsService (entity default only, no transition code path)"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RECON-V1 (version 1) has its single finding Resolved, and RECON-V2 (version 2, generated afterward) exists for the same run+type"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.View)
+    perm: Payroll.Reconciliation.View
+    tenant: "T1 (DEMO01)"
+    data: "id=RECON-V1"
+    steps:
+      - "[GET /api/payroll/reconciliation/{RECON-V1}] => [200] Status=Generated, despite its only finding being Resolved AND a newer version (RECON-V2) now existing"
+    auto: API
+    cr: [CR-297]

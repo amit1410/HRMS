@@ -1,0 +1,135 @@
+sheet: Payroll_Frontend
+submodule: Frontend page-level permission gating, navigation discoverability, concurrency-version threading, loading/empty/error states
+defaults:
+  role: HRADMIN
+  perm: "n/a"
+  tenant: A
+  pre: "Tenant A, frontend source read directly from Frontend/HRMS.Web/src/pages/payroll/*.tsx, src/App.tsx, and src/layout/navigation.ts, unless stated."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: PAY-FE-001
+    func: [F-PAY-248]
+    sc: Client-side permission checks exist only on master-configuration pages
+    t: A grep confirms exactly 8 payroll pages import a permission-check hook; approval/workflow pages and both dashboards do not
+    src: ["grep of useAuth/usePermission/hasPermission/can( across src/pages/payroll"]
+    type: Boundary
+    pri: P1
+    sev: Medium
+    steps:
+      - "[Manual] Grep 'useAuth|usePermission|hasPermission|can\\(' across every *.tsx in Frontend/HRMS.Web/src/pages/payroll (excluding *.test.tsx) => exactly 8 files match SalaryComponentsPage, SalaryStructuresPage, EmployeeSalaryAssignmentsPage, PayrollInputsPage, PayrollPeriodsRunsPage, StatutoryConfigurationsPage, StatutoryFilingsPage, YearEndTaxPage"
+      - "[Manual] Confirm PayrollAdjustmentsPage/ReimbursementsPage/PayrollOffCyclePage/PayrollRetroPage/FinalSettlementPage/PayrollOperationsDashboardPage/PayrollConfigurationHealthPage => zero matches for the same grep"
+    auto: "Manual only"
+    cr: [CR-170]
+
+  - id: PAY-FE-002
+    func: [F-PAY-249]
+    sc: Concurrency version is correctly threaded, not hardcoded
+    t: Editing a salary component/structure/employee-salary-assignment row uses the real detail's concurrencyVersion, never a literal
+    src: ["grep of expectedConcurrencyVersion in the three master pages"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[Manual] Grep 'expectedConcurrencyVersion' in SalaryComponentsPage.tsx, SalaryStructuresPage.tsx, EmployeeSalaryAssignmentsPage.tsx => every assignment reads from row.concurrencyVersion or detail.concurrencyVersion, never a literal integer - no CR-161-style hardcoded-version bug exists here"
+    auto: "Manual only"
+
+  - id: PAY-FE-003
+    func: [F-PAY-250]
+    sc: Most Payroll routes are not in the app's own navigation
+    t: A route-count comparison shows a majority of registered routes are unreachable from the nav menu
+    src: ["src/layout/navigation.ts vs src/App.tsx route table"]
+    type: Boundary
+    pri: P1
+    sev: Medium
+    steps:
+      - "[Manual] Count '/payroll' entries in Frontend/HRMS.Web/src/layout/navigation.ts (14) vs '/payroll' <Route> registrations in Frontend/HRMS.Web/src/App.tsx (~27) => roughly 19 routes, including in-scope Reimbursements/Adjustments/Off-Cycle/Inputs/Analytics/Reports and both My-* self-service pages, have no nav entry and are reachable only by typing the URL"
+    auto: "Manual only"
+    cr: [CR-169]
+
+  - id: PAY-FE-004
+    func: [F-PAY-251]
+    sc: Self-service pages block an unlinked account before mounting
+    t: An account with no employee link is redirected away from MyPayslipsPage/MyReimbursementsPage/MyPayrollAdjustmentsPage rather than rendering and then failing
+    src: ["App.tsx RequireEmployeeIdentity wrapping"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    steps:
+      - "[UI] Navigate to /payroll/my-payslips as an unlinked account => redirected/blocked by RequireEmployeeIdentity before the page's own API calls fire"
+      - "[UI] Navigate to /payroll/my-reimbursements as the same unlinked account => same blocking behavior"
+    auto: UI
+
+  - id: PAY-FE-005
+    func: [F-PAY-252]
+    sc: Periods and Runs share one component
+    t: Both /payroll/periods and /payroll/runs render PayrollPeriodsRunsPage with a different mode prop
+    src: ["App.tsx route wiring"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual] Confirm App.tsx registers both routes against the same <PayrollPeriodsRunsPage mode=... /> component => a shared-chrome defect (e.g. a broken filter control) would surface on BOTH periods and runs simultaneously"
+    auto: "Manual only"
+
+  - id: PAY-FE-006
+    func: [F-PAY-253]
+    sc: Action buttons render unconditionally on the un-gated approval pages
+    t: A user holding only the route-level view permission still sees every mutating button on the Adjustments/Off-Cycle/Reimbursements pages
+    src: ["PayrollAdjustmentsPage.tsx, ReimbursementsPage.tsx, PayrollOffCyclePage.tsx"]
+    type: Security
+    pri: P1
+    sev: Medium
+    role: EMPLOYEE
+    steps:
+      - "[UI] Log in as a role holding only Payroll.Reimbursements.View (not Approve/Settle) and open /payroll/reimbursements => the Approve/Reject/Settle buttons are still rendered and clickable"
+      - "[UI] Click Approve => the button click round-trips to the backend and only THEN fails [403] Forbidden - the UI gave no earlier signal that the action was unavailable"
+    auto: UI
+
+  - id: PAY-FE-007
+    func: [F-PAY-254]
+    sc: Client validation mirrors but does not replace server validation
+    t: A direct API call bypassing the create-component form's client checks is still rejected server-side
+    src: ["backend validation, confirmed against the client form fields"]
+    type: Security
+    pri: P1
+    steps:
+      - "[UI] Attempt to submit the Salary Component creation form with a blank Code => the client blocks submission client-side"
+      - "[POST /api/payroll/salary-components] the same blank Code sent directly via API, bypassing the UI => [400] Salary Component Code is required. - the server enforces the rule independently"
+    auto: API
+
+  - id: PAY-FE-008
+    func: [F-PAY-255]
+    sc: CSV export buttons are wired to the matching backend export endpoint
+    t: Clicking Export on the Reimbursements register and Payroll Reports pages triggers the corresponding filtered CSV download
+    src: ["ReimbursementsPage.tsx, PayrollReportsPage.tsx"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Apply a status filter on the Reimbursements register, click Export => the downloaded CSV reflects the same filter as the on-screen table"
+    auto: UI
+
+  - id: PAY-FE-009
+    func: [F-PAY-256]
+    sc: Loading/empty/error states are distinguishable
+    t: A slow network, a genuinely empty tenant, and a backend error each render a different, recognizable UI state
+    src: ["SalaryComponentsPage, PayrollAdjustmentsPage, ReimbursementsPage, PayrollInputsPage"]
+    type: Boundary
+    tags: [Usability]
+    pri: P2
+    steps:
+      - "[UI] Load /payroll/salary-components with the API artificially delayed => a loading indicator is shown, not a blank table"
+      - "[UI] Load /payroll/adjustments for a tenant with zero adjustments => an empty-state message is shown, not a blank table"
+      - "[UI] Load /payroll/reimbursements with the API forced to return a 500 => a visible error message is shown, not a silent blank screen"
+    auto: UI
+
+  - id: PAY-FE-010
+    func: [F-PAY-257]
+    sc: API client modules match the backend contract
+    t: The typed client functions in payroll.ts and its siblings match the real query/paging shape the backend returns
+    src: ["src/api/payroll.ts and siblings"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual] Compare each exported client function's TypeScript return type in src/api/payroll.ts, payrollAdjustments.ts, payrollAnalytics.ts, payrollInputs.ts, payrollReports.ts against the corresponding backend DTO/PagedResult shape => no mismatch found; src/api/payroll.test.ts (existing, not individually classified for this module per the qa/09-separation precedent for large modules) exercises this client independently"
+    auto: "Manual only"

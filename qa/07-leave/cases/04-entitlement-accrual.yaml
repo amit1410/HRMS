@@ -1,0 +1,245 @@
+sheet: Leave_Accrual
+submodule: Entitlement/Accrual processing, proration, carry-forward, and entitlement expiry
+defaults:
+  role: NONE
+  perm: "n/a"
+  tenant: A
+  pre: "Tenant A; LeaveAccrualOptions.Enabled=true for these cases (DB-assisted, worker/processor invoked directly, not via HTTP)."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LEAVE-ACCRUAL-001
+    func: [F-LEAVE-087]
+    sc: Upfront accrual is explicitly out of LeaveAccrualProcessor's scope
+    t: An Upfront-frequency entitlement rule is skipped by the processor entirely, every pass, with zero occurrences ever created for it
+    src: ["LeaveAccrualProcessor.ProcessAsync"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Manual/DB] Configure EntitlementMode=Allocated, AccrualFrequency=Upfront, EntitlementQuantity=12 => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] Invoke ILeaveAccrualProcessor.ProcessAsync(throughDate) => Processed=0 for this employee/leaveType combination; no LeaveAccrualOccurrences row is ever created for it"
+    auto: DB-assisted
+    cr: [CR-86]
+
+  - id: LEAVE-ACCRUAL-002
+    func: [F-LEAVE-088]
+    sc: Monthly accrual fires on day 1 (StartOfPeriod) or the last calendar day (EndOfPeriod)
+    t: A Monthly/StartOfPeriod rule credits only on the 1st; a Monthly/EndOfPeriod rule credits only on the month's last day
+    src: ["LeaveAccrualProcessor.IsDue"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    steps:
+      - "[Manual/DB] AccrualFrequency=Monthly, AccrualTiming=StartOfPeriod, EntitlementQuantity=1.5, ProratePartialPeriod=false => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] ProcessAsync(throughDate='2027-02-01') => a credit is posted dated 2027-02-01; ProcessAsync(throughDate='2027-02-15') posts NOTHING further for February"
+      - "[Manual/DB] Change AccrualTiming=EndOfPeriod; ProcessAsync(throughDate='2027-02-28') => credit posted dated 2027-02-28 (last day of Feb 2027, non-leap)"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-003
+    func: [F-LEAVE-089]
+    sc: Annual/Yearly accrual fires exactly on the LeavePeriod's own StartDate or EndDate
+    t: StartOfPeriod credits on the period's first day; EndOfPeriod credits on its last day
+    src: ["LeaveAccrualProcessor.IsDue"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] AccrualFrequency=Annual, AccrualTiming=StartOfPeriod, LeavePeriod FY27 ='2027-01-01'..'2027-12-31' => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] ProcessAsync(throughDate='2027-01-01') => credit posted; ProcessAsync at any other date posts nothing further for FY27"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-004
+    func: [F-LEAVE-090]
+    sc: Daily accrual is due every single day with no periodic gating
+    t: Three consecutive daily ProcessAsync passes each post their own day's credit
+    src: ["LeaveAccrualProcessor.IsDue"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/DB] AccrualFrequency=Daily, EntitlementQuantity=0.033; ProcessAsync for three consecutive throughDates => three separate LeaveAccrualOccurrences rows, one per date"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-005
+    func: [F-LEAVE-091, F-LEAVE-107]
+    sc: "Numerical example - Annual proration for a mid-period joiner"
+    t: An employee joining exactly at a 365-day period's midpoint (day 183) with a 12-day/year prorated entitlement receives 12*(365-183+1)/365 = 6.016... days
+    src: ["LeaveAccrualProcessor.Quantity/EligibleDays"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Manual/DB] LeavePeriod FY27 '2027-01-01'..'2027-12-31' (365 days); Employee joins '2027-07-02' (day 183); EntitlementQuantity=12, AccrualFrequency=Annual, AccrualTiming=EndOfPeriod, ProratePartialPeriod=true => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] ProcessAsync(throughDate='2027-12-31') => credited quantity = 12 * (365-183+1)/365 = 6.016... (matches EligibleDays/period-length arithmetic to 3 decimal places)"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-006
+    func: [F-LEAVE-091, F-LEAVE-106]
+    sc: "Numerical example - Monthly proration and a 12-month full-year accumulation"
+    t: A policy granting 1.5 days/month with no proration, over 12 StartOfPeriod occurrences for an employee who joined before period start, credits 18.000 by period end
+    src: ["LeaveAccrualProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Manual/DB] EntitlementQuantity=1.5, AccrualFrequency=Monthly, AccrualTiming=StartOfPeriod, ProratePartialPeriod=false; employee joined before 2027-01-01 => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] ProcessAsync(throughDate='2027-12-01') run cumulatively across all 12 months => EmployeeLeaveBalances.GrantedQuantity = 18.000 exactly (12 * 1.5)"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-007
+    func: [F-LEAVE-092]
+    sc: Annual proration for a mid-year joiner (StartOfPeriod)
+    t: A joiner partway through the year receives a proportional annual credit, not the full configured quantity
+    src: ["LeaveAccrualProcessor.Quantity/EligibleDays"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/DB] EntitlementQuantity=12, AccrualFrequency=Annual, AccrualTiming=StartOfPeriod, ProratePartialPeriod=true; employee joins 2027-10-01 (day 274 of 365) => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] ProcessAsync(throughDate='2027-01-01') the NEXT year's occurrence is unaffected; verify NO 2027 StartOfPeriod credit is posted for a joiner arriving after that date, and confirm the prorated arithmetic only applies from the joiner's own eligible-days window forward => the forced/simulated state is established for the steps below"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-008
+    func: [F-LEAVE-093]
+    sc: ProratePartialPeriod=false credits the full quantity regardless of a mid-period joining date
+    t: A mid-month joiner still receives the FULL monthly quantity when proration is disabled
+    src: ["LeaveAccrualProcessor.Quantity"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/DB] EntitlementQuantity=1.5, AccrualFrequency=Monthly, ProratePartialPeriod=false; employee joins mid-month (2027-02-15) => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] ProcessAsync(throughDate='2027-02-28') => full 1.5 credited for February despite joining mid-month"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-009
+    func: [F-LEAVE-094]
+    sc: An occurrence is never fabricated for dates before the employee's own joining date
+    t: An end-of-year joiner has no occurrence claimed for any date before DateOfJoining, even when ProcessAsync sweeps back up to 366 days
+    src: ["LeaveAccrualProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Employee joins 2027-12-01; ProcessAsync(throughDate='2027-12-31') => the per-day sweep never claims/credits an occurrence dated before 2027-12-01 for this employee"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-010
+    func: [F-LEAVE-095]
+    sc: MaximumAccumulation caps a credit to remaining headroom, or zeroes it if already exhausted
+    t: A credit that would exceed the cap is truncated; a subsequent credit with zero headroom is Skipped with zero credited
+    src: ["LeaveAccrualProcessor.CreditAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Manual/DB] MaximumAccumulation=10; balance already holds 9 (Granted-Consumed); the next monthly credit of 1.5 is truncated to 1.0 (headroom) => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] The FOLLOWING month's credit, with headroom now 0, credits 0 and the occurrence is finalized 'Skipped' => the forced/simulated state is established for the steps below"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-011
+    func: [F-LEAVE-096]
+    sc: Balance precision is held to 3 decimal places end to end
+    t: A fractional daily/monthly credit sequence never silently loses or gains precision beyond 3 decimals across accrual->reservation->consumption
+    src: ["LeaveAccrualProcessor.Quantity", "LeaveBalanceImportService.ValidateAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/DB] Post several fractional accrual credits (e.g. 0.0333 daily) and then a full submission/approval cycle consuming part of the balance => the final GrantedQuantity/ReservedQuantity/ConsumedQuantity/AvailableQuantity all remain consistent to 3 decimal places with no drift"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-012
+    func: [F-LEAVE-097]
+    sc: Running the processor twice for the same throughDate is idempotent
+    t: A second identical ProcessAsync call does not double-credit
+    src: ["LeaveAccrualProcessor.ClaimAsync"]
+    type: Contract
+    tags: [Idempotency]
+    pri: P0
+    smoke: true
+    steps:
+      - "[Manual/DB] ProcessAsync(throughDate='2027-02-01') => credited=1.5"
+      - "[Manual/DB] ProcessAsync(throughDate='2027-02-01') (repeat, same date) => credited=0 this run; EmployeeLeaveBalances.GrantedQuantity unchanged from the first run"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-013
+    func: [F-LEAVE-098]
+    sc: A Failed occurrence is retried up to MaxAttempts, then left permanently Failed
+    t: Repeated ProcessAsync calls retry a Failed occurrence until MaxAttempts (default 5), after which it is never claimed again
+    src: ["LeaveAccrualProcessor.ClaimAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Force the poster to fail for 5 consecutive ProcessAsync passes on the same occurrence => AttemptCount reaches 5, Status='Failed'"
+      - "[Manual/DB] A 6th ProcessAsync pass => the occurrence is NOT re-claimed (ClaimAsync's AttemptCount>=MaxAttempts guard)"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-014
+    func: [F-LEAVE-099]
+    sc: A crediting failure for one employee/leaveType does not abort the whole run
+    t: One failing pair is finalized Failed with a FailureCode while every other pair in the same pass still processes normally
+    src: ["LeaveAccrualProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Force the poster to throw for Employee A / LeaveType X only; run ProcessAsync across many employees/types => Employee A/X's occurrence is Failed with a FailureCode; all other employee/type pairs are Processed normally in the SAME run"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-015
+    func: [F-LEAVE-100]
+    sc: "Both workers are disabled by default - neither runs unless explicitly configured"
+    t: A fresh Development environment with default configuration never fires LeaveAccrualWorker or LeaveApprovalReminderWorker
+    src: ["LeaveAccrualWorker.ExecuteAsync", "LeaveApprovalReminderWorker.ExecuteAsync"]
+    type: Contract
+    tags: [Configuration]
+    pri: P1
+    steps:
+      - "[Manual] Start the API with default configuration (LeaveAccrual:Enabled and LeaveReminders:Enabled unset) => neither worker's ExecuteAsync body runs past its own Enabled guard; no accrual/reminder activity occurs regardless of elapsed time"
+    auto: Manual only
+    cr: [CR-86]
+
+  - id: LEAVE-ACCRUAL-016
+    func: [F-LEAVE-101]
+    sc: An entitlement change mid-period affects only future occurrences
+    t: Publishing a new policy version with a different EntitlementQuantity partway through a LeavePeriod never retroactively adjusts already-Processed occurrences
+    src: ["LeaveAccrualProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Process January's 1.5-day credit under v1; publish v2 (2.0/month) effective February 1st => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] ProcessAsync(throughDate='2027-01-31') re-run => January's occurrence remains 1.5 (already Processed, untouched); ProcessAsync(throughDate='2027-02-28') credits 2.0 for February under v2"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-017
+    func: [F-LEAVE-102, F-LEAVE-103]
+    sc: Period close carries forward capped balance with its own expiry, and lapses the remainder
+    t: CarryForwardEnabled + MaximumCarryForwardQuantity caps what moves to the destination period; CarryForwardExpiryDays sets the new grant's ExpiresOn; the excess lapses as an Expiry debit against the source period
+    src: ["LeavePeriodCloseProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Manual/DB] Employee has AvailableQuantity=15 in FY27; CarryForwardEnabled=true, MaximumCarryForwardQuantity=10, CarryForwardExpiryDays=90; FY28 starts 2028-01-01 => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] ProcessAsync(FY27Id, asOf='2028-01-01') => a new LeaveEntitlementGrant of 10 is created in FY28 with ExpiresOn='2028-03-31' (90 days from 2028-01-01); an Expiry debit of 5 is posted against FY27"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-018
+    func: [F-LEAVE-104]
+    sc: LeaveEntitlementExpiryProcessor debits and expires carried-forward grants past their ExpiresOn
+    t: A grant with remaining AvailableQuantity past ExpiresOn is debited exactly that amount and marked Expired; a zero-available grant is marked Expired with no debit
+    src: ["LeaveEntitlementExpiryProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] A CarryForward grant of 10, ExpiresOn='2028-03-31', with 6 still available on '2028-04-01' => ProcessAsync(throughDate='2028-04-01') posts an Expiry debit of 6 and marks the grant Expired"
+      - "[Manual/DB] A separate carried grant already fully consumed (0 available) past its own ExpiresOn => marked Expired with NO debit transaction posted"
+    auto: DB-assisted
+
+  - id: LEAVE-ACCRUAL-019
+    func: [F-LEAVE-105]
+    sc: Period close is idempotent per (source,destination,employee,leaveType) key
+    t: A repeat ProcessAsync run for an already-closed pairing returns zero for every counter on that pairing
+    src: ["LeavePeriodCloseProcessor.ClaimAsync"]
+    type: Contract
+    tags: [Idempotency]
+    pri: P1
+    steps:
+      - "[Manual/DB] ProcessAsync(FY27Id, asOf) once => Done=1 for Employee A/LeaveType X"
+      - "[Manual/DB] ProcessAsync(FY27Id, asOf) again => Employee A/LeaveType X contributes 0 to Done/Carried/Lapsed on this second run (already Processed)"
+    auto: DB-assisted

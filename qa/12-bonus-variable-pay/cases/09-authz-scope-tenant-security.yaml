@@ -1,0 +1,184 @@
+sheet: VPay_Scope_Security
+submodule: Seeded-role permission matrix (headline CR-202), ESS ownership, and tenant isolation
+defaults:
+  role: SUPERADMIN
+  perm: "n/a"
+  tenant: A
+  pre: "Tenant A, roles as stated per case (seeded, out-of-box grants unless stated otherwise)."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: VPAY-SEC-001
+    func: [F-VPAY-097]
+    sc: HEADLINE - no seeded role but SuperAdmin/TenantAdmin holds any VariablePay permission
+    t: A full grep of SeedData.cs's RolePermissionMap confirms zero VariablePay* grants outside SuperAdmin/TenantAdmin
+    src: ["Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap)"]
+    type: Authorization
+    pri: P0
+    sev: Critical
+    tags: [Authorization]
+    cr: [CR-202]
+    steps:
+      - "[Manual/Code] Grep SeedData.cs's RolePermissionMap for every Payroll.VariablePay.* constant (View/ManagePlans/Calculate/CreateAward/Submit/Approve/Override/Cancel/ViewHistory) => matches only inside the PermissionIds numbering dictionary and Permissions.All; zero matches inside any individual role's own grant array"
+    auto: Manual only
+
+  - id: VPAY-SEC-002
+    func: [F-VPAY-098]
+    sc: HRAdmin holds zero native VariablePay permissions
+    t: A freshly seeded HRAdmin cannot list plans or awards without an explicit tenant grant
+    src: ["SeedData.cs (RolePermissionMap[HRAdmin])"]
+    type: Authorization
+    pri: P0
+    role: HRADMIN
+    tags: [Authorization]
+    cr: [CR-202]
+    steps:
+      - "[GET /api/payroll/variable-pay-plans] signed in as a freshly seeded HRAdmin (no explicit VariablePay grant) => [403] Forbidden"
+    auto: API
+
+  - id: VPAY-SEC-003
+    func: [F-VPAY-099]
+    sc: SuperHR can self-escalate to full module management via PageAccess.Manage
+    t: SuperHR holds zero native VariablePay permissions but can self-grant the entire family through one PageAccess.Manage call
+    src: ["Backend/HRMS.Application/Services/PageAccessService.cs (UpdateAsync); SeedData.cs (RolePermissionMap[SuperHR])"]
+    type: Security
+    pri: P0
+    role: SUPERHR
+    perm: "PageAccess.Manage"
+    secc: true
+    tags: [Security]
+    steps:
+      - "[GET /api/payroll/variable-pay-plans] signed in as freshly seeded SuperHR (no explicit VariablePay grant) => [403] Forbidden"
+      - "[POST /api/page-access] signed in as SuperHR, grant the entire Payroll.VariablePay.* family to their own role via PageAccess.Manage => [200] grant applied"
+      - "[GET /api/payroll/variable-pay-plans] same SuperHR user, re-authenticated => [200] plans returned - self-escalation succeeded"
+    auto: API
+
+  - id: VPAY-SEC-004
+    func: [F-VPAY-100]
+    sc: Employee holds zero native VariablePay permissions, including View
+    t: A freshly seeded Employee cannot list their own awards through /api/me/variable-pay without an explicit tenant grant
+    src: ["SeedData.cs (RolePermissionMap[Employee]); VariablePayController.My"]
+    type: Authorization
+    pri: P0
+    role: EMPLOYEE
+    tags: [Authorization]
+    cr: [CR-202]
+    steps:
+      - "[GET /api/me/variable-pay] signed in as a freshly seeded, linked Employee (no explicit VariablePay grant) => [403] Forbidden"
+    auto: API
+
+  - id: VPAY-SEC-005
+    func: [F-VPAY-101]
+    sc: Manager holds zero native VariablePay permissions and has no team-scope view
+    t: A freshly seeded Manager cannot view a direct report's awards - there is no team-scope concept for this module
+    src: ["SeedData.cs (RolePermissionMap[Manager])"]
+    type: Authorization
+    pri: P1
+    role: MANAGER
+    tags: [Authorization]
+    steps:
+      - "[GET /api/payroll/variable-pay-awards?employeeId={directReportId}] signed in as freshly seeded Manager => [403] Forbidden"
+    auto: API
+
+  - id: VPAY-SEC-006
+    func: [F-VPAY-102]
+    sc: ESS routes reuse the same View/ViewHistory permissions as the admin routes
+    t: A role explicitly granted only View (no separate self-view permission exists) can list its own awards via /api/me/variable-pay
+    src: ["VariablePayController.cs (My, MyDetail, MyHistory - full [HasPermission] grep)"]
+    type: Authorization
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.VariablePay.View"
+    tags: [Authorization]
+    steps:
+      - "[GET /api/me/variable-pay] signed in as a linked Employee explicitly granted Payroll.VariablePay.View => [200] the employee's own awards are returned"
+    auto: API
+
+  - id: VPAY-SEC-007
+    func: [F-VPAY-103]
+    sc: An unlinked user receives Unauthorized, not an empty list
+    t: A user with no AccountEmployeeLink calling any /api/me/variable-pay* route is Unauthorized
+    src: ["VariablePayController.My (links.GetUserAsync check)"]
+    type: Security
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.VariablePay.View"
+    secc: true
+    tags: [Security]
+    steps:
+      - "[GET /api/me/variable-pay] signed in as an Employee-role user with Payroll.VariablePay.View but NO AccountEmployeeLink => [401] Unauthorized"
+    auto: API
+
+  - id: VPAY-SEC-008
+    func: [F-VPAY-104]
+    sc: MyDetail never leaks another employee's award by id
+    t: An award belonging to a different employee returns NotFound, not the award's data
+    src: ["VariablePayController.MyDetail"]
+    type: Security
+    pri: P0
+    role: EMPLOYEE
+    perm: "Payroll.VariablePay.View"
+    secc: true
+    tags: [Security]
+    steps:
+      - "[GET /api/me/variable-pay/{otherEmployeesAwardId}] signed in as a linked Employee (award belongs to a different employee) => [404] Not Found"
+    auto: API
+
+  - id: VPAY-SEC-009
+    func: [F-VPAY-105]
+    sc: MyHistory applies the identical ownership check as MyDetail
+    t: Another employee's award history id returns NotFound
+    src: ["VariablePayController.MyHistory"]
+    type: Security
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.VariablePay.ViewHistory"
+    secc: true
+    tags: [Security]
+    steps:
+      - "[GET /api/me/variable-pay/{otherEmployeesAwardId}/history] signed in as a linked Employee => [404] Not Found"
+    auto: API
+
+  - id: VPAY-SEC-010
+    func: [F-VPAY-106]
+    sc: A cross-tenant plan/award id is NotFound across every read/mutation route
+    t: Tenant B accessing a Tenant A plan or award id by any route receives NotFound, never Forbidden
+    src: ["VariablePayService.cs (TenantId filter throughout)"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[GET /api/payroll/variable-pay-plans/{tenantAPlanId}] signed in as Tenant B => not exposed via a direct GET-by-id route for plans; verified instead through PUT (see VPAY-PLN-016)"
+      - "[GET /api/payroll/variable-pay-awards/{tenantAAwardId}] signed in as Tenant B => [404] Variable-pay award not found."
+    auto: API
+
+  - id: VPAY-SEC-011
+    func: [F-VPAY-107]
+    sc: The award register filters strictly by the resolved tenant
+    t: A second tenant's awards never appear in the register regardless of query filters supplied
+    src: ["VariablePayService.GetAwardsAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[GET /api/payroll/variable-pay-awards] signed in as Tenant B, no filters => [200] only Tenant B's own awards are returned, none from Tenant A"
+    auto: API
+
+  - id: VPAY-SEC-012
+    func: [F-VPAY-108]
+    sc: Calculate and CreateAward are independently gated
+    t: A role holding only Calculate can Preview but not Generate; a role holding only CreateAward can Generate but not Preview
+    src: ["VariablePayController.cs (HasPermission attributes)"]
+    type: Authorization
+    pri: P1
+    role: HRADMIN
+    perm: "Payroll.VariablePay.Calculate"
+    tags: [Authorization]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] signed in with ONLY Payroll.VariablePay.Calculate granted => [200] preview succeeds"
+      - "[POST /api/payroll/variable-pay-awards/generate] same user, same request body => [403] Forbidden (CreateAward not granted)"
+    auto: API

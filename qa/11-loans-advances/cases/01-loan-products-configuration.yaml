@@ -1,0 +1,183 @@
+sheet: Loans_Products
+submodule: Loan Products and Configuration - CRUD, effective-dated versions, overlap validation
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Loans.ManageProducts"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.Loans.ManageProducts granted, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-PR-001
+    func: [F-LOAN-002]
+    sc: Create a valid loan product
+    t: A well-formed Loan-type product is created Active
+    src: ["PayrollLoanService.CreateProductAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/loan-products] Code=PL, Name=Personal Loan, ProductType=Loan, IsActive=true => [200/201] Code=PL, IsActive=true"
+    auto: API
+
+  - id: LOAN-PR-002
+    func: [F-LOAN-001]
+    sc: List loan products for the tenant
+    t: GetProductsAsync returns tenant-scoped products ordered by Code
+    src: ["PayrollLoanService.GetProductsAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Loans.View"
+    steps:
+      - "[GET /api/payroll/loan-products] => [200] products returned ordered by Code ascending"
+    auto: API
+
+  - id: LOAN-PR-003
+    func: [F-LOAN-002]
+    sc: Missing Code or Name is rejected
+    t: Blank Code and blank Name each fail validation
+    src: ["PayrollLoanService.CreateProductAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loan-products] Code='' => [400] Code and name are required."
+      - "[POST /api/payroll/loan-products] Name='' => [400] Code and name are required."
+    auto: API
+
+  - id: LOAN-PR-004
+    func: [F-LOAN-003]
+    sc: Amount limits must be non-negative and ordered
+    t: A negative MinAmount/MaxAmount or Min>Max is rejected
+    src: ["PayrollLoanService.CreateProductAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loan-products] MinAmount=-1 => [400] Amount limits are invalid."
+      - "[POST /api/payroll/loan-products] MinAmount=5000, MaxAmount=1000 => [400] Amount limits are invalid."
+    auto: API
+
+  - id: LOAN-PR-005
+    func: [F-LOAN-004]
+    sc: Tenure limits must be >=1 and ordered
+    t: MinTenureMonths<1 or Min>Max is rejected
+    src: ["PayrollLoanService.CreateProductAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loan-products] MinTenureMonths=0 => [400] Tenure limits are invalid."
+      - "[POST /api/payroll/loan-products] MinTenureMonths=12, MaxTenureMonths=6 => [400] Tenure limits are invalid."
+    auto: API
+
+  - id: LOAN-PR-006
+    func: [F-LOAN-005]
+    sc: Product Code is unique per tenant
+    t: A trimmed duplicate code is rejected as Conflict
+    src: ["PayrollLoanService.CreateProductAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loan-products] Code=' PL2 ' => [200/201] Code=PL2 (trimmed)"
+      - "[POST /api/payroll/loan-products] Code=PL2 (second attempt) => [409] A loan product with this code already exists."
+    auto: API
+
+  - id: LOAN-PR-007
+    func: [F-LOAN-006]
+    sc: Creating a product auto-generates an initial Active version
+    t: A brand-new product immediately has one open-ended Active LoanProductVersion effective today
+    src: ["PayrollLoanService.CreateProductAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Manual/DB] Create a product with MinAmount=1000, MaxAmount=50000, MinTenureMonths=3, MaxTenureMonths=24 => exactly one LoanProductVersion exists for the product with Status=Active, EffectiveFrom=today, EffectiveTo=null, and the same amount/tenure/interest terms"
+    auto: DB-assisted
+
+  - id: LOAN-PR-008
+    func: [F-LOAN-007]
+    sc: Update requires the product to exist and re-checks code uniqueness
+    t: Update on an unknown id is NotFound; updating to another product's code is Conflict
+    src: ["PayrollLoanService.UpdateProductAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[PUT /api/payroll/loan-products/{unknownId}] => [404] Loan product not found."
+      - "[PUT /api/payroll/loan-products/{plId}] Code=PL2 (belongs to a different product) => [409] A loan product with this code already exists."
+    auto: API
+
+  - id: LOAN-PR-009
+    func: [F-LOAN-008]
+    sc: Updating a product's header bounds does not touch its existing version's own bounds
+    t: A header MinAmount/MaxAmount change leaves the already-created LoanProductVersion row's own MinAmount/MaxAmount unchanged
+    src: ["PayrollLoanService.UpdateProductAsync"]
+    type: Boundary
+    pri: P2
+    tags: [Configuration]
+    cr: [CR-193]
+    steps:
+      - "[PUT /api/payroll/loan-products/{plId}] MinAmount=2000, MaxAmount=20000 (was 1000/50000) => [200] product header MinAmount=2000, MaxAmount=20000"
+      - "[Manual/DB] Read the product's existing LoanProductVersion row => version MinAmount/MaxAmount still reflect the ORIGINAL 1000/50000 terms, not the updated header values"
+    auto: DB-assisted
+
+  - id: LOAN-PR-010
+    func: [F-LOAN-009]
+    sc: Create a new product version - term validation matrix
+    t: EffectiveTo<EffectiveFrom, negative amounts, Max<Min amount/tenure, and negative InterestRate are each rejected
+    src: ["PayrollLoanService.CreateProductVersionAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loan-products/{id}/versions] EffectiveFrom=2027-01-01, EffectiveTo=2026-01-01 => [400] Loan product version terms are invalid."
+      - "[POST /api/payroll/loan-products/{id}/versions] MinAmount=-1 => [400] Loan product version terms are invalid."
+      - "[POST /api/payroll/loan-products/{id}/versions] InterestRate=-5 => [400] Loan product version terms are invalid."
+    auto: API
+
+  - id: LOAN-PR-011
+    func: [F-LOAN-010]
+    sc: A new version cannot overlap an existing Active version's date range
+    t: A second Active version whose range intersects the first is rejected as Conflict
+    src: ["PayrollLoanService.CreateProductVersionAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loan-products/{id}/versions] EffectiveFrom=2026-06-01 (overlaps the open-ended initial version) => [409] Loan product versions cannot overlap."
+    auto: API
+
+  - id: LOAN-PR-012
+    func: [F-LOAN-010]
+    sc: A non-overlapping future version is accepted
+    t: A version whose EffectiveFrom starts after an explicit EffectiveTo on the prior version succeeds
+    src: ["PayrollLoanService.CreateProductVersionAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/DB] Set the initial version's EffectiveTo=2026-12-31 directly (simulating a bounded version) => version row updated, EffectiveTo=2026-12-31"
+      - "[POST /api/payroll/loan-products/{id}/versions] EffectiveFrom=2027-01-01, EffectiveTo=null => [200/201] new version created Active"
+    auto: DB-assisted
+
+  - id: LOAN-PR-013
+    func: [F-LOAN-011]
+    sc: No API path ever retires a loan product version
+    t: A full source grep confirms LoanProductVersionStatus.Retired is never assigned by any service method
+    src: ["PayrollLoanService.cs (full grep for LoanProductVersionStatus.Retired)"]
+    type: Boundary
+    pri: P2
+    tags: [Configuration]
+    cr: [CR-200]
+    steps:
+      - "[Manual/Code] Grep Backend/HRMS.Application/Services/PayrollLoanService.cs for 'LoanProductVersionStatus.Retired' => zero matches; every created version is Status=Active and no transition-to-Retired code path exists"
+    auto: Manual only
+
+  - id: LOAN-PR-014
+    func: [F-LOAN-002]
+    sc: A cross-tenant product id is NotFound
+    t: Updating a product belonging to a different tenant returns NotFound, not Forbidden
+    src: ["PayrollLoanService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[PUT /api/payroll/loan-products/{tenantAProductId}] signed in as Tenant B HRAdmin => [404] Loan product not found."
+    auto: API

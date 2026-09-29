@@ -1,0 +1,181 @@
+sheet: Platform_Tenant_Status
+submodule: Tenant Activation / Deactivation / Suspended
+defaults:
+  role: PLATFORM_ADMIN
+  perm: PlatformTenant.UpdateStatus
+  tenant: None (platform identity domain)
+  pre: "QA platform.localhost stack; a disposable QA tenant available for status changes so Tenant A/B's Active status is never disturbed for other suites."
+  data: "A disposable QA tenant id ('Tenant S')."
+  sev: High
+  reg: true
+
+cases:
+  - id: PLAT-STATUS-001
+    func: [F-PLAT-17]
+    sc: Deactivate an Active tenant
+    t: Deactivating an Active tenant flips its status and blocks sign-in
+    src: ["PlatformTenantService.DeactivateAsync/SetStatusAsync"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "[POST /api/platform/tenants/{Tenant S id}/deactivate] Call as PLATFORM_ADMIN => [200] data.status='Inactive', message 'Tenant inactive successfully.'"
+      - "[POST /api/auth/login] Attempt tenant sign-in at Tenant S's host with valid credentials => [403] \"Your organization's account is inactive. Please contact support.\" per Module 1 AUTH-LOGIN-027, OR the request is refused earlier if the shard resolver also treats Inactive as unreachable - record actual"
+      - "[GET /api/tenants/current/branding] Call at Tenant S's host, anonymously => record actual (branding read may or may not depend on Active status; confirm behaviour)"
+    db: "Catalog Tenants.Status='Inactive' for Tenant S."
+    auto: API
+
+  - id: PLAT-STATUS-002
+    func: [F-PLAT-16]
+    sc: Activate an Inactive tenant
+    t: Activating a previously deactivated tenant restores sign-in
+    src: ["PlatformTenantService.ActivateAsync/SetStatusAsync"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "[POST /api/platform/tenants/{Tenant S id}/activate] Call as PLATFORM_ADMIN => [200] data.status='Active'"
+      - "[POST /api/auth/login] Sign in at Tenant S's host with valid credentials => [200]"
+    db: "Catalog Tenants.Status='Active' for Tenant S."
+    auto: API
+
+  - id: PLAT-STATUS-003
+    func: [F-PLAT-16, F-PLAT-17]
+    sc: Idempotent status change
+    t: Activating an already-Active tenant (or deactivating an already-Inactive one) succeeds with a status-quo message
+    src: ["PlatformTenantService.SetStatusAsync (tenant.Status == status branch)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants/{Tenant S id}/activate] Call on an already-Active tenant => [200] message 'Tenant is already Active.'"
+      - "[POST /api/platform/tenants/{Tenant S id}/deactivate] Then deactivate, then deactivate again => second call [200] 'Tenant is already Inactive.'"
+    auto: API
+
+  - id: PLAT-STATUS-004
+    func: [F-PLAT-16, F-PLAT-17]
+    sc: Status change on an unknown tenant
+    t: A well-formed but non-existent id returns 404 for both activate and deactivate
+    src: ["PlatformTenantService.SetStatusAsync (tenant is null)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants/{random GUID}/activate] => [404] 'Tenant was not found.'"
+      - "[POST /api/platform/tenants/{random GUID}/deactivate] => [404] same"
+    auto: API
+
+  - id: PLAT-STATUS-005
+    func: [F-PLAT-18]
+    sc: Suspended tenants cannot be reactivated through this endpoint
+    t: Activate/Deactivate refuse to touch a Suspended tenant
+    src: ["PlatformTenantService.SetStatusAsync (tenant.Status == Suspended branch)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    pre: "DB-assisted: set a disposable QA tenant's Status directly to Suspended, since no API path produces it (see F-PLAT-18)."
+    steps:
+      - "[POST /api/platform/tenants/{suspended tenant id}/activate] => [409] 'Suspended tenants must be handled by the existing suspension workflow.'"
+      - "[POST /api/platform/tenants/{suspended tenant id}/deactivate] => [409] same message"
+      - "[GET /api/platform/tenants/{suspended tenant id}] Confirm status is still Suspended => confirmed"
+    db: "Catalog Tenants.Status set to Suspended directly for setup; unchanged after both calls."
+    auto: DB-assisted
+    cr: [CR-25]
+    cm: "Exposes CR-25/F-PLAT-18: the message references 'the existing suspension workflow', but no code path in this repository ever sets Suspended or offers to clear it. Confirm whether this is a deferred feature, dead code, or reserved for an external/manual process."
+
+  - id: PLAT-STATUS-006
+    func: [F-PLAT-17]
+    sc: Deactivation revokes nothing by itself
+    t: Deactivating a tenant does not itself revoke existing tenant users' refresh tokens (only the host-level status check blocks them)
+    src: ["PlatformTenantService.SetStatusAsync (no RefreshTokens interaction)"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    role: S_EMP (a signed-in user of Tenant S before deactivation)
+    steps:
+      - "[POST /api/auth/login] Sign in as S_EMP at Tenant S's host before deactivation => [200] T1 (access + refresh)"
+      - "[POST /api/platform/tenants/{Tenant S id}/deactivate] Deactivate Tenant S => [200]"
+      - "[GET /api/auth/me] Use S_EMP's still-unexpired T1 access token => record actual: the access token itself carries no tenant-status check, so this may still succeed [200] until it expires (mirrors AUTH-TOKEN-026 in Module 1, but for tenant-wide deactivation rather than a single user)"
+      - "[POST /api/auth/refresh] Attempt to refresh T1 => [401]/[403] refused once the refresh path re-checks tenant status"
+    sec: "Bounds the exposure window to the access-token lifetime, same class of finding as Module 1's CR-14."
+    auto: API
+    cr: [CR-14]
+    ex: ["xU:AuthServiceRefreshTests.Refresh_revokes_the_token_when_the_organization_is_suspended"]
+    cm: "Cross-references Module 1's CR-14 in the specific context of an operator-initiated deactivation rather than self-service password/permission changes."
+
+  - id: PLAT-STATUS-007
+    func: [F-PLAT-24]
+    sc: Status-change endpoints require PlatformTenant.UpdateStatus, not merely TenantCreate
+    t: A platform user holding PlatformTenant.Create but not PlatformTenant.UpdateStatus cannot activate/deactivate
+    src: ["[PlatformPermission(PlatformPermissions.TenantUpdateStatus)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: PLATFORM_ONBOARDER (PlatformTenant.Create only, no PlatformTenant.UpdateStatus)
+    steps:
+      - "[POST /api/platform/tenants/{Tenant S id}/deactivate] As PLATFORM_ONBOARDER => [403]"
+      - "[POST /api/platform/tenants] As PLATFORM_ONBOARDER, onboard a new tenant => [201] (confirms Create still works, isolating the permission gap to status changes)"
+    auto: API
+    ex: ["xU:PlatformTenantAuthorizationTests.Tenant_status_actions_require_the_existing_platform_status_permission"]
+
+  - id: PLAT-STATUS-008
+    func: [F-PLAT-24]
+    sc: PlatformTenant.UpdateStatus alone is not enough to onboard or edit
+    t: A platform user holding only PlatformTenant.UpdateStatus cannot create or edit tenants
+    src: ["[PlatformPermission(PlatformPermissions.TenantCreate)] on Create/UpdateInactive/RetryProvisioning/ResetAdminPassword"]
+    type: Authorization
+    tags: [Negative]
+    pri: P1
+    role: PLATFORM_STATUS_ONLY (PlatformTenant.UpdateStatus only)
+    steps:
+      - "[POST /api/platform/tenants] As PLATFORM_STATUS_ONLY => [403]"
+      - "[PUT /api/platform/tenants/{Tenant S id}] As PLATFORM_STATUS_ONLY => [403]"
+      - "[POST /api/platform/tenants/{Tenant S id}/activate] As PLATFORM_STATUS_ONLY => [200] (status change still works)"
+    auto: API
+
+  - id: PLAT-STATUS-009
+    func: [F-PLAT-16, F-PLAT-17, F-PLAT-32]
+    sc: Status-change endpoints are unreachable at a tenant host
+    t: Activate/deactivate at a customer host are blocked before authentication
+    src: ["PlatformRequestRoutingMiddleware"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    tenant: A
+    steps:
+      - "[POST /api/platform/tenants/{Tenant S id}/activate] Call at the Tenant A host with a valid platform token => [404]"
+      - "[POST /api/platform/tenants/{Tenant S id}/deactivate] Same => [404]"
+    auto: API
+
+  - id: PLAT-STATUS-010
+    func: [F-PLAT-16, F-PLAT-17]
+    sc: Cache-Control on status-change responses
+    t: Status-change responses are not marked no-store (contrast with Create/Update/Retry/ResetAdminPassword)
+    src: ["PlatformTenantsController.Activate/Deactivate (no explicit Response.Headers.CacheControl set)"]
+    type: Security
+    tags: [Configuration]
+    pri: P3
+    sev: Low
+    steps:
+      - "[POST /api/platform/tenants/{Tenant S id}/activate] Inspect response headers => record whether Cache-Control: no-store is present, for consistency with the other mutating tenant endpoints"
+    auto: API
+    cm: "Low-severity consistency check; the response carries no secret, so this is informational rather than a security finding."
+
+  - id: PLAT-STATUS-011
+    func: [F-PLAT-16, F-PLAT-17]
+    sc: Frontend status-change confirmation
+    t: The UI requires an explicit confirmation dialog before activating or deactivating, and reflects the result in the table
+    src: ["PlatformTenantsPage statusChange dialog"]
+    type: Positive
+    pri: P1
+    steps:
+      - "In the UI, click Deactivate on an Active tenant row => a confirmation dialog appears naming the consequence ('This will prevent tenant users from signing in...'); no API call fires until confirmed"
+      - "Confirm => the row's status pill updates to Inactive and the summary cards recompute"
+      - "Click Activate on that row => a differently-worded confirmation appears; confirm => status pill returns to Active"
+    auto: UI

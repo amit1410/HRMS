@@ -1,0 +1,91 @@
+sheet: RBAC_ConcurrencyAudit
+submodule: Cross-cutting concurrency and audit-trail contract (Page Access, and immutability sweep)
+defaults:
+  role: TENANT_ADMIN
+  perm: "PageAccess.Manage"
+  tenant: A
+  pre: "Tenant A signed in; roles/permissions per case."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: RBAC-CONC-001
+    func: [F-RBAC-016, F-RBAC-022]
+    sc: Two admins concurrently editing the same role's permission matrix
+    t: A Serializable-transaction race between two simultaneous PUT calls to the same roleId resolves to one consistent final state, not a lost update
+    src: ["PageAccessService.UpdateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[PUT /api/page-access/roles/{itRoleId}] Two admins concurrently PUT different permission sets for the same role (adminA adds Employee.View, adminB adds Employee.Export, both computed from the same pre-race baseline) => both calls return [200], but one is serialized after the other by the transaction"
+      - "[GET /api/page-access/roles/{itRoleId}] Call => [200] the final grantedPermissions reflects whichever write committed LAST in full - not a merge, and not a silently dropped write with no error"
+    auto: API
+
+  - id: RBAC-CONC-002
+    func: [F-RBAC-152]
+    sc: Page Access permission changes are audited distinctly from Role/AccountEmployeeLink events
+    t: AuthorizationConfigurationEvents is its own dedicated audit store, with actor/tenant/old-new-value/reason
+    src: ["PageAccessService.UpdateAsync/GetHistoryAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/page-access/roles/{itRoleId}] Grant Employee.Export, reason='pilot expansion' => [200]"
+      - "[GET /api/page-access/history?roleId={itRoleId}] Call => [200] a RolePermissionGranted event: actorUserId=caller, permissionCode='Employee.Export', oldValue=null, newValue='Granted', reason='pilot expansion'"
+    auto: API
+
+  - id: RBAC-CONC-003
+    func: [F-RBAC-149, F-RBAC-150, F-RBAC-152]
+    sc: All three audit trails are append-only with no edit/delete endpoint
+    t: A sweep confirming UserRoleAssignmentEvents, AccountEmployeeLinkEvents and AuthorizationConfigurationEvents each expose only GET routes
+    src: ["RoleAssignmentsController", "AccountEmployeeLinksController", "PageAccessController"]
+    type: Contract
+    tags: [Security]
+    pri: P2
+    steps:
+      - "[PUT /api/role-assignments/{assignmentId}/history/{eventId}] Attempt to edit a history event => [404] no such route exists"
+      - "[DELETE /api/account-employee-links/users/{userId}/history/{eventId}] Attempt to delete a link-history event => [404] no such route exists"
+      - "[PUT /api/page-access/history/{eventId}] Attempt to edit an authorization-config event => [404] no such route exists"
+    auto: API
+
+  - id: RBAC-CONC-004
+    func: [F-RBAC-037]
+    sc: Concurrent double-revoke of the same assignment
+    t: Two simultaneous revoke calls for the same assignmentId resolve idempotently - one applies the revocation, the other reports 'already revoked'
+    src: ["RoleAssignmentService.RevokeAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    perm: "RoleAssignment.AssignmentManage"
+    steps:
+      - "[POST /api/role-assignments/{assignmentId}/revoke] Fired twice concurrently, identical payload => both calls return [200]; the database ends with exactly one Revoked event, and the second caller's response message indicates it was already revoked"
+    auto: API
+
+  - id: RBAC-CONC-005
+    func: [F-RBAC-045]
+    sc: Concurrent revoke race on the tenant's two remaining active SuperHR assignments
+    t: Simultaneously revoking BOTH of a tenant's two active SuperHR assignments leaves at least one active, never zero
+    src: ["RoleAssignmentService.RevokeAsync (anotherActive probe)"]
+    type: Integration-Concurrency
+    pri: P0
+    sev: Critical
+    role: SUPER_HR
+    perm: "RoleAssignment.AssignmentManage"
+    steps:
+      - "[GET /api/role-assignments?roleId={superHrRoleId}&status=Active] Confirm exactly two active SuperHR assignments => [200]"
+      - "[POST /api/role-assignments/{assignmentIdA}/revoke] and [POST /api/role-assignments/{assignmentIdB}/revoke], fired concurrently => at most ONE succeeds [200]; the other is rejected [409] The tenant must retain at least one effective Super HR assignment"
+      - "[GET /api/role-assignments?roleId={superHrRoleId}&status=Active] Call => [200] at least one active SuperHR assignment remains - the invariant holds even under a race"
+    auto: API
+
+  - id: RBAC-CONC-006
+    func: [F-RBAC-150]
+    sc: Link event correlation id is unique per event
+    t: Every AccountEmployeeLinkEvent carries a distinct CorrelationId, usable to trace a single mutation end-to-end
+    src: ["AccountEmployeeLinkService.MutateAsync (CorrelationId = Guid.NewGuid())"]
+    type: Positive
+    tags: [Contract]
+    pri: P3
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] Link => [200]"
+      - "[POST /api/account-employee-links/users/{userId}/unlink] Unlink => [200]"
+      - "[GET /api/account-employee-links/users/{userId}/history] Call => [200] the Link and Unlink events carry two DIFFERENT correlation ids (each mutation generates its own)"
+    auto: API

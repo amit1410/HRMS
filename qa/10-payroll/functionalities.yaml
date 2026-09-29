@@ -1,0 +1,2446 @@
+# Functionality registry for Module 10 - Payroll (Salary Component Master, Salary Structures/Versions,
+# Employee Salary Assignment, Payroll Periods/Runs, Calculation Engine, Recalculation/Off-Cycle/Adjustments/
+# Reversals, Payroll Results/Errors/Outputs, Reimbursements/Claims, Payroll Settlement (Retro + Final
+# Settlement), Payroll Inputs (bulk imports), Authorization/Scope, Tenant Isolation/Audit/Reports,
+# SQL Server/MySQL Provider Parity, Large Data, Frontend).
+# Every test case references one or more of these ids; the builder fails if a functionality has zero
+# cases or a case references an unknown id. IDs are allocated in one global sequence (F-PAY-001...) in
+# the order the case files below were authored - group boundaries are noted with a comment banner.
+#
+# SCOPE NOTE (read before extending this module): Payroll is the largest domain in the product (24
+# docs/phase-7a...7y.md design docs). This module deliberately covers the areas explicitly requested -
+# Salary Component/Structure masters, Employee Salary Assignment, Payroll Periods/Runs, the Calculation
+# Engine (earnings/deductions/proration/statutory integration), Recalculation/Off-Cycle/Adjustments/
+# Reversals, Payroll Results/Errors/Outputs (payslips/register), Reimbursements/Claims, Payroll Settlement
+# (Retro cases + Final Settlement), Payroll Inputs (bulk CSV correction imports, tightly coupled to
+# recalculation), Authorization/Tenant Isolation/Audit/Reports/Provider Parity/Large Data/Frontend - and
+# explicitly EXCLUDES, as out-of-scope carry-forwards for a future module: Loans/Salary Advances (phase
+# 7n), Bonus/Variable Pay (7q), Statutory Calculation Configuration/Compliance Returns/Filing (7f/7k/7x -
+# StatutoryPayrollService's employee-profile/config CRUD is IN scope here only insofar as it feeds the
+# Calculation Engine's statutory deduction step; PayrollStatutoryComplianceService/StatutoryFilingService
+# and their controllers are NOT), Bank Advice/Payment Processing (7h), Payroll Accounting/GL Posting (7i),
+# Payroll Controls/Production-Readiness/UAT/Production-Closure (7l/7m/7y - PayrollControlService's own
+# maker-checker CONFIGURATION is covered narrowly because PayrollApprovalGuard consumes it everywhere),
+# Employee Tax Declarations (7u), and Year-End Tax Processing (7w). Gratuity/Separation Benefits (7p) is
+# already fully covered by qa/09-separation (Separation_Benefits sheet) and is not duplicated here.
+#
+# Discovered implementation (authoritative source, read directly - not assumed from any design doc; every
+# doc/phase-7*.md was read where relevant and current code wins wherever they diverge, per CLAUDE.md):
+#   Backend/HRMS.API/Controllers/SalaryComponentsController.cs, SalaryStructuresController.cs,
+#     EmployeeSalaryAssignmentsController.cs, PayrollPeriodsController.cs, PayrollRunsController.cs,
+#     PayrollOperationsController.cs, PayrollOffCycleController.cs, PayrollAdjustmentsController.cs,
+#     PayrollReversalsController.cs, PayrollOutputsController.cs (also hosts MyPayslipsController),
+#     ReimbursementsController.cs, PayrollInputsController.cs (also hosts PayrollInputTemplatesController),
+#     PayrollAnalyticsController.cs (also hosts PayrollExceptionsController/PayrollReconciliationController/
+#     PayrollAnalyticsControlsController), PayrollReportsController.cs, StatutoryPayrollController.cs,
+#     PayrollControlsController.cs, and the PayrollRetroSettlementController nested in PayrollOutputsController.cs
+#   Backend/HRMS.Application/Services/SalaryComponentService.cs, SalaryStructureService.cs,
+#     EmployeeSalaryAssignmentService.cs, PayrollPeriodService.cs, PayrollRunService.cs,
+#     PayrollCalculationEngine.cs (+ PayrollCalculationService, PayrollFormula), PayrollRoundingPolicy.cs,
+#     PayrollApprovalGuard.cs, PayrollReadinessService.cs, PayrollAdjustmentService.cs, PayrollOutputService.cs,
+#     ReimbursementService.cs, ReimbursementPolicyServices.cs (ReimbursementPolicyResolver/
+#     ReimbursementEligibilityService), PayrollRetroSettlementService.cs, PayrollInputService.cs,
+#     PayrollOperationsService.cs, PayrollControlService.cs, StatutoryPayrollService.cs (calculation
+#     integration + configuration/employee-profile CRUD), AttendancePayrollSnapshotResolver.cs,
+#     LoanPayrollRecoveryResolver.cs, ReimbursementPayrollResolver.cs
+#   Backend/HRMS.Domain/Entities/SalaryComponent.cs, SalaryStructure.cs, EmployeeSalaryAssignment.cs,
+#     PayrollPeriodRun.cs, PayrollCalculation.cs, PayrollInputs.cs, Reimbursements.cs, PayrollRetroSettlement.cs,
+#     PayrollControls.cs
+#   Backend/HRMS.Domain/Enums/PayrollEnums.cs, PayrollInputEnums.cs
+#   Backend/HRMS.Domain/Authorization/Permissions.cs (Permissions.Payroll.* - full 160+ constant inventory
+#     read in full; PayrollInput.* uses a different constant prefix than every sibling Payroll.* permission)
+#   Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap for every seeded role, read
+#     in full for SuperAdmin/TenantAdmin/HRAdmin/HRManager/Manager/Employee/SuperHR)
+#   Frontend/HRMS.Web/src/pages/payroll/*.tsx (in-scope pages), src/api/payroll.ts, payrollAdjustments.ts,
+#     payrollAnalytics.ts, payrollInputs.ts, payrollReports.ts, src/layout/navigation.ts, src/App.tsx
+#   Existing xUnit (90+ classes touching this surface - EmployeeSalaryAssignmentTests, SalaryComponentMasterTests,
+#     SalaryStructureMasterTests, PayrollPeriodRunTests, PayrollCalculationTests, PayrollConcurrencyMatrixTests,
+#     PayrollAdjustmentFoundationTests/ConcurrencyTests, PayrollOutputTests, PayrollReimbursementsProviderAcceptance,
+#     PayrollRetroSettlementTests, PayrollInputServiceTests/AcceptanceTests/ConcurrencyIdempotencyTests/
+#     RetrySafetyTests, PayrollAnalyticsTests family, PayrollReportsTests family, plus the MySql*/SqlServer*
+#     provider-acceptance mirrors - none previously classified in qa/tools/existing_test_layers.yaml before
+#     this module) and Vitest across the in-scope pages - see README.md's mapping.
+#
+# ── Headline findings that shape this whole module's cases (see clarifications.yaml for full detail) ──
+# CR-66 recurs directly: SuperHR holds PageAccess.Manage and, unlike Separation (where it held ZERO native
+# permissions), already holds a PARTIAL native Payroll footprint (full Salary/Period/Run management
+# including Run.Approve/Finalize and Controls.Manage) - via one PageAccess call it can self-grant every
+# remaining Payroll permission it lacks (Adjustments/Reimbursements/OffCycle/Analytics/Retro/FinalSettlement/
+# PayrollInput.*), closing the gap to the entire module. CR-77 (manager/team-scope resolution) does NOT
+# recur here: no Payroll.*.ViewTeam permission exists anywhere in the module - there is no "manager sees
+# their team's payroll" concept at all, only ViewOwn (self-service) vs the tenant-wide View/Manage tier.
+# Payroll.Run.Approve and Payroll.Run.Finalize are declared and seeded to SuperAdmin/TenantAdmin/HRAdmin/
+# SuperHR but checked by ZERO endpoints - the only real state-transition action (POST /runs/{id}/transition)
+# is gated by the coarser Payroll.Run.Manage, the same dead-permission shape as Separation's CR-134.
+# HRManager holds NONE of the module's core payroll permissions (no Salary*/Period*/Run*/Payslip*/
+# Adjustments*/Reimbursements*/OffCycle*/Analytics*/Retro*/FinalSettlement*) despite being a senior HR role -
+# a narrower gap than even Separation's own HRManager finding (CR-135). Manager holds ZERO Payroll
+# permissions of any kind. A confirmed source-level bug: PayrollRunService.TransitionAsync's single-statement
+# `if (target is Finalized or Cancelled) row.CompletedAtUtc = ...;` has no braces, so the very next statement
+# `row.CompletedByUserId = tenant.UserId;` executes UNCONDITIONALLY on every transition (Approved,
+# Processing, etc.), stamping CompletedByUserId long before CompletedAtUtc is ever set.
+
+functionalities:
+  # ═══════════════════════════════ A. SALARY COMPONENT MASTER ═══════════════════════════════
+  - id: F-PAY-001
+    name: List/search salary components with filters (type, calculation type, active, statutory) and paging
+    group: Salary Component Master
+    status: Implemented
+    ui: SalaryComponentsPage
+    api: "GET /api/payroll/salary-components"
+    service: "SalaryComponentService.GetAsync"
+    permission: "Payroll.SalaryComponent.View"
+    db: SalaryComponents
+
+  - id: F-PAY-002
+    name: Get a single salary component by id (tenant-scoped)
+    group: Salary Component Master
+    status: Implemented
+    api: "GET /api/payroll/salary-components/{id}"
+    service: "SalaryComponentService.GetByIdAsync"
+    permission: "Payroll.SalaryComponent.View"
+    db: SalaryComponents
+
+  - id: F-PAY-003
+    name: Create a salary component - Code and Name are required
+    group: Salary Component Master
+    status: Implemented
+    ui: SalaryComponentsPage
+    api: "POST /api/payroll/salary-components"
+    service: "SalaryComponentService.CreateAsync -> Validate"
+    permission: "Payroll.SalaryComponent.Manage"
+    db: SalaryComponents
+
+  - id: F-PAY-004
+    name: EffectiveTo cannot precede EffectiveFrom, else Invalid
+    group: Salary Component Master
+    status: Implemented
+    api: "POST/PUT /api/payroll/salary-components"
+    service: "SalaryComponentService.Validate"
+    permission: "Payroll.SalaryComponent.Manage"
+    db: SalaryComponents
+
+  - id: F-PAY-005
+    name: IsStatutory must exactly match StatutoryType!=None, else Invalid
+    group: Salary Component Master
+    status: Implemented
+    api: "POST/PUT /api/payroll/salary-components"
+    service: "SalaryComponentService.Validate"
+    permission: "Payroll.SalaryComponent.Manage"
+    db: SalaryComponents
+
+  - id: F-PAY-006
+    name: An EmployerContribution component cannot AffectsNetPay=true, else Invalid
+    group: Salary Component Master
+    status: Implemented
+    api: "POST/PUT /api/payroll/salary-components"
+    service: "SalaryComponentService.Validate"
+    permission: "Payroll.SalaryComponent.Manage"
+    db: SalaryComponents
+
+  - id: F-PAY-007
+    name: Code is normalized (trim + uppercase) and must be unique per tenant, else Conflict
+    group: Salary Component Master
+    status: Implemented
+    api: "POST /api/payroll/salary-components"
+    service: "SalaryComponentService.CreateAsync -> NormalizeCode"
+    permission: "Payroll.SalaryComponent.Manage"
+    db: SalaryComponents
+
+  - id: F-PAY-008
+    name: A concurrent duplicate-code create race is caught at the DB layer as a fallback to the pre-check
+    group: Salary Component Master
+    status: Implemented
+    api: "POST /api/payroll/salary-components"
+    service: "SalaryComponentService.CreateAsync (DbUpdateException fallback)"
+    permission: "Payroll.SalaryComponent.Manage"
+    db: SalaryComponents
+
+  - id: F-PAY-009
+    name: Update requires the component to exist in the tenant, else NotFound
+    group: Salary Component Master
+    status: Implemented
+    api: "PUT /api/payroll/salary-components/{id}"
+    service: "SalaryComponentService.UpdateAsync"
+    permission: "Payroll.SalaryComponent.Manage"
+    db: SalaryComponents
+
+  - id: F-PAY-010
+    name: Update honors ExpectedConcurrencyVersion, else Conflict ("changed by another user")
+    group: Salary Component Master
+    status: Implemented
+    api: "PUT /api/payroll/salary-components/{id}"
+    service: "SalaryComponentService.UpdateAsync"
+    permission: "Payroll.SalaryComponent.Manage"
+    db: SalaryComponents.ConcurrencyVersion
+
+  - id: F-PAY-011
+    name: Update re-checks code uniqueness excluding the current row
+    group: Salary Component Master
+    status: Implemented
+    api: "PUT /api/payroll/salary-components/{id}"
+    service: "SalaryComponentService.UpdateAsync"
+    permission: "Payroll.SalaryComponent.Manage"
+    db: SalaryComponents
+
+  - id: F-PAY-012
+    name: "Activate/Deactivate (SetActiveAsync) is an idempotent no-op - no DB write/history row when the requested state already matches"
+    group: Salary Component Master
+    status: Implemented
+    api: "POST /api/payroll/salary-components/{id}/activate, /deactivate"
+    service: "SalaryComponentService.SetActiveAsync"
+    permission: "Payroll.SalaryComponent.Manage"
+    db: SalaryComponents.IsActive
+
+  - id: F-PAY-013
+    name: Activate/Deactivate accepts an optional expectedConcurrencyVersion query parameter
+    group: Salary Component Master
+    status: Implemented
+    api: "POST /api/payroll/salary-components/{id}/activate, /deactivate"
+    service: "SalaryComponentService.SetActiveAsync"
+    permission: "Payroll.SalaryComponent.Manage"
+    db: SalaryComponents.ConcurrencyVersion
+
+  - id: F-PAY-014
+    name: "Every mutation (Created/Updated/Activated/Deactivated) appends an append-only SalaryComponentHistory snapshot row"
+    group: Salary Component Master
+    status: Implemented
+    api: "GET /api/payroll/salary-components/{id}/history"
+    service: "SalaryComponentService.AddHistory / GetHistoryAsync"
+    permission: "Payroll.SalaryComponent.ViewHistory"
+    db: SalaryComponentHistories
+
+  - id: F-PAY-015
+    name: GetHistory requires the component to exist in the tenant, else NotFound
+    group: Salary Component Master
+    status: Implemented
+    api: "GET /api/payroll/salary-components/{id}/history"
+    service: "SalaryComponentService.GetHistoryAsync"
+    permission: "Payroll.SalaryComponent.ViewHistory"
+    db: SalaryComponentHistories
+
+  - id: F-PAY-016
+    name: "A cross-tenant salary-component id (GET/PUT/activate/history) is NotFound, not Forbidden"
+    group: Salary Component Master
+    status: Implemented
+    api: "GET/PUT /api/payroll/salary-components/{id}"
+    service: "SalaryComponentService.cs (TenantId filter)"
+    permission: "Payroll.SalaryComponent.View / Manage"
+    db: SalaryComponents (TenantId filter)
+
+  # ═══════════════════════════════ B. SALARY STRUCTURES AND VERSIONS ═══════════════════════════════
+  - id: F-PAY-017
+    name: List/search salary structures (active filter, effectiveOn resolves the displayed version)
+    group: Salary Structures and Versions
+    status: Implemented
+    ui: SalaryStructuresPage
+    api: "GET /api/payroll/salary-structures"
+    service: "SalaryStructureService.GetAsync -> SelectVersion"
+    permission: "Payroll.SalaryStructure.View"
+    db: SalaryStructures, SalaryStructureVersions
+
+  - id: F-PAY-018
+    name: Get a single structure by id, optionally resolving a specific effectiveOn version
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "GET /api/payroll/salary-structures/{id}?effectiveOn="
+    service: "SalaryStructureService.GetByIdAsync"
+    permission: "Payroll.SalaryStructure.View"
+    db: SalaryStructures, SalaryStructureVersions
+
+  - id: F-PAY-019
+    name: Create requires Code and Name, and EffectiveTo cannot precede EffectiveFrom (header validation)
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures"
+    service: "SalaryStructureService.ValidateHeader"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructures
+
+  - id: F-PAY-020
+    name: Structure Code is normalized and must be unique per tenant, else Conflict
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures"
+    service: "SalaryStructureService.CreateAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructures
+
+  - id: F-PAY-021
+    name: At least one component is required to create a structure version, else Invalid
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures"
+    service: "SalaryStructureService.ValidateComponentsAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureComponents
+
+  - id: F-PAY-022
+    name: A component row must reference a real Salary Component id, else Invalid
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST/PUT .../components"
+    service: "SalaryStructureService.ValidateComponentsAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureComponents
+
+  - id: F-PAY-023
+    name: A Salary Component may not appear twice (duplicate SalaryComponentId) in the same structure version, else Conflict
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures, .../components"
+    service: "SalaryStructureService.ValidateComponentsAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureComponents
+
+  - id: F-PAY-024
+    name: Component sequence values must be positive and unique within the version
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures"
+    service: "SalaryStructureService.ValidateComponentsAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureComponents.Sequence
+
+  - id: F-PAY-025
+    name: A component's own EffectiveFrom/EffectiveTo must remain within the parent version's window
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures"
+    service: "SalaryStructureService.ValidateComponentsAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureComponents
+
+  - id: F-PAY-026
+    name: Every referenced Salary Component must exist, be Active, and belong to the tenant
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures"
+    service: "SalaryStructureService.ValidateComponentsAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryComponents
+
+  - id: F-PAY-027
+    name: PercentageOfComponentId must reference a different, known active component - self-reference is rejected
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures"
+    service: "SalaryStructureService.ValidateComponentsAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureComponents
+
+  - id: F-PAY-028
+    name: "CalculationType-specific field matrix is enforced: FixedAmount needs Value>=0 and no percentage/formula; Percentage needs Value 0-100 and a PercentageOfComponentId; Formula needs non-blank Formula text and no value/base; Manual rejects any of value/base/formula"
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures"
+    service: "SalaryStructureService.ValidateComponentsAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureComponents
+
+  - id: F-PAY-029
+    name: MinimumAmount/MaximumAmount must be non-negative and Minimum cannot exceed Maximum
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures"
+    service: "SalaryStructureService.ValidateComponentsAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureComponents
+
+  - id: F-PAY-030
+    name: "Update to a NEW EffectiveFrom creates a brand-new version rather than mutating the matching one"
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "PUT /api/payroll/salary-structures/{id}"
+    service: "SalaryStructureService.UpdateAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureVersions
+
+  - id: F-PAY-031
+    name: A new version's date range cannot overlap an existing version's range, else Conflict
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "PUT /api/payroll/salary-structures/{id}"
+    service: "SalaryStructureService.UpdateAsync -> Overlaps"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureVersions
+
+  - id: F-PAY-032
+    name: Update to an EffectiveFrom matching an existing version instead reconciles that version's components in place
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "PUT /api/payroll/salary-structures/{id}"
+    service: "SalaryStructureService.UpdateAsync -> ReconcileComponents"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureVersions, SalaryStructureComponents
+
+  - id: F-PAY-033
+    name: Reconcile soft-deactivates (IsActive=false) any existing component omitted from the update request rather than deleting it
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "PUT /api/payroll/salary-structures/{id}"
+    service: "SalaryStructureService.ReconcileComponents"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureComponents.IsActive
+
+  - id: F-PAY-034
+    name: Update honors ExpectedConcurrencyVersion, else Conflict
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "PUT /api/payroll/salary-structures/{id}"
+    service: "SalaryStructureService.UpdateAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructures.ConcurrencyVersion
+
+  - id: F-PAY-035
+    name: SetActiveAsync toggles the structure header IsActive flag and is an idempotent no-op when unchanged
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures/{id}/activate, /deactivate"
+    service: "SalaryStructureService.SetActiveAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructures.IsActive
+
+  - id: F-PAY-036
+    name: AddComponent/UpdateComponent/RemoveComponent operate only against the CURRENTLY effective version (resolved by today's date)
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST/PUT/DELETE .../components, /components/{componentId}"
+    service: "SalaryStructureService.LoadCurrentAsync -> SelectVersion"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureVersions
+
+  - id: F-PAY-037
+    name: RemoveComponent is a soft delete (IsActive=false) - the row and its history remain
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "DELETE /api/payroll/salary-structures/{id}/components/{componentId}"
+    service: "SalaryStructureService.RemoveComponentAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureComponents.IsActive
+
+  - id: F-PAY-038
+    name: "AddComponent rejects re-adding a component that already has an active row in the version, else Conflict"
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "POST /api/payroll/salary-structures/{id}/components"
+    service: "SalaryStructureService.AddComponentAsync"
+    permission: "Payroll.SalaryStructure.Manage"
+    db: SalaryStructureComponents
+
+  - id: F-PAY-039
+    name: "SelectVersion prefers a version whose window covers the given date, falling back to the latest active version otherwise"
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "GET /api/payroll/salary-structures/{id}?effectiveOn="
+    service: "SalaryStructureService.SelectVersion"
+    permission: "Payroll.SalaryStructure.View"
+    db: SalaryStructureVersions
+
+  - id: F-PAY-040
+    name: "Every mutation appends an append-only SalaryStructureHistory row carrying a full JSON snapshot of the version's components"
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "GET /api/payroll/salary-structures/{id}/history"
+    service: "SalaryStructureService.AddHistory / GetHistoryAsync"
+    permission: "Payroll.SalaryStructure.ViewHistory"
+    db: SalaryStructureHistories
+
+  - id: F-PAY-041
+    name: "A cross-tenant structure id (GET/PUT/component actions/history) is NotFound, not Forbidden"
+    group: Salary Structures and Versions
+    status: Implemented
+    api: "GET/PUT /api/payroll/salary-structures/{id}"
+    service: "SalaryStructureService.cs (TenantId filter)"
+    permission: "Payroll.SalaryStructure.View / Manage"
+    db: SalaryStructures (TenantId filter)
+
+  # ═══════════════════════════════ C. EMPLOYEE SALARY ASSIGNMENT ═══════════════════════════════
+  - id: F-PAY-042
+    name: List/filter employee salary assignments (employeeId, salaryStructureId, status, effectiveOn, search) with paging
+    group: Employee Salary Assignment
+    status: Implemented
+    ui: EmployeeSalaryAssignmentsPage
+    api: "GET /api/payroll/employee-salary-assignments"
+    service: "EmployeeSalaryAssignmentService.GetAsync"
+    permission: "Payroll.EmployeeSalary.View"
+    db: EmployeeSalaryAssignments
+
+  - id: F-PAY-043
+    name: Get a single assignment by id, and list by employee via the dedicated by-employee route
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "GET .../{id}, .../by-employee/{employeeId}"
+    service: "EmployeeSalaryAssignmentService.GetByIdAsync / GetForEmployeeAsync"
+    permission: "Payroll.EmployeeSalary.View"
+    db: EmployeeSalaryAssignments
+
+  - id: F-PAY-044
+    name: "GetEffective(employeeId, date) returns exactly one Active assignment covering the date, NotFound for zero, and Conflict for more than one"
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "GET .../by-employee/{employeeId}/effective?date="
+    service: "EmployeeSalaryAssignmentService.GetEffectiveAsync"
+    permission: "Payroll.EmployeeSalary.View"
+    db: EmployeeSalaryAssignments
+
+  - id: F-PAY-045
+    name: Create requires EffectiveTo>=EffectiveFrom, non-negative CTC values, and a 3-letter CurrencyCode
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "POST /api/payroll/employee-salary-assignments"
+    service: "EmployeeSalaryAssignmentService.ValidateRequest"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: EmployeeSalaryAssignments
+
+  - id: F-PAY-046
+    name: Employee must exist in the tenant, else NotFound
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "POST /api/payroll/employee-salary-assignments"
+    service: "EmployeeSalaryAssignmentService.CreateAsync"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: Employees
+
+  - id: F-PAY-047
+    name: Salary Structure must exist and be Active, else NotFound/Conflict
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "POST /api/payroll/employee-salary-assignments"
+    service: "EmployeeSalaryAssignmentService.CreateAsync"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: SalaryStructures
+
+  - id: F-PAY-048
+    name: "ResolveVersionAsync requires exactly ONE active Salary Structure version to be effective on EffectiveFrom - zero or multiple is Invalid"
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "POST /api/payroll/employee-salary-assignments"
+    service: "EmployeeSalaryAssignmentService.ResolveVersionAsync"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: SalaryStructureVersions
+
+  - id: F-PAY-049
+    name: "An employee cannot have two overlapping ACTIVE assignments - OverlapsAsync rejects with Conflict"
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "POST /api/payroll/employee-salary-assignments"
+    service: "EmployeeSalaryAssignmentService.OverlapsAsync"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: EmployeeSalaryAssignments
+
+  - id: F-PAY-050
+    name: "Employee-level component overrides may only target a structure component flagged IsEditableAtEmployeeLevel, else Forbidden"
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "POST /api/payroll/employee-salary-assignments, .../components"
+    service: "EmployeeSalaryAssignmentService.ValidateComponent"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: EmployeeSalaryComponents
+
+  - id: F-PAY-051
+    name: An override's shape must match the bound structure component's CalculationType (FixedAmount/Percentage/Formula each require the matching field only)
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "POST /api/payroll/employee-salary-assignments, .../components"
+    service: "EmployeeSalaryAssignmentService.ValidateComponent"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: EmployeeSalaryComponents
+
+  - id: F-PAY-052
+    name: Duplicate overrides for the same structure component within one create/update request are rejected
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "POST/PUT /api/payroll/employee-salary-assignments"
+    service: "EmployeeSalaryAssignmentService.ValidateComponents"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: EmployeeSalaryComponents
+
+  - id: F-PAY-053
+    name: Update re-validates employee/structure/version/overlap/components exactly as Create does, and honors ExpectedConcurrencyVersion
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "PUT /api/payroll/employee-salary-assignments/{id}"
+    service: "EmployeeSalaryAssignmentService.UpdateAsync"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: EmployeeSalaryAssignments.ConcurrencyVersion
+
+  - id: F-PAY-054
+    name: Update reconciles component overrides - omitted overrides are soft-deactivated, present ones are upserted
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "PUT /api/payroll/employee-salary-assignments/{id}"
+    service: "EmployeeSalaryAssignmentService.ReconcileComponents"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: EmployeeSalaryComponents
+
+  - id: F-PAY-055
+    name: "SetActiveAsync (Active/Inactive) always writes a new history row and a DB update, even when the requested status equals the current one - no idempotent no-op guard exists here, unlike SalaryComponentService/SalaryStructureService's SetActiveAsync"
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "POST /api/payroll/employee-salary-assignments/{id}/activate, /deactivate"
+    service: "EmployeeSalaryAssignmentService.SetActiveAsync"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: EmployeeSalaryAssignments.Status
+
+  - id: F-PAY-056
+    name: "AddComponent/UpdateComponent share ChangeComponentAsync; adding a second override for a structure component that already has one (when componentId is unspecified) is Conflict"
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "POST /api/payroll/employee-salary-assignments/{id}/components"
+    service: "EmployeeSalaryAssignmentService.ChangeComponentAsync"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: EmployeeSalaryComponents
+
+  - id: F-PAY-057
+    name: RemoveComponent is a soft delete (IsActive=false)
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "DELETE /api/payroll/employee-salary-assignments/{id}/components/{componentId}"
+    service: "EmployeeSalaryAssignmentService.RemoveComponentAsync"
+    permission: "Payroll.EmployeeSalary.Manage"
+    db: EmployeeSalaryComponents
+
+  - id: F-PAY-058
+    name: "Every mutation appends an append-only EmployeeSalaryAssignmentHistory row with a JSON snapshot of the override list"
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "GET /api/payroll/employee-salary-assignments/{id}/history"
+    service: "EmployeeSalaryAssignmentService.AddHistory / GetHistoryAsync"
+    permission: "Payroll.EmployeeSalary.ViewHistory"
+    db: EmployeeSalaryAssignmentHistories
+
+  - id: F-PAY-059
+    name: "A cross-tenant assignment id (GET/PUT/component actions/history) is NotFound, not Forbidden"
+    group: Employee Salary Assignment
+    status: Implemented
+    api: "GET/PUT /api/payroll/employee-salary-assignments/{id}"
+    service: "EmployeeSalaryAssignmentService.cs (TenantId filter)"
+    permission: "Payroll.EmployeeSalary.View / Manage"
+    db: EmployeeSalaryAssignments (TenantId filter)
+
+  # ═══════════════════════════════ D. PAYROLL PERIODS AND RUNS ═══════════════════════════════
+  - id: F-PAY-060
+    name: List/filter payroll periods (status, periodType) with paging
+    group: Payroll Periods and Runs
+    status: Implemented
+    ui: PayrollPeriodsRunsPage (periods mode)
+    api: "GET /api/payroll/periods"
+    service: "PayrollPeriodService.GetAsync"
+    permission: "Payroll.Period.View"
+    db: PayrollPeriods
+
+  - id: F-PAY-061
+    name: Get a single period by id, including its runs
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "GET /api/payroll/periods/{id}"
+    service: "PayrollPeriodService.GetByIdAsync"
+    permission: "Payroll.Period.View"
+    db: PayrollPeriods, PayrollRuns
+
+  - id: F-PAY-062
+    name: "Create requires Code/Name, StartDate<=EndDate, and PayDate>=StartDate"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/periods"
+    service: "PayrollPeriodService.Validate"
+    permission: "Payroll.Period.Manage"
+    db: PayrollPeriods
+
+  - id: F-PAY-063
+    name: Period code must be unique per tenant, and an active period's dates cannot overlap another active period's dates
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/periods"
+    service: "PayrollPeriodService.CreateAsync"
+    permission: "Payroll.Period.Manage"
+    db: PayrollPeriods
+
+  - id: F-PAY-064
+    name: A Closed or Locked period cannot be edited via Update, else Conflict
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "PUT /api/payroll/periods/{id}"
+    service: "PayrollPeriodService.UpdateAsync"
+    permission: "Payroll.Period.Manage"
+    db: PayrollPeriods.Status
+
+  - id: F-PAY-065
+    name: Update honors ExpectedConcurrencyVersion and re-checks code uniqueness/overlap
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "PUT /api/payroll/periods/{id}"
+    service: "PayrollPeriodService.UpdateAsync"
+    permission: "Payroll.Period.Manage"
+    db: PayrollPeriods.ConcurrencyVersion
+
+  - id: F-PAY-066
+    name: "Declared transition order is Draft -> Open -> Closed -> Locked; any other jump is rejected as Conflict"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/periods/{id}/{action}"
+    service: "PayrollPeriodService.TransitionAsync -> ValidTransition"
+    permission: "Payroll.Period.Manage"
+    db: PayrollPeriods.Status
+
+  - id: F-PAY-067
+    name: Locking a period requires a non-blank reason and stamps LockedAtUtc/LockedByUserId/LockReason
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/periods/{id}/lock"
+    service: "PayrollPeriodService.TransitionAsync"
+    permission: "Payroll.Period.Manage"
+    db: PayrollPeriods.LockedAtUtc, LockReason
+
+  - id: F-PAY-068
+    name: "Unlock is a dedicated action gated by the separate Payroll.Period.Unlock permission, requires a reason, is blocked while any of the period's runs is Approved/Finalized, and transitions back to Closed (never Open)"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/periods/{id}/unlock"
+    service: "PayrollPeriodService.TransitionAsync (unlock branch)"
+    permission: "Payroll.Period.Unlock"
+    db: PayrollPeriods.UnlockedAtUtc, UnlockReason
+
+  - id: F-PAY-069
+    name: "The generic transition route explicitly Forbids the 'unlock' action name - unlock is reachable ONLY through its own dedicated endpoint/permission"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/periods/{id}/unlock (generic route rejects this actionName)"
+    service: "PayrollPeriodsController.Transition"
+    permission: "Payroll.Period.Manage"
+    db: "n/a"
+
+  - id: F-PAY-070
+    name: "Every period mutation appends an append-only PayrollPeriodHistory row with a JSON snapshot"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "GET /api/payroll/periods/{id}/history"
+    service: "PayrollPeriodService.AddHistory / GetHistoryAsync"
+    permission: "Payroll.Period.Manage"
+    db: PayrollPeriodHistories
+
+  - id: F-PAY-071
+    name: List/filter payroll runs (payrollPeriodId, status, runType) with paging
+    group: Payroll Periods and Runs
+    status: Implemented
+    ui: PayrollPeriodsRunsPage (runs mode)
+    api: "GET /api/payroll/runs"
+    service: "PayrollRunService.GetAsync"
+    permission: "Payroll.Run.View"
+    db: PayrollRuns
+
+  - id: F-PAY-072
+    name: Get a single run by id including its prepared employee population
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "GET /api/payroll/runs/{id}"
+    service: "PayrollRunService.GetByIdAsync"
+    permission: "Payroll.Run.View"
+    db: PayrollRuns, PayrollRunEmployees
+
+  - id: F-PAY-073
+    name: "A run can only be created against a period that exists, is Active, and is not Closed/Locked, else NotFound/Conflict"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/runs"
+    service: "PayrollRunService.CreateAsync"
+    permission: "Payroll.Run.Manage"
+    db: PayrollPeriods, PayrollRuns
+
+  - id: F-PAY-074
+    name: "RunNumber is auto-generated as PR-{fiscalYear}-{periodNumber:D2}-{ordinal:D3}, ordinal scoped per period"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/runs"
+    service: "PayrollRunService.CreateAsync"
+    permission: "Payroll.Run.Manage"
+    db: PayrollRuns.RunNumber
+
+  - id: F-PAY-075
+    name: "Prepare builds the employee population snapshot: eligible = Employee.Status=Active AND DateOfJoining<=periodEnd AND (DateOfLeaving is null OR >=periodStart) AND an active Salary Assignment exists"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/prepare"
+    service: "PayrollRunService.PrepareAsync"
+    permission: "Payroll.Run.Prepare"
+    db: PayrollRunEmployees
+
+  - id: F-PAY-076
+    name: "Prepare requires Draft/Prepared status; re-preparing an already-Prepared run without rebuild=true is Conflict"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/prepare?rebuild="
+    service: "PayrollRunService.PrepareAsync"
+    permission: "Payroll.Run.Prepare"
+    db: PayrollRuns.Status
+
+  - id: F-PAY-077
+    name: Prepare snapshots each employee's DepartmentId/CostCenterId from EmployeeEmploymentHistory as of the period end date
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/prepare"
+    service: "PayrollRunService.PrepareAsync"
+    permission: "Payroll.Run.Prepare"
+    db: PayrollRunEmployees.DepartmentId, CostCenterId
+
+  - id: F-PAY-078
+    name: "Rebuild=true fully replaces the prior PayrollRunEmployees set rather than merging"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/prepare?rebuild=true"
+    service: "PayrollRunService.PrepareAsync"
+    permission: "Payroll.Run.Prepare"
+    db: PayrollRunEmployees
+
+  - id: F-PAY-079
+    name: An ineligible employee is included in the population as Excluded with a specific ExclusionReason (no salary assignment / not active / not employed during the period)
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "GET /api/payroll/runs/{id}/employees"
+    service: "PayrollRunService.PrepareAsync"
+    permission: "Payroll.Run.View"
+    db: PayrollRunEmployees.ExclusionReason
+
+  - id: F-PAY-080
+    name: Get the run's employee population, paged
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "GET /api/payroll/runs/{id}/employees"
+    service: "PayrollRunService.GetEmployeesAsync"
+    permission: "Payroll.Run.View"
+    db: PayrollRunEmployees
+
+  - id: F-PAY-081
+    name: "Declared run transitions: Prepared->Processing->Calculated->Approved->Finalized, plus Draft/Prepared->Cancelled - anything else is Conflict"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/transition?target="
+    service: "PayrollRunService.TransitionAsync -> ValidTransition"
+    permission: "Payroll.Run.Manage"
+    db: PayrollRuns.Status
+
+  - id: F-PAY-082
+    name: "Transitioning to Approved or Finalized invokes PayrollApprovalGuard (maker-checker/self-approval block using the tenant's PayrollControlConfiguration)"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/transition?target=Approved|Finalized"
+    service: "PayrollRunService.TransitionAsync -> PayrollApprovalGuard.ValidateAsync"
+    permission: "Payroll.Run.Manage"
+    db: PayrollControlConfigurations
+
+  - id: F-PAY-083
+    name: Transitioning to Processing stamps LockedAtUtc/LockedByUserId on the run
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/transition?target=Processing"
+    service: "PayrollRunService.TransitionAsync"
+    permission: "Payroll.Run.Manage"
+    db: PayrollRuns.LockedAtUtc
+
+  - id: F-PAY-084
+    name: "Every run mutation appends an append-only PayrollRunHistory row (Created/PopulationGenerated/PopulationRebuilt/Prepared/Approved/Finalized/Cancelled/StatusChanged)"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "GET /api/payroll/runs/{id}/history"
+    service: "PayrollRunService.AddHistory / GetHistoryAsync"
+    permission: "Payroll.Run.ViewHistory"
+    db: PayrollRunHistories
+
+  - id: F-PAY-085
+    name: "Readiness evaluates: MissingPayrollPeriod, LockedPeriod-before-approval (both blocking), NoEligibleEmployees (blocking), MissingSalaryAssignment/MissingSalaryStructure per eligible employee (blocking), and RunNotOpenForCalculation once Finalized/Cancelled (non-blocking warning)"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "GET /api/payroll/runs/{id}/readiness"
+    service: "PayrollReadinessService.CheckAsync"
+    permission: "Payroll.Run.View"
+    db: PayrollRuns, PayrollRunEmployees, EmployeeSalaryAssignments
+
+  - id: F-PAY-086
+    name: "A cross-tenant period/run id (GET/PUT/prepare/transition/employees/history/readiness) is NotFound, not Forbidden"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "GET/POST /api/payroll/periods/{id}, /runs/{id}"
+    service: "PayrollPeriodService.cs, PayrollRunService.cs (TenantId filter)"
+    permission: "Payroll.Period.View / Payroll.Run.View"
+    db: PayrollPeriods, PayrollRuns (TenantId filter)
+
+  - id: F-PAY-087
+    name: The Payroll Operations dashboard aggregates open/locked period counts and prepared/calculated run counts alongside downstream (out-of-module-scope) payslip/bank-advice/journal/statutory-return/retro/final-settlement counts
+    group: Payroll Periods and Runs
+    status: Implemented
+    ui: PayrollOperationsDashboardPage
+    api: "GET /api/payroll/dashboard/operations"
+    service: "PayrollOperationsService.GetOperationsDashboardAsync"
+    permission: "Payroll.Run.View"
+    db: PayrollPeriods, PayrollRuns
+
+  - id: F-PAY-088
+    name: "Configuration health reports 6 categories (Salary, Statutory, Payment, Accounting, Controls, EmployeeReadiness) each Healthy/Warning/Error"
+    group: Payroll Periods and Runs
+    status: Implemented
+    ui: PayrollConfigurationHealthPage
+    api: "GET /api/payroll/configuration-health"
+    service: "PayrollOperationsService.GetConfigurationHealthAsync"
+    permission: "Payroll.Controls.View"
+    db: EmployeeSalaryAssignments, StatutoryConfigurationVersions, EmployeeBankDetails, PayrollAccountingConfigurationVersions, PayrollControlConfigurations
+
+  - id: F-PAY-089
+    name: The Salary and EmployeeReadiness health categories both derive from the SAME active-employee-vs-active-assignment gap count, reported as an Error (not a Warning) when nonzero
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "GET /api/payroll/configuration-health"
+    service: "PayrollOperationsService.SalaryHealthAsync / EmployeeReadinessHealthAsync"
+    permission: "Payroll.Controls.View"
+    db: Employees, EmployeeSalaryAssignments
+
+  - id: F-PAY-090
+    name: Production health rolls the configuration-health issue list into a single Critical/Warning/Healthy status
+    group: Payroll Periods and Runs
+    status: Implemented
+    ui: PayrollProductionHealthPage
+    api: "GET /api/payroll/production-health"
+    service: "PayrollOperationsService.GetProductionHealthAsync"
+    permission: "Payroll.Controls.View"
+    db: "n/a (derived)"
+
+  - id: F-PAY-091
+    name: "Integrity checks report duplicate current PayrollResults per run+employee, duplicate PayrollAdjustment source identities, and journals whose TotalDebit != TotalCredit - all Critical if nonzero"
+    group: Payroll Periods and Runs
+    status: Implemented
+    api: "GET /api/payroll/integrity"
+    service: "PayrollOperationsService.GetIntegrityAsync"
+    permission: "Payroll.Controls.View"
+    db: PayrollResults, PayrollAdjustments, PayrollJournalBatches
+
+  # ═══════════════════════════════ E. CALCULATION ENGINE (EARNINGS/DEDUCTIONS/PRORATION) ═══════════════════════════════
+  - id: F-PAY-092
+    name: "Calculate requires the run to be Prepared (or Calculated with recalculate=true); an already-Calculated run without recalculate is Conflict"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollRuns.Status
+
+  - id: F-PAY-093
+    name: Recalculate is blocked once the run is Approved or Finalized
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/recalculate"
+    service: "PayrollCalculationEngine.CalculateAsync (recalculate=true)"
+    permission: "Payroll.Run.Recalculate"
+    db: PayrollRuns.Status
+
+  - id: F-PAY-094
+    name: "Each calculation attempt gets a fresh CalculationAttemptId and a monotonically-incrementing CalculationVersion; prior IsCurrent results are only superseded on a fully successful attempt"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate, /recalculate"
+    service: "PayrollCalculationEngine.CalculateAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResults.CalculationVersion, IsCurrent
+
+  - id: F-PAY-095
+    name: Recalculation additionally logs RecalculationRequested and RecalculationCompleted history events around the ordinary Started/Completed pair
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/recalculate"
+    service: "PayrollCalculationEngine.CalculateAsync"
+    permission: "Payroll.Run.Recalculate"
+    db: PayrollCalculationHistories
+
+  - id: F-PAY-096
+    name: "A partial-failure calculation attempt leaves the run in Prepared (not stuck in Processing) so the operator can fix data and retry; a fully successful attempt moves it to Calculated"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollRuns.Status
+
+  - id: F-PAY-097
+    name: "Per-employee calculation requires the run-employee snapshot's own EmployeeSalaryAssignmentId/SalaryStructureVersionId to still resolve; a missing/deleted assignment or version is NoSalaryAssignment/NoSalaryStructureVersion"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollCalculationErrors
+
+  - id: F-PAY-098
+    name: "Attendance integration: a missing Attendance period is treated as legacy-compatible (calculation proceeds with no snapshot); an existing-but-not-Closed period is AttendanceNotFinalized; a Closed period with no current snapshot is AttendanceSnapshotMissing"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "AttendancePayrollSnapshotResolver.ResolveAsync"
+    permission: "Payroll.Run.Calculate"
+    db: AttendancePeriods, PayrollAttendanceSnapshots
+
+  - id: F-PAY-099
+    name: An Overtime snapshot resolution failure surfaces as a per-employee CalculationFailed error rather than aborting the whole run
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync (overtime branch)"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollCalculationErrors
+
+  - id: F-PAY-100
+    name: "Off-Cycle/Supplementary runs skip the full structure walk entirely and calculate ONLY adjustments plus statutory deductions (CalculateAdjustmentOnlyAsync)"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/off-cycle-runs/{id}/prepare, then .../process"
+    service: "PayrollCalculationEngine.CalculateAdjustmentOnlyAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResults
+
+  - id: F-PAY-101
+    name: More than one overlapping Active salary assignment for the same employee/period is a CalculationFailed error requiring segmented calculation, not a silent pick
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync"
+    permission: "Payroll.Run.Calculate"
+    db: EmployeeSalaryAssignments
+
+  - id: F-PAY-102
+    name: A structure version with zero active components is a NoSalaryStructureVersion error
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync"
+    permission: "Payroll.Run.Calculate"
+    db: SalaryStructureComponents
+
+  - id: F-PAY-103
+    name: "CalculateValue applies the same FixedAmount/Percentage/Formula/Manual matrix as structure validation, with an active EmployeeSalaryComponent override taking precedence over the structure default (Source=EmployeeOverride vs Structure)"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateValue"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResultComponents.CalculationSource
+
+  - id: F-PAY-104
+    name: "A Percentage component's base must already have been calculated earlier in sequence order, else MissingBaseComponent"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateValue"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResultComponents
+
+  - id: F-PAY-105
+    name: "Any computed component value below zero is rejected unconditionally as InvalidOverride ('Negative component values are not supported by the generic engine') - there is no supported way for a structure component itself to net negative"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateValue"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollCalculationErrors
+
+  - id: F-PAY-106
+    name: "Proration: a proratable component whose payable window (assignment/DOJ/DOL-truncated) is shorter than the full period is scaled by payableDays/totalDays; a component whose calculation already referenced an upstream prorated base is NOT prorated a second time"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateValue"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResultComponents.IsProrated, ProrationFactor
+
+  - id: F-PAY-107
+    name: MinimumAmount/MaximumAmount clamps are applied AFTER proration, not before
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateValue"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResultComponents
+
+  - id: F-PAY-108
+    name: "Approved overtime is added as a synthetic OVERTIME earning using a weighted-minutes formula (Normal/WeekOff/Holiday multipliers) against the resolved hourly-rate base, only when a monthly work-minutes basis is present"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync (overtime add-on)"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResultComponents (ComponentCode=OVERTIME)
+
+  - id: F-PAY-109
+    name: "Gross/Deductions/Net and every component amount are rounded via PayrollRoundingPolicy.RoundMoney (2 decimal places, MidpointRounding.AwayFromZero, not banker's rounding) at every accumulation step"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollRoundingPolicy.RoundMoney"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResults
+
+  - id: F-PAY-110
+    name: "Negative net pay after the structure walk is a NegativeNetPay error; it is checked AGAIN after statutory deductions are layered in, since statutory alone can also push net below zero"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollCalculationErrors
+
+  - id: F-PAY-111
+    name: "Approved/Scheduled adjustments targeting this run (or the run's period with no specific run) are applied as synthetic components; a deducting adjustment that would exceed available net is rejected with a per-adjustment message naming the AdjustmentNumber"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.ApplyAdjustmentsAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollAdjustments, PayrollResultComponents
+
+  - id: F-PAY-112
+    name: "Applied adjustment components are persisted as PayrollAdjustmentApplication rows and the source PayrollAdjustment's Status becomes Applied/PartiallyApplied - but ONLY once the whole employee's calculation succeeds (a rolled-back attempt applies nothing)"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.PersistAdjustmentApplicationsAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollAdjustmentApplications, PayrollAdjustmentHistories
+
+  - id: F-PAY-113
+    name: "Statutory calculation (StatutoryPayrollService.CalculateAsync) layers its EmployeeAmount into TotalDeductions and EmployerAmount into EmployerContributions, recomputes NetPay, and a StatutoryCalculationFailed error aborts just that employee"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync -> StatutoryPayrollService.CalculateAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollStatutoryResults
+
+  - id: F-PAY-114
+    name: "Loan recovery integration: DeferInstallment skips silently; RecoverFullOrFail blocks the whole employee's calculation if the due installment exceeds available net pay; every other policy clamps the recovered amount down to available net pay"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync (loanRecovery branch)"
+    permission: "Payroll.Run.Calculate"
+    db: LoanInstallments
+
+  - id: F-PAY-115
+    name: "Loan recoveries persist LoanRepayment rows and update LoanInstallment/EmployeeLoan outstanding balances ONLY after the whole run's calculation attempt fully succeeds (a second, post-loop persistence pass)"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.PersistLoanRecoveriesAsync"
+    permission: "Payroll.Run.Calculate"
+    db: LoanRepayments, LoanInstallments, EmployeeLoans
+
+  - id: F-PAY-116
+    name: "Reimbursement recoveries add taxable/non-taxable earning components and INCREASE Gross Earnings and Net Pay - unlike loan recoveries and deducting adjustments, this money flows toward the employee"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync (reimbursementResolver branch)"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResultComponents (ComponentType=Reimbursement)
+
+  - id: F-PAY-117
+    name: "Reimbursement settlements are persisted as ReimbursementSettlement rows (grouped per claim line) and the source claim's SettledAmount/Status are updated, ONLY on full calculation success"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.PersistReimbursementSettlementsAsync"
+    permission: "Payroll.Run.Calculate"
+    db: ReimbursementSettlements, ReimbursementClaims
+
+  - id: F-PAY-118
+    name: "GetResults/GetResult/GetErrors read paths are scoped to IsCurrent=true rows only, so a superseded calculation attempt's stale results/errors never surface"
+    group: Calculation Engine
+    status: Implemented
+    api: "GET /api/payroll/runs/{id}/results, /results/{employeeId}, /calculation-errors"
+    service: "PayrollCalculationService.GetResultsAsync / GetResultAsync / GetErrorsAsync"
+    permission: "Payroll.Run.ViewResults"
+    db: PayrollResults.IsCurrent, PayrollCalculationErrors.IsCurrent
+
+  - id: F-PAY-119
+    name: "The Formula calculation type supports +, -, *, /, parentheses, numeric literals, and named component-code references resolved against already-calculated components; division by zero or an unresolved token is InvalidFormula"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollFormula.TryEvaluate"
+    permission: "Payroll.Run.Calculate"
+    db: SalaryStructureComponents.Formula
+
+  - id: F-PAY-120
+    name: "A cross-tenant run id on calculate/recalculate/results/errors is NotFound"
+    group: Calculation Engine
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateAsync (TenantId filter)"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollRuns (TenantId filter)
+
+  # ═══════════════════════════════ F. RECALCULATION, OFF-CYCLE, ADJUSTMENTS, REVERSALS ═══════════════════════════════
+  - id: F-PAY-121
+    name: "Adjustment reason codes: list, and create requiring unique Code+Name per tenant"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "GET/POST /api/payroll/adjustments/reasons"
+    service: "PayrollAdjustmentService.GetReasonsAsync / CreateReasonAsync"
+    permission: "Payroll.Adjustments.View / Create"
+    db: PayrollAdjustmentReasons
+
+  - id: F-PAY-122
+    name: List/filter payroll adjustments (employeeId, status, adjustmentType, direction) with paging
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    ui: PayrollAdjustmentsPage
+    api: "GET /api/payroll/adjustments"
+    service: "PayrollAdjustmentService.GetAsync"
+    permission: "Payroll.Adjustments.View"
+    db: PayrollAdjustments
+
+  - id: F-PAY-123
+    name: "Create requires Amount>0, a non-blank Description, and a non-default EffectiveDate; Employee must exist, and an active ReasonCodeId if supplied"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/adjustments"
+    service: "PayrollAdjustmentService.CreateAsync"
+    permission: "Payroll.Adjustments.Create"
+    db: PayrollAdjustments
+
+  - id: F-PAY-124
+    name: "Exactly one adjustment may exist per (SourceType, SourceId) pair - a duplicate is Conflict"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/adjustments"
+    service: "PayrollAdjustmentService.CreateAsync"
+    permission: "Payroll.Adjustments.Create"
+    db: PayrollAdjustments (SourceType, SourceId)
+
+  - id: F-PAY-125
+    name: "AdjustmentNumber is allocated from a per-tenant-per-year sequence row (PADJ/{year}/{seq:D6}) that retries up to 8 times on a concurrency/insert race rather than relying on provider-specific SQL"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/adjustments"
+    service: "PayrollAdjustmentService.NextNumberAsync"
+    permission: "Payroll.Adjustments.Create"
+    db: PayrollAdjustmentNumberSequences
+
+  - id: F-PAY-126
+    name: "Creating a correction adjustment against an OriginalPayrollResultId captures an IMMUTABLE PayrollCorrectionSnapshot (original vs corrected gross/deduction/net) at creation time - it is never recomputed afterward"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/adjustments"
+    service: "PayrollAdjustmentService.CreateAsync"
+    permission: "Payroll.Adjustments.Create"
+    db: PayrollCorrectionSnapshots
+
+  - id: F-PAY-127
+    name: "Submit moves Draft -> Submitted; Approve moves Submitted -> Approved and invokes PayrollApprovalGuard's self-approval block; Reject moves Submitted -> Rejected and requires a reason"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/adjustments/{id}/submit, /approve, /reject"
+    service: "PayrollAdjustmentService.SubmitAsync / ApproveAsync / RejectAsync"
+    permission: "Payroll.Adjustments.Submit / Approve"
+    db: PayrollAdjustments.Status
+
+  - id: F-PAY-128
+    name: "Cancel is allowed from Draft OR Submitted (uniquely permissive among the transitions) and requires a reason"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/adjustments/{id}/cancel"
+    service: "PayrollAdjustmentService.CancelAsync"
+    permission: "Payroll.Adjustments.Cancel"
+    db: PayrollAdjustments.Status
+
+  - id: F-PAY-129
+    name: "History is append-only across Created/CorrectionSnapshotCaptured/Submitted/Approved/Rejected/Cancelled/Applied/PartiallyApplied/Scheduled events"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "GET /api/payroll/adjustments/{id}/history"
+    service: "PayrollAdjustmentService.AddHistory / GetHistoryAsync"
+    permission: "Payroll.Adjustments.ViewHistory"
+    db: PayrollAdjustmentHistories
+
+  - id: F-PAY-130
+    name: "Self-service /api/me/payroll-adjustments* is strictly scoped to the caller's own linked EmployeeId - detail/history routes re-check ownership and return NotFound (not Forbidden) for another employee's adjustment"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    ui: MyPayrollAdjustmentsPage
+    api: "GET /api/me/payroll-adjustments, /{id}, /{id}/history"
+    service: "PayrollAdjustmentsController.My / MyDetail / MyHistory"
+    permission: "Payroll.Adjustments.View"
+    db: AccountEmployeeCurrentLinks, PayrollAdjustments
+
+  - id: F-PAY-131
+    name: An unlinked account calling the self-service adjustments routes gets Unauthorized, never another employee's data
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "GET /api/me/payroll-adjustments"
+    service: "PayrollAdjustmentsController.My"
+    permission: "Payroll.Adjustments.View"
+    db: AccountEmployeeCurrentLinks
+
+  - id: F-PAY-132
+    name: "Off-cycle run creation requires RunType to be OffCycle or Supplementary, else Invalid"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/off-cycle-runs"
+    service: "PayrollAdjustmentService.CreateOffCycleRunAsync"
+    permission: "Payroll.OffCycle.Create"
+    db: PayrollRuns
+
+  - id: F-PAY-133
+    name: "Selecting existing adjustments into a new off-cycle run requires every one to be Approved and not already scheduled to a run, atomically within one DB transaction; a mid-flight race rolls the whole run-creation back"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/off-cycle-runs"
+    service: "PayrollAdjustmentService.CreateOffCycleRunAsync"
+    permission: "Payroll.OffCycle.Create"
+    db: PayrollAdjustments.TargetPayrollRunId
+
+  - id: F-PAY-134
+    name: "Off-cycle Preview is a plain alias for the ordinary GetById read - it does not compute or render anything different from the run's current stored state"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/off-cycle-runs/{id}/preview"
+    service: "PayrollAdjustmentService.PreviewOffCycleRunAsync -> IPayrollRunService.GetByIdAsync"
+    permission: "Payroll.OffCycle.View"
+    db: PayrollRuns
+
+  - id: F-PAY-135
+    name: Off-cycle Prepare/Approve are thin aliases for the ordinary run Prepare/Transition(Approved) operations
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/off-cycle-runs/{id}/prepare, /approve"
+    service: "PayrollAdjustmentService.PrepareOffCycleRunAsync / ApproveOffCycleRunAsync"
+    permission: "Payroll.OffCycle.Create / Approve"
+    db: PayrollRuns
+
+  - id: F-PAY-136
+    name: "Process orchestrates the full Draft->Prepare->Calculate->Approve->Finalize sequence in one call, short-circuiting from whatever stage the run is already at"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/off-cycle-runs/{id}/process"
+    service: "PayrollAdjustmentService.ProcessOffCycleRunAsync"
+    permission: "Payroll.OffCycle.Process"
+    db: PayrollRuns, PayrollResults
+
+  - id: F-PAY-137
+    name: "Off-cycle Cancel requires a reason, is only allowed from Draft/Prepared, and un-schedules every adjustment that had been targeted to it (TargetPayrollRunId cleared, Status reverts to Approved)"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/off-cycle-runs/{id}/cancel"
+    service: "PayrollAdjustmentService.CancelOffCycleRunAsync"
+    permission: "Payroll.OffCycle.Cancel"
+    db: PayrollAdjustments.TargetPayrollRunId, Status
+
+  - id: F-PAY-138
+    name: "A reversal may only be requested against a Finalized original run, requires a non-blank reason, and only ONE reversal may exist per original run, regardless of whether OriginalPayrollResultId narrows it to a single employee"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/reversals"
+    service: "PayrollAdjustmentService.RequestReversalAsync"
+    permission: "Payroll.Adjustments.Reverse"
+    db: PayrollReversals
+
+  - id: F-PAY-139
+    name: Reversal Approve requires PayrollApprovalGuard's self-approval check and only proceeds from Requested
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/reversals/{id}/approve"
+    service: "PayrollAdjustmentService.ApproveReversalAsync"
+    permission: "Payroll.Adjustments.Reverse"
+    db: PayrollReversals.Status
+
+  - id: F-PAY-140
+    name: "Processing an Approved reversal creates a new Off-Cycle run and one negating PayrollAdjustment per non-zero original result component (direction flipped), each already Scheduled - skipping the ordinary Draft/Submit/Approve pipeline entirely"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/reversals/{id}/process"
+    service: "PayrollAdjustmentService.ProcessReversalAsync"
+    permission: "Payroll.Adjustments.Reverse"
+    db: PayrollRuns, PayrollAdjustments (Status=Scheduled)
+
+  - id: F-PAY-141
+    name: The generated reversal RunNumber is truncated to 100 characters if the composed REV-{original}-{guid} string would exceed it
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "POST /api/payroll/reversals/{id}/process"
+    service: "PayrollAdjustmentService.ProcessReversalAsync"
+    permission: "Payroll.Adjustments.Reverse"
+    db: PayrollRuns.RunNumber
+
+  - id: F-PAY-142
+    name: "A cross-tenant adjustment/off-cycle-run/reversal id is NotFound"
+    group: Recalculation Off-Cycle Adjustments Reversals
+    status: Implemented
+    api: "GET /api/payroll/adjustments/{id}"
+    service: "PayrollAdjustmentService.cs (TenantId filter)"
+    permission: "Payroll.Adjustments.View"
+    db: PayrollAdjustments (TenantId filter)
+
+  # ═══════════════════════════════ G. PAYROLL RESULTS/ERRORS AND OUTPUTS (PAYSLIPS/REGISTER) ═══════════════════════════════
+  - id: F-PAY-143
+    name: "Payslip generation requires the run to be Calculated, Approved, or Finalized"
+    group: Payroll Results and Outputs
+    status: Implemented
+    api: "POST /api/payroll/runs/{runId}/payslips/generate"
+    service: "PayrollOutputService.GenerateAsync"
+    permission: "Payroll.Payslip.Generate"
+    db: PayrollRuns.Status
+
+  - id: F-PAY-144
+    name: "Generate processes only IsCurrent+Calculated results and skips (no-op) any employee whose latest payslip is already Published"
+    group: Payroll Results and Outputs
+    status: Implemented
+    api: "POST /api/payroll/runs/{runId}/payslips/generate"
+    service: "PayrollOutputService.GenerateAsync"
+    permission: "Payroll.Payslip.Generate"
+    db: Payslips.Status
+
+  - id: F-PAY-145
+    name: Regenerating over a not-yet-published payslip supersedes the prior Generated row (Status=Superseded) and appends a Superseded history event
+    group: Payroll Results and Outputs
+    status: Implemented
+    api: "POST /api/payroll/runs/{runId}/payslips/generate"
+    service: "PayrollOutputService.GenerateAsync"
+    permission: "Payroll.Payslip.Generate"
+    db: PayslipHistories
+
+  - id: F-PAY-146
+    name: "PayslipNumber is PS/{yyyyMM}/{employeeId:N}/{version}, with Version incrementing per employee per run on each regeneration"
+    group: Payroll Results and Outputs
+    status: Implemented
+    api: "POST /api/payroll/runs/{runId}/payslips/generate"
+    service: "PayrollOutputService.GenerateAsync"
+    permission: "Payroll.Payslip.Generate"
+    db: Payslips.PayslipNumber, Version
+
+  - id: F-PAY-147
+    name: "Payslip lines include every structure/adjustment/overtime/reimbursement PayrollResultComponent AND separate statutory lines (DisplayGroup='Statutory Deductions', IsStatutory=true) sourced from PayrollStatutoryResults"
+    group: Payroll Results and Outputs
+    status: Implemented
+    api: "GET /api/payroll/payslips/{id}"
+    service: "PayrollOutputService.GenerateAsync"
+    permission: "Payroll.Payslip.ViewAll"
+    db: PayslipLines
+
+  - id: F-PAY-148
+    name: "Publish requires the run to be Approved or Finalized, and bulk-moves every Generated payslip for the run to Published"
+    group: Payroll Results and Outputs
+    status: Implemented
+    api: "POST /api/payroll/runs/{runId}/payslips/publish"
+    service: "PayrollOutputService.PublishAsync"
+    permission: "Payroll.Payslip.Publish"
+    db: Payslips.Status
+
+  - id: F-PAY-149
+    name: "Get/GetRunPayslips/GetDocument each accept a publishedOnly flag - the self-service (/api/me/payslips) surface always forces it true"
+    group: Payroll Results and Outputs
+    status: Implemented
+    api: "GET /api/payroll/payslips/{id}, /runs/{runId}/payslips, /payslips/{id}/document"
+    service: "PayrollOutputService.GetAsync / GetRunPayslipsAsync / GetDocumentAsync"
+    permission: "Payroll.Payslip.ViewAll"
+    db: Payslips
+
+  - id: F-PAY-150
+    name: "Self-service GetOwnAsync resolves the caller's employee identity and returns only Published payslips for that employee"
+    group: Payroll Results and Outputs
+    status: Implemented
+    ui: MyPayslipsPage
+    api: "GET /api/me/payslips"
+    service: "PayrollOutputService.GetOwnAsync"
+    permission: "Payroll.Payslip.ViewOwn"
+    db: Payslips (Status=Published, EmployeeId=caller)
+
+  - id: F-PAY-151
+    name: "GetDocument renders a self-contained HTML payslip with every employee/component text field HTML-encoded"
+    group: Payroll Results and Outputs
+    status: Implemented
+    api: "GET /api/payroll/payslips/{id}/document, /api/me/payslips/{id}/document"
+    service: "PayrollOutputService.RenderHtml"
+    permission: "Payroll.Payslip.ViewAll / ViewOwn"
+    db: "n/a (rendered)"
+
+  - id: F-PAY-152
+    name: "The payroll register is paged, searchable by employee code/first/last name, and scoped to IsCurrent results only"
+    group: Payroll Results and Outputs
+    status: Implemented
+    ui: PayrollPeriodsRunsPage (register view)
+    api: "GET /api/payroll/runs/{runId}/register"
+    service: "PayrollOutputService.GetRegisterAsync"
+    permission: "Payroll.Register.View"
+    db: PayrollResults
+
+  - id: F-PAY-153
+    name: Register export produces a CSV capped at 50000 rows with correct comma/quote/newline escaping
+    group: Payroll Results and Outputs
+    status: Implemented
+    api: "GET /api/payroll/runs/{runId}/register/export"
+    service: "PayrollOutputService.ExportRegisterAsync"
+    permission: "Payroll.Register.Export"
+    db: PayrollResults
+
+  - id: F-PAY-154
+    name: "Payroll.Payslip.ViewHistory is declared and seeded (HRAdmin/SuperAdmin/TenantAdmin) but no payslip-history endpoint or service method exists anywhere in the codebase - a dead permission"
+    group: Payroll Results and Outputs
+    status: Implemented
+    api: "n/a (no such endpoint exists)"
+    service: "PayrollOutputService.cs (absence of a GetHistoryAsync)"
+    permission: "Payroll.Payslip.ViewHistory"
+    db: "n/a"
+
+  - id: F-PAY-155
+    name: A cross-tenant payslip/run id on any output endpoint is NotFound
+    group: Payroll Results and Outputs
+    status: Implemented
+    api: "GET /api/payroll/payslips/{id}"
+    service: "PayrollOutputService.cs (TenantId filter)"
+    permission: "Payroll.Payslip.ViewAll"
+    db: Payslips (TenantId filter)
+
+  # ═══════════════════════════════ H. REIMBURSEMENTS AND CLAIMS ═══════════════════════════════
+  - id: F-PAY-156
+    name: "Reimbursement categories: list, create (unique Code+Name+CurrencyCode per tenant), update"
+    group: Reimbursements and Claims
+    status: Implemented
+    ui: ReimbursementsPage
+    api: "GET/POST/PUT /api/payroll/reimbursement-categories"
+    service: "ReimbursementService.GetCategoriesAsync / CreateCategoryAsync / UpdateCategoryAsync"
+    permission: "Payroll.Reimbursements.View / ManageCategories"
+    db: ReimbursementCategories
+
+  - id: F-PAY-157
+    name: A category's policy versions may not have overlapping active date ranges
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursement-categories/{id}/versions"
+    service: "ReimbursementService.CreatePolicyVersionAsync"
+    permission: "Payroll.Reimbursements.ManageCategories"
+    db: ReimbursementPolicyVersions
+
+  - id: F-PAY-158
+    name: List/filter claims (employeeId, categoryId, status, settlementMethod, date range) and get a single claim/history
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "GET /api/payroll/reimbursements, /{id}, /{id}/history"
+    service: "ReimbursementService.GetClaimsAsync / GetClaimAsync / GetHistoryAsync"
+    permission: "Payroll.Reimbursements.View / ViewHistory"
+    db: ReimbursementClaims
+
+  - id: F-PAY-159
+    name: "Create requires at least one line, each with a description and a positive claimed amount, and ExpenseToDate>=ExpenseFromDate"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements"
+    service: "ReimbursementService.CreateClaimAsync"
+    permission: "Payroll.Reimbursements.Request"
+    db: ReimbursementClaims
+
+  - id: F-PAY-160
+    name: "Every line's category must be active and tenant-scoped; a category not flagged AllowsMultipleLines rejects a second line in the same category; every line's category currency must match the claim's CurrencyCode"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements"
+    service: "ReimbursementService.CreateClaimAsync"
+    permission: "Payroll.Reimbursements.Request"
+    db: ReimbursementCategories
+
+  - id: F-PAY-161
+    name: "ClaimNumber is CLM/{yyyy}/{seq:000000}, computed by scanning the max existing suffix for the tenant/year rather than a dedicated sequence row - unlike PayrollAdjustment's dedicated, retry-safe PayrollAdjustmentNumberSequence"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements"
+    service: "ReimbursementService.NextClaimNumberAsync"
+    permission: "Payroll.Reimbursements.Request"
+    db: ReimbursementClaims.ClaimNumber
+
+  - id: F-PAY-162
+    name: "ReconcileClaim recomputes claim-level TotalClaimedAmount/EligibleAmount/ApprovedAmount/TaxableAmount/NonTaxableAmount from the current line set on every mutation"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST/PUT /api/payroll/reimbursements"
+    service: "ReimbursementService.ReconcileClaim"
+    permission: "Payroll.Reimbursements.Request"
+    db: ReimbursementClaims
+
+  - id: F-PAY-163
+    name: Update is Draft-only and fully replaces the line set
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "PUT /api/payroll/reimbursements/{id}"
+    service: "ReimbursementService.UpdateClaimAsync"
+    permission: "Payroll.Reimbursements.Request"
+    db: ReimbursementClaimLines
+
+  - id: F-PAY-164
+    name: "Submit resolves an active policy per line's ExpenseDate (else Invalid), computes EligibleAmount from the policy's PerTransactionLimit/MaxClaimAmount/MinClaimAmount, and requires every receipt-required line to already have an uploaded receipt"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements/{id}/submit"
+    service: "ReimbursementService.SubmitAsync"
+    permission: "Payroll.Reimbursements.Request"
+    db: ReimbursementClaimLines.EligibleAmount, ReceiptStatus
+
+  - id: F-PAY-165
+    name: Submit requires the claiming employee to still be Active
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements/{id}/submit"
+    service: "ReimbursementService.SubmitAsync"
+    permission: "Payroll.Reimbursements.Request"
+    db: Employees.Status
+
+  - id: F-PAY-166
+    name: "Approve (maker-checker) only fires from Submitted/UnderReview; each line's ApprovedAmount is bounded 0..EligibleAmount, splits Taxable/NonTaxable per the policy's TaxTreatment (or an explicit override), and the claim's overall status is derived (Rejected/PartiallyApproved/promoted straight to ReadyForSettlement)"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements/{id}/approve"
+    service: "ReimbursementService.ApproveAsync"
+    permission: "Payroll.Reimbursements.Approve"
+    db: ReimbursementClaimLines.ApprovedAmount, TaxableAmount
+
+  - id: F-PAY-167
+    name: "Approve enforces the policy's Monthly/Yearly limit across ALL the employee's other non-rejected/non-cancelled claims in the same category - exceeding it is Conflict"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements/{id}/approve"
+    service: "ReimbursementService.LimitExceededAsync"
+    permission: "Payroll.Reimbursements.Approve"
+    db: ReimbursementClaimLines
+
+  - id: F-PAY-168
+    name: Reject requires a reason and only fires from Submitted/UnderReview
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements/{id}/reject"
+    service: "ReimbursementService.RejectAsync"
+    permission: "Payroll.Reimbursements.Approve"
+    db: ReimbursementClaims.Status
+
+  - id: F-PAY-169
+    name: "Manual settlement only fires from ReadyForSettlement/PartiallyApproved, requires 0<amount<=remaining and a Reference, and distributes across lines in id order with each line's own taxable/non-taxable split preserved"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements/{id}/settle-manually"
+    service: "ReimbursementService.SettleManuallyAsync"
+    permission: "Payroll.Reimbursements.Settle"
+    db: ReimbursementSettlements
+
+  - id: F-PAY-170
+    name: A claim becomes Settled once its full ApprovedAmount has been covered by settlements (manual, payroll, or final-settlement combined)
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements/{id}/settle-manually"
+    service: "ReimbursementService.SettleManuallyAsync"
+    permission: "Payroll.Reimbursements.Settle"
+    db: ReimbursementClaims.Status
+
+  - id: F-PAY-171
+    name: Cancel is blocked once Settled or already Cancelled, and requires a reason
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements/{id}/cancel"
+    service: "ReimbursementService.CancelAsync"
+    permission: "Payroll.Reimbursements.Cancel"
+    db: ReimbursementClaims.Status
+
+  - id: F-PAY-172
+    name: "Attachment metadata (filename/contentType/storageReference/non-negative size) is validated, and attaching to a specific line flips that line's ReceiptStatus to Uploaded"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "POST /api/payroll/reimbursements/{id}/attachments"
+    service: "ReimbursementService.AddAttachmentAsync"
+    permission: "Payroll.Reimbursements.Request"
+    db: ReimbursementAttachments, ReimbursementClaimLines.ReceiptStatus
+
+  - id: F-PAY-173
+    name: The reimbursement register and its CSV export are paged and filterable by employee/status/category/date-range
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "GET /api/payroll/reimbursements/register, /register/export.csv"
+    service: "ReimbursementService.GetRegisterAsync"
+    permission: "Payroll.Reimbursements.View"
+    db: ReimbursementClaims
+
+  - id: F-PAY-174
+    name: "GetPayrollRecoveriesAsync (feeding the Calculation Engine) returns only ReadyForSettlement claims with SettlementMethod=Payroll and ExpenseDate<=asOf, netting out any amount already settled via prior ReimbursementSettlement rows"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "n/a (internal - PayrollCalculationEngine consumer)"
+    service: "ReimbursementService.GetPayrollRecoveriesAsync"
+    permission: "n/a"
+    db: ReimbursementClaimLines, ReimbursementSettlements
+
+  - id: F-PAY-175
+    name: "RecordPayrollSettlementAsync is idempotency-guarded per (claimLineId, payrollResultId), rejects an amount exceeding the remaining approved balance, and requires the claim's SettlementMethod to be Payroll"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "n/a (internal - PayrollCalculationEngine consumer)"
+    service: "ReimbursementService.RecordPayrollSettlementAsync"
+    permission: "n/a"
+    db: ReimbursementSettlements
+
+  - id: F-PAY-176
+    name: "ReimbursementEligibilityService.EvaluateAsync is a separate, advisory-only eligibility check - an inactive employee, an inactive category, or no active policy each return a structured ineligible result rather than an error status"
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "n/a (service-level; no dedicated controller route was found)"
+    service: "ReimbursementEligibilityService.EvaluateAsync"
+    permission: "n/a"
+    db: Employees, ReimbursementCategories, ReimbursementPolicyVersions
+
+  - id: F-PAY-177
+    name: "Self-service /api/me/reimbursements* re-checks ownership (EmployeeId match) on detail/update/submit/attachment/history, returning NotFound for another employee's claim"
+    group: Reimbursements and Claims
+    status: Implemented
+    ui: MyReimbursementsPage
+    api: "GET/POST/PUT /api/me/reimbursements, /{id}, /{id}/submit, /{id}/attachments, /{id}/history"
+    service: "ReimbursementsController.MyClaim / MyUpdate / MySubmit / MyAttachment / MyHistory"
+    permission: "Payroll.Reimbursements.Request"
+    db: AccountEmployeeCurrentLinks, ReimbursementClaims
+
+  - id: F-PAY-178
+    name: A cross-tenant category/claim id is NotFound
+    group: Reimbursements and Claims
+    status: Implemented
+    api: "GET /api/payroll/reimbursements/{id}"
+    service: "ReimbursementService.cs (TenantId filter)"
+    permission: "Payroll.Reimbursements.View"
+    db: ReimbursementClaims (TenantId filter)
+
+  # ═══════════════════════════════ I. PAYROLL SETTLEMENT (RETRO CASES + FINAL SETTLEMENT) ═══════════════════════════════
+  # NOTE: PayrollRetroSettlementService's Final Settlement half is the SAME service qa/09-separation's
+  # Separation_Settlement sheet already exercised for the separation-triggered handoff (CR-152/CR-155/CR-157
+  # there). This group does not re-litigate that coverage; it documents the RETRO-CASE half (never covered by
+  # Separation) and the Payroll-perspective generation specifics (loan/reimbursement/variable-pay/adjustment
+  # line auto-generation), cross-referencing the already-established Final Settlement findings by id.
+  - id: F-PAY-179
+    name: "CreateRetroCase requires EffectiveTo>=EffectiveFrom and an existing tenant employee"
+    group: Payroll Settlement
+    status: Implemented
+    ui: PayrollRetroPage
+    api: "POST /api/payroll/retro/cases"
+    service: "PayrollRetroSettlementService.CreateRetroCaseAsync"
+    permission: "Payroll.Retro.Evaluate"
+    db: PayrollRetroCases
+
+  - id: F-PAY-180
+    name: "EvaluateRetro snapshots every current PayrollResult overlapping the case's effective window into PayrollRetroResults/PayrollRetroComponents"
+    group: Payroll Settlement
+    status: Implemented
+    api: "POST /api/payroll/retro/cases/{id}/evaluate"
+    service: "PayrollRetroSettlementService.EvaluateRetroAsync"
+    permission: "Payroll.Retro.Evaluate"
+    db: PayrollRetroResults, PayrollRetroComponents
+
+  - id: F-PAY-181
+    name: "CONFIRMED CODE-LEVEL DEFECT: EvaluateRetroAsync hardcodes every snapshot's CorrectedGross/CorrectedDeductions/CorrectedNet EQUAL to the original amount with GrossDifference/DeductionDifference/NetDifference all fixed at 0 - it never recalculates anything. Because Status only becomes Evaluated when at least one result has a nonzero NetDifference, and every row's NetDifference is unconditionally 0, a retro case can NEVER reach Evaluated - it always lands on NoImpact, even when a real, intended correction exists"
+    group: Payroll Settlement
+    status: Implemented (structurally unreachable outcome)
+    api: "POST /api/payroll/retro/cases/{id}/evaluate"
+    service: "PayrollRetroSettlementService.EvaluateRetroAsync"
+    permission: "Payroll.Retro.Evaluate"
+    db: PayrollRetroResults.NetDifference
+
+  - id: F-PAY-182
+    name: "ApproveRetro is consequently unreachable through ordinary use, since it requires Status=Evaluated (CR-181's finding) and invokes the approval guard's self-approval block"
+    group: Payroll Settlement
+    status: Implemented (unreachable precondition)
+    api: "POST /api/payroll/retro/cases/{id}/approve"
+    service: "PayrollRetroSettlementService.ApproveRetroAsync"
+    permission: "Payroll.Retro.Approve"
+    db: PayrollRetroCases.Status
+
+  - id: F-PAY-183
+    name: "ApplyRetro requires Status=Approved and a target run in Draft/Prepared; each nonzero-difference component becomes a pre-Scheduled ArrearEarning/ArrearDeduction PayrollAdjustment"
+    group: Payroll Settlement
+    status: Implemented (unreachable precondition, same root cause as CR-181)
+    api: "POST /api/payroll/retro/cases/{id}/apply/{targetPayrollRunId}"
+    service: "PayrollRetroSettlementService.ApplyRetroAsync"
+    permission: "Payroll.Retro.Apply"
+    db: PayrollAdjustments (AdjustmentType=ArrearEarning/ArrearDeduction)
+
+  - id: F-PAY-184
+    name: "CreateSettlement (Final Settlement) requires LastWorkingDate<=SeparationDate<=SettlementDate, and only one non-Cancelled settlement may exist per employee/SeparationDate"
+    group: Payroll Settlement
+    status: Implemented
+    ui: FinalSettlementPage
+    api: "POST /api/payroll/final-settlements"
+    service: "PayrollRetroSettlementService.CreateSettlementAsync"
+    permission: "Payroll.FinalSettlement.Manage"
+    db: FinalSettlementCases
+
+  - id: F-PAY-185
+    name: AddSettlementLine is only allowed while Draft/Calculated and auto-assigns a sequential Sequence number
+    group: Payroll Settlement
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/lines"
+    service: "PayrollRetroSettlementService.AddSettlementLineAsync"
+    permission: "Payroll.FinalSettlement.Manage"
+    db: FinalSettlementLines
+
+  - id: F-PAY-186
+    name: "CalculateSettlement auto-generates, once each (idempotent by SourceType+SourceId): a Recovery line per active outstanding loan, a Reimbursement line per ReadyForSettlement claim line whose SettlementMethod=FinalSettlement, a Bonus line per eligible VariablePayAward per its FinalSettlementTreatment, and a Recovery/Other line per outstanding FinalSettlement-method PayrollAdjustment"
+    group: Payroll Settlement
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/calculate"
+    service: "PayrollRetroSettlementService.CalculateSettlementAsync"
+    permission: "Payroll.FinalSettlement.Calculate"
+    db: FinalSettlementLines
+
+  - id: F-PAY-187
+    name: "GrossPayable/TotalDeductions/NetSettlement are fully recomputed from ALL lines (manual + generated) on every Calculate call, not just the newly-generated ones"
+    group: Payroll Settlement
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/calculate"
+    service: "PayrollRetroSettlementService.CalculateSettlementAsync"
+    permission: "Payroll.FinalSettlement.Calculate"
+    db: FinalSettlementCases.GrossPayable, NetSettlement
+
+  - id: F-PAY-188
+    name: "Approve requires Calculated status and the approval guard's self-approval check; Finalize requires Approved and rejects a negative NetSettlement (re-confirms qa/09-separation's CR-157 - the SAME check, on the SAME shared service, from the Payroll module's own perspective)"
+    group: Payroll Settlement
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/approve, /finalize"
+    service: "PayrollRetroSettlementService.ApproveSettlementAsync / FinalizeSettlementAsync"
+    permission: "Payroll.FinalSettlement.Approve / Finalize"
+    db: FinalSettlementCases.Status
+
+  - id: F-PAY-189
+    name: "Finalize is the ONLY point where the sub-ledger side-effects actually post: LoanRepayment rows (idempotent per settlement id), ReimbursementSettlement rows (SettlementType=FinalSettlement, idempotent per line+settlement), VariablePaySettlement rows, and PayrollAdjustmentApplication rows are all created here, never at Calculate time"
+    group: Payroll Settlement
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/finalize"
+    service: "PayrollRetroSettlementService.TransitionSettlementAsync (Finalized branch)"
+    permission: "Payroll.FinalSettlement.Finalize"
+    db: LoanRepayments, ReimbursementSettlements, VariablePaySettlements, PayrollAdjustmentApplications
+
+  - id: F-PAY-190
+    name: Finalize also invokes the Separation Benefits service to lock the gratuity calculation for this settlement (cross-module handoff, out of this module's own detailed scope)
+    group: Payroll Settlement
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/finalize"
+    service: "PayrollRetroSettlementService.TransitionSettlementAsync -> ISeparationBenefitsService.FinalizeAsync"
+    permission: "Payroll.FinalSettlement.Finalize"
+    db: "n/a (cross-module - see qa/09-separation)"
+
+  - id: F-PAY-191
+    name: "Payroll.Retro.Cancel is declared and seeded but no cancel endpoint or service method exists anywhere for PayrollRetroCase - an orphan permission distinct from the already-documented Payroll.FinalSettlement.Cancel (qa/09-separation CR-152)"
+    group: Payroll Settlement
+    status: Implemented
+    api: "n/a (no such endpoint exists)"
+    service: "PayrollRetroSettlementService.cs (absence of a Cancel method)"
+    permission: "Payroll.Retro.Cancel"
+    db: "n/a"
+
+  - id: F-PAY-192
+    name: "A cross-tenant retro-case/final-settlement id is NotFound"
+    group: Payroll Settlement
+    status: Implemented
+    api: "GET (via history/detail reads) /api/payroll/retro/cases/{id}, /final-settlements/{id}"
+    service: "PayrollRetroSettlementService.cs (TenantId filter)"
+    permission: "Payroll.Retro.Evaluate / Payroll.FinalSettlement.View"
+    db: PayrollRetroCases, FinalSettlementCases (TenantId filter)
+
+  # ═══════════════════════════════ J. PAYROLL INPUTS (BULK CSV CORRECTION IMPORTS) ═══════════════════════════════
+  - id: F-PAY-193
+    name: "Import templates: list, create (unique Code at Version=1, >=1 column mapping)"
+    group: Payroll Inputs
+    status: Implemented
+    ui: PayrollInputsPage
+    api: "GET/POST /api/payroll/input-templates"
+    service: "PayrollInputService.GetTemplatesAsync / CreateTemplateAsync"
+    permission: "Payroll.Input.View / ConfigureTemplate"
+    db: PayrollInputTemplates
+
+  - id: F-PAY-194
+    name: "Updating a template already referenced by a non-Draft batch creates a NEW template Version instead of mutating the original in place - a versioning-on-write pattern"
+    group: Payroll Inputs
+    status: Implemented
+    api: "PUT /api/payroll/input-templates/{id}"
+    service: "PayrollInputService.UpdateTemplateAsync"
+    permission: "Payroll.Input.ConfigureTemplate"
+    db: PayrollInputTemplates.Version
+
+  - id: F-PAY-195
+    name: List/filter input batches (status, payrollPeriodId) with paging
+    group: Payroll Inputs
+    status: Implemented
+    api: "GET /api/payroll/input-batches"
+    service: "PayrollInputService.GetBatchesAsync"
+    permission: "Payroll.Input.View"
+    db: PayrollInputBatches
+
+  - id: F-PAY-196
+    name: "Create batch requires a non-blank Name; an optional PayrollPeriodId must exist and an optional TemplateId must be Active"
+    group: Payroll Inputs
+    status: Implemented
+    api: "POST /api/payroll/input-batches"
+    service: "PayrollInputService.CreateBatchAsync"
+    permission: "Payroll.Input.Create"
+    db: PayrollInputBatches
+
+  - id: F-PAY-197
+    name: "BatchNumber is generated as PIN/{yyyyMMddHHmmss}/{guid}, truncated to 34 characters"
+    group: Payroll Inputs
+    status: Implemented
+    api: "POST /api/payroll/input-batches"
+    service: "PayrollInputService.CreateBatchAsync"
+    permission: "Payroll.Input.Create"
+    db: PayrollInputBatches.BatchNumber
+
+  - id: F-PAY-198
+    name: "Upload is Draft-only, enforces a 0-25MB size window, and de-duplicates by SHA-256 file hash: re-uploading the identical file to the SAME batch is a harmless success, to a DIFFERENT batch is Conflict"
+    group: Payroll Inputs
+    status: Implemented
+    api: "POST /api/payroll/input-batches/{id}/upload"
+    service: "PayrollInputService.UploadAsync"
+    permission: "PayrollInput.Import"
+    db: PayrollInputBatches.FileHash
+
+  - id: F-PAY-199
+    name: "CSV parsing requires a header row containing EmployeeCode/ComponentCode/Amount/EffectiveDate, rejects duplicate headers, and correctly handles quoted fields containing commas"
+    group: Payroll Inputs
+    status: Implemented
+    api: "POST /api/payroll/input-batches/{id}/upload"
+    service: "PayrollInputService.ParseCsvAsync / ParseCsvRow"
+    permission: "PayrollInput.Import"
+    db: PayrollInputLines
+
+  - id: F-PAY-200
+    name: "Validate re-checks every line fresh each call (clearing prior issues) against: EMPLOYEE_NOT_FOUND, EMPLOYEE_INACTIVE (warning-only), COMPONENT_NOT_FOUND, COMPONENT_NOT_EFFECTIVE, INVALID_COMPONENT_TYPE, INVALID_AMOUNT, PERIOD_FINALIZED, and DUPLICATE_ROW"
+    group: Payroll Inputs
+    status: Implemented
+    api: "POST /api/payroll/input-batches/{id}/validate"
+    service: "PayrollInputService.ValidateAsync"
+    permission: "PayrollInput.Validate"
+    db: PayrollInputValidationIssues
+
+  - id: F-PAY-201
+    name: Batch status becomes ValidationFailed if any line is Invalid after validation, else Validated
+    group: Payroll Inputs
+    status: Implemented
+    api: "POST /api/payroll/input-batches/{id}/validate"
+    service: "PayrollInputService.ValidateAsync"
+    permission: "PayrollInput.Validate"
+    db: PayrollInputBatches.Status
+
+  - id: F-PAY-202
+    name: Preview aggregates earning/deduction totals, employee count, and component count while excluding Invalid lines
+    group: Payroll Inputs
+    status: Implemented
+    api: "GET /api/payroll/input-batches/{id}/preview"
+    service: "PayrollInputService.GetPreviewAsync"
+    permission: "Payroll.Input.View"
+    db: PayrollInputLines
+
+  - id: F-PAY-203
+    name: "Editing or deleting a staged line downgrades the WHOLE batch back to Draft and resets its validation counts, forcing a fresh Validate"
+    group: Payroll Inputs
+    status: Implemented
+    api: "PUT /api/payroll/input-batches/{id}/lines/{lineId}, DELETE .../lines/{lineId}"
+    service: "PayrollInputService.UpdateLineAsync / DeleteLineAsync"
+    permission: "Payroll.Input.Create"
+    db: PayrollInputBatches.Status, ValidRows
+
+  - id: F-PAY-204
+    name: "Submit is Validated-only and is blocked while InvalidRows>0"
+    group: Payroll Inputs
+    status: Implemented
+    api: "POST /api/payroll/input-batches/{id}/submit"
+    service: "PayrollInputService.SubmitAsync"
+    permission: "Payroll.Input.Submit"
+    db: PayrollInputBatches.Status
+
+  - id: F-PAY-205
+    name: Approve is Submitted-only and invokes the approval guard's self-approval block; Reject requires a reason and is Submitted-only
+    group: Payroll Inputs
+    status: Implemented
+    api: "POST /api/payroll/input-batches/{id}/approve, /reject"
+    service: "PayrollInputService.ApproveAsync / RejectAsync"
+    permission: "Payroll.Input.Approve"
+    db: PayrollInputBatches.Status
+
+  - id: F-PAY-206
+    name: "Post is Approved-only with InvalidRows==0, converts each non-InformationOnly line into a PayrollAdjustment inside a Serializable transaction, and is idempotent per line (a retried Post after partial failure never double-creates an adjustment for an already-posted line)"
+    group: Payroll Inputs
+    status: Implemented
+    api: "POST /api/payroll/input-batches/{id}/post"
+    service: "PayrollInputService.PostAsync"
+    permission: "Payroll.Input.Post"
+    db: PayrollAdjustments (SourceType=PayrollInputBatch)
+
+  - id: F-PAY-207
+    name: "Cancel on a Posted batch is blocked once any PayrollAdjustmentApplication already exists for it ('Finalized Payroll may not be rewritten; submit this correction through Phase 7R'), else bulk-cancels its still-unapplied generated adjustments; otherwise Cancel works from Draft/Validated/ValidationFailed/Approved/Posted"
+    group: Payroll Inputs
+    status: Implemented
+    api: "POST /api/payroll/input-batches/{id}/cancel"
+    service: "PayrollInputService.CancelAsync"
+    permission: "Payroll.Input.Cancel"
+    db: PayrollInputBatches.Status, PayrollAdjustments
+
+  - id: F-PAY-208
+    name: History is append-only across Created/Uploaded/Validated/ValidationFailed/Corrected/Submitted/Approved/Rejected/Posted/Cancelled events
+    group: Payroll Inputs
+    status: Implemented
+    api: "GET /api/payroll/input-batches/{id}/history"
+    service: "PayrollInputService.AddHistory / GetHistoryAsync"
+    permission: "Payroll.Input.ViewAudit"
+    db: PayrollInputHistories
+
+  - id: F-PAY-209
+    name: Preview/Issues/Result each export as a downloadable CSV
+    group: Payroll Inputs
+    status: Implemented
+    api: "GET /api/payroll/input-batches/{id}/preview/export, /issues/export, /result/export"
+    service: "PayrollInputService.ExportPreviewAsync / ExportIssuesAsync / ExportResultAsync"
+    permission: "Payroll.Input.View"
+    db: PayrollInputLines, PayrollInputValidationIssues
+
+  - id: F-PAY-210
+    name: A cross-tenant batch/template id is NotFound
+    group: Payroll Inputs
+    status: Implemented
+    api: "GET /api/payroll/input-batches/{id}"
+    service: "PayrollInputService.cs (TenantId filter)"
+    permission: "Payroll.Input.View"
+    db: PayrollInputBatches (TenantId filter)
+
+  # ═══════════════════════════════ K. AUTHORIZATION AND ROLE SCOPE ═══════════════════════════════
+  - id: F-PAY-211
+    name: "SuperAdmin/TenantAdmin hold every Payroll permission by construction (DomainPermissions.All, with SuperAdmin excluding only the unrelated AccountEmployeeLink.* family)"
+    group: Authorization and Role Scope
+    status: Implemented
+    api: "n/a (seed-time)"
+    service: "SeedData.cs RolePermissionMap[SuperAdmin/TenantAdmin]"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-212
+    name: "HRManager holds NONE of the module's core payroll permissions - no Salary*/Period*/Run*/Payslip*/Register*/Adjustments*/Reimbursements*/OffCycle*/Analytics*/Retro*/FinalSettlement*/Input.* - only TaxDeclaration.Review/ViewAudit and YearEndTax.View/ViewHistory (both out-of-module-scope), despite HRManager's central review role elsewhere in the product"
+    group: Authorization and Role Scope
+    status: Implemented
+    api: "n/a (seed-time)"
+    service: "SeedData.cs RolePermissionMap[HRManager]"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-213
+    name: "Manager holds ZERO Payroll permissions of any kind - there is no seeded way for a manager to see even their own direct reports' payroll data through this module"
+    group: Authorization and Role Scope
+    status: Implemented
+    api: "n/a (seed-time)"
+    service: "SeedData.cs RolePermissionMap[Manager]"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-214
+    name: "Employee is seeded with exactly Payroll.Adjustments.View/ViewHistory and Payroll.TaxDeclaration.ViewOwn/ManageOwn - self-service Payslip.ViewOwn and Reimbursements.Request are notably ABSENT from the seeded Employee role, meaning a plain Employee cannot see their own payslip or file a reimbursement claim out of the box"
+    group: Authorization and Role Scope
+    status: Implemented
+    api: "n/a (seed-time)"
+    service: "SeedData.cs RolePermissionMap[Employee]"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-215
+    name: "SuperHR is directly seeded (not merely self-escalated) with a PARTIAL native payroll footprint - full Salary Component/Structure/Employee-Salary management, Period management+Unlock, Controls management, and Run management including Run.Approve/Run.Finalize/Run.Calculate/Run.Recalculate - broader than HRManager's footprint of literally zero"
+    group: Authorization and Role Scope
+    status: Implemented
+    api: "n/a (seed-time)"
+    service: "SeedData.cs RolePermissionMap[SuperHR]"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-216
+    name: "CR-66 recurs directly: SuperHR simultaneously holds PageAccess.Manage, so it can self-grant every remaining Payroll permission it lacks natively (Adjustments/Reimbursements/OffCycle/Analytics/Retro/FinalSettlement/PayrollInput.*) via one PUT /api/page-access/roles/{roleId} call, closing the gap to the ENTIRE module including irreversible Run.Finalize and Final-Settlement authority it already holds a path toward"
+    group: Authorization and Role Scope
+    status: Implemented
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: RolePermissions
+
+  - id: F-PAY-217
+    name: "CR-77 (manager/team-scope resolution) does NOT recur in Payroll - no Payroll.*.ViewTeam permission constant exists anywhere in the module; there is no 'manager sees their team's payroll' concept at all, only self (ViewOwn) vs tenant-wide (View/Manage)"
+    group: Authorization and Role Scope
+    status: Implemented (confirmed absent)
+    api: "n/a"
+    service: "Permissions.Payroll.cs (full constant-list grep)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-218
+    name: "Payroll.Run.Approve and Payroll.Run.Finalize are declared and seeded to SuperAdmin/TenantAdmin/HRAdmin/SuperHR but checked by ZERO endpoints - the only real state-transition action (POST /runs/{id}/transition) is gated by the coarser Payroll.Run.Manage, the same dead-permission shape as qa/09-separation's CR-134"
+    group: Authorization and Role Scope
+    status: Implemented (dead permission)
+    api: "POST /api/payroll/runs/{id}/transition"
+    service: "PayrollRunsController.Transition (grep of every [HasPermission])"
+    permission: "Payroll.Run.Manage (not Approve/Finalize)"
+    db: "n/a"
+
+  - id: F-PAY-219
+    name: "Payroll.Exceptions.Manage is declared and seeded but PayrollExceptionsController's only two routes (list, export) both check Payroll.Exceptions.View - Manage is checked nowhere"
+    group: Authorization and Role Scope
+    status: Implemented (dead permission)
+    api: "GET /api/payroll/exceptions, /export.csv"
+    service: "PayrollExceptionsController (grep of every [HasPermission])"
+    permission: "Payroll.Exceptions.View (not Manage)"
+    db: "n/a"
+
+  - id: F-PAY-220
+    name: "PayrollInput.* uses a distinct permission-string prefix ('PayrollInput.X') from every sibling Payroll.* permission ('Payroll.X.Y') - a naming inconsistency that does not affect enforcement but could mislead a permission-audit tool that pattern-matches on the 'Payroll.' prefix"
+    group: Authorization and Role Scope
+    status: Implemented
+    api: "n/a"
+    service: "Permissions.Payroll.cs (constant naming)"
+    permission: "n/a"
+    db: "n/a"
+
+  # ═══════════════════════════════ L. TENANT ISOLATION (CROSS-CUTTING SWEEP) ═══════════════════════════════
+  - id: F-PAY-221
+    name: "A full-surface sweep confirms every GET-by-id/PUT/action endpoint across all ten in-scope services applies its own TenantId filter and returns NotFound (never Forbidden or a 500) for a cross-tenant id"
+    group: Tenant Isolation
+    status: Implemented
+    api: "GET/PUT/POST across every in-scope Payroll controller"
+    service: "Every in-scope *Service.cs (ITenantContext.TenantId filter)"
+    permission: "varies per endpoint"
+    db: "every in-scope table (TenantId filter)"
+
+  - id: F-PAY-222
+    name: "Number-sequence isolation: PayrollAdjustment's PADJ/{year}/{seq} sequence, Reimbursement's CLM/{year}/{seq} scan, and PayrollInputBatch's PIN/{timestamp}/{guid} generator are each scoped per tenant - two tenants creating on the same day never collide and never observe each other's sequence position"
+    group: Tenant Isolation
+    status: Implemented
+    api: "POST /api/payroll/adjustments, /reimbursements, /input-batches"
+    service: "PayrollAdjustmentService.NextNumberAsync, ReimbursementService.NextClaimNumberAsync, PayrollInputService.CreateBatchAsync"
+    permission: "varies"
+    db: PayrollAdjustmentNumberSequences (TenantId), ReimbursementClaims (TenantId), PayrollInputBatches (TenantId)
+
+  # ═══════════════════════════════ M. AUDIT/HISTORY (CROSS-CUTTING SWEEP) ═══════════════════════════════
+  - id: F-PAY-223
+    name: "Every history/audit table discovered in this module (SalaryComponentHistories, SalaryStructureHistories, EmployeeSalaryAssignmentHistories, PayrollPeriodHistories, PayrollRunHistories, PayrollCalculationHistories, PayrollAdjustmentHistories, PayslipHistories, ReimbursementHistories, PayrollRetroHistories, FinalSettlementHistories, PayrollInputHistories) is written via an Add-only call pattern - no Update/Remove call against any *History DbSet was found anywhere in the read source"
+    group: Audit and History
+    status: Implemented
+    api: "n/a (cross-cutting)"
+    service: "every in-scope *Service.cs AddHistory method (grep for db.*Histories.Update / .Remove)"
+    permission: "n/a"
+    db: "*Histories tables"
+
+  - id: F-PAY-224
+    name: Every history row captures ActorUserId from the current tenant context at the moment of the mutation, giving a reliable who-did-it trail even though no dedicated single unified payroll audit log table exists
+    group: Audit and History
+    status: Implemented
+    api: "GET .../history endpoints across the module"
+    service: "every in-scope *Service.cs AddHistory method"
+    permission: "varies (*.ViewHistory / ViewAudit)"
+    db: "*Histories.ActorUserId"
+
+  # ═══════════════════════════════ N. REPORTS AND QUEUES ═══════════════════════════════
+  - id: F-PAY-225
+    name: "Every PayrollReportsController route shares exactly ONE controller-level permission (Payroll.Analytics.View) - the payroll register, bank-payments, and statutory-summary reports are all gated identically, with no finer per-report split"
+    group: Reports and Queues
+    status: Implemented
+    api: "GET /api/payroll/reports/*"
+    service: "PayrollReportsController"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PAY-226
+    name: "Every report is derived from the SAME base filter (IsCurrent+Calculated PayrollResults, tenant-scoped, optional run/period/employee/department/cost-center/search) - a superseded or errored result never leaks into any report"
+    group: Reports and Queues
+    status: Implemented
+    ui: PayrollReportsPage
+    api: "GET /api/payroll/reports/payroll-register, /earnings, /deductions, /employer-contributions"
+    service: "PayrollReportsService.Results"
+    permission: "Payroll.Analytics.View"
+    db: PayrollResults (IsCurrent, Status)
+
+  - id: F-PAY-227
+    name: "Department/Cost-Center reports fall back to an 'UNCLASSIFIED' label for a result whose run-employee snapshot has no department/cost-center id"
+    group: Reports and Queues
+    status: Implemented
+    api: "GET /api/payroll/reports/departments, /cost-centers"
+    service: "PayrollReportsService.DimensionsAsync"
+    permission: "Payroll.Analytics.View"
+    db: PayrollRunEmployees.DepartmentId, CostCenterId
+
+  - id: F-PAY-228
+    name: The Components report aggregates count/sum/average/min/max per component code across the filtered result set
+    group: Reports and Queues
+    status: Implemented
+    api: "GET /api/payroll/reports/components"
+    service: "PayrollReportsService.GetComponentsAsync"
+    permission: "Payroll.Analytics.View"
+    db: PayrollResultComponents
+
+  - id: F-PAY-229
+    name: "The Statutory Summary report aggregates PayrollStatutoryResults by StatutoryType across the same filtered result set"
+    group: Reports and Queues
+    status: Implemented
+    api: "GET /api/payroll/reports/statutory-summary"
+    service: "PayrollReportsService.GetStatutorySummaryAsync"
+    permission: "Payroll.Analytics.View"
+    db: PayrollStatutoryResults
+
+  - id: F-PAY-230
+    name: "The Dashboard classifies reimbursement/loan/variable-pay/adjustment totals by CASE-INSENSITIVE SUBSTRING matching on PayrollResultComponent.CalculationSource, not a structured type or foreign key - a future CalculationSource string that doesn't contain the expected substring would silently be excluded from its category's total with no error surfaced"
+    group: Reports and Queues
+    status: Implemented
+    api: "GET /api/payroll/reports/dashboard"
+    service: "PayrollReportsService.GetDashboardAsync"
+    permission: "Payroll.Analytics.View"
+    db: PayrollResultComponents.CalculationSource
+
+  - id: F-PAY-231
+    name: "GetTrendsAsync's last five numeric fields on PayrollTrendRowDto are always hardcoded to 0m for every row - a placeholder that is never populated from real trend data"
+    group: Reports and Queues
+    status: Implemented (dead output fields)
+    api: "GET /api/payroll/reports/trends"
+    service: "PayrollReportsService.GetTrendsAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PAY-232
+    name: "ExportAsync(report, query) dispatches by a lowercase report-key switch; an unrecognized key returns NotFound ('Unknown Payroll report export.') rather than an empty file"
+    group: Reports and Queues
+    status: Implemented
+    api: "GET /api/payroll/reports/{report}.csv"
+    service: "PayrollReportsService.ExportAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PAY-233
+    name: "Payroll Analytics Overview/Summary/Control-Totals/Departments/Cost-Centers are all scoped per run"
+    group: Reports and Queues
+    status: Implemented
+    ui: PayrollAnalyticsPage
+    api: "GET /api/payroll/analytics/runs/{runId}/overview, /summary, /control-totals, /departments, /cost-centers"
+    service: "PayrollAnalyticsService.GetOverviewAsync / GetRunSummaryAsync / GetControlTotalsAsync"
+    permission: "Payroll.Analytics.View"
+    db: PayrollResults
+
+  - id: F-PAY-234
+    name: Variance and Component-Variance both compare the current run against an optional second compareRunId
+    group: Reports and Queues
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/variance, /components?compareRunId="
+    service: "PayrollAnalyticsService.GetVarianceAsync / GetComponentVarianceAsync"
+    permission: "Payroll.Analytics.View"
+    db: PayrollResults
+
+  - id: F-PAY-235
+    name: "Findings/Variance/Component-Variance/Run-Summary/Control-Totals each have a dedicated CSV export counterpart"
+    group: Reports and Queues
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/findings.csv, /variance.csv, /summary.csv, /control-totals.csv"
+    service: "PayrollAnalyticsService.ExportFindingsAsync / ExportVarianceAsync / ExportRunSummaryAsync / ExportControlTotalsAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PAY-236
+    name: "Exceptions has its own controller and permission (Payroll.Exceptions.View) separate from the general Analytics.View gate, list + CSV export"
+    group: Reports and Queues
+    status: Implemented
+    api: "GET /api/payroll/exceptions, /export.csv"
+    service: "PayrollAnalyticsService.GetExceptionsAsync / ExportExceptionsAsync"
+    permission: "Payroll.Exceptions.View"
+    db: PayrollExceptions
+
+  - id: F-PAY-237
+    name: "Reconciliation generation is typed PrePayroll/PostPayroll per its own dedicated route; a Finding is acted on via three distinct verb strings (acknowledge/resolve/accept-exception) through one shared ActOnFindingAsync method"
+    group: Reports and Queues
+    status: Implemented
+    api: "POST /api/payroll/reconciliation/runs/{runId}/pre, /post, .../findings/{id}/acknowledge, /resolve, /accept-exception"
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync / ActOnFindingAsync"
+    permission: "Payroll.Reconciliation.Generate / Acknowledge / Resolve"
+    db: PayrollReconciliations, PayrollFindings
+
+  - id: F-PAY-238
+    name: Analytics Controls (thresholds/rules configuration) can be listed by anyone holding Analytics.View but only created/updated under the separate Analytics.Configure permission
+    group: Reports and Queues
+    status: Implemented
+    api: "GET/POST/PUT /api/payroll/analytics-controls"
+    service: "PayrollAnalyticsService.ListControlsAsync / CreateControlAsync / UpdateControlAsync"
+    permission: "Payroll.Analytics.View / Configure"
+    db: PayrollAnalyticsControls
+
+  - id: F-PAY-239
+    name: A cross-tenant run/finding/exception id on any reports/analytics/reconciliation endpoint is NotFound
+    group: Reports and Queues
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{tenantBRunId}/overview"
+    service: "PayrollAnalyticsService.cs, PayrollReportsService.cs (TenantId filter)"
+    permission: "Payroll.Analytics.View"
+    db: "n/a (TenantId filter)"
+
+  # ═══════════════════════════════ O. SQL SERVER/MYSQL PROVIDER PARITY AND LARGE DATA ═══════════════════════════════
+  - id: F-PAY-240
+    name: "Every concurrency-versioned entity in this module (SalaryComponent, SalaryStructure, EmployeeSalaryAssignment, PayrollPeriod, PayrollRun, PayrollAdjustment, Payslip) must enforce the SAME optimistic-concurrency contract on both SQL Server (native rowversion) and MySQL (app-managed binary(16) token via interceptor), per CLAUDE.md's documented provider divergence"
+    group: Provider Parity and Large Data
+    status: Implemented
+    api: "PUT/POST across every concurrency-versioned entity's controller"
+    service: "every in-scope *Service.cs (ConcurrencyVersion checks)"
+    permission: "varies"
+    db: "ConcurrencyVersion column (rowversion vs binary(16))"
+
+  - id: F-PAY-241
+    name: "PayrollAdjustmentNumberSequence's retry-on-DbUpdateException allocation loop is provider-agnostic by design; the Reimbursement claim number's scan-existing-then-increment approach is NOT backed by a dedicated sequence row and must be proven race-free on both providers, not assumed safe from SQLite behavior alone"
+    group: Provider Parity and Large Data
+    status: Implemented
+    api: "POST /api/payroll/adjustments, /reimbursements"
+    service: "PayrollAdjustmentService.NextNumberAsync, ReimbursementService.NextClaimNumberAsync"
+    permission: "varies"
+    db: PayrollAdjustmentNumberSequences, ReimbursementClaims
+
+  - id: F-PAY-242
+    name: "PayrollInputService.PostAsync and ReimbursementService's claim mutations use IsolationLevel.Serializable transactions - their actual blocking/retry behavior differs between SQL Server's UPDLOCK/HOLDLOCK-style locking and MySQL's SELECT...FOR UPDATE/InnoDB snapshot isolation, and must be proven concurrently on both real providers"
+    group: Provider Parity and Large Data
+    status: Implemented
+    api: "POST /api/payroll/input-batches/{id}/post, /reimbursements/{id}/approve"
+    service: "PayrollInputService.PostAsync, ReimbursementService.ApproveAsync"
+    permission: "varies"
+    db: "n/a (transaction isolation)"
+
+  - id: F-PAY-243
+    name: "MySQL deadlock error 1213 is retryable and lock-timeout 1205 is deliberately NOT, per CLAUDE.md's documented provider divergence - PayrollAdjustmentService.NextNumberAsync's catch clauses must classify these correctly rather than retrying every DbUpdateException indiscriminately"
+    group: Provider Parity and Large Data
+    status: Implemented
+    api: "POST /api/payroll/adjustments"
+    service: "PayrollAdjustmentService.NextNumberAsync"
+    permission: "Payroll.Adjustments.Create"
+    db: "n/a (MySQL error codes 1213/1205)"
+
+  - id: F-PAY-244
+    name: "PayrollOutputService's ExecuteUpdateAsync bulk status flips (Publish, supersede-on-regenerate) must translate and execute identically on SQL Server and MySQL"
+    group: Provider Parity and Large Data
+    status: Implemented
+    api: "POST /api/payroll/runs/{runId}/payslips/publish"
+    service: "PayrollOutputService.PublishAsync"
+    permission: "Payroll.Payslip.Publish"
+    db: Payslips.Status
+
+  - id: F-PAY-245
+    name: "Every paged list endpoint enforces PagedQuery.MaxPageSize; PayrollAnalyticsLargeDataTests and PayrollReportsLargeDataTests are the only in-scope areas with a DEDICATED large-data test class discovered - Salary Master, Periods/Runs, Calculation, Adjustments, Reimbursements, Settlement, and Inputs have none, and rely on this module's own large-data cases for that proof"
+    group: Provider Parity and Large Data
+    status: Implemented (partially covered by existing automation)
+    api: "GET across every in-scope paged endpoint"
+    service: "every in-scope *Service.cs (paging clamp)"
+    permission: "varies"
+    db: "n/a"
+
+  - id: F-PAY-246
+    name: "A large (1000+ employee) payroll run's Prepare/Calculate/GetEmployees must complete within a defined time ceiling and produce exact-count proof of zero cross-employee leakage into an unrelated run's population"
+    group: Provider Parity and Large Data
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/prepare, /calculate"
+    service: "PayrollRunService.PrepareAsync, PayrollCalculationEngine.CalculateAsync"
+    permission: "Payroll.Run.Prepare / Calculate"
+    db: PayrollRunEmployees, PayrollResults
+
+  - id: F-PAY-247
+    name: "MySQL/SQL-Server-tagged provider-acceptance classes skip silently when their env var is absent, per CLAUDE.md's documented convention - a green run with skips is not evidence of provider parity"
+    group: Provider Parity and Large Data
+    status: Implemented
+    api: "n/a (test infrastructure)"
+    service: "MySql*/SqlServer* provider-acceptance test classes"
+    permission: "n/a"
+    db: "n/a"
+
+  # ═══════════════════════════════ P. FRONTEND ═══════════════════════════════
+  - id: F-PAY-248
+    name: "Only 8 of the ~29 Payroll-family pages (SalaryComponentsPage, SalaryStructuresPage, EmployeeSalaryAssignmentsPage, PayrollInputsPage, PayrollPeriodsRunsPage, StatutoryConfigurationsPage, StatutoryFilingsPage, YearEndTaxPage - all master-configuration screens) perform any client-side permission check; every approval/workflow screen (Adjustments, Off-Cycle, Reimbursements, Retro, Final Settlement) and both dashboards do not"
+    group: Frontend
+    status: Implemented
+    ui: "every page under Frontend/HRMS.Web/src/pages/payroll/*.tsx"
+    api: "n/a (client-side)"
+    service: "grep of useAuth/usePermission/hasPermission/can( across src/pages/payroll"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-249
+    name: "The three master-config pages correctly thread each row's real concurrencyVersion into expectedConcurrencyVersion on edit/activate/deactivate - confirmed NO hardcoded-version bug, a positive contrast with qa/09-separation's CR-161"
+    group: Frontend
+    status: Implemented
+    ui: SalaryComponentsPage, SalaryStructuresPage, EmployeeSalaryAssignmentsPage
+    api: "n/a (client-side)"
+    service: "grep of expectedConcurrencyVersion across the three pages"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-250
+    name: "~19 of the ~27 Payroll routes registered in App.tsx have no navigation.ts entry, including the in-scope Reimbursements, Payroll Adjustments, Off-Cycle, Payroll Inputs, Payroll Analytics, Payroll Reports pages and both self-service My-Adjustments/My-Reimbursements pages - reachable only by typing the URL"
+    group: Frontend
+    status: Implemented
+    ui: "src/layout/navigation.ts vs src/App.tsx route table"
+    api: "n/a (client-side)"
+    service: "grep count comparison"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-251
+    name: "MyPayslipsPage, MyReimbursementsPage, and MyPayrollAdjustmentsPage are each wrapped in RequireEmployeeIdentity at the route level - an unlinked account is blocked before the page mounts, not left to fail against the API"
+    group: Frontend
+    status: Implemented
+    ui: MyPayslipsPage, MyReimbursementsPage, MyPayrollAdjustmentsPage
+    api: "n/a (client-side)"
+    service: "App.tsx route wrapping"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-252
+    name: "PayrollPeriodsRunsPage is a single shared component parameterized by mode='periods'|'runs' rather than two separate pages - a defect in the shared chrome affects both screens simultaneously"
+    group: Frontend
+    status: Implemented
+    ui: PayrollPeriodsRunsPage
+    api: "n/a (client-side)"
+    service: "App.tsx route wiring (mode prop)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-253
+    name: "PayrollAdjustmentsPage, MyPayrollAdjustmentsPage, PayrollOffCyclePage, ReimbursementsPage, and MyReimbursementsPage render every action button unconditionally once the page-level route permission is satisfied, since none imports a permission-check hook - a user holding only the route's own permission sees every button including ones that require a different, more privileged backend permission"
+    group: Frontend
+    status: Implemented
+    ui: PayrollAdjustmentsPage, MyPayrollAdjustmentsPage, PayrollOffCyclePage, ReimbursementsPage, MyReimbursementsPage
+    api: "n/a (client-side)"
+    service: "grep of the pages' rendered action buttons"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-254
+    name: "Each in-scope area's client validation (required fields, positive amounts, date ordering) mirrors but does not replace the backend's own validation - a direct API call bypassing the UI must still be rejected server-side"
+    group: Frontend
+    status: Implemented
+    ui: "every in-scope create/edit form"
+    api: "n/a (contract check)"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-255
+    name: "The Reimbursement register and Payroll Reports pages wire their CSV export buttons to the corresponding backend export endpoints, matching the currently-applied filters"
+    group: Frontend
+    status: Implemented
+    ui: ReimbursementsPage, PayrollReportsPage
+    api: "GET /api/payroll/reimbursements/register/export.csv, /api/payroll/reports/{report}.csv"
+    service: "n/a (client-side wiring)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-256
+    name: "Every in-scope master/list page renders a distinguishable loading, empty, and error state rather than a blank screen"
+    group: Frontend
+    status: Implemented
+    ui: "SalaryComponentsPage, SalaryStructuresPage, EmployeeSalaryAssignmentsPage, PayrollPeriodsRunsPage, PayrollAdjustmentsPage, ReimbursementsPage, PayrollInputsPage"
+    api: "n/a (client-side)"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PAY-257
+    name: "The api/payroll.ts, payrollAdjustments.ts, payrollAnalytics.ts, payrollInputs.ts, and payrollReports.ts client modules each expose typed functions matching the backend's actual query/paging contract, confirmed by their own existing Vitest coverage (payroll.test.ts)"
+    group: Frontend
+    status: Implemented
+    ui: "n/a (API client layer)"
+    api: "n/a"
+    service: "src/api/payroll.ts and siblings"
+    permission: "n/a"
+    db: "n/a"

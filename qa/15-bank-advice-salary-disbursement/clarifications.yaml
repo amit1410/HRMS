@@ -1,0 +1,214 @@
+# Module 15 QA-risk register. Numbering continues after Module 14's CR-262 (qa/14-tax-declarations-year-end-tax/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. Classification starts 'Open - awaiting decision'.
+# CR-264, CR-265, CR-266, and CR-267 are exceptions: they document confirmed source-level/frontend
+# defects, not merely design ambiguities, and are classified accordingly.
+
+clarifications:
+  - id: CR-263
+    title: "HEADLINE FINDING - no seeded role except SuperAdmin/TenantAdmin holds any of the 7 Payroll.BankAdvice* permissions, out of the box"
+    observation: >
+      A full grep of Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs for all 7 BankAdvice
+      permission constants (BankAdviceView/Generate/Validate/Approve/Export/Cancel/ViewHistory)
+      returns matches only in the permission-id-assignment dictionary (ids 110-116) - never inside any
+      role's RolePermissionMap array. SuperAdmin and TenantAdmin hold all 7 only via the blanket
+      DomainPermissions.All grant. HRAdmin (which otherwise holds the full Payroll.SalaryComponent*/
+      SalaryStructure*/EmployeeSalary*/Period*/Controls*/Run*/TaxDeclaration*/YearEndTax* surface),
+      HRManager, SuperHR (which otherwise holds a broad SalaryComponent*/SalaryStructure*/
+      EmployeeSalary*/Period*/Controls*/Run* Payroll grant, the same set qa/14's CR-251 noted), and the
+      role literally named "Accounts" (whose entire seeded grant is DomainPermissions.Employee.View -
+      nothing else) all hold zero of the 7.
+    risk: >
+      A tenant that relies on any seeded role other than SuperAdmin/TenantAdmin to run payroll
+      operations - including the role named "Accounts", which is the one role whose name most directly
+      suggests it should handle payment processing - cannot view, generate, validate, approve, export,
+      or cancel a single bank advice batch out of the box. This is a broader version of qa/14's CR-251
+      SuperHR-specific gap: there, one role was missing a grant other similar roles held; here, EVERY
+      operational role is missing it, and the tenant's ability to run bank advice at all depends
+      entirely on either using SuperAdmin/TenantAdmin directly or a custom role being configured
+      per-tenant after go-live.
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, full-file grep for the 7 BankAdvice permission constants - zero matches outside the id-assignment dictionary; HRAdmin/HRManager/SuperHR/Accounts/IT/Manager/Employee role arrays all read in full)"
+    classification: Open - awaiting decision
+
+  - id: CR-264
+    title: "CONFIRMED DEFECT: Payroll.BankAdvice.ViewHistory is a declared, seeded permission that gates nothing"
+    observation: >
+      Payroll.BankAdvice.ViewHistory is defined in Permissions.cs, assigned permission id 116 in
+      SeedData.cs, and mirrored on the frontend as Permissions.payroll.bankAdviceViewHistory - but a
+      full grep of BankAdviceController (in PayrollOutputsController.cs) for
+      [HasPermission(Permissions.Payroll.BankAdviceViewHistory)] returns zero matches. History is
+      returned unconditionally as part of BankAdviceBatchDto by both the List and Get actions, which
+      are gated only on Payroll.BankAdvice.View. No route, controller action, or service method
+      anywhere in the codebase checks BankAdviceViewHistory.
+    risk: >
+      A tenant that grants a custom role BankAdvice.View but deliberately withholds ViewHistory,
+      expecting history to be hidden, gets no such effect - history is visible to anyone who can view
+      the batch at all. The permission exists purely as configuration surface with no enforcement
+      behind it, the identical "declared but dead" shape as several permission/enum findings in prior
+      modules.
+    source: "Backend/HRMS.Domain/Authorization/Permissions.cs (BankAdviceViewHistory); Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (id 116); Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController, full route grep - no ViewHistory reference)"
+    classification: Confirmed defect
+
+  - id: CR-265
+    title: "CONFIRMED DEFECT: cancelling a bank advice batch never updates its child payment rows - BankAdvicePaymentStatus.Cancelled and .Processed are both dead enum members"
+    observation: >
+      CancelAsync's own ExecuteUpdateAsync call is scoped entirely to db.BankAdviceBatches - it sets
+      Status/CancelledAtUtc/CancelledByUserId/ConcurrencyVersion on the BATCH row only. No statement
+      anywhere in CancelAsync (or anywhere else in BankAdviceService.cs, confirmed by full grep) ever
+      updates a BankAdvicePayment.PaymentStatus to BankAdvicePaymentStatus.Cancelled. Separately,
+      BankAdvicePaymentStatus.Processed is likewise never assigned anywhere - it appears to model a
+      "sent to bank / processed" state that this deliberately-internal-only service never reaches (per
+      docs/phase-7h's own statement that no live bank submission exists).
+    risk: >
+      After a batch reaches Status=Cancelled, its individual BankAdvicePayment rows are left exactly
+      as they were - typically PaymentStatus=Ready or PaymentStatus=Failed - permanently. Any future
+      code or report that queries BankAdvicePayments directly (rather than joining through the parent
+      batch's own Status) would see "Ready" payments that in fact belong to a cancelled batch and were
+      never paid, with no payment-level signal that they were cancelled. PayrollAnalyticsService's own
+      reconciliation queries already defensively filter on `PaymentStatus != Cancelled`
+      (F-BANKADV-071), but since that value is never set, the filter is a no-op for this specific
+      exclusion (the surrounding batch-level `Status != Cancelled` filter is what actually does the
+      real work).
+    source: "Backend/HRMS.Application/Services/BankAdviceService.cs (CancelAsync, full method; full-file grep for BankAdvicePaymentStatus.Cancelled/.Processed assignment - zero matches)"
+    classification: Confirmed defect
+
+  - id: CR-266
+    title: "CONFIRMED DEFECT: calling Validate has the same state-mutating effect as calling Prepare whenever every payment is already valid"
+    observation: >
+      ValidateAsync and PrepareAsync are both thin wrappers around the same private
+      SetPreparedAsync(batchId, requireValid, ct) method, differing only in the requireValid argument
+      (false for Validate, true for Prepare). SetPreparedAsync's own logic is: recalculate, then `if
+      (valid) { ...transition to Prepared, record a Prepared history event... } else if (requireValid)
+      { return Conflict } else { record a ValidationFailed history event }`. The `if (valid)` branch is
+      unconditional on requireValid - it runs identically for both Validate and Prepare whenever every
+      payment already passed validation. There is no code path in which Validate can inspect a batch's
+      validity WITHOUT also committing it to Prepared if that batch turns out to be fully valid.
+    risk: >
+      A caller who invokes Validate expecting a read-only/preview check (the natural reading of a
+      "validate" action, and how the two are presented as separate steps in BankAdvicePage.tsx's own
+      Draft-status button row) will unknowingly advance a fully-valid batch straight to Prepared,
+      skipping the deliberate two-step Draft-check-then-commit workflow the UI otherwise implies. There
+      is no way to check a batch's validation status without risking this side effect once the batch is
+      actually clean.
+    source: "Backend/HRMS.Application/Services/BankAdviceService.cs (ValidateAsync, PrepareAsync, SetPreparedAsync - full method read)"
+    classification: Confirmed defect
+
+  - id: CR-267
+    title: "CONFIRMED FRONTEND DEFECT: there is no UI path to generate a new bank advice batch or to cancel an existing one, despite both client functions existing and working"
+    observation: >
+      Frontend/HRMS.Web/src/api/payroll.ts exports both generateBankAdvice(runId) (calling the real
+      POST /api/payroll/runs/{runId}/bank-advice route) and cancelBankAdvice(id) (calling the real
+      POST /api/payroll/bank-advice/{id}/cancel route). A full grep of
+      Frontend/HRMS.Web/src/pages for either function name finds no call site anywhere -
+      BankAdvicePage.tsx's own button row only ever calls validateBankAdvice/prepareBankAdvice (from
+      Draft), approveBankAdvice (from Prepared), and exportBankAdvice (from Approved/Exported).
+    risk: >
+      An operator with full BankAdvice permissions still cannot generate a batch for a newly approved
+      payroll run, or cancel a batch they no longer want, through the product UI at all - both actions
+      require Swagger/Postman/a script, despite the page otherwise correctly supporting the rest of the
+      lifecycle (Validate/Prepare/Approve/Export). This is the same "the wiring exists but the page
+      never uses it" shape as qa/14's CR-254 finding on YearEndTaxPage's Previous Employer Inputs tab.
+    source: "Frontend/HRMS.Web/src/api/payroll.ts (generateBankAdvice, cancelBankAdvice); Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.tsx (full component, full grep for either function name - zero call sites); Frontend/HRMS.Web/src/pages (full grep - no other page references either function)"
+    classification: Confirmed defect
+
+  - id: CR-268
+    title: "(frontend, low severity) BankAdvicePage has no permission gating on any of its lifecycle buttons"
+    observation: >
+      BankAdvicePage.tsx has no useAuth import and no can() call anywhere in the component (full
+      read) - its Validate/Prepare/Approve/Export buttons all render unconditionally based only on the
+      selected batch's Status, for any user who can reach the page at all (i.e. who holds
+      Payroll.BankAdvice.View, the route's own gate).
+    risk: >
+      Low severity, since [HasPermission] is the real backend authorization gate per CLAUDE.md - a user
+      who holds View but not Approve, for example, would see an Approve button that 403s on click
+      rather than a disabled-button affordance. The identical low-severity shape as qa/13's CR-237 and
+      qa/14's CR-257.
+    source: "Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.tsx (full component - no useAuth/can() usage)"
+    classification: Open - awaiting decision
+
+  - id: CR-269
+    title: "GenerateAsync's active-batch uniqueness pre-check has no surrounding try/catch, sharing the same uncaught-race shape as prior modules' CR-262-family findings"
+    observation: >
+      GenerateAsync's own `db.BankAdviceBatches.AnyAsync(... && x.Status != Cancelled)` pre-check runs
+      with no try/catch around the method's own db.SaveChangesAsync call. Two concurrent Generate calls
+      for the same PayrollRunId that both pass the pre-check before either commits would each compute
+      Version via the same `MaxAsync(x.Version) ?? 0` read, and - since both reads can return the same
+      stale maximum - can produce an IDENTICAL deterministic BatchNumber
+      (BA/{PayDate:yyyyMM}/{RunId:N}/{version}). The database's own unique (TenantId, BatchNumber)
+      index would then make the race loser's SaveChangesAsync throw an unhandled DbUpdateException
+      instead of the module's usual graceful Conflict Result.
+    risk: >
+      A genuine concurrent-request race (e.g. a double-click Generate, or two admins independently
+      triggering generation for the same freshly-approved run) surfaces as an unhandled exception
+      (likely a 500) rather than a Conflict, even though the equivalent concurrency handling elsewhere
+      in this same service (Prepare/Approve/Cancel/Export, all compare-and-swap guarded) is done
+      correctly.
+    source: "Backend/HRMS.Application/Services/BankAdviceService.cs (GenerateAsync, full method - no try/catch DbUpdateException around SaveChangesAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-270
+    title: "The bank advice list endpoint supports only a Status filter - no PayrollRunId, PayrollPeriodId, date-range, or BatchNumber filter exists"
+    observation: >
+      BankAdviceQuery (the request DTO for GET /api/payroll/bank-advice) declares exactly one filter
+      property, Status, inherited PagedQuery paging aside. There is no way to ask the API directly for
+      "the bank advice batch(es) for payroll run X" - a caller must page through the full tenant-wide
+      list (ordered by CreatedDate descending) and match PayrollRunId client-side, or already hold the
+      batch id from the Generate response.
+    risk: >
+      For a tenant with a long payroll history, finding the bank advice batch for a specific historical
+      run requires paging through every batch the tenant has ever generated rather than a direct
+      lookup - a usability gap rather than a correctness defect, worth a product decision on whether a
+      PayrollRunId filter should be added.
+    source: "Backend/HRMS.Application/DTOs/Payroll/BankAdviceDtos.cs (BankAdviceQuery - Status only)"
+    classification: Open - awaiting decision
+
+  - id: CR-271
+    title: "No endpoint exists to edit/amend an individual BankAdvicePayment row - the only remedy for one bad payment is cancelling the whole batch and regenerating"
+    observation: >
+      A full read of IBankAdviceService.cs's 8 methods shows none operate at the individual-payment
+      level - Generate/Validate/Prepare/Approve/Cancel/Export/Get/GetById are all batch-scoped. If a
+      single employee's payment fails validation (e.g. a missing IFSC code) while the rest of the batch
+      is otherwise clean, there is no way to fix or exclude just that one row; PrepareAsync's own
+      requireValid=true check means the WHOLE batch is blocked from Prepared until every row is Valid.
+    risk: >
+      A single employee with an incomplete bank-account record blocks the entire batch's progression
+      past Draft, forcing either a fix to the employee's bank details followed by a full
+      cancel-and-regenerate of the batch (which re-numbers and re-sequences every OTHER employee's
+      payment too), or leaving the whole batch stuck. There is no partial-approval or
+      exclude-one-employee-and-proceed path, unlike some other payroll sub-modules' line-level review
+      granularity (e.g. qa/14's per-line tax declaration review).
+    source: "Backend/HRMS.Application/Abstractions/IBankAdviceService.cs (full interface - 8 methods, all batch-scoped)"
+    classification: Open - awaiting decision
+
+  - id: CR-272
+    title: "BankAdviceHistory.ActorUserId is a declared entity field that is never populated"
+    observation: >
+      BankAdviceHistory declares an ActorUserId Guid? field. The private History(batch, type, message)
+      helper that is the sole construction site for every BankAdviceHistory row (confirmed by full
+      grep) never sets it - every history row's ActorUserId is left at its default null, even though
+      tenant.UserId (the acting user) is available in scope at every call site.
+    risk: >
+      A history/audit trail that cannot attribute WHO performed each lifecycle transition (only WHEN
+      and WHAT) is weaker evidence for an auditable payment-processing workflow than the design intent
+      likely calls for - the batch-level ApprovedByUserId/CancelledByUserId/ExportedByUserId/
+      GeneratedByUserId fields do capture the actor for their own specific transition, but the
+      general-purpose History rows do not carry the same attribution.
+    source: "Backend/HRMS.Domain/Entities/BankAdvice.cs (BankAdviceHistory.ActorUserId); Backend/HRMS.Application/Services/BankAdviceService.cs (History helper, full grep - no ActorUserId assignment)"
+    classification: Open - awaiting decision
+
+  - id: CR-273
+    title: "Validate and Prepare are two distinct routes/actions gated by ONE shared permission (BankAdvice.Validate) - there is no way to grant one without the other"
+    observation: >
+      Both [HttpPost(\"{id:guid}/validate\")] and [HttpPost(\"{id:guid}/prepare\")] on
+      BankAdviceController carry the identical [HasPermission(Permissions.Payroll.BankAdviceValidate)]
+      attribute - there is no separate BankAdvicePrepare permission constant anywhere in Permissions.cs.
+      Given CR-266 (Validate can silently commit to Prepared), this also means a role scoped to only
+      "check without committing" cannot actually be constructed - any role that can Validate can, by the
+      same permission, also explicitly Prepare, and can also trigger the CR-266 side effect via Validate
+      alone.
+    risk: >
+      A tenant wanting a narrower role that can preview validation results without being able to advance
+      a batch's lifecycle at all cannot express that today - Validate and Prepare are permission-equivalent,
+      compounding CR-266's behavioral overlap with a matching authorization-model overlap.
+    source: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController.Validate, .Prepare); Backend/HRMS.Domain/Authorization/Permissions.cs (no separate BankAdvicePrepare constant)"
+    classification: Open - awaiting decision

@@ -1,0 +1,234 @@
+sheet: EmployeeCode_EffectiveDates
+submodule: Configuration Versioning and Effective-Dated Resolution
+defaults:
+  role: TENANT_ADMIN
+  perm: EmployeeCodeConfiguration.Manage
+  tenant: A
+  pre: "Tenant A holds EmployeeCodeConfiguration.Manage for configuration cases; EmploymentHistory.Change (HR_ADMIN) for employment-resolution cases - see individual case role."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: CODE-EFFDATE-001
+    func: [F-CODE-05]
+    sc: Two versions with non-overlapping date ranges save independently
+    t: Version 1 (2026-01-01..2026-01-31) and Version 2 (2026-02-01 onward, open-ended) both save without conflict
+    src: ["EmployeeCodeConfigurationService.SaveAsync (interval-overlap test)"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'2026-01-01', effectiveTo:'2026-01-31', ...} => [200] saved"
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'2026-02-01', effectiveTo:null, ...} => [200] saved, no conflict with the January version"
+    auto: API
+
+  - id: CODE-EFFDATE-002
+    func: [F-CODE-05]
+    sc: A new version whose range overlaps an existing ACTIVE version anywhere is rejected
+    t: A version starting mid-way through an already-active version's range conflicts
+    src: ["EmployeeCodeConfigurationService.SaveAsync ('Another Employee Code configuration is already effective for part of the selected date range.')"]
+    type: Negative
+    pri: P0
+    pre: "Version A is Active, effective 2026-01-01 to 2026-06-30."
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'2026-03-01', effectiveTo:'2026-04-30', ...} (fully inside Version A's range) => [409] 'Another Employee Code configuration is already effective for part of the selected date range.'"
+    auto: API
+
+  - id: CODE-EFFDATE-003
+    func: [F-CODE-05]
+    sc: A new open-ended version overlaps any existing active version that starts on or after it
+    t: A version with EffectiveTo=null (open-ended) is treated as extending to DateOnly.MaxValue for overlap purposes
+    src: ["EmployeeCodeConfigurationService.SaveAsync ('requestedEnd = request.EffectiveTo ?? DateOnly.MaxValue')"]
+    type: Boundary
+    pri: P1
+    pre: "Version A is Active, effective 2027-01-01 onward (open-ended)."
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'2026-06-01', effectiveTo:null, ...} (also open-ended, starts before Version A but never closes) => [409] overlaps Version A, which starts within the new version's own open-ended range"
+    auto: API
+
+  - id: CODE-EFFDATE-004
+    func: [F-CODE-05]
+    sc: An overlap against an INACTIVE version does not block a new save
+    t: Only IsActive versions participate in the overlap check; a deactivated version's date range is free to be reused
+    src: ["EmployeeCodeConfigurationService.SaveAsync ('.Where(v => v.EmployeeCodeConfigId == config.Id && v.IsActive)')"]
+    type: Boundary
+    tags: [Positive]
+    pri: P1
+    pre: "Version A (2026-01-01 to 2026-12-31) has been saved with isActive=false."
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'2026-06-01', effectiveTo:'2026-06-30', isActive:true, ...} (falls entirely inside the inactive Version A's date range) => [200] saved, no conflict"
+    auto: API
+
+  - id: CODE-EFFDATE-005
+    func: [F-CODE-06]
+    sc: Editing an existing version excludes ITSELF from its own overlap check
+    t: Re-saving Version A with the same or a slightly adjusted range does not conflict with itself
+    src: ["EmployeeCodeConfigurationService.SaveAsync ('v.Id != version.Id')"]
+    type: Positive
+    pri: P1
+    pre: "Version A is Active, effective 2026-01-01 to 2026-06-30."
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {versionId: <Version A id>, effectiveFrom:'2026-01-01', effectiveTo:'2026-07-31', ...} (extends its own end date) => [200] saved, not rejected as a self-overlap"
+    auto: API
+
+  - id: CODE-EFFDATE-006
+    func: [F-CODE-06]
+    sc: Editing an existing version STILL conflicts if the edited range newly overlaps a DIFFERENT active version
+    t: Extending Version A's EffectiveTo into Version B's already-active range is rejected
+    src: ["EmployeeCodeConfigurationService.SaveAsync (versionId branch, checks every OTHER active version)"]
+    type: Negative
+    pri: P1
+    pre: "Version A (2026-01-01 to 2026-03-31) and Version B (2026-04-01 onward) are both Active."
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {versionId: <Version A id>, effectiveFrom:'2026-01-01', effectiveTo:'2026-04-15', ...} (now overlaps Version B's first two weeks) => [409] 'Another active Employee Code configuration is already effective for part of the selected date range.'"
+    auto: API
+
+  - id: CODE-EFFDATE-007
+    func: [F-CODE-07]
+    sc: A versionId that does not resolve to a version of THIS tenant's configuration is Not Found
+    t: A stale, deleted, or cross-tenant versionId is rejected rather than silently creating a new version
+    src: ["EmployeeCodeConfigurationService.SaveAsync ('The selected Employee Code configuration version was not found.')"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {versionId: <random GUID>, ...} => [404] 'The selected Employee Code configuration version was not found.'"
+      - "[PUT /api/employee-code-configuration] Body {versionId: <a real version id belonging to Tenant B>, ...} As Tenant A => [404] same message (tenant-scoped lookup)"
+    auto: API
+
+  - id: CODE-EFFDATE-008
+    func: [F-CODE-35]
+    sc: Employment on the exact EffectiveFrom date of a version resolves to that version
+    t: Hiring an employee with EffectiveFrom exactly matching a version's start date uses that version
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (EffectiveFrom<=request.EffectiveFrom)"]
+    type: Boundary
+    pri: P0
+    pre: "Version A effective 2026-06-01 to 2026-06-30, Prefix='JUN'."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] EffectiveFrom='2026-06-01' (exact start) => [200] EmployeeCode uses Version A's Prefix ('JUN...')"
+    auto: API
+
+  - id: CODE-EFFDATE-009
+    func: [F-CODE-35]
+    sc: Employment on the exact EffectiveTo date of a version still resolves to that (closing) version
+    t: The end date is inclusive
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync ('request.EffectiveFrom<=v.EffectiveTo')"]
+    type: Boundary
+    pri: P0
+    pre: "Version A effective 2026-06-01 to 2026-06-30."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] EffectiveFrom='2026-06-30' (exact end) => [200] still resolves to Version A"
+    auto: API
+
+  - id: CODE-EFFDATE-010
+    func: [F-CODE-35]
+    sc: Employment ONE DAY after a version's EffectiveTo finds no matching version if no later version exists
+    t: A gap immediately after a closed version's end date is treated as 'no active configuration effective', not as continuing the closed version
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (matchingVersions.Count==0)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    pre: "Version A effective 2026-06-01 to 2026-06-30 is the ONLY version, and no later version exists."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] EffectiveFrom='2026-07-01' => [400] rejected - no active Employee Code configuration is effective for that date"
+    auto: API
+
+  - id: CODE-EFFDATE-011
+    func: [F-CODE-35]
+    sc: An open-ended (EffectiveTo=null) version resolves for any date on or after its EffectiveFrom, arbitrarily far in the future
+    t: A far-future employment date under an open-ended version still resolves
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync ('v.EffectiveTo == null || request.EffectiveFrom <= v.EffectiveTo')"]
+    type: Positive
+    pri: P1
+    pre: "Version A effective 2026-01-01, EffectiveTo=null."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] EffectiveFrom='2040-01-01' => [200] resolves to Version A"
+    auto: API
+
+  - id: CODE-EFFDATE-012
+    func: [F-CODE-35]
+    sc: A future-dated version (EffectiveFrom later than today) is correctly ignored for employment dated before it, and honored for employment dated on/after it
+    t: A version that has not started yet does not apply to a current-dated hire, but does apply once the employment's own EffectiveFrom reaches that future date
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync"]
+    type: Boundary
+    pri: P1
+    pre: "Version A (2026-01-01 to 2026-12-31, Prefix='OLD') is Active; Version B (2027-01-01 onward, Prefix='NEW') is Active and saved in advance."
+    steps:
+      - "[POST /api/employees/{idA}/employment-history] EffectiveFrom='2026-12-15' => [200] uses Version A ('OLD...')"
+      - "[POST /api/employees/{idB}/employment-history] EffectiveFrom='2027-01-15' => [200] uses Version B ('NEW...')"
+    auto: API
+
+  - id: CODE-EFFDATE-013
+    func: [F-CODE-35]
+    sc: An expired version (EffectiveTo already in the past relative to today) is still correctly resolved for a BACKDATED employment record that falls inside its range
+    t: Effective-dating is evaluated against the employment's own EffectiveFrom, never against today's date
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (no comparison against DateTime.UtcNow/today anywhere in this method)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    pre: "Version A effective 2020-01-01 to 2020-12-31 (long expired relative to 'today'). No later version exists."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] EffectiveFrom='2020-06-15' (backdated hire, inside the expired version's own range) => [200] resolves to Version A and generates a code from it, even though 'today' is years later"
+    auto: API
+
+  - id: CODE-EFFDATE-014
+    func: [F-CODE-35]
+    sc: Zero active versions effective on the requested date is rejected with a clear error, not a silent default
+    t: An employment date that falls in a gap between two versions, or before the very first version, fails generation rather than falling back to some implicit default
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (matchingVersions.Count==0 -> rejection)"]
+    type: Negative
+    pri: P0
+    pre: "Version A (2026-03-01 to 2026-03-31) and Version B (2026-05-01 onward) exist; April is a gap."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] EffectiveFrom='2026-04-15' (inside the gap) => [400] rejected - no configuration effective for that date, even though versions exist both before and after"
+    auto: API
+
+  - id: CODE-EFFDATE-015
+    func: [F-CODE-35]
+    sc: Two overlapping ACTIVE versions effective on the same date (a data-integrity edge Save is meant to prevent) is reported as a Conflict, not resolved arbitrarily
+    t: If two active versions somehow both cover the same date (e.g. via direct data manipulation bypassing Save's own guard), employment-time resolution refuses rather than picking one
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (matchingVersions.Count>1 -> Conflict)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    pre: "Two Active versions both cover 2026-08-15, constructed via direct data manipulation."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] EffectiveFrom='2026-08-15' => [409] 'Multiple active Employee Code configurations are effective for the selected date.'"
+    auto: DB-assisted
+
+  - id: CODE-EFFDATE-016
+    func: [F-CODE-25, F-CODE-35]
+    sc: A future-dated hire that becomes eligible for a NEW version can use a rule that was version-copied specifically for that new version
+    t: Confirms the full versioning + rule-copy + effective-date-resolution chain end to end
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync (version-local copy) + AssignPendingEmployeeCodeAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[PUT /api/employee-code-configuration] Save an old version (2026-09-02 to 2026-09-12) => [200] with a rule 'Test' attached"
+      - "[PUT /api/employee-code-configuration] Save a new version (2026-09-13 onward) => [200] new versionId returned"
+      - "[PUT /api/employee-code-configuration/rules/{oldRule.id}] Copy the rule onto the new version's id => [200] new rule id"
+      - "[POST /api/employees/{id}/employment-history] EffectiveFrom='2026-09-13' => [200] EmployeeCode = 'HC01/LOB01/ORG01/00000001' generated from the NEW version's copied rule and its own fresh sequence"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.New_active_version_on_2026_09_13_can_use_a_versioned_rule_and_generate_code"]
+
+  - id: CODE-EFFDATE-017
+    func: [F-CODE-04]
+    sc: EffectiveTo earlier than EffectiveFrom is rejected at the configuration-validator level
+    t: Saving with an end date before the start date never reaches the overlap check
+    src: ["EmployeeCodeConfigurationRequestValidator ('Effective end date cannot be before the start date.')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'2026-05-01', effectiveTo:'2026-04-30', ...} => [400] 'Effective end date cannot be before the start date.'"
+    auto: API
+
+  - id: CODE-EFFDATE-018
+    func: [F-CODE-04]
+    sc: EffectiveTo equal to EffectiveFrom (a single-day version) is accepted
+    t: The validator only rejects EffectiveTo strictly before EffectiveFrom; equal is a valid one-day range
+    src: ["EmployeeCodeConfigurationRequestValidator ('!x.EffectiveTo.HasValue || x.EffectiveTo.Value >= x.EffectiveFrom')"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'2026-05-01', effectiveTo:'2026-05-01', ...} => [200] accepted"
+    auto: API

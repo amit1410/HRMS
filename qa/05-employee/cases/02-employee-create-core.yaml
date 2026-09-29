@@ -1,0 +1,204 @@
+sheet: Employee_Core
+submodule: Employee Create (legacy full record + modern Personal-Details path)
+defaults:
+  role: HR_ADMIN
+  perm: Employee.Create
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (Employee.Create, Employee.Edit, EmployeeSensitive.Edit)."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: EMP-CREATE-001
+    func: [F-EMP-013]
+    sc: Legacy full create requires a client-supplied Employee Code and accepts organizational fields immediately
+    t: POST /api/employees with a full EmployeeRequest (code, department, designation, manager) creates the record in one call
+    src: ["EmployeeService.CreateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/employees] Full EmployeeRequest with employeeCode='LEG-001', departmentId, designationId, managerId, email => [201] employee created with all fields set, Location header points to GetById"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Create_stamps_the_authenticated_tenant_and_returns_the_joined_record"]
+
+  - id: EMP-CREATE-002
+    func: [F-EMP-017]
+    sc: Legacy create rejects a department/designation/manager id from another tenant or that does not exist
+    t: A cross-tenant or fabricated reference id is reported identically to a nonexistent one
+    src: ["EmployeeService.ValidateReferencesAsync"]
+    type: Negative
+    tags: [Tenant-Isolation]
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[POST /api/employees] departmentId belonging to Tenant B => [400] department reference invalid"
+      - "[POST /api/employees] designationId belonging to Tenant B => [400] designation reference invalid"
+      - "[POST /api/employees] managerId belonging to Tenant B => [400] manager reference invalid"
+      - "[POST /api/employees] departmentId=<random guid> => [400] department reference invalid"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Create_rejects_a_department_belonging_to_another_tenant", "xU:EmployeeServiceTests.Create_rejects_a_designation_belonging_to_another_tenant", "xU:EmployeeServiceTests.Create_rejects_a_manager_belonging_to_another_tenant", "xU:EmployeeServiceTests.Create_rejects_a_nonexistent_department"]
+
+  - id: EMP-CREATE-003
+    func: [F-EMP-018]
+    sc: Legacy create rejects an inactive department/designation and a manager who has left the organization
+    t: A retired master or a non-Active manager is rejected at create time
+    src: ["EmployeeService.ValidateReferencesAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/employees] departmentId of a retired (IsActive=false) department => [400] department is inactive"
+      - "[POST /api/employees] managerId of a Terminated employee => [400] manager does not exist, is inactive, or belongs to another tenant"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Create_rejects_a_retired_department", "xU:EmployeeServiceTests.Create_rejects_a_manager_who_has_left_the_organization"]
+
+  - id: EMP-CREATE-004
+    func: [F-EMP-019]
+    sc: Legacy create rejects a duplicate Employee Code or email case-insensitively within the tenant; another tenant may reuse both
+    t: Uniqueness is enforced per-tenant and case-insensitively, and a race condition is caught and reported as the same Conflict
+    src: ["EmployeeService.FindConflictAsync"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    smoke: true
+    tenant: A+B
+    steps:
+      - "[POST /api/employees] employeeCode matching an existing employee's code in a DIFFERENT case => [409] 'This employee code is already in use.'"
+      - "[POST /api/employees] email matching an existing employee's email in a DIFFERENT case => [409] 'This email address is already in use.'"
+      - "[POST /api/employees] Same employeeCode and email, submitted as Tenant B => [201] created successfully - another tenant may reuse both"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Create_rejects_a_duplicate_employee_code_regardless_of_case", "xU:EmployeeServiceTests.Create_rejects_a_duplicate_email_regardless_of_case", "xU:EmployeeServiceTests.Another_tenant_may_reuse_an_employee_code_and_email"]
+
+  - id: EMP-CREATE-005
+    func: [F-EMP-014]
+    sc: Modern Personal-Details create requires only personal fields - no department, designation, manager, email or code
+    t: POST /api/employees/personal-details creates a draft employee with EmployeeCode left null and no organizational assignment
+    src: ["EmployeeService.CreatePersonalDetailsCoreAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employees/personal-details] firstName, lastName, dateOfJoining only => [201] employee created, employeeCode=null, departmentId=null, designationId=null, reportingManagerId=null"
+    auto: API
+    ex: ["xU:EmployeePersonalDetailsTests.Create_creates_with_no_department_or_designation", "xU:EmployeePersonalDetailsTests.Create_leaves_auto_employee_code_pending_until_initial_employment"]
+
+  - id: EMP-CREATE-006
+    func: [F-EMP-015]
+    sc: Personal-Details create does not require EmployeeSensitive.Edit; without it, sensitive fields sent are silently dropped, not rejected
+    t: A caller with only Employee.Create can create the record, and any Aadhaar/PAN/UAN/ESIC/PF/Mediclaim they submit is not persisted, with no error
+    src: ["EmployeeService.CreatePersonalDetailsAsync (canEditSensitive)"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    role: HR_MANAGER
+    perm: Employee.Create
+    pre: "Caller holds Employee.Create but NOT EmployeeSensitive.Edit."
+    steps:
+      - "[POST /api/employees/personal-details] Body includes aadhaarNumber and panNumber => [201] employee created successfully"
+      - "[GET /api/employees/{id}/sensitive-details] As a caller who DOES hold EmployeeSensitive.View => [200] aadhaarNumber and panNumber are both null - the submitted values were dropped, not saved"
+    auto: API
+    ex: ["xU:EmployeePersonalDetailsTests.Create_personal_details_does_not_require_sensitive_edit_permission", "xU:EmployeePersonalDetailsTests.Create_without_sensitive_permission_does_not_persist_sensitive_values_but_authorized_create_does"]
+    cr: [CR-62]
+
+  - id: EMP-CREATE-007
+    func: [F-EMP-016]
+    sc: Personal-Details create never touches the Employee Code sequence/version counter
+    t: Creating N draft employees via the personal-details path does not advance any EmployeeCodeConfigVersion.NextNumber or EmployeeCodeSequence
+    src: ["EmployeeService.CreatePersonalDetailsCoreAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/employees/personal-details] Create 3 draft employees in a row under an Auto/Simple configuration => [201] x3, the configuration's NextNumber is unchanged after all three"
+    auto: API
+    ex: ["xU:EmployeePersonalDetailsTests.Create_does_not_consume_employee_code_sequence"]
+
+  - id: EMP-CREATE-008
+    func: [F-EMP-020]
+    sc: Birth country/state/city cascade validation on create
+    t: A birth state without its country, or a birth city without its state, is rejected; a state/city that does not belong to its stated parent is rejected
+    src: ["EmployeeService.ValidateBirthLocationAsync"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/employees/personal-details] birthStateId set, birthCountryId omitted => [400] 'Birth country is required when a birth state is selected.'"
+      - "[POST /api/employees/personal-details] birthCityId set, birthStateId omitted => [400] 'Birth state is required when a birth city is selected.'"
+      - "[POST /api/employees/personal-details] birthStateId belonging to a DIFFERENT country than birthCountryId => [400] 'The selected state does not belong to the selected country.'"
+      - "[POST /api/employees/personal-details] birthCountryId, matching birthStateId, matching birthCityId, all consistent => [201] created"
+    auto: API
+
+  - id: EMP-CREATE-009
+    func: [F-EMP-021]
+    sc: Legacy create request-shape validation matrix
+    t: Employee Code format/length, name/email/phone format are all enforced by EmployeeRequestValidator
+    src: ["EmployeeRequestValidator", "CodeFormats"]
+    type: Negative
+    tags: [Validation]
+    pri: P2
+    steps:
+      - "[POST /api/employees] employeeCode with a leading special character (e.g. '#ABC') => [400] code format rejected"
+      - "[POST /api/employees] employeeCode 21 characters long => [400] max length exceeded"
+      - "[POST /api/employees] email='not-an-email' => [400] 'email' invalid"
+      - "[POST /api/employees] phone='abc***' (letters) => [400] 'Phone may contain only digits and the characters + - ( ) . and spaces.'"
+    auto: API
+
+  - id: EMP-CREATE-010
+    func: [F-EMP-022]
+    sc: DateOfLeaving/Status cross-field validation
+    t: DateOfLeaving is forbidden for Active, required for any non-Active status, and cannot precede DateOfJoining
+    src: ["EmployeeRequestValidator"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/employees] status=Active, dateOfLeaving set => [400] 'Date of leaving must be empty for an active employee.'"
+      - "[POST /api/employees] status=Resigned, dateOfLeaving omitted => [400] 'Date of leaving is required once an employee is no longer active.'"
+      - "[POST /api/employees] status=Resigned, dateOfLeaving earlier than dateOfJoining => [400] 'Date of leaving cannot be before the date of joining.'"
+    auto: API
+
+  - id: EMP-CREATE-011
+    func: [F-EMP-023]
+    sc: Employee Status defaults to Active when the request omits it or sends the enum default
+    t: An EmployeeRequest with no Status field (or Status=0) is saved as Active
+    src: ["EmployeeService.CreateAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/employees] Status field omitted entirely => [201] status='Active' in the response"
+    auto: API
+
+  - id: EMP-CREATE-012
+    func: [F-EMP-024]
+    sc: A uniqueness race on create is caught and reported as a Conflict, not a raw 500
+    t: A DbUpdateException from a lost uniqueness race is re-probed and turned into the same 409 FindConflictAsync would have returned synchronously
+    src: ["EmployeeService.CreateAsync (DbUpdateException catch)"]
+    type: Integration-Concurrency
+    pri: P2
+    steps:
+      - "[POST /api/employees] Two concurrent requests with the same employeeCode => [201] one succeeds, [409] the other reports 'This employee code is already in use.' (not a 500)"
+    auto: API
+
+  - id: EMP-CREATE-013
+    func: [F-EMP-014]
+    sc: Personal-Details create is available to any caller holding Employee.Create alone, without any organizational permission
+    t: No Department.View/Designation.View/EmploymentHistory.* permission is needed to create a Personal-Details-only draft
+    src: ["EmployeesController"]
+    type: Authorization
+    pri: P2
+    steps:
+      - "[POST /api/employees/personal-details] Caller holds Employee.Create only (no other Employee-adjacent permission) => [201] created"
+    auto: API
+
+  - id: EMP-CREATE-014
+    func: [F-EMP-013]
+    sc: Full-record create is refused without the stacked EmployeeSensitive.Edit permission
+    t: A caller with Employee.Create but not EmployeeSensitive.Edit gets 403 on the full-record endpoint (unlike the Personal-Details path, F-EMP-006)
+    src: ["EmployeesController ([HasPermission] stacking)"]
+    type: Authorization
+    pri: P1
+    role: HR_MANAGER
+    perm: Employee.Create
+    pre: "Caller holds Employee.Create but NOT EmployeeSensitive.Edit."
+    steps:
+      - "[POST /api/employees] Full EmployeeRequest => [403] Forbidden"
+    auto: API
+    cr: [CR-62]

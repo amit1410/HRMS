@@ -1,0 +1,196 @@
+sheet: EmployeeCode_Sequence
+submodule: Simple Sequence Generation Method
+defaults:
+  role: HR_ADMIN
+  perm: EmploymentHistory.Change
+  tenant: A
+  pre: "Tenant A has an active Auto/Simple Employee Code configuration effective on or before the employment date; caller holds EmploymentHistory.Change (HRAdmin)."
+  data: "Prefix='EMP', Separator='-', Padding=5, NextNumber=1 unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: CODE-SIMPLE-001
+    func: [F-CODE-08]
+    sc: Simple code composition is Prefix + Separator + zero-padded number
+    t: The first two employees hired under a fresh Simple configuration receive EMP-00001 and EMP-00002
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (Simple branch)"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employees/{id1}/employment-history] Initial Employment for employee 1, NewJoining => [200] employee 1's EmployeeCode = 'EMP-00001'"
+      - "[POST /api/employees/{id2}/employment-history] Initial Employment for employee 2, NewJoining => [200] employee 2's EmployeeCode = 'EMP-00002'"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Simple_configuration_creates_version_and_assigns_sequential_codes_to_pending_employees"]
+
+  - id: CODE-SIMPLE-002
+    func: [F-CODE-08]
+    sc: Padding=0 produces an unpadded number with no leading zeros
+    t: NextNumber=7, Padding=0 renders 'EMP-7', not 'EMP-07' or 'EMP-00007'
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync ('number.ToString(padding==0 ? string.Empty : ...)')"]
+    type: Boundary
+    tags: [Validation]
+    pri: P1
+    data: "Padding=0, NextNumber=7"
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment => [200] EmployeeCode = 'EMP-7'"
+    auto: API
+
+  - id: CODE-SIMPLE-003
+    func: [F-CODE-08]
+    sc: Padding=1 with a single-digit number renders exactly one digit, no truncation for multi-digit numbers beyond width
+    t: Padding=1 with NextNumber=3 renders 'EMP-3'; once the counter passes 9 it still renders every digit (padding is a MINIMUM width, never a truncation)
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync"]
+    type: Boundary
+    pri: P1
+    data: "Padding=1, NextNumber starts at 9"
+    steps:
+      - "[POST /api/employees/{idA}/employment-history] Initial Employment (counter=9) => [200] EmployeeCode = 'EMP-9'"
+      - "[POST /api/employees/{idB}/employment-history] Initial Employment (counter=10) => [200] EmployeeCode = 'EMP-10' (two digits, not truncated to one)"
+    auto: API
+
+  - id: CODE-SIMPLE-004
+    func: [F-CODE-08]
+    sc: Normal padding (5) zero-pads short numbers
+    t: NextNumber=42, Padding=5 renders 'EMP-00042'
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync"]
+    type: Positive
+    pri: P1
+    data: "Padding=5, NextNumber=42"
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment => [200] EmployeeCode = 'EMP-00042'"
+    auto: API
+
+  - id: CODE-SIMPLE-005
+    func: [F-CODE-08, F-CODE-04]
+    sc: Maximum allowed padding (10) is accepted and renders the full width
+    t: Padding=10, NextNumber=1 renders 'EMP-0000000001'
+    src: ["EmployeeCodeConfigurationRequestValidator.Padding InclusiveBetween(0,10)"]
+    type: Boundary
+    pri: P2
+    data: "Padding=10, NextNumber=1"
+    steps:
+      - "[PUT /api/employee-code-configuration] Save with padding=10 => [200] accepted (upper boundary, not rejected)"
+      - "[POST /api/employees/{id}/employment-history] Initial Employment => [200] EmployeeCode = 'EMP-0000000001'"
+    auto: API
+
+  - id: CODE-SIMPLE-006
+    func: [F-CODE-08]
+    sc: No separator (blank) concatenates Prefix and number directly
+    t: Separator='' composes 'EMP00001' with no character between prefix and number
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync ('prefix + (version.Separator ?? string.Empty) + ...')"]
+    type: Boundary
+    pri: P1
+    data: "Separator='', Padding=5, NextNumber=1"
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment => [200] EmployeeCode = 'EMP00001'"
+    auto: API
+
+  - id: CODE-SIMPLE-007
+    func: [F-CODE-08]
+    sc: Every allowed separator character composes correctly ('/', '.', '_')
+    t: Each of the validator's allowed separators is rendered verbatim between prefix and number
+    src: ["EmployeeCodeConfigurationRequestValidator.Separator; EmployeeEmploymentService.AssignPendingEmployeeCodeAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[PUT /api/employee-code-configuration] Save with separator='/' => [200]; hire an employee => [200] EmployeeCode = 'EMP/00001'"
+      - "[PUT /api/employee-code-configuration] Save a later version with separator='.' => [200]; hire an employee under it => [200] EmployeeCode = 'EMP.00001' (own NEW version's counter, not continuing the '/' version's count)"
+      - "[PUT /api/employee-code-configuration] Save a later version with separator='_' => [200]; hire an employee under it => [200] EmployeeCode = 'EMP_00001'"
+    auto: API
+
+  - id: CODE-SIMPLE-008
+    func: [F-CODE-09]
+    sc: Starting number honors a NextNumber other than 1 on a brand-new version
+    t: A configuration saved with NextNumber=1000 issues 'EMP-01000' to the first employee hired under it, not 'EMP-00001'
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (reads version.NextNumber, does not reset to 1)"]
+    type: Positive
+    pri: P1
+    data: "NextNumber=1000, Padding=5"
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment => [200] EmployeeCode = 'EMP-01000'"
+    auto: API
+
+  - id: CODE-SIMPLE-009
+    func: [F-CODE-09]
+    sc: Repeated employee creation increments the counter by exactly 1 each time, with no gaps or reuse
+    t: Five sequential hires produce five consecutive numbers
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync"]
+    type: Positive
+    pri: P0
+    data: "Padding=3, NextNumber=1"
+    steps:
+      - "[POST /api/employees/{id1..id5}/employment-history] Five sequential Initial Employment calls => [200] EmployeeCode values are 'EMP-001','EMP-002','EMP-003','EMP-004','EMP-005' in call order"
+    auto: API
+
+  - id: CODE-SIMPLE-010
+    func: [F-CODE-09]
+    sc: Counter rollover past the configured padding width grows the rendered number rather than wrapping or erroring
+    t: Advancing NextNumber to 99999 then 100000 under Padding=5 renders 'EMP-99999' then 'EMP-100000' (six digits, no truncation, no reset to 0)
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync ('D{padding}' is a minimum-width format, never a max-width one)"]
+    type: Boundary
+    pri: P1
+    data: "Padding=5, NextNumber=99999"
+    steps:
+      - "[POST /api/employees/{idA}/employment-history] Initial Employment (counter=99999) => [200] EmployeeCode = 'EMP-99999'"
+      - "[POST /api/employees/{idB}/employment-history] Initial Employment (counter=100000) => [200] EmployeeCode = 'EMP-100000'"
+    auto: API
+
+  - id: CODE-SIMPLE-011
+    func: [F-CODE-09]
+    sc: Large sequence values (near long.MaxValue) still compose without overflow
+    t: A NextNumber close to Int64.MaxValue still renders correctly and advances by 1
+    src: ["EmployeeCodeConfigVersion.NextNumber is a long; EmployeeEmploymentService.AssignPendingEmployeeCodeAsync"]
+    type: Boundary
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    data: "NextNumber=9223372036854775800, Padding=0"
+    steps:
+      - "[PUT /api/employee-code-configuration] Save with nextNumber=9223372036854775800 => [200] accepted (NextNumber only requires >=1, no upper bound)"
+      - "[POST /api/employees/{id}/employment-history] Initial Employment => [200] EmployeeCode = 'EMP-9223372036854775800'"
+    auto: API
+
+  - id: CODE-SIMPLE-012
+    func: [F-CODE-51]
+    sc: A Simple-generated code that collides with an existing employee's code is NOT caught as a handled Conflict
+    t: Unlike Rule-Based, the Simple branch has no AnyAsync duplicate probe before assigning; a collision surfaces as an unhandled database error, not a 409
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (Simple branch); EmployeeConfiguration.cs (unique index on TenantId+EmployeeCode)"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    sev: High
+    pre: "Tenant A already has an employee whose EmployeeCode is exactly 'EMP-00003' (created via Manual mode or seed data), and the Simple version's NextNumber is currently 3."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment for a new pending employee under the Simple/Auto configuration whose next composed code is 'EMP-00003' => [500] unhandled DbUpdateException (NOT a 409 Conflict, in contrast to the Manual/Rule-Based duplicate paths) - confirm the exact status/behavior against current code and record it verbatim"
+    auto: API
+    cr: [CR-45]
+    cm: "This case is expected to expose CR-45. Record the ACTUAL observed status/response verbatim - do not assume 500 without running it, since global exception-handling middleware may translate the DbUpdateException into a different status."
+
+  - id: CODE-SIMPLE-013
+    func: [F-CODE-08]
+    sc: Prefix is required for Simple mode even though it plays no role once Rule-Based/Manual is active
+    t: A blank prefix is rejected by the shared validator regardless of which mode is being saved (Prefix has no mode-conditional rule)
+    src: ["EmployeeCodeConfigurationRequestValidator.Prefix NotEmpty (unconditional)"]
+    type: Negative
+    tags: [Validation]
+    pri: P2
+    role: TENANT_ADMIN
+    perm: EmployeeCodeConfiguration.Manage
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {assignmentMode:'Manual', prefix:'', effectiveFrom:'2026-01-01'} => [400] prefix required, even though Manual mode never uses it"
+    auto: API
+
+  - id: CODE-SIMPLE-014
+    func: [F-CODE-09]
+    sc: Two tenants running identical Simple configurations (same prefix, same starting number) produce identical-looking codes independently
+    t: Tenant A and Tenant B each configured EMP/Padding5/Start1 both issue 'EMP-00001' to their own first hire, with no cross-tenant collision or shared counter
+    src: ["EmployeeCodeConfigVersion is tenant-scoped; Employees uniqueness index is (TenantId, EmployeeCode), not global"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A and B, same configuration
+    steps:
+      - "[POST /api/employees/{tenantA-id}/employment-history] As Tenant A => [200] EmployeeCode = 'EMP-00001'"
+      - "[POST /api/employees/{tenantB-id}/employment-history] As Tenant B, independently configured the same way => [200] EmployeeCode = 'EMP-00001' (same string, different tenant, both succeed)"
+    auto: API

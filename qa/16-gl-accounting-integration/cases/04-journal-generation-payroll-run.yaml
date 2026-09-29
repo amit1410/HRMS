@@ -1,0 +1,314 @@
+sheet: GLAcc_Journal_Generation
+submodule: Journal Generation from Payroll Run
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-GEN-001
+    func: [F-GLACC-031]
+    sc: Unauthenticated tenant context cannot generate
+    t: GenerateAsync returns Unauthorized when no tenant is resolved on the request context
+    src: "PayrollAccountingService.GenerateAsync"
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: High
+    pre: "Approved payroll run RUN1 exists"
+    role: n/a (no tenant context)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] with a request bearing no resolvable tenant => [401] Unauthorized"
+    auto: API
+
+  - id: GLACC-GEN-002
+    func: [F-GLACC-032]
+    sc: Nonexistent payroll run
+    t: Generate for a run id that does not exist in the tenant returns NotFound
+    src: "PayrollAccountingService.GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId = a fresh random guid"
+    steps:
+      - "[POST /api/payroll/runs/{randomGuid}/accounting/generate] => [404] NotFound"
+    auto: API
+
+  - id: GLACC-GEN-003
+    func: [F-GLACC-033]
+    sc: Run status gate - eligible statuses succeed, others are rejected
+    t: Generate succeeds only when PayrollRun.Status is Approved or Finalized; Draft/Prepared/Processing/Calculated/Cancelled are all Conflict
+    src: "PayrollAccountingService.GenerateAsync"
+    type: Negative
+    tags: [Boundary, Validation]
+    pri: P0
+    sev: High
+    pre: "One payroll run per status value exists, each with at least one Calculated PayrollResult and a matching active accounting configuration/mapping"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: "Runs at Draft/Prepared/Processing/Calculated/Approved/Finalized/Cancelled"
+    steps:
+      - "[POST /api/payroll/runs/{draftRun}/accounting/generate] => [409] Conflict (approved or finalized payroll run)"
+      - "[POST /api/payroll/runs/{calculatedRun}/accounting/generate] => [409] Conflict"
+      - "[POST /api/payroll/runs/{cancelledRun}/accounting/generate] => [409] Conflict"
+      - "[POST /api/payroll/runs/{approvedRun}/accounting/generate] => [200] journal created, Status=Generated"
+      - "[POST /api/payroll/runs/{finalizedRun}/accounting/generate] => [200] journal created, Status=Generated"
+    auto: API
+
+  - id: GLACC-GEN-004
+    func: [F-GLACC-034]
+    sc: Second generation for a run that already has a journal is permanently blocked
+    t: A second Generate call on the same run while ANY non-Cancelled journal exists is Conflict, and (since Cancelled is unreachable) this is permanent
+    src: "PayrollAccountingService.GenerateAsync (AnyAsync guard)"
+    type: Negative
+    tags: [Idempotency]
+    pri: P0
+    sev: High
+    pre: "RUN1 (Approved) already has a Generated journal"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] a second time => [409] Conflict (An active journal already exists for this payroll run.)"
+    auto: API
+    cr: [CR-275]
+
+  - id: GLACC-GEN-005
+    func: [F-GLACC-035]
+    sc: Only current, calculated results and their components contribute
+    t: A superseded (IsCurrent=false) or Failed PayrollResult row never produces a journal line
+    src: "PayrollAccountingService.GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (Approved) has 3 employees: one Calculated+current, one Calculated but IsCurrent=false (superseded), one Status=Failed"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: 3 PayrollResult rows as described
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] => [200] journal lines reference only the current+Calculated employee's components"
+    auto: DB-assisted
+    db: "Assert PayrollJournalLines.SourceId/EmployeeId trace only to the current/Calculated PayrollResult"
+
+  - id: GLACC-GEN-006
+    func: [F-GLACC-036]
+    sc: Zero eligible results
+    t: Generate on an Approved run with no Calculated payroll results is Conflict
+    src: "PayrollAccountingService.GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "RUN2 is Approved but has zero PayrollResult rows"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN2}/accounting/generate] => [409] Conflict (No calculated payroll results are available.)"
+    auto: API
+
+  - id: GLACC-GEN-007
+    func: [F-GLACC-037]
+    sc: Mapping selection by CalculationSource
+    t: Components with CalculationSource=LoanRecovery/TaxableReimbursement/NonTaxableReimbursement resolve to their special mapping types; all other components resolve by SalaryComponentId
+    src: "PayrollAccountingService.GenerateAsync (mapping selection)"
+    type: Contract
+    tags: [Positive]
+    pri: P0
+    sev: High
+    pre: "RUN1 has one employee with 4 components: BASIC (ordinary earning), PF-EE (LoanRecovery source), a TaxableReimbursement component, and a NonTaxableReimbursement component; corresponding mappings for LoanPayrollRecovery, TaxableReimbursementExpense, and ReimbursementExpense exist"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: "4 PayrollResultComponent rows"
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] => [200] BASIC's line uses the SalaryComponentId-matched mapping; the LoanRecovery component uses the LoanPayrollRecovery mapping; the two reimbursement components use their respective Taxable/non-Taxable mapping"
+    auto: DB-assisted
+    db: "Assert each PayrollJournalLine.PayrollGLAccountId matches the mapping its component's CalculationSource implies"
+
+  - id: GLACC-GEN-008
+    func: [F-GLACC-038]
+    sc: Missing mapping blocks the whole journal
+    t: A component with no matching mapping, or a mapping with an inactive/missing account, causes the entire Generate call to fail with no journal persisted
+    src: "PayrollAccountingService.GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "RUN3 (Approved) has one employee whose OT-ALLOW component has NO active mapping configured"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN3}/accounting/generate] => [409] Conflict (MissingGLMapping for component OT-ALLOW.)"
+      - "[GET /api/payroll/accounting?payrollRunId={RUN3}] (client-side filter) => [200] no journal exists for RUN3"
+    auto: DB-assisted
+    db: "Assert zero PayrollJournalBatches rows exist for RUN3 after the failed call"
+
+  - id: GLACC-GEN-009
+    func: [F-GLACC-039]
+    sc: Earning/deduction/employer-contribution component line shape
+    t: An IsEarning component produces one Debit line; an IsDeduction component produces one Credit line; an IsEmployerContribution component produces BOTH a Debit and a Credit line on the same amount
+    src: "PayrollAccountingService.GenerateAsync (AddLine calls)"
+    type: Contract
+    tags: [Positive]
+    pri: P0
+    sev: High
+    pre: "RUN1 has one employee with BASIC (earning, 50000), PF-EE (deduction, 6000), and PF-ER (employer contribution, 6000), all with active mappings"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: 3 components
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] => [200] BASIC produces 1 Debit line of 50000; PF-EE produces 1 Credit line of 6000; PF-ER produces 2 lines (1 Debit + 1 Credit) both of 6000"
+    auto: DB-assisted
+    db: "Assert exactly 4 PayrollJournalLines for these 3 components, with the described Debit/Credit split"
+
+  - id: GLACC-GEN-010
+    func: [F-GLACC-040]
+    sc: LoanRecovery component produces one credit-only line with correct source traceability
+    t: A LoanRecovery-sourced component produces a single Credit line, traced to LoanInstallmentId (or EmployeeLoanId, or the component id) via a LoanRepayment source
+    src: "PayrollAccountingService.GenerateAsync (LoanRecovery branch)"
+    type: Contract
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "RUN1 has an employee with a LoanRecovery component whose LoanInstallmentId is set"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] => [200] the loan-recovery component produces exactly 1 Credit-only line, SourceType='LoanRepayment' pointing to LoanInstallmentId"
+    auto: DB-assisted
+    db: "Assert PayrollJournalLines row: Debit=0, Credit=amount, SourceType matches"
+
+  - id: GLACC-GEN-011
+    func: [F-GLACC-041]
+    sc: Net-payable line is always present and missing-mapping blocks the journal
+    t: Every eligible result produces exactly one Net-Payable credit line for its rounded NetPay; a missing NetPayable mapping is Conflict
+    src: "PayrollAccountingService.GenerateAsync (NetPayable line)"
+    type: Negative
+    tags: [Boundary, Validation]
+    pri: P0
+    sev: High
+    pre: "RUN1 (Approved) has one employee with NetPay=44123.456; no NetPayable mapping is configured yet"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] => [409] Conflict (MissingGLMapping for net salary payable.)"
+      - "[Manual] configure a NetPayable mapping, then retry => [POST /api/payroll/runs/{RUN1}/accounting/generate] => [200] one Net-Payable Credit line of 44123.46 (rounded AwayFromZero) is present"
+    auto: DB-assisted
+    db: "Assert one PayrollJournalLine with Description='Net Payable', Credit=44123.46"
+
+  - id: GLACC-GEN-012
+    func: [F-GLACC-042]
+    sc: Unbalanced totals block the whole journal with no partial persistence
+    t: If summed TotalDebit != TotalCredit, Generate is Conflict and nothing is saved to the database
+    src: "PayrollAccountingService.GenerateAsync (balance check before SaveChangesAsync)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "RUN4 (Approved) has a deliberately misconfigured mapping such that an earning's debit account differs from its offsetting deduction/net-payable so totals will not balance"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN4}/accounting/generate] => [409] Conflict (Generated journal is unbalanced.)"
+    auto: DB-assisted
+    db: "Assert zero PayrollJournalBatches/PayrollJournalLines rows exist for RUN4 after the failed call"
+
+  - id: GLACC-GEN-013
+    func: [F-GLACC-043]
+    sc: Deterministic journal number with a fixed version segment
+    t: JournalNumber follows PJ/{PayDate:yyyyMM}/{RunId:N}/1 with a literal, non-computed trailing "1"
+    src: "PayrollAccountingService.GenerateAsync"
+    type: Contract
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (Approved, PayDate 2026-10-05) has one eligible employee, fully mapped, no prior journal"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] => [200] JournalNumber == \"PJ/202610/{RUN1:N}/1\""
+    auto: API
+
+  - id: GLACC-GEN-014
+    func: [F-GLACC-044]
+    sc: New journal starting state
+    t: A newly generated journal starts at Status=Generated with GeneratedAtUtc/GeneratedByUserId stamped and a Generated history event
+    src: "PayrollAccountingService.GenerateAsync -> History(Generated)"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (Approved) has one fully-mapped eligible employee"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] => [200] Status=='Generated', GeneratedAtUtc is set"
+    auto: DB-assisted
+    db: "Assert PayrollJournalHistories has exactly one Generated-type row with ActorUserId populated"
+    cr: [CR-279]
+
+  - id: GLACC-GEN-015
+    func: [F-GLACC-045]
+    sc: Cross-tenant run id
+    t: Generate for a run id belonging to another tenant returns NotFound, not Forbidden
+    src: "PayrollAccountingService.GenerateAsync (TenantId filter)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "RUN_T2 is an Approved payroll run belonging to tenant T2 (DEMO02)"
+    role: HRAdmin (T1, custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN_T2}/accounting/generate] as a T1 user => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: GLACC-GEN-016
+    func: [F-GLACC-046]
+    sc: Generation never mutates payroll results or components
+    t: PayrollResult/PayrollResultComponent rows are read-only inputs to generation; their values are unchanged before and after
+    src: "PayrollAccountingService.GenerateAsync (AsNoTracking source query)"
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Low
+    pre: "RUN1 (Approved) has one eligible employee with known component values"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] snapshot the PayrollResultComponent rows' CalculatedAmount/Status before generation => values recorded"
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] => [200] journal created"
+      - "[Manual] re-read the same rows => values are byte-for-byte unchanged"
+    auto: DB-assisted
+    db: "PayrollResultComponents rows unchanged"

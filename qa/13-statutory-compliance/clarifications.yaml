@@ -1,0 +1,418 @@
+# Module 13 QA-risk register. Numbering continues after Module 12's CR-218 (qa/12-bonus-variable-pay/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. Classification starts 'Open - awaiting decision'.
+# CR-219, CR-224, and CR-234/CR-235 are exceptions: they document confirmed source-level/frontend defects,
+# not merely design ambiguities, and are classified accordingly. CR-222 documents an explicitly-documented,
+# intentional design choice (no change requested), the same shape as qa/12-bonus-variable-pay's CR-214.
+
+clarifications:
+  - id: CR-219
+    title: "HEADLINE FINDING - CONFIRMED DEFECT: PayrollStatutoryResult has no attempt-scoping, so recalculation silently accumulates stale statutory rows and the results endpoint returns their union"
+    observation: >
+      PayrollStatutoryResult carries no CalculationAttemptId and no IsCurrent flag, unlike
+      PayrollResult, PayrollResultComponent, and PayrollCalculationError, all of which use one or
+      both to distinguish the current calculation attempt from superseded ones. When
+      PayrollCalculationEngine.CalculateAsync runs with recalculate=true, it marks the prior
+      attempt's PayrollResult rows IsCurrent=false and mints an entirely new PayrollResult id for
+      the new attempt, but StatutoryPayrollService.CalculateAsync is invoked again against that new
+      result id and simply INSERTs a fresh set of PayrollStatutoryResult rows - it never touches,
+      deletes, or flags the prior attempt's own statutory rows, which remain in the table
+      indefinitely. StatutoryPayrollService.GetResultsAsync(payrollRunId, employeeId) - the sole read
+      endpoint for this data - filters only by TenantId/PayrollRunId/EmployeeId, with no
+      PayrollResultId or attempt/IsCurrent predicate anywhere in the query. After even a single
+      recalculation, this endpoint returns the UNION of every attempt's statutory rows (e.g. two
+      ProvidentFund rows, two Esi rows) with no field on PayrollStatutoryResultDto that would let a
+      caller identify which set belongs to the current, authoritative PayrollResult. The same
+      unfiltered accumulation additionally corrupts PayrollStatutoryComplianceService.GenerateAsync's
+      own statutory-source query (also PayrollRunId/StatutoryType/JurisdictionCode-only, with no
+      attempt filter), meaning a compliance return generated after any recalculation on any
+      contributing payroll run double- or multiple-counts that employee's contribution once per
+      retained attempt.
+    risk: >
+      This is the single most consequential correctness defect in the module: it silently corrupts
+      both the ad-hoc statutory-results API and the statutory compliance register itself (real money
+      figures reported to a regulator) the moment any payroll run in scope has ever been
+      recalculated - a routine, expected operational event, not an edge case. No error, warning, or
+      distinguishing field anywhere in the API surface hints that the returned figures are wrong.
+    source: "Backend/HRMS.Domain/Entities/PayrollCalculation.cs (PayrollStatutoryResult, full field list); Backend/HRMS.Application/Services/PayrollCalculationEngine.cs (CalculateAsync's recalculation cleanup block, full grep for PayrollStatutoryResults - zero matches); Backend/HRMS.Application/Services/StatutoryPayrollService.cs (GetResultsAsync, CalculateAsync); Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs (GenerateAsync's sources query)"
+    classification: Confirmed defect
+
+  - id: CR-220
+    title: "No seeded role other than SuperAdmin/TenantAdmin natively holds ANY of the 29 Statutory/StatutoryCompliance/StatutoryFiling permissions, the identical shape to qa/11-loans-advances' CR-183 and qa/12-bonus-variable-pay's CR-202"
+    observation: >
+      A full grep of Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs's RolePermissionMap
+      for every one of the 29 Payroll.Statutory*/StatutoryCompliance*/StatutoryFiling* permission
+      constants returns matches ONLY inside the PermissionIds numbering dictionary and the
+      Permissions.All catalogue - zero matches inside any individual role's own grant array.
+      SuperAdmin and TenantAdmin both receive the entire module only via Permissions.All; HRAdmin,
+      HRManager, Manager, Employee, and SuperHR are all granted precisely zero permissions from this
+      module, including EmployeeStatutory.View, meaning a freshly seeded HR role cannot even view an
+      employee's own statutory applicability out of the box.
+    risk: >
+      Without an explicit, deliberate tenant-level grant, the entire Statutory Compliance feature
+      (configuration, employee profiles, calculation results, compliance returns, and filing) is
+      functionally invisible to every role except the two full-tenant-admin roles immediately after a
+      tenant is provisioned - confirm with product whether this is intentional (consistent with the
+      identical pattern already accepted for Loans and Variable Pay) or a seeding oversight, since the
+      feature is otherwise fully implemented end-to-end.
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, full grep for every one of the 29 constants); Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll.Statutory*/StatutoryCompliance*/StatutoryFiling* blocks)"
+    classification: Open - awaiting decision
+
+  - id: CR-221
+    title: "PayrollStatutoryChallan is a fully migrated entity, table, and EF configuration that no service, controller, DTO, or frontend code anywhere ever creates, reads, updates, or lists - a completely dead feature area"
+    observation: >
+      PayrollStatutoryChallan (ChallanNumber, PaymentDate, Amount, Status, BankReference,
+      ExternalReference) has a working Status enum (Pending/Prepared/Paid/Cancelled), a real EF
+      configuration with a (TenantId, PayrollStatutoryReturnBatchId) index and a cascading
+      relationship from PayrollStatutoryReturnBatch, and matching migrations in both the SQL Server
+      and MySQL chains. A full codebase grep for "PayrollStatutoryChallan" returns 94 file matches,
+      every single one an entity definition, EF configuration, migration, or model-snapshot file -
+      IStatutoryPayrollService, IPayrollStatutoryComplianceService, IStatutoryFilingService, and
+      every corresponding implementation and controller have zero references to it, and no frontend
+      page renders or links a challan anywhere.
+    risk: >
+      A tenant using this module has no way, through this API, to record the bank challan
+      number/payment date that a real EPFO/ESIC/Professional Tax deposit produces, even though the
+      schema was clearly built to support exactly that. Any operator or integrator who discovers the
+      PayrollStatutoryChallans table (e.g. via a database export or the Challans navigation property
+      on PayrollStatutoryReturnBatch) would reasonably expect a corresponding API surface to exist -
+      confirm whether challan tracking was deferred to a later phase or is simply an incomplete
+      feature that should either be finished or removed.
+    source: "Backend/HRMS.Domain/Entities/PayrollStatutoryCompliance.cs (PayrollStatutoryChallan); Backend/HRMS.Infrastructure/Persistence/Configurations/PayrollStatutoryComplianceConfiguration.cs (PayrollStatutoryChallanConfiguration); full-codebase grep for 'PayrollStatutoryChallan' (94 matches, all entity/config/migration files)"
+    classification: Open - awaiting decision
+
+  - id: CR-222
+    title: "(by design, documented in the UI itself) Only ManualDownload and Test statutory filing connectors are ever registered - there is no real government-portal (EPFO/ESIC/GSTN/TRACES) integration anywhere in the codebase"
+    observation: >
+      StatutoryFilingService's ResolveConnector method constructs a StatutoryFilingConnectorRegistry
+      containing exactly two connectors when none is supplied via DI:
+      ManualDownloadStatutoryFilingConnector and TestStatutoryFilingConnector. No third connector
+      implementation exists anywhere in the codebase. StatutoryFilingsPage.tsx's own subtitle
+      explicitly states this design choice to the end user: "Generate controlled packages from
+      authoritative statutory results. ManualDownload is explicit; no portal upload is implied." -
+      this is documented, intentional scope for the current phase, not an oversight.
+    risk: >
+      None beyond what is already disclosed in the product UI - recorded here so QA does not spend
+      effort hunting for a hidden government-portal integration (there is none) and so a future phase
+      that adds a real EPFO/ESIC connector is aware this is the first one.
+    source: "Backend/HRMS.Application/Services/StatutoryFilingConnectors.cs (full file - two connector classes only); Backend/HRMS.Application/Services/StatutoryFilingService.cs (ResolveConnector default registry construction); Frontend/HRMS.Web/src/pages/payroll/StatutoryFilingsPage.tsx (page subtitle)"
+    classification: Design confirmed (no change requested)
+
+  - id: CR-223
+    title: "ManualDownload's SubmitAsync always reports Outcome=Pending, which StatutoryFilingService then unconditionally maps to Status=Submitted - a run can reach 'Submitted' without anything ever having actually left the system"
+    observation: >
+      ManualDownloadStatutoryFilingConnector.SubmitAsync always returns
+      Result.Success(new(StatutoryFilingSubmissionOutcome.Pending, null, "MANUAL_DOWNLOAD", "...ready
+      for operator download and external portal submission.", false)) regardless of the package
+      content. StatutoryFilingService.SubmitAsync's own outcome-to-status mapping is
+      `response.Outcome == Rejected ? Rejected : response.Outcome == Failed ? Failed : Submitted` -
+      since ManualDownload's outcome is neither Rejected nor Failed, every ManualDownload submission
+      immediately lands the run at Status=Submitted, identical to what a real connector would report
+      only after actual confirmed transmission.
+    risk: >
+      "Submitted" is a status name that, for every other connector shape in this design, implies
+      transmission occurred; for ManualDownload it means only "the package was generated and is
+      ready for a human to download and file manually." A dashboard, report, or downstream automation
+      that treats Status=Submitted as "this filing has left our system" would be misled for every
+      ManualDownload-connector run - confirm whether a distinct status (or a UI label override) is
+      warranted for the ManualDownload path specifically.
+    source: "Backend/HRMS.Application/Services/StatutoryFilingConnectors.cs (ManualDownloadStatutoryFilingConnector.SubmitAsync); Backend/HRMS.Application/Services/StatutoryFilingService.cs (SubmitAsync's outcome-to-status mapping)"
+    classification: Open - awaiting decision
+
+  - id: CR-224
+    title: "CONFIRMED DEFECT - PtRegistrationReference on every ProfessionalTax compliance return row is permanently null; GenerateAsync never assigns it"
+    observation: >
+      PayrollStatutoryReturnEmployee.PtRegistrationReference is a declared, mapped column
+      (HasMaxLength(100)) intended to carry the employee's Professional Tax registration identifier,
+      analogous to Uan for ProvidentFund and EsicNumber for Esi. PayrollStatutoryComplianceService.
+      GenerateAsync's row initializer sets Uan, EsicNumber, and Pan from the employee snapshot but has
+      no corresponding PtRegistrationReference assignment anywhere in the method (full read).
+      ExportAsync's own identifier-column selector explicitly references
+      `row.PtRegistrationReference` for `PayrollComplianceType.ProfessionalTax`, so the CSV export's
+      identifier column for every Professional Tax compliance return is unconditionally empty.
+    risk: >
+      A Professional Tax statutory return - the one compliance type whose export column this field
+      exists specifically for - can never carry the employee's own PT registration reference through
+      this API; the exported file's identifier column is always blank for this compliance type,
+      unlike every other supported type.
+    source: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs (GenerateAsync row initializer - full method, no PtRegistrationReference assignment; ExportAsync's identifier selector, line ~84)"
+    classification: Confirmed defect
+
+  - id: CR-225
+    title: "EmployeeStatutoryProfile.Uan/EsiNumber and Employee.UanNumber/EsicNumber are two independent identifier pairs that are never cross-referenced or reconciled anywhere"
+    observation: >
+      StatutoryPayrollService's EmployeeStatutoryProfile entity stores its own Uan and EsiNumber
+      fields, populated only through SaveProfileAsync. Separately, Employee (the Personal Details
+      record surfaced on PersonalDetailsForm's "Statutory & Benefits" section) stores UanNumber and
+      EsicNumber. PayrollStatutoryComplianceService.GenerateAsync sources the compliance register's
+      own Uan/EsicNumber columns from the Employee record, NOT from EmployeeStatutoryProfile - so the
+      calculation-driving profile record's own identifier fields are never actually surfaced in the
+      compliance register at all, and the two pairs can be set to different values for the same
+      employee with no validation, warning, or reconciliation anywhere.
+    risk: >
+      An administrator who updates an employee's UAN through EmployeeStatutoryProfile (believing it
+      to be the authoritative record, since it is the one gating PF applicability) would not see that
+      change reflected in the compliance register, which continues to read the older
+      Employee.UanNumber value - a plausible source of incorrect UANs appearing on a real PF ECR
+      filing. Confirm which field should be authoritative, or whether the two should be merged/synced.
+    source: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs (EmployeeStatutoryProfile.Uan/EsiNumber); Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs (GenerateAsync - row.Uan = employee.UanNumber, row.EsicNumber = employee.EsicNumber); Backend/HRMS.Domain/Entities/Employee.cs (UanNumber, EsicNumber, PanNumber)"
+    classification: Open - awaiting decision
+
+  - id: CR-226
+    title: "Labour Welfare Fund (LWF) has no StatutoryType member and therefore no calculation-engine support at all, despite being a selectable descriptive tag on a salary component"
+    observation: >
+      Backend/HRMS.Domain/Enums/PayrollEnums.cs's StatutoryType enum declares exactly four members:
+      ProvidentFund, Esi, ProfessionalTax, IncomeTax - there is no LabourWelfareFund (or any other)
+      member. Separately, SalaryComponent.cs declares its own, purely descriptive
+      SalaryStatutoryType enum (None/ProvidentFund/Esi/ProfessionalTax/LabourWelfareFund/IncomeTax/
+      Gratuity/Other) used only to tag a salary component in the Salary Component Master. A component
+      tagged SalaryStatutoryType.LabourWelfareFund is calculated purely as whatever generic
+      Fixed/Percentage/Formula calculation type its salary structure definition specifies - it never
+      passes through StatutoryConfiguration/StatutoryConfigurationVersion/StatutorySlab at all, so it
+      has no ceiling, no slab, no effective-dating, no jurisdiction/state matching, and no separate
+      employer-contribution amount the way a genuine StatutoryType value would.
+    risk: >
+      LWF is a real, commonly-configured Indian state-level statutory deduction with its own
+      state-specific slabs and half-yearly/annual periodicity - a tenant operating in a state that
+      levies LWF has no way to configure it with the same effective-dated, slab-driven rigor as
+      PF/ESI/PT through this module; the closest available mechanism (tagging a plain salary
+      component) provides none of the ceiling/slab/audit machinery the rest of this module offers.
+      Confirm whether LWF support is planned for a future phase or intentionally out of scope for
+      this statutory framework.
+    source: "Backend/HRMS.Domain/Enums/PayrollEnums.cs (StatutoryType, 4 members); Backend/HRMS.Domain/Entities/SalaryComponent.cs (SalaryStatutoryType, includes LabourWelfareFund as tag-only)"
+    classification: Open - awaiting decision
+
+  - id: CR-227
+    title: "No UpdateConfigurationAsync/DeactivateAsync exists for StatutoryConfiguration - Code/Name/IsActive/JurisdictionCode/StateCode/StatutoryType are permanently immutable after creation"
+    observation: >
+      A full read of IStatutoryPayrollService.cs and StatutoryPayrollController.cs shows only
+      GetConfigurationsAsync/GetConfigurationAsync/CreateConfigurationAsync/AddVersionAsync for the
+      configuration surface - there is no PUT/PATCH route and no corresponding service method to
+      update or deactivate an existing StatutoryConfiguration. Every other master-data-shaped module
+      surveyed so far (Loans products, Variable Pay plans, statutory's own EmployeeStatutoryProfile
+      via its append-only-versioning pattern) has SOME mechanism to change or supersede an existing
+      record's header fields; StatutoryConfiguration has none at all.
+    risk: >
+      A configuration created with a typo in its Name, or one whose IsActive flag needs to be
+      flipped off after go-live, can never be corrected or deactivated - only new configurations (with
+      a different Code, since Code is unique) can be created going forward, leaving the original
+      permanently active and matchable by CalculateAsync unless every one of its own versions happens
+      to lapse.
+    source: "Backend/HRMS.Application/Abstractions/IStatutoryPayrollService.cs (full interface); Backend/HRMS.API/Controllers/StatutoryPayrollController.cs (full route list)"
+    classification: Open - awaiting decision
+
+  - id: CR-228
+    title: "Statutory configuration version overlap and employee statutory profile overlap are both enforced only by a non-unique index plus an app-level pre-check - a genuine race window exists for both"
+    observation: >
+      StatutoryConfigurationVersionConfiguration and EmployeeStatutoryProfileConfiguration each
+      declare only a plain (non-unique) index covering (TenantId, ..., EffectiveFrom, EffectiveTo).
+      AddVersionAsync and SaveProfileAsync each perform an AnyAsync overlap check before inserting the
+      new row, with no transaction, no application-level lock, and no DB-level exclusion constraint
+      backing the check - two concurrent calls for the same configuration/employee that both read
+      "no overlap" before either has committed can both succeed, producing two overlapping,
+      simultaneously-Active version or profile rows.
+    risk: >
+      A genuine race (e.g. two administrators independently correcting the same employee's statutory
+      profile around the same time) can silently produce two overlapping EmployeeStatutoryProfile
+      rows; CalculateAsync's own selection (OrderByDescending(EffectiveFrom).FirstOrDefault, F-STAT-032)
+      would then pick one of the two non-deterministically-ordered-in-a-tie rows, an unpredictable
+      outcome for a financial calculation. The identical risk applies to overlapping statutory
+      configuration versions.
+    source: "Backend/HRMS.Infrastructure/Persistence/Configurations/StatutoryConfiguration.cs (StatutoryConfigurationVersionConfiguration, EmployeeStatutoryProfileConfiguration - non-unique indexes); Backend/HRMS.Application/Services/StatutoryPayrollService.cs (AddVersionAsync, SaveProfileAsync overlap checks)"
+    classification: Open - awaiting decision
+
+  - id: CR-229
+    title: "ValidateAsync's own 'Return contains validation errors' guard is unreachable dead code, since nothing ever sets a PayrollStatutoryReturnEmployee's ValidationStatus to Invalid"
+    observation: >
+      PayrollStatutoryReturnEmployee.ValidationStatus defaults to
+      PayrollComplianceValidationStatus.Valid at construction. A full grep of
+      PayrollStatutoryComplianceService.cs for "ValidationStatus =" shows no method ever assigns
+      Invalid or Warning to any row - GenerateAsync's row initializer does not set it either (it
+      relies entirely on the entity default). ValidateAsync's own guard,
+      `if (batch.Employees.Any(x => x.ValidationStatus == Invalid)) return Conflict(...)`, can
+      therefore never actually fire for any return this service has ever generated.
+    risk: >
+      The compliance module implies (via its own declared ValidationStatus enum, ValidationMessage
+      field, and this explicit guard) that some form of per-employee data-quality validation exists
+      before a return can proceed to Validated - in reality no such validation is ever performed, and
+      an administrator inspecting a Valid-everywhere register has no way to distinguish "genuinely
+      clean data" from "validation was never implemented." Confirm whether a real validation rule set
+      (e.g. missing UAN/PAN, negative wages, duplicate employees) was intended for this phase.
+    source: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs (ValidateAsync guard, GenerateAsync row initializer - full grep for ValidationStatus assignment, only the entity's own default)"
+    classification: Open - awaiting decision
+
+  - id: CR-230
+    title: "Statutory filing's own validation step has exactly one rule, and that rule can never actually fail against data GenerateAsync itself produces"
+    observation: >
+      StatutoryFilingService.ValidateAsync's only implemented check is
+      `string.IsNullOrWhiteSpace(item.SourceReference)` on each StatutoryFilingRunItem, raising a
+      MissingSource error. GenerateAsync's own item-creation loop unconditionally sets
+      `SourceReference = row.Id.ToString("N")` for every item it inserts - a non-blank GUID string is
+      always present, so this rule can never actually trigger against normally-generated data (only
+      against a row manipulated directly in the database would it fire).
+    risk: >
+      The same "declared validation with no reachable failure path" shape as CR-229 - an
+      administrator relying on Validate to catch data-quality problems before submission gets no real
+      protection beyond confirming the run was Generated at all. Confirm whether additional filing
+      validation rules (amount sign/range checks, duplicate employee detection, mandatory-field
+      completeness against the target filing type) were intended for this phase.
+    source: "Backend/HRMS.Application/Services/StatutoryFilingService.cs (ValidateAsync's sole rule; GenerateAsync's SourceReference assignment)"
+    classification: Open - awaiting decision
+
+  - id: CR-231
+    title: "No Cancel action exists for a PayrollStatutoryReturnBatch despite Cancelled being a declared, actively-referenced status"
+    observation: >
+      PayrollStatutoryReturnStatus.Cancelled is referenced by GenerateAsync's own guard predicates
+      (F-STAT-062, F-STAT-066: "no existing non-Cancelled batch/period") but no method in
+      IPayrollStatutoryComplianceService or PayrollOutputsController ever transitions a batch TO
+      Cancelled. A full grep for a cancel route confirms none exists. Once Generated, a return batch
+      can only move forward through Validated/Approved/Exported/Filed or be abandoned in place - it
+      can never be formally withdrawn, unlike StatutoryFilingRun which does have a (Draft-only)
+      CancelAsync (F-STAT-109).
+    risk: >
+      A return batch generated in error (e.g. against the wrong compliance period, or before a
+      correcting payroll recalculation) can never be withdrawn - the tenant is stuck either
+      progressing an incorrect return through Approve/Export/MarkFiled or leaving it permanently
+      stranded at Generated/Validated, since no new batch can be generated for the same period while
+      the erroneous one remains non-Cancelled (F-STAT-066).
+    source: "Backend/HRMS.Application/Abstractions/IPayrollStatutoryComplianceService.cs (full interface - no Cancel member); Backend/HRMS.API/Controllers/PayrollOutputsController.cs (PayrollStatutoryComplianceController - full route list, no cancel route)"
+    classification: Open - awaiting decision
+
+  - id: CR-232
+    title: "Statutory filing submission retry is gated on one connector's own hardcoded response-code string, not a declared, connector-agnostic retryability flag"
+    observation: >
+      StatutoryFilingService.SubmitAsync's retry-eligibility check is
+      `string.Equals(priorAttempt?.ResponseCode, "RETRYABLE_EXTERNAL_FAILURE", StringComparison.Ordinal)`.
+      This exact string is produced only by TestStatutoryFilingConnector's own SubmitAsync
+      implementation. StatutoryFilingConnectorResult does carry its own boolean IsRetryable-shaped
+      field (set true for the Test connector's Failed/Pending outcomes), but SubmitAsync's retry gate
+      reads the STORED ResponseCode string from the prior attempt instead of that structured flag.
+    risk: >
+      Any future real connector (or the Test connector, if its own response-code string is ever
+      renamed) that reports a transient failure via a different response code would be permanently
+      un-retryable through this API - Conflict("Only retryable failed submissions may be retried")
+      forever, even though the connector itself correctly flagged the outcome as retryable at the
+      time. This is a maintainability/correctness risk for adding any real government-portal connector
+      later, not merely a cosmetic one.
+    source: "Backend/HRMS.Application/Services/StatutoryFilingService.cs (SubmitAsync's retry-eligibility check); Backend/HRMS.Application/Services/StatutoryFilingConnectors.cs (TestStatutoryFilingConnector's ResponseCode/retryable production)"
+    classification: Open - awaiting decision
+
+  - id: CR-233
+    title: "Self-approval prevention for both statutory-return Approve and statutory-filing Approve is opt-in only, disabled by default"
+    observation: >
+      Both PayrollStatutoryComplianceService.ApproveAsync and StatutoryFilingService.ApproveAsync
+      delegate to the shared PayrollApprovalGuard.ValidateAsync, which only blocks self-approval when
+      the tenant has a PayrollControlConfiguration row with BOTH RequireMakerChecker=true AND
+      PreventSelfApproval=true. When no such row exists for the tenant (the default state for a newly
+      provisioned tenant, per this guard's own `if (policy is null) return Success(true)` early
+      return), the guard is a complete no-op and the same user who generated a return/run may approve
+      it themselves.
+    risk: >
+      Combined with CR-220 (only SuperAdmin/TenantAdmin hold any of these permissions today), the
+      practical exposure is currently limited to those two roles, but the underlying control is
+      opt-in rather than a secure-by-default posture - a tenant that has not explicitly configured
+      PayrollControlConfiguration gets no self-approval protection on either the statutory return or
+      the statutory filing approval step, mirroring the identical gap already documented for other
+      payroll sub-modules that share this same guard.
+    source: "Backend/HRMS.Application/Services/PayrollApprovalGuard.cs (full file - policy-null early return); Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs (ApproveAsync); Backend/HRMS.Application/Services/StatutoryFilingService.cs (ApproveAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-234
+    title: "CONFIRMED FRONTEND DEFECT - EmployeeStatutoryProfile, the record that actually gates statutory calculation, has zero UI surface anywhere, while a confusingly-named, unrelated legacy section sits in its place"
+    observation: >
+      getEmployeeStatutoryProfile and saveEmployeeStatutoryProfile already exist as fully-implemented
+      client functions in Frontend/HRMS.Web/src/api/payroll.ts, but a full grep of every page
+      component under src/pages finds zero callers of either function - there is no form, page, or
+      panel anywhere that lets an operator view or edit an employee's PF/ESI/Professional
+      Tax/Income-Tax applicability, UAN, ESI number, tax regime, or effective dates (the exact record
+      StatutoryPayrollService.CalculateAsync reads to decide whether to calculate anything at all,
+      per F-STAT-031). In its place, PersonalDetailsForm.tsx renders an entirely different, older
+      "Statutory & Benefits" fieldset (esicApplicable/gratuity/pension/uanNumber) bound to the
+      Employee/PersonalDetails model, not EmployeeStatutoryProfile - editing these fields has no
+      effect whatsoever on statutory calculation eligibility, and the section's name and its
+      co-located UAN field make it easy to believe otherwise.
+    risk: >
+      An HR administrator who configures "Statutory & Benefits" on an employee's Personal Details tab
+      - the only statutory-labelled UI surface that exists in the product - has configured NOTHING
+      that affects actual PF/ESI/PT/Income-Tax deduction; the real gating record can only be set via a
+      direct API call. This is a severe, easy-to-fall-into trap: the UI actively suggests the wrong
+      mental model to the exact audience (HR/payroll admins) who most need the real one.
+    source: "Frontend/HRMS.Web/src/api/payroll.ts (getEmployeeStatutoryProfile/saveEmployeeStatutoryProfile, unused); full grep of Frontend/HRMS.Web/src/pages for either function name - zero matches; Frontend/HRMS.Web/src/pages/employees/PersonalDetailsForm.tsx (lines ~396-430, the unrelated 'Statutory & Benefits' section)"
+    classification: Confirmed defect
+
+  - id: CR-235
+    title: "CONFIRMED FRONTEND DEFECT - both StatutoryCompliancePage and StatutoryFilingsPage are missing the majority of their own backend lifecycle actions, the identical shape as qa/12-bonus-variable-pay's CR-207"
+    observation: >
+      StatutoryCompliancePage.tsx exposes exactly two actions: a hardcoded "Create open period"
+      (ComplianceType always ProvidentFund, JurisdictionCode always IN, no manual date override) and
+      "Generate return" - there is no ComplianceType/jurisdiction selector and no
+      Validate/Approve/Export/MarkFiled control anywhere on the page, even though all four exist as
+      working backend endpoints. StatutoryFilingsPage.tsx wires only Generate and Validate (plus a
+      "Create corrected resubmission" alias for Generate on Rejected/Failed runs); SubmitForApproval,
+      Approve, Submit (the real connector transmission step), Acknowledge, Cancel, and package
+      Download have no button, control, or client function anywhere in the page or
+      src/api/statutoryFilings.ts (only 5 of the 13 backend routes have a corresponding client
+      function at all).
+    risk: >
+      An administrator using only the shipped statutory pages can create a ProvidentFund-only
+      compliance period and generate its return, but can never validate, approve, export, or mark it
+      filed; and can generate and validate a filing run but can never submit it for approval, approve
+      it, actually transmit it, acknowledge a government response, cancel it, or download the
+      generated package - every one of these real operational actions requires a direct API call
+      (Swagger, Postman, or a script), making both shipped pages effectively read-mostly/early-stage
+      dashboards rather than the working surface for statutory compliance operations.
+    source: "Frontend/HRMS.Web/src/pages/payroll/StatutoryCompliancePage.tsx (full component - 2 of 6 lifecycle actions, no type/jurisdiction selector); Frontend/HRMS.Web/src/pages/payroll/StatutoryFilingsPage.tsx (full component - 2 of 8 lifecycle actions); Frontend/HRMS.Web/src/api/statutoryFilings.ts (full file - 5 of 13 backend routes exposed)"
+    classification: Confirmed defect
+
+  - id: CR-236
+    title: "(frontend) StatutoryConfigurationsPage and StatutoryFilingsPage have no navigation.ts entry - both are reachable only by typing the URL, the same discoverability gap as qa/12-bonus-variable-pay's CR-217"
+    observation: >
+      A grep of Frontend/HRMS.Web/src/layout/navigation.ts for "statutory" (case-insensitive) returns
+      exactly one match: Statutory Compliance (/payroll/statutory-compliance). StatutoryConfigurationsPage
+      (/payroll/statutory) and StatutoryFilingsPage (/payroll/statutory-filings) are both registered,
+      permission-gated routes in App.tsx and are functional pages with real backend integration
+      (subject to CR-234/CR-235's own gaps) - but have no sidebar/menu entry of any kind.
+    risk: >
+      Manual QA, payroll administrators, and anyone else can only reach either page by already
+      knowing the exact URL - there is no sidebar, menu, or discoverable in-app path to statutory
+      configuration or statutory filing, compounding the CR-235 finding that even the page reached by
+      the one discoverable route (Statutory Compliance) cannot perform most of its own lifecycle
+      actions.
+    source: "Frontend/HRMS.Web/src/layout/navigation.ts (full grep for 'statutory'); Frontend/HRMS.Web/src/App.tsx (all three route registrations)"
+    classification: Open - awaiting decision
+
+  - id: CR-237
+    title: "(frontend, low severity) StatutoryCompliancePage has no permission gating on either of its two buttons, unlike the other two statutory pages"
+    observation: >
+      StatutoryConfigurationsPage and StatutoryFilingsPage both call useAuth().can(...) before
+      rendering/enabling their mutating buttons. StatutoryCompliancePage.tsx has no useAuth import and
+      no can() call anywhere in the component (full read) - its "Create open period" and "Generate
+      return" buttons render unconditionally for any user who can see the page at all
+      (StatutoryComplianceView), regardless of whether they hold
+      StatutoryComplianceManagePeriods/Generate.
+    risk: >
+      Low severity, since the backend [HasPermission] attribute is the real authorization gate per
+      CLAUDE.md (frontend checks are cosmetic only) - but a user without the mutating permission would
+      only discover this from a 403 response after clicking, rather than the disabled-button
+      affordance used consistently on the other two statutory pages.
+    source: "Frontend/HRMS.Web/src/pages/payroll/StatutoryCompliancePage.tsx (full component - no useAuth/can() usage); contrast with StatutoryConfigurationsPage.tsx and StatutoryFilingsPage.tsx (both use can())"
+    classification: Open - awaiting decision
+
+  - id: CR-238
+    title: "No SQL Server/MySQL provider-specific integration test class exists for the Statutory Filing area"
+    observation: >
+      SqlServerStatutoryPayrollIntegrationTests/MySqlStatutoryPayrollIntegrationTests and
+      SqlServerPayrollStatutoryComplianceIntegrationTests/MySqlPayrollStatutoryComplianceIntegrationTests
+      exist and cover the Calculation Framework and Compliance Returns areas respectively. A full glob
+      of Backend/HRMS.Tests for a Filing-area equivalent (*StatutoryFiling*IntegrationTests.cs) finds
+      none - only a single, provider-agnostic StatutoryFilingProviderAcceptance.cs exists for the
+      entire Generate/Validate/Submit/Approve/Reject/Acknowledge/retry/resubmission surface.
+    risk: >
+      A green run of the two provider-specific fixtures that DO exist is not evidence of SQL
+      Server/MySQL parity for any Filing behavior - the content-hash-keyed package deduplication, the
+      compare-and-swap-free optimistic concurrency (F-STAT-131), and the retry/resubmission state
+      machine have never been exercised against a real SQL Server or MySQL database specifically,
+      only against the shared SQLite in-memory default suite plus whatever the generic provider
+      acceptance fixture covers.
+    source: "Backend/HRMS.Tests (full glob for *StatutoryFiling*IntegrationTests.cs - zero matches beyond StatutoryFilingProviderAcceptance.cs)"
+    classification: Open - awaiting decision

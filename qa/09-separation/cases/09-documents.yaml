@@ -1,0 +1,352 @@
+sheet: Separation_Documents
+submodule: Document template configuration, generation, maker-checker approval/issue, supersession/cancellation, self/HR download, and the HR document dashboard
+defaults:
+  role: HRADMIN
+  perm: "Separation.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: SEP-DOC-001
+    func: [F-SEP-216]
+    sc: Document type and generated-document status enum contract
+    t: DocumentType and SeparationGeneratedDocumentStatus values match the declared enums exactly
+    src: ["Backend/HRMS.Domain/Enums/SeparationDocumentEnums.cs"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Inspect SeparationDocumentType (RelievingLetter/ExperienceLetter/ServiceCertificate/CustomSeparationDocument) and SeparationGeneratedDocumentStatus (DraftGenerated/PendingApproval/Approved/Issued/Superseded/Cancelled) => match documented values exactly"
+    auto: Manual only
+
+  - id: SEP-DOC-002
+    func: [F-SEP-217]
+    sc: Configure a document template and a Published version; Published versions must not date-overlap
+    t: Creating a template, adding a version, and publishing it succeeds; a second overlapping Published version on the same template is rejected
+    src: ["SeparationDocumentService.CreateTemplateAsync / PublishVersionAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    ui: "SeparationDocumentTemplateConfigurationPage"
+    steps:
+      - "[POST /api/separation/documents/templates] DocumentType=RelievingLetter, Code='RL-STD', Name='Standard Relieving Letter' => [200/201] template created"
+      - "[POST /api/separation/documents/templates/{id}/versions] BodyTemplate with valid merge fields, EffectiveFrom=today => [200/201] Draft version created"
+      - "[POST /api/separation/documents/templates/versions/{versionId}/publish] no overlapping Published version exists => [200] Published"
+      - "[POST /api/separation/documents/templates/{id}/versions] a second version, EffectiveFrom overlapping the first Published version's range => [200/201] created as Draft"
+      - "[POST /api/separation/documents/templates/versions/{versionId2}/publish] overlaps the first Published version => [409] Published template versions cannot overlap."
+    auto: API
+
+  - id: SEP-DOC-003
+    func: [F-SEP-218]
+    sc: Merge-field whitelist rejects an unknown token
+    t: A template body referencing an unrecognised {{field}} is rejected before publish, naming the unknown field
+    src: ["SeparationDocumentService.ValidateBody"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/separation/documents/templates/{id}/versions] BodyTemplate contains '{{Employee.SecretField}}' => [400] Unknown merge field 'Employee.SecretField'."
+      - "[POST /api/separation/documents/templates/{id}/versions] BodyTemplate uses only whitelisted fields (Employee.FullName, Separation.ApprovedLastWorkingDate, Organization.Name, Document.Number, etc.) => [200/201] created"
+    auto: API
+
+  - id: SEP-DOC-004
+    func: [F-SEP-219]
+    sc: Unsafe/executable template content is rejected
+    t: A body containing <script, javascript:, file:, http://, https://, localhost, 127.0.0.1, or ../ (case-insensitive) is rejected with the same message regardless of which token matched
+    src: ["SeparationDocumentService.ValidateBody"]
+    type: Security
+    pri: P0
+    steps:
+      - "[POST /api/separation/documents/templates/{id}/versions] BodyTemplate contains '<script>alert(1)</script>' => [400] Executable or unsafe template content is not allowed."
+      - "[POST /api/separation/documents/templates/{id}/versions] BodyTemplate contains 'javascript:alert(1)' => [400] Executable or unsafe template content is not allowed."
+      - "[POST /api/separation/documents/templates/{id}/versions] BodyTemplate contains a relative path traversal '../../etc/passwd' => [400] Executable or unsafe template content is not allowed."
+      - "[POST /api/separation/documents/templates/{id}/versions] BodyTemplate contains 'http://example.com' => [400] Executable or unsafe template content is not allowed."
+    auto: API
+
+  - id: SEP-DOC-005
+    func: [F-SEP-220]
+    sc: Generation readiness gate - five independent blockers
+    t: Readiness reports ApprovedLastWorkingDateRequired, SeparationNotApproved, FinalSettlementNotFinalized, ClearanceIncomplete, and DocumentTemplateUnavailable independently, and IsReady only when none apply
+    src: ["SeparationDocumentService.GetReadinessAsync / ToReadinessAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Case has no ApprovedLastWorkingDate (still Draft) => precondition established"
+      - "[GET /api/separation/documents/for/{id}/readiness] => [200] Blockers include ApprovedLastWorkingDateRequired and SeparationNotApproved"
+      - "[Setup] Case Approved, clearance NOT Completed, settlement NOT Finalized, no Published template exists for the document type => precondition established"
+      - "[GET /api/separation/documents/for/{id}/readiness] => [200] Blockers include ClearanceIncomplete, FinalSettlementNotFinalized, DocumentTemplateUnavailable"
+      - "[Setup] All five conditions satisfied (Approved LWD set, status Approved/NoticePeriod/ReadyForExit/Exited, clearance Completed, settlement Finalized, an effective Published template exists) => precondition established"
+      - "[GET /api/separation/documents/for/{id}/readiness] => [200] IsReady=true, Blockers empty"
+    auto: API
+
+  - id: SEP-DOC-006
+    func: [F-SEP-221]
+    sc: Generate a document; a second generate of the same type without SupersedesDocumentId is idempotent
+    t: Generating twice for the same document type with no explicit supersession returns the existing document rather than creating a duplicate
+    src: ["SeparationDocumentService.GenerateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    ui: "SeparationDocumentsPage"
+    steps:
+      - "[Setup] Readiness is IsReady=true for the separation => precondition established"
+      - "[POST /api/separation/documents/for/{id}/generate] DocumentType=RelievingLetter => [200/201] document created, Status=PendingApproval or Issued depending on RequiresApproval"
+      - "[POST /api/separation/documents/for/{id}/generate] DocumentType=RelievingLetter, no SupersedesDocumentId => [200] returns the SAME document, no second row created"
+    auto: API
+
+  - id: SEP-DOC-007
+    func: [F-SEP-222]
+    sc: Generation resolves historical employment facts as of the approved LWD, never current mutable Employee fields
+    t: Changing the employee's CURRENT designation/department after generation does not retroactively alter an already-generated document, and generation itself reads EmployeeEmploymentHistory as of the LWD
+    src: ["SeparationDocumentService.ResolveEmploymentAsync", "EffectiveEmploymentResolver"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] Employee's EmployeeEmploymentHistory as of the Approved LWD has Designation='Senior Engineer'; a LATER (post-LWD) history row has Designation='Manager' => precondition established"
+      - "[POST /api/separation/documents/for/{id}/generate] DocumentType=RelievingLetter => [200/201] Document.Designation snapshot reflects 'Senior Engineer' (as of LWD), not 'Manager'"
+      - "[Setup] No EmployeeEmploymentHistory row covers the LWD date at all => precondition established"
+      - "[POST /api/separation/documents/for/{id2}/generate] => [409] Historical employment facts are unavailable."
+    auto: API
+
+  - id: SEP-DOC-008
+    func: [F-SEP-223]
+    sc: Numbering is per-tenant/type/year sequential; Preview never allocates a number
+    t: Two successive generations of the same type/year receive consecutive numbers; a Preview call allocates nothing
+    src: ["SeparationDocumentService.AllocateNumberAsync / PreviewAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/separation/documents/for/{id}/generate] DocumentType=ExperienceLetter, first of the year for this tenant => [200/201] DocumentNumber='EL/{year}/000001'"
+      - "[POST /api/separation/documents/for/{id2}/generate] DocumentType=ExperienceLetter, same tenant/year => [200/201] DocumentNumber='EL/{year}/000002'"
+      - "[POST /api/separation/documents/templates/versions/{versionId}/preview] repeated 3 times => [200] each call succeeds with no persisted record and no number consumed from the sequence"
+    auto: API
+
+  - id: SEP-DOC-009
+    func: [F-SEP-224]
+    sc: RequiresApproval flag drives whether generation lands PendingApproval or self-approves to Issued
+    t: A template with RequiresApproval=true generates PendingApproval; RequiresApproval=false auto-approves and auto-issues in one step
+    src: ["SeparationDocumentService.GenerateAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] Template version RequiresApproval=true => precondition established"
+      - "[POST /api/separation/documents/for/{id}/generate] => [200/201] Status=PendingApproval"
+      - "[Setup] A different template version RequiresApproval=false => precondition established"
+      - "[POST /api/separation/documents/for/{id2}/generate] => [200/201] Status=Issued directly, no approval step"
+    auto: API
+
+  - id: SEP-DOC-010
+    func: [F-SEP-225]
+    sc: Approve requires PendingApproval, blocks the generating user (maker-checker), and re-validates the content hash
+    t: The user who generated the document cannot approve it; approval re-checks SHA-256 integrity before transitioning
+    src: ["SeparationDocumentService.TransitionAsync"]
+    type: Security
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Document generated by User X, RequiresApproval=true, Status=PendingApproval => precondition established"
+      - "[POST /api/separation/documents/{id}/approve] as User X (the generator) => [403] The maker cannot approve the same document."
+      - "[POST /api/separation/documents/{id}/approve] as a different HR user Y => [200] Status=Approved, ApprovedByUserId=Y"
+      - "[POST /api/separation/documents/{id}/approve] on a document not in PendingApproval status => [409] The document is not in the required state."
+    auto: API
+    sec: "Maker-checker enforced at the service layer, not merely a UI convention"
+
+  - id: SEP-DOC-011
+    func: [F-SEP-226]
+    sc: Issue requires Approved status; re-issuing an already-Issued document is idempotent, wrong prior status is Conflict
+    t: Issue transitions Approved->Issued; calling Issue again on an already-Issued document succeeds with no re-mutation; calling Issue on a PendingApproval document is rejected
+    src: ["SeparationDocumentService.TransitionAsync / IssueAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Document Status=Approved => precondition established"
+      - "[POST /api/separation/documents/{id}/issue] => [200] Status=Issued"
+      - "[POST /api/separation/documents/{id}/issue] repeated, already Issued => [200] 'Document was already transitioned.'"
+      - "[Setup] A different document, Status=PendingApproval => precondition established"
+      - "[POST /api/separation/documents/{id2}/issue] => [409] The document is not in the required state."
+    auto: API
+
+  - id: SEP-DOC-012
+    func: [F-SEP-227]
+    sc: Supersede a document; old document becomes Superseded and preserved, new document independently generated
+    t: Superseding requires a reason, flips the old document's CurrentDocumentKey off 'CURRENT', and independently regenerates bytes/hash/snapshot for the replacement
+    src: ["SeparationDocumentService.SupersedeAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/separation/documents/{id}/supersede] Reason='' (blank) => [400] A supersession reason is required."
+      - "[POST /api/separation/documents/{id}/supersede] Reason='Employee name corrected' => [200/201] new document generated, old document Status=Superseded, SupersededByDocumentId set on the old row"
+      - "[Manual/DB] Query the old row's ContentBase64/ContentHash => unchanged (byte-for-byte preserved), independent of the new document's own bytes/hash"
+    auto: DB-assisted
+
+  - id: SEP-DOC-013
+    func: [F-SEP-228]
+    sc: Cancel a document; already-closed is idempotent success
+    t: Cancel requires a reason; cancelling an already-Superseded or already-Cancelled document is idempotent success, not an error
+    src: ["SeparationDocumentService.CancelAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/separation/documents/{id}/cancel] Reason='' => [400] A cancellation reason is required."
+      - "[POST /api/separation/documents/{id}/cancel] Reason='Issued in error' => [200] Status=Cancelled"
+      - "[POST /api/separation/documents/{id}/cancel] repeated, same document, Reason='Issued in error' => [200] 'Document was already closed.'"
+    auto: API
+
+  - id: SEP-DOC-014
+    func: [F-SEP-229]
+    sc: Employee self-view only ever returns Issued or Superseded documents
+    t: A PendingApproval/Approved/DraftGenerated document of the same type is never visible to the employee, even alongside an Issued document of a different type
+    src: ["SeparationDocumentService.GetForSeparationAsync"]
+    type: Security
+    pri: P0
+    smoke: true
+    role: EMPLOYEE
+    perm: "Separation.ViewSelf"
+    ui: "MySeparationDocumentsPage"
+    steps:
+      - "[Setup] One RelievingLetter Status=Issued; one ExperienceLetter Status=PendingApproval, same separation => precondition established"
+      - "[GET /api/separation/documents/mine/{separationId}] => [200] list contains only the Issued RelievingLetter, never the PendingApproval ExperienceLetter"
+    auto: API
+
+  - id: SEP-DOC-015
+    func: [F-SEP-230]
+    sc: Self-download requires Issued or Superseded specifically, not Approved; re-verifies content hash at download time
+    t: An Approved-but-not-yet-Issued document cannot be self-downloaded even though it exists; download fails closed if the stored hash does not match the content
+    src: ["SeparationDocumentService.DownloadAsync"]
+    type: Security
+    pri: P0
+    role: EMPLOYEE
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[Setup] Document Status=Approved (not yet Issued) => precondition established"
+      - "[GET /api/separation/documents/mine/{id}/download] => [403] This document has not been issued."
+      - "[Setup] Document Status=Issued, content deliberately corrupted at rest (hash mismatch) => precondition established"
+      - "[GET /api/separation/documents/mine/{id2}/download] => [503] Document integrity validation failed."
+      - "[Setup] Document Status=Issued, content intact => precondition established"
+      - "[GET /api/separation/documents/mine/{id3}/download] => [200] file bytes returned"
+    auto: API
+
+  - id: SEP-DOC-016
+    func: [F-SEP-231]
+    sc: Post-exit document access is gated by ownership+status only, not Employee.Status - but exit execution's account deactivation blocks reaching it at all
+    t: A separated employee cannot download their own relieving letter through the normal portal because their account is deactivated and every session revoked by exit execution (CR-53); no alumni/magic-link path exists
+    src: ["SeparationDocumentService.DownloadAsync", "SeparationExitService.ExecuteAsync"]
+    type: Negative
+    pri: P1
+    cr: [CR-150]
+    steps:
+      - "[Setup] Employee's separation Status=Closed (exit executed): User.IsActive=false, all RefreshTokens revoked => precondition established"
+      - "[POST /api/auth/login] as the terminated employee's credentials => [403] This account has been deactivated. Please contact your administrator."
+      - "[Manual] Search the product for an alumni/rehire access mechanism for this employee's own Issued relieving letter post-deactivation => none exists"
+    auto: API
+
+  - id: SEP-DOC-017
+    func: [F-SEP-232]
+    sc: HR (non-self) download allows Approved, Issued, or Superseded - bypassing the Issue gate the employee is subject to
+    t: HR can download an Approved-but-not-yet-Issued document; the employee cannot
+    src: ["SeparationDocumentService.DownloadAsync"]
+    type: Authorization
+    pri: P1
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Document Status=Approved (not yet Issued) => precondition established"
+      - "[GET /api/separation/documents/{id}/download] as HRAdmin (non-self path) => [200] file bytes returned"
+    auto: API
+
+  - id: SEP-DOC-018
+    func: [F-SEP-233]
+    sc: DocumentGenerationFailed, DocumentViewed, and DocumentDownloaded event types are declared but never raised
+    t: The document History endpoint never shows a download/view event or a generation-failure event, even after repeated downloads and a deliberately failed generation attempt
+    src: ["SeparationDocumentService.cs (absence of AddEvent calls for these three types)"]
+    type: Negative
+    pri: P2
+    cr: [CR-149]
+    perm: "Separation.ViewHistory"
+    steps:
+      - "[Setup] The document has been downloaded by HR three times and by the employee once => precondition established"
+      - "[GET /api/separation/documents/{id}/history] => [200] Events list contains only DocumentGenerated/Approved/Issued/Superseded/Cancelled-family events - no DocumentViewed/DocumentDownloaded event of any kind, confirming the gap"
+    auto: API
+
+  - id: SEP-DOC-019
+    func: [F-SEP-234]
+    sc: The hand-rolled PDF renderer has no text-wrapping or pagination
+    t: A long employee full name or organization address string renders truncated, overlapping, or garbled rather than wrapping onto a new line
+    src: ["SeparationDocumentService.RenderPdf"]
+    type: Negative
+    pri: P1
+    cr: [CR-151]
+    steps:
+      - "[Setup] Employee FirstName/LastName concatenated exceed 150 characters (a long legal name) => precondition established"
+      - "[POST /api/separation/documents/for/{id}/generate] => [200/201] generated successfully with no validation error"
+      - "[Manual] Open the generated PDF => the long name overflows the single fixed text line with no wrapping - a genuine rendering defect for a legal document, not merely untested"
+    auto: Manual only
+
+  - id: SEP-DOC-020
+    func: [F-SEP-235]
+    sc: Full PDF bytes are stored inline with no purge on supersede/cancel
+    t: Superseding or cancelling a document does not remove or shrink its ContentBase64 - storage grows unbounded across repeated supersessions
+    src: ["SeparationGeneratedDocument.ContentBase64 (no purge path)"]
+    type: Negative
+    pri: P2
+    cr: [CR-151]
+    steps:
+      - "[Setup] Generate, then supersede a document 3 times in a row for the same separation/type => precondition established"
+      - "[Manual/DB] Query all 4 resulting SeparationGeneratedDocuments rows' ContentBase64 length => all 4 remain non-null/full-size; none were cleared or truncated after superseding"
+    auto: DB-assisted
+
+  - id: SEP-DOC-021
+    func: [F-SEP-236]
+    sc: HR document generation dashboard - paged, type/status/date filterable
+    t: The dashboard correctly filters by DocumentType, Status, LWD range, and issue-date range, server-paged
+    src: ["SeparationDocumentService.DashboardAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ViewAll"
+    ui: "SeparationDocumentsPage"
+    steps:
+      - "[GET /api/separation/documents/dashboard?documentType=RelievingLetter&status=Issued&page=1&pageSize=25] => [200] only matching rows returned, correct TotalCount"
+    auto: API
+
+  - id: SEP-DOC-022
+    func: [F-SEP-237]
+    sc: Preview a template version - no persistence, same permission tier as full generate
+    t: Preview uses fixed sample data, allocates no number/record, and requires the SAME Separation.Manage permission as Generate/Approve - no lighter preview-only permission exists
+    src: ["SeparationDocumentService.PreviewAsync"]
+    type: Boundary
+    pri: P2
+    ui: "SeparationDocumentTemplateConfigurationPage"
+    steps:
+      - "[POST /api/separation/documents/templates/versions/{versionId}/preview] as a role holding ONLY Separation.ViewAll (no Separation.Manage) => [403] Forbidden"
+      - "[POST /api/separation/documents/templates/versions/{versionId}/preview] as HRAdmin (holds Separation.Manage) => [200] rendered sample output, no DocumentNumber allocated, no SeparationGeneratedDocument row created"
+    auto: API
+
+  - id: SEP-DOC-023
+    func: [F-SEP-238]
+    sc: HRManager lacks Separation.Manage and Separation.ViewAll - cannot operate the document lifecycle at all
+    t: HRManager is denied Forbidden on generate/approve/issue/supersede/cancel/dashboard/HR-download
+    src: ["SeedData.cs RolePermissionMap[HRManager]"]
+    type: Authorization
+    pri: P1
+    role: HRMANAGER
+    steps:
+      - "[POST /api/separation/documents/for/{id}/generate] as HRManager => [403] Forbidden"
+      - "[GET /api/separation/documents/dashboard] as HRManager => [403] Forbidden"
+      - "[GET /api/separation/documents/{id}/download] as HRManager (HR path) => [403] Forbidden"
+    auto: API
+
+  - id: SEP-DOC-024
+    func: [F-SEP-239]
+    sc: Tenant isolation across every document template/generation/approval/download query
+    t: A Tenant B caller cannot template, generate, approve, download, or reach the dashboard for a Tenant A separation/document id
+    src: ["SeparationDocumentService.cs (TenantId filter on every query)"]
+    type: Tenant-Isolation
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Tenant A has an Issued RelievingLetter with a known document id => precondition established"
+      - "[GET /api/separation/documents/{tenantADocId}/download] as Tenant B HRAdmin => [404] Document not found."
+      - "[POST /api/separation/documents/for/{tenantASeparationId}/generate] as Tenant B HRAdmin => [404] Separation not found."
+      - "[GET /api/separation/documents/dashboard] as Tenant B => [200] Tenant A's documents never appear in the result set"
+    auto: API

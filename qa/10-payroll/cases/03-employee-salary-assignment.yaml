@@ -1,0 +1,215 @@
+sheet: Payroll_EmployeeSalary
+submodule: Employee Salary Assignment - CTC binding, structure-version resolution, overlap guard, employee-level overrides
+defaults:
+  role: HRADMIN
+  perm: "Payroll.EmployeeSalary.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, with an active Employee and an active Salary Structure with one editable-at-employee-level FixedAmount component, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-ESA-001
+    func: [F-PAY-045]
+    sc: Create a valid assignment
+    t: A well-formed assignment binds an employee to a structure with CTC values
+    src: ["EmployeeSalaryAssignmentService.CreateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/employee-salary-assignments] EmployeeId, SalaryStructureId, EffectiveFrom=today, AnnualCtc=600000, MonthlyCtc=50000, CurrencyCode=INR => [200/201] Status=Active"
+    auto: API
+
+  - id: PAY-ESA-002
+    func: [F-PAY-045]
+    sc: Request-level validation
+    t: Inverted dates, negative CTC, and a non-3-letter currency code are each rejected
+    src: ["EmployeeSalaryAssignmentService.ValidateRequest"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/employee-salary-assignments] EffectiveFrom=2026-06-01, EffectiveTo=2026-01-01 => [400] EffectiveTo cannot be earlier than EffectiveFrom."
+      - "[POST /api/payroll/employee-salary-assignments] AnnualCtc=-1 => [400] CTC values cannot be negative."
+      - "[POST /api/payroll/employee-salary-assignments] CurrencyCode=IN => [400] CurrencyCode must be a three-letter code."
+    auto: API
+
+  - id: PAY-ESA-003
+    func: [F-PAY-046, F-PAY-047]
+    sc: Employee and Salary Structure must exist and the structure must be active
+    t: A random employeeId is NotFound; an inactive structure is Conflict
+    src: ["EmployeeSalaryAssignmentService.CreateAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/employee-salary-assignments] EmployeeId=<random guid> => [404] Employee not found."
+      - "[POST /api/payroll/employee-salary-assignments] SalaryStructureId=<inactive structure> => [409] The Salary Structure is inactive."
+    auto: API
+
+  - id: PAY-ESA-004
+    func: [F-PAY-048]
+    sc: Exactly one effective structure version is required
+    t: An EffectiveFrom date with zero, or with two overlapping, active versions is Invalid
+    src: ["EmployeeSalaryAssignmentService.ResolveVersionAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/employee-salary-assignments] EffectiveFrom=<date before any structure version starts> => [400] No single active Salary Structure version is effective on the assignment date."
+      - "[Setup] Structure has two overlapping active versions covering the same date => precondition established"
+      - "[POST /api/payroll/employee-salary-assignments] EffectiveFrom=<the overlapping date> => [400] No single active Salary Structure version is effective on the assignment date."
+    auto: API
+
+  - id: PAY-ESA-005
+    func: [F-PAY-049]
+    sc: An employee cannot have two overlapping active assignments
+    t: A second assignment whose window overlaps an existing active one is Conflict
+    src: ["EmployeeSalaryAssignmentService.OverlapsAsync"]
+    type: Negative
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/employee-salary-assignments] first assignment EffectiveFrom=2026-01-01 => [200/201] Active"
+      - "[POST /api/payroll/employee-salary-assignments] second assignment, same employee, EffectiveFrom=2026-06-01 (before first's open-ended EffectiveTo) => [409] The employee already has an overlapping salary assignment."
+    auto: API
+
+  - id: PAY-ESA-006
+    func: [F-PAY-044]
+    sc: GetEffective resolves 0/1/many correctly
+    t: No assignment on the date is NotFound, exactly one is Success, and (via direct DB seeding) two active overlapping rows is Conflict
+    src: ["EmployeeSalaryAssignmentService.GetEffectiveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET .../by-employee/{employeeId}/effective?date=<before hire>] => [404] No effective salary assignment exists for this employee and date."
+      - "[GET .../by-employee/{employeeId}/effective?date=<covered by the one active assignment>] => [200] the assignment is returned"
+    auto: API
+
+  - id: PAY-ESA-007
+    func: [F-PAY-050]
+    sc: Overrides are only allowed on components flagged IsEditableAtEmployeeLevel
+    t: An override targeting a non-editable structure component is Forbidden
+    src: ["EmployeeSalaryAssignmentService.ValidateComponent"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/employee-salary-assignments] Components=[<non-editable structure component>, OverrideValue=1000] => [403] This Salary Structure component does not allow employee-level overrides."
+    auto: API
+
+  - id: PAY-ESA-008
+    func: [F-PAY-051]
+    sc: Override shape must match the bound component's calculation type
+    t: A FixedAmount component's override must carry OverrideValue only; a Percentage component's override must carry OverridePercentage 0-100 only
+    src: ["EmployeeSalaryAssignmentService.ValidateComponent"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/employee-salary-assignments] FixedAmount component override with OverridePercentage set instead of OverrideValue => [400] A fixed amount override requires a non-negative value."
+      - "[POST /api/payroll/employee-salary-assignments] Percentage component override with OverridePercentage=150 => [400] A percentage override requires a value between 0 and 100."
+    auto: API
+
+  - id: PAY-ESA-009
+    func: [F-PAY-052]
+    sc: Duplicate overrides for the same structure component in one request are rejected
+    t: Two override rows targeting the same SalaryStructureComponentId fail validation
+    src: ["EmployeeSalaryAssignmentService.ValidateComponents"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/payroll/employee-salary-assignments] Components=[X, X] (same SalaryStructureComponentId) => [400] Duplicate employee salary overrides are not allowed."
+    auto: API
+
+  - id: PAY-ESA-010
+    func: [F-PAY-053]
+    sc: Update re-validates fully and honors ExpectedConcurrencyVersion
+    t: A stale concurrency version on update is Conflict
+    src: ["EmployeeSalaryAssignmentService.UpdateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[PUT /api/payroll/employee-salary-assignments/{id}] ExpectedConcurrencyVersion=<stale> => [409] The employee salary assignment was changed by another user."
+    auto: API
+
+  - id: PAY-ESA-011
+    func: [F-PAY-054]
+    sc: Update reconciles overrides
+    t: Omitting a previously-present override deactivates it; a new override upserts a fresh row
+    src: ["EmployeeSalaryAssignmentService.ReconcileComponents"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/payroll/employee-salary-assignments/{id}] Components omits a previously-present override => [200] that override row IsActive=false"
+    auto: API
+
+  - id: PAY-ESA-012
+    func: [F-PAY-055]
+    sc: SetActiveAsync always writes a history row, even on a no-op status
+    t: "Setting Status=Active on an assignment already Active still appends a new history row - contrast with the idempotent-no-op behavior of SalaryComponent/SalaryStructure's SetActiveAsync"
+    src: ["EmployeeSalaryAssignmentService.SetActiveAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/payroll/employee-salary-assignments/{id}/history] baseline count => N"
+      - "[POST /api/payroll/employee-salary-assignments/{id}/activate] on an already-Active assignment => [200] Status=Active"
+      - "[GET /api/payroll/employee-salary-assignments/{id}/history] => [200] count is N+1, a fresh Activated row was written despite no state change"
+    auto: API
+    cr: [CR-171]
+
+  - id: PAY-ESA-013
+    func: [F-PAY-056]
+    sc: A second unscoped override for the same component is Conflict
+    t: AddComponent without specifying componentId, against a structure component that already has an active override, is rejected
+    src: ["EmployeeSalaryAssignmentService.ChangeComponentAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/payroll/employee-salary-assignments/{id}/components] SalaryStructureComponentId=<already overridden> => [409] This Salary Structure component already has an override."
+    auto: API
+
+  - id: PAY-ESA-014
+    func: [F-PAY-057]
+    sc: RemoveComponent is a soft delete
+    t: Removing an override sets IsActive=false, leaving the row and its history intact
+    src: ["EmployeeSalaryAssignmentService.RemoveComponentAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[DELETE /api/payroll/employee-salary-assignments/{id}/components/{componentId}] => [200] true"
+    auto: API
+
+  - id: PAY-ESA-015
+    func: [F-PAY-058]
+    sc: History is append-only and requires the assignment to exist
+    t: History for an unknown id is NotFound
+    src: ["EmployeeSalaryAssignmentService.GetHistoryAsync"]
+    type: Negative
+    pri: P2
+    perm: "Payroll.EmployeeSalary.ViewHistory"
+    steps:
+      - "[GET /api/payroll/employee-salary-assignments/{randomGuid}/history] => [404] Employee salary assignment not found."
+    auto: API
+
+  - id: PAY-ESA-016
+    func: [F-PAY-059]
+    sc: Cross-tenant assignment id is not reachable
+    t: Tenant B's assignment id is NotFound as Tenant A
+    src: ["EmployeeSalaryAssignmentService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[GET /api/payroll/employee-salary-assignments/{tenantBAssignmentId}] As Tenant A => [404] Employee salary assignment not found."
+    auto: API
+
+  - id: PAY-ESA-017
+    func: [F-PAY-042, F-PAY-043]
+    sc: List/filter and by-employee read paths
+    t: GetAll respects employeeId/structureId/status/effectiveOn/search filters; by-employee scopes correctly
+    src: ["EmployeeSalaryAssignmentService.GetAsync", "EmployeeSalaryAssignmentService.GetForEmployeeAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.EmployeeSalary.View"
+    steps:
+      - "[GET /api/payroll/employee-salary-assignments?employeeId={id}&status=Active] => [200] only that employee's Active assignments"
+      - "[GET /api/payroll/employee-salary-assignments/by-employee/{employeeId}] => [200] same result set, scoped route"
+    auto: API

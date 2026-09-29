@@ -1,0 +1,121 @@
+sheet: BankAdv_Tenant_Isolation
+submodule: Tenant Isolation
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-TENANT-001
+    func: [F-BANKADV-087]
+    sc: Cross-tenant run id on Generate
+    t: A payroll run belonging to another tenant is NotFound to Generate, never resolved
+    src: "BankAdviceService.GenerateAsync (TenantId filter)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "RUN_T2 (Approved) belongs to tenant T2 (DEMO02)"
+    role: HRAdmin (T1, custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN_T2}/bank-advice] as a T1 user => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: BANKADV-TENANT-002
+    func: [F-BANKADV-088]
+    sc: Cross-tenant batch id on every id-scoped action
+    t: Get/Validate/Prepare/Approve/Cancel/Export all NotFound a batch id from another tenant
+    src: "BankAdviceService.Load"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "BATCH_T2 belongs to tenant T2 (DEMO02), Status=Draft"
+    role: HRAdmin (T1, custom role holding all BankAdvice permissions)
+    perm: Payroll.BankAdvice.View, Validate, Approve, Export, Cancel
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{BATCH_T2}] as a T1 user => [404] NotFound"
+      - "[POST /api/payroll/bank-advice/{BATCH_T2}/validate] as a T1 user => [404] NotFound"
+      - "[POST /api/payroll/bank-advice/{BATCH_T2}/cancel] as a T1 user => [404] NotFound"
+      - "[GET /api/payroll/bank-advice/{BATCH_T2}/export] as a T1 user => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: BANKADV-TENANT-003
+    func: [F-BANKADV-089]
+    sc: List never leaks another tenant's batches
+    t: GetAsync (list) only ever returns the caller's own tenant's batches, for every Status filter value
+    src: "BankAdviceService.GetAsync (TenantId filter)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "T1 has 2 batches, T2 (DEMO02) has 3 batches, some sharing the same Status value"
+    role: HRAdmin (T1, custom role holding BankAdvice.View)
+    perm: Payroll.BankAdvice.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice] as a T1 user, no Status filter => [200] exactly T1's 2 batches, none of T2's 3"
+      - "[GET /api/payroll/bank-advice?status=Draft] as a T1 user => [200] only T1's Draft batches, even if T2 also has Draft batches"
+    auto: API
+    secc: true
+
+  - id: BANKADV-TENANT-004
+    func: [F-BANKADV-090]
+    sc: Bank-account resolution is tenant-scoped
+    t: A bank account belonging to an employee in another tenant is never matched during generation, even with the same EmployeeId value
+    src: "BankAdviceService.GenerateAsync (accounts query, TenantId filter)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "T2 has an EmployeeBankDetail row for an employee whose Id guid happens to collide with a T1 employee's id (test-constructed collision)"
+    role: HRAdmin (T1, custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] as a T1 user => [200] the T1 employee's payment is Invalid (\"No active salary bank account...\") - T2's colliding-id account is never matched"
+    auto: DB-assisted
+
+  - id: BANKADV-TENANT-005
+    func: [F-BANKADV-091]
+    sc: Composite FK pattern used throughout
+    t: Every relationship in BankAdviceConfiguration.cs is keyed by a composite (TenantId, ...) FK, never a bare Guid
+    src: "BankAdviceBatchConfiguration, BankAdvicePaymentConfiguration, BankAdviceHistoryConfiguration"
+    type: Contract
+    tags: [Tenant-Isolation]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full read of BankAdviceConfiguration.cs => every HasOne(...).HasForeignKey(...) call for PayrollRun/PayrollPeriod/PayrollResult/Employee/Batch uses a composite (TenantId, ...) key, confirmed for all 3 entity configurations"
+    auto: Manual only
+
+  - id: BANKADV-TENANT-006
+    func: [F-BANKADV-092]
+    sc: PayrollControlConfiguration opt-ins are tenant-scoped
+    t: Tenant T2's maker-checker/reason-required policy never affects tenant T1's Approve/Cancel calls
+    src: "PayrollApprovalGuard.ValidateAsync (SingleOrDefaultAsync TenantId filter)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "T2's PayrollControlConfiguration has RequireMakerChecker=true, PreventSelfApproval=true; T1's PayrollControlConfiguration has both false (or no row at all)"
+    role: HRAdmin (T1, custom role holding BankAdvice.Approve)
+    perm: Payroll.BankAdvice.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{T1_BATCH}/approve] as the same user who generated it, in T1 (where the self-approval opt-in is off) => [200] Approved (T2's stricter policy has no effect on T1)"
+    auto: API

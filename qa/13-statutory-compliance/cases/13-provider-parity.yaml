@@ -1,0 +1,68 @@
+sheet: Stat_Provider_Parity
+submodule: SQL Server/MySQL Provider Parity
+defaults:
+  tenant: "T1 (DEMO01)"
+  role: "n/a (CI/provider-acceptance fixtures)"
+  perm: "n/a"
+  pre: none
+  reg: true
+
+cases:
+  - id: STAT-PROV-001
+    func: [F-STAT-136]
+    sc: Migration parity across all three statutory schema areas
+    t: Every statutory migration has a matching pair in both the SQL Server and MySQL chains
+    src: "Backend/HRMS.Infrastructure/Persistence/Migrations; Backend/HRMS.Infrastructure.MySqlMigrations/Migrations"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    data: none
+    steps:
+      - "[Manual] glob both migration directories for AddStatutoryCalculationFramework, AddPayrollStatutoryComplianceReturns, AddStatutoryFilingPhase7X, AddStatutoryFilingConnectorProfilesPhase7X, and AdjustStatutoryFilingPackageHashUniquenessPhase7X => each of the five migrations has a matching, dated .cs/.Designer.cs pair in both chains"
+    auto: Manual only
+
+  - id: STAT-PROV-002
+    func: [F-STAT-137]
+    sc: Opt-in provider fixtures for Calculation Framework and Compliance Returns
+    t: SqlServer/MySql integration test classes exist for these two areas and skip silently without env vars
+    src: "Backend/HRMS.Tests/SqlServerStatutoryPayrollIntegrationTests.cs, MySqlStatutoryPayrollIntegrationTests.cs, SqlServerPayrollStatutoryComplianceIntegrationTests.cs, MySqlPayrollStatutoryComplianceIntegrationTests.cs"
+    type: Contract
+    tags: [Environment]
+    pri: P1
+    sev: Medium
+    data: none
+    steps:
+      - "[Manual/CI] run `dotnet test --filter FullyQualifiedName~SqlServerStatutoryPayrollIntegrationTests` with HRMS_SQLSERVER_TEST_CONNECTION unset => [SKIPPED] all tests skip silently, per CLAUDE.md's documented convention"
+      - "[Manual/CI] run the same filter with a disposable SQL Server test database configured => [PASS] the fixture exercises the Calculation Framework against a real SQL Server instance"
+    auto: "DB-assisted"
+
+  - id: STAT-PROV-003
+    func: [F-STAT-138]
+    sc: CONFIRMED GAP - no provider-specific Filing fixture exists
+    t: A green run of the two fixtures in F-STAT-137 is not evidence of provider parity for the Filing area
+    src: "Backend/HRMS.Tests (full glob for *StatutoryFiling*IntegrationTests.cs)"
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    data: none
+    steps:
+      - "[Manual] glob Backend/HRMS.Tests for SqlServerStatutoryFilingIntegrationTests.cs / MySqlStatutoryFilingIntegrationTests.cs => zero matches; only the provider-agnostic StatutoryFilingProviderAcceptance.cs exists"
+      - "[Manual] read StatutoryFilingProviderAcceptance.cs in full => document which of Generate/Validate/Submit/Approve/Reject/Acknowledge/retry/resubmission it actually exercises against a real provider, and which are gaps for a future test-authoring pass"
+    auto: Manual only
+    cr: [CR-238]
+
+  - id: STAT-PROV-004
+    func: [F-STAT-139]
+    sc: No SQL Server rowversion vs MySQL binary(16) divergence applies here
+    t: All four ConcurrencyVersion columns in this module are plain app-managed integers, not genuine rowversion/timestamp columns
+    src: "StatutoryConfiguration.cs, PayrollStatutoryComplianceConfiguration.cs, StatutoryFilingConfiguration.cs (all four IsConcurrencyToken() calls)"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    data: none
+    steps:
+      - "[Manual] inspect all four EF configurations for [Timestamp]/IsRowVersion() on their own ConcurrencyVersion property => none found; all four are plain int properties marked IsConcurrencyToken() only, so this module is NOT exposed to CLAUDE.md's documented SQL Server rowversion vs MySQL binary(16) provider divergence (a scope note, not a gap)"
+    auto: Manual only

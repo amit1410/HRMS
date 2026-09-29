@@ -1,0 +1,250 @@
+sheet: Attendance_Self
+submodule: Employee self-view of own attendance (calendar, day detail) and Manager team read
+defaults:
+  role: EMPLOYEE
+  perm: "Attendance.View"
+  tenant: A
+  pre: "Tenant A signed in as an Employee whose account is linked to an active Employee record, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-SELF-001
+    func: [F-ATT-055]
+    sc: An employee views their own attendance calendar for a month
+    t: GET me/calendar returns every day of the requested month for the caller's own, server-resolved identity
+    src: ["AttendanceReadService.GetMyCalendarAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/attendance/me/calendar?year=2026&month=7] => [200] 31 rows returned, each day's status/shift/flags reflect the caller's OWN processed or planned-fallback state"
+    auto: API
+
+  - id: ATT-SELF-002
+    func: [F-ATT-056]
+    sc: An employee views a single day's raw punches and paired sessions
+    t: GET me/days/{date} returns punch list and paired sessions for a processed day
+    src: ["AttendanceReadService.GetMyDayAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/attendance/me/days/2026-07-10] Two In/Out pairs recorded that day => [200] 4 raw punches listed, 2 paired sessions of correct duration, WorkedMinutes matches the sum"
+    auto: API
+
+  - id: ATT-SELF-003
+    func: [F-ATT-057]
+    sc: Own-identity resolution never uses UserId as an EmployeeId, email, or employee code
+    t: An authenticated user whose UserId happens to numerically/textually resemble another tenant's EmployeeId never sees that employee's data
+    src: ["EmployeeIdentityResolver.ResolveCurrentAsync"]
+    type: Security
+    pri: P0
+    steps:
+      - "[GET /api/attendance/me/calendar?year=2026&month=7] As a normally-linked employee => [200] returns exactly the calendar for the AccountEmployeeCurrentLinks-resolved EmployeeId, never derived from UserId/email/code directly"
+    auto: API
+
+  - id: ATT-SELF-004
+    func: [F-ATT-058]
+    sc: An unlinked account gets an explicit not-found, never another employee's data
+    t: A valid but unlinked account calling me/calendar gets NotFound
+    src: ["EmployeeIdentityResolver.ResolveCurrentAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] An account with no AccountEmployeeCurrentLinks row for this tenant => precondition established"
+      - "[GET /api/attendance/me/calendar?year=2026&month=7] => [404] 'The authenticated account is not linked to an Employee.'"
+    auto: API
+
+  - id: ATT-SELF-005
+    func: [F-ATT-058]
+    sc: A stale link (linked Employee row no longer exists) is distinguished from never-linked
+    t: A link pointing at a deleted Employee row returns Conflict, not NotFound
+    src: ["EmployeeIdentityResolver.ResolveCurrentAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] AccountEmployeeCurrentLinks row exists but the linked Employee row has been removed => precondition established"
+      - "[GET /api/attendance/me/calendar?year=2026&month=7] => [409] 'The account's Employee link requires administrator review.'"
+    auto: DB-assisted
+
+  - id: ATT-SELF-006
+    func: [F-ATT-059]
+    sc: Year/Month validation rejects out-of-[1,9999]/[1,12] values but accepts extreme in-range years
+    t: Year=0 or Month=13 is rejected; Year=9999 is accepted and processed
+    src: ["AttendanceReadService.GetMyCalendarAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/attendance/me/calendar?year=0&month=7] => [400] validation error"
+      - "[GET /api/attendance/me/calendar?year=2026&month=13] => [400] validation error"
+      - "[GET /api/attendance/me/calendar?year=9999&month=1] => [200] 31 planned-fallback NotProcessed rows returned - no realistic-range clamp"
+    auto: API
+
+  - id: ATT-SELF-007
+    func: [F-ATT-060]
+    sc: GetMyDayAsync accepts any date with no min/max range validation
+    t: A far-future or far-past date is accepted and returns a graceful NotProcessed fallback, not an error
+    src: ["AttendanceReadService.GetMyDayAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/attendance/me/days/9999-12-31] => [200] a NotProcessed/empty-punch detail response, no unhandled exception"
+    auto: API
+
+  - id: ATT-SELF-008
+    func: [F-ATT-061]
+    sc: A systemic roster-resolution failure degrades to a full month of NotProcessed rows with no surfaced error
+    t: With no active shift/pattern configured for the tenant at all, me/calendar still returns 200
+    src: ["AttendanceReadService.BuildDayAsync (PlannedFallback)"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Remove/deactivate all Shifts and Patterns so roster resolution fails for every date => precondition established"
+      - "[GET /api/attendance/me/calendar?year=2026&month=7] => [200] 31 rows, all NotProcessed/PlannedFallback - looks identical to 'not yet processed', with no warning that roster config itself is broken"
+    auto: DB-assisted
+    cr: [CR-98]
+
+  - id: ATT-SELF-009
+    func: [F-ATT-062]
+    sc: A separated employee whose Employee row still exists can still read their own attendance
+    t: With no employment-status check on the self-view read path, a terminated employee's still-valid session sees full attendance data
+    src: ["EmployeeIdentityResolver.ResolveCurrentAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee E1 is separated (Employee.Status != Active / DateOfLeaving set), account/token remains valid => precondition established"
+      - "[GET /api/attendance/me/calendar?year=2026&month=7] As the separated E1 => [200] full calendar returned exactly as before separation - no eligibility gate blocks this read"
+      - "[GET /api/attendance/me/days/{dateBeforeSeparation}] => [200] full day detail returned"
+    auto: API
+    cr: [CR-53, CR-98]
+
+  - id: ATT-SELF-010
+    func: [F-ATT-063]
+    sc: me/calendar and my/monthly-summary are independently permission-gated
+    t: A role holding Attendance.View but not Attendance.MonthlyViewSelf can see the daily calendar but is denied the monthly summary, and vice versa
+    src: ["AttendanceReadService / AttendanceMonthlyController"]
+    type: Authorization
+    pri: P1
+    steps:
+      - "[Setup] Caller holds Attendance.View only, not Attendance.MonthlyViewSelf => precondition established"
+      - "[GET /api/attendance/me/calendar?year=2026&month=7] => [200] daily calendar succeeds"
+      - "[GET /api/attendance/my/monthly-summary?year=2026&month=7] => [403] Forbidden - the two 'My Attendance' surfaces are not gated together"
+    auto: API
+
+  - id: ATT-SELF-011
+    func: [F-ATT-055, F-ATT-056]
+    sc: An unauthenticated caller is rejected
+    t: No token on the self-view endpoints returns 401
+    src: ["AttendanceReadController"]
+    type: Authorization
+    pri: P0
+    role: NONE
+    perm: "n/a"
+    steps:
+      - "[GET /api/attendance/me/calendar?year=2026&month=7] No Authorization header => [401] Unauthorized"
+    auto: API
+
+  - id: ATT-SELF-012
+    func: [F-ATT-064]
+    sc: A manager views their team's attendance for a date range
+    t: The manager-team query returns rows only for the caller's in-scope employees
+    src: ["AttendanceReadService.GetManagerTeamAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: MANAGER
+    steps:
+      - "[GET /api/attendance/manager/team?fromDate=2026-07-01&toDate=2026-07-31] As a manager with 2 direct reports => [200] rows for exactly those 2 employees across the range, paginated"
+    auto: API
+
+  - id: ATT-SELF-013
+    func: [F-ATT-064]
+    sc: Manager-team query never returns an unrelated employee's row
+    t: An employee outside the caller's scope is absent from the result even though they exist in the same tenant
+    src: ["AttendanceReadService.GetManagerTeamAsync"]
+    type: Negative
+    pri: P0
+    role: MANAGER
+    steps:
+      - "[GET /api/attendance/manager/team?fromDate=2026-07-01&toDate=2026-07-31&employeeId=<unrelatedEmployeeId>] => [200] empty result / the unrelated employee never appears, even when explicitly filtered by their id"
+    auto: API
+
+  - id: ATT-SELF-014
+    func: [F-ATT-065]
+    sc: Manager-team range is capped at 92 days
+    t: A range over 92 days is rejected as a validation failure
+    src: ["AttendanceReadService.GetManagerTeamAsync"]
+    type: Boundary
+    pri: P1
+    role: MANAGER
+    steps:
+      - "[GET /api/attendance/manager/team?fromDate=2026-01-01&toDate=2026-04-05] (95 days) => [400] validation failed, range too wide"
+      - "[GET /api/attendance/manager/team?fromDate=2026-01-01&toDate=2026-04-02] (92 days, boundary) => [200] succeeds"
+    auto: API
+
+  - id: ATT-SELF-015
+    func: [F-ATT-065]
+    sc: Manager-team Page/PageSize are validated
+    t: Page=0 or an over-max PageSize is rejected
+    src: ["AttendanceReadService.GetManagerTeamAsync"]
+    type: Boundary
+    pri: P2
+    role: MANAGER
+    steps:
+      - "[GET /api/attendance/manager/team?fromDate=2026-07-01&toDate=2026-07-07&page=0] => [400] page must be at least 1"
+    auto: API
+
+  - id: ATT-SELF-016
+    func: [F-ATT-066]
+    sc: Denial semantics for a manager viewing an out-of-scope colleague's day depend on which authorization code path is active
+    t: With IAttendanceAuthorizationService wired, denial is NotFound; without it (plain manager-resolver fallback), denial is Forbidden
+    src: ["AttendanceReadService.GetManagerDayAsync"]
+    type: Security
+    pri: P1
+    role: MANAGER
+    steps:
+      - "[GET /api/attendance/manager/team/{outOfScopeEmployeeId}/2026-07-10] As a manager with IAttendanceAuthorizationService active and no scope over this employee => [404] NotFound - denial looks identical to a nonexistent day"
+      - "[GET /api/attendance/manager/team/{outOfScopeEmployeeId}/2026-07-10] Under the legacy/null-DI fallback path (plain manager-resolver, no role-scope) => [403] Forbidden instead - verify which path is actually wired before asserting a specific status in an automated suite"
+    auto: API
+    cr: [CR-100]
+
+  - id: ATT-SELF-017
+    func: [F-ATT-064]
+    sc: A manager's own team scope is re-resolved at read time, not frozen from a stale relationship
+    t: An employee no longer reporting to this manager (as of the queried date) is excluded even if they used to report to them
+    src: ["AttendanceReadService.GetManagerTeamAsync"]
+    type: Boundary
+    pri: P1
+    role: MANAGER
+    steps:
+      - "[Setup] Employee E1 reported to Manager M until 2026-06-30, then moved to Manager N from 2026-07-01 => precondition established"
+      - "[GET /api/attendance/manager/team?fromDate=2026-07-01&toDate=2026-07-31] As Manager M => [200] E1's July rows are absent"
+      - "[GET /api/attendance/manager/team?fromDate=2026-07-01&toDate=2026-07-31] As Manager N => [200] E1's July rows are present"
+    auto: API
+
+  - id: ATT-SELF-018
+    func: [F-ATT-067]
+    sc: Tenant isolation on the manager-day read
+    t: A cross-tenant employeeId in the path never returns another tenant's data
+    src: ["AttendanceReadService.GetManagerDayAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    role: MANAGER
+    tenant: B
+    steps:
+      - "[GET /api/attendance/manager/team/{tenantAEmployeeId}/2026-07-10] As a Tenant B manager => [403 or 404] the Tenant A employee id resolves to nothing in Tenant B's scoped queries - no cross-tenant data leak"
+    auto: API
+
+  - id: ATT-SELF-019
+    func: [F-ATT-064]
+    sc: Manager-team query is denied entirely for a caller with no manager relationship and no role scope over anyone
+    t: A manager with zero direct/effective reports gets an empty, not an error, result
+    src: ["AttendanceReadService.GetManagerTeamAsync"]
+    type: Boundary
+    pri: P2
+    role: MANAGER
+    steps:
+      - "[GET /api/attendance/manager/team?fromDate=2026-07-01&toDate=2026-07-31] As a manager with zero reports and no role scope => [200] empty items list, not an error"
+    auto: API

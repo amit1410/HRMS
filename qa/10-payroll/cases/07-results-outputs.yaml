@@ -1,0 +1,171 @@
+sheet: Payroll_Outputs
+submodule: Payroll Results and Outputs - payslip generation/publication, register, self-service, dead permission
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Payslip.Generate"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, with a Calculated payroll run holding at least one IsCurrent PayrollResult, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-OUT-001
+    func: [F-PAY-143]
+    sc: Generate payslips from a Calculated run
+    t: Generate succeeds against Calculated, Approved, and Finalized runs; a Prepared/Processing run is Conflict
+    src: ["PayrollOutputService.GenerateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/runs/{runId}/payslips/generate] on a Calculated run => [200] one payslip per eligible employee, Status=Generated"
+      - "[POST /api/payroll/runs/{prepared-run-id}/payslips/generate] => [409] Payslips can only be generated from a calculated, approved, or finalized payroll run."
+    auto: API
+
+  - id: PAY-OUT-002
+    func: [F-PAY-144]
+    sc: Generate skips an already-Published payslip
+    t: A previously Published payslip for an employee is left untouched by a fresh Generate call
+    src: ["PayrollOutputService.GenerateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee's payslip is already Status=Published => precondition established"
+      - "[POST /api/payroll/runs/{runId}/payslips/generate] => [200] that employee's Published payslip is unchanged, no new row added for them"
+    auto: API
+
+  - id: PAY-OUT-003
+    func: [F-PAY-145]
+    sc: Regenerating supersedes the prior Generated payslip
+    t: A second Generate call before Publish moves the first row to Superseded and creates a new Version
+    src: ["PayrollOutputService.GenerateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/runs/{runId}/payslips/generate] first call => [200] Version=1, Status=Generated"
+      - "[POST /api/payroll/runs/{runId}/payslips/generate] second call (e.g. after a recalculation) => [200] the first row is now Status=Superseded, a new Version=2 row is Status=Generated"
+    auto: API
+
+  - id: PAY-OUT-004
+    func: [F-PAY-146]
+    sc: Payslip number format and version increment
+    t: PayslipNumber follows PS/{yyyyMM}/{employeeId}/{version}
+    src: ["PayrollOutputService.GenerateAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[GET /api/payroll/payslips/{id}] => [200] PayslipNumber matches PS/{periodEnd:yyyyMM}/{employeeId:N}/{version}"
+    auto: API
+
+  - id: PAY-OUT-005
+    func: [F-PAY-147]
+    sc: Payslip lines include structure, statutory, and add-on components
+    t: A payslip with PF and an approved overtime line shows a Statutory Deductions group and the OVERTIME earning
+    src: ["PayrollOutputService.GenerateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/payroll/payslips/{id}] => [200] Lines include a DisplayGroup='Statutory Deductions', IsStatutory=true line for PF, and an OVERTIME earnings line"
+    auto: API
+
+  - id: PAY-OUT-006
+    func: [F-PAY-148]
+    sc: Publish requires Approved/Finalized and bulk-publishes
+    t: Publish against a merely Calculated run is Conflict; against an Approved run it publishes every Generated payslip
+    src: ["PayrollOutputService.PublishAsync"]
+    type: Negative
+    pri: P0
+    perm: "Payroll.Payslip.Publish"
+    steps:
+      - "[POST /api/payroll/runs/{calculatedRunId}/payslips/publish] => [409] Payslips can only be published for an approved or finalized payroll run."
+      - "[POST /api/payroll/runs/{approvedRunId}/payslips/publish] => [200] every Generated payslip for the run is now Published"
+    auto: API
+
+  - id: PAY-OUT-007
+    func: [F-PAY-149]
+    sc: publishedOnly flag differs by surface
+    t: The admin GetById can see a Generated (unpublished) payslip; the self-service route cannot
+    src: ["PayrollOutputService.GetAsync"]
+    type: Security
+    pri: P1
+    steps:
+      - "[GET /api/payroll/payslips/{id}] on a Generated (not yet Published) payslip, as HRAdmin => [200] returned"
+      - "[GET /api/me/payslips/{id}] on the SAME not-yet-Published payslip, as the owning employee => [404] not visible until Published"
+    auto: API
+
+  - id: PAY-OUT-008
+    func: [F-PAY-150]
+    sc: Self-service my-payslips is scoped to the caller's own Published payslips
+    t: An employee's my-payslips list never includes another employee's payslip
+    src: ["PayrollOutputService.GetOwnAsync"]
+    type: Security
+    pri: P0
+    role: EMPLOYEE
+    perm: "Payroll.Payslip.ViewOwn"
+    steps:
+      - "[GET /api/me/payslips] => [200] only Published payslips whose EmployeeId matches the caller's linked identity"
+    auto: API
+
+  - id: PAY-OUT-009
+    func: [F-PAY-151]
+    sc: The rendered HTML document HTML-encodes employee/component text
+    t: An employee or component name containing HTML-special characters renders safely, not as raw markup
+    src: ["PayrollOutputService.RenderHtml"]
+    type: Security
+    pri: P1
+    steps:
+      - "[Setup] Employee first name contains '<script>' => precondition established"
+      - "[GET /api/payroll/payslips/{id}/document] => [200] the returned HTML contains the HTML-encoded form, not an executable <script> tag"
+    auto: API
+    secc: true
+
+  - id: PAY-OUT-010
+    func: [F-PAY-152]
+    sc: Register lists current results, paged and searchable
+    t: The register omits superseded (IsCurrent=false) results and supports a name/code search
+    src: ["PayrollOutputService.GetRegisterAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Register.View"
+    steps:
+      - "[GET /api/payroll/runs/{runId}/register?search=<employee code>] => [200] only the matching employee's current result row"
+    auto: API
+
+  - id: PAY-OUT-011
+    func: [F-PAY-153]
+    sc: Register export produces a well-formed CSV
+    t: A department name containing a comma is correctly quoted in the exported CSV
+    src: ["PayrollOutputService.ExportRegisterAsync"]
+    type: Boundary
+    pri: P2
+    perm: "Payroll.Register.Export"
+    steps:
+      - "[Setup] An employee's Department name is 'Finance, Corporate' => precondition established"
+      - "[GET /api/payroll/runs/{runId}/register/export] => [200] text/csv, the department field is quoted as \"Finance, Corporate\""
+    auto: API
+
+  - id: PAY-OUT-012
+    func: [F-PAY-154]
+    sc: Payslip.ViewHistory is a dead permission
+    t: No endpoint anywhere checks Payroll.Payslip.ViewHistory - confirmed by a full route-table grep of the payslip/payroll-output controllers
+    src: ["PayrollOutputService.cs (absence of GetHistoryAsync)"]
+    type: Boundary
+    pri: P2
+    sev: Medium
+    steps:
+      - "[Manual] Grep every [HasPermission(...)] attribute across PayrollOutputsController.cs and MyPayslipsController.cs => zero references to Payroll.Payslip.ViewHistory; no /history route exists for payslips"
+    auto: "Manual only"
+    cr: [CR-173]
+
+  - id: PAY-OUT-013
+    func: [F-PAY-155]
+    sc: Cross-tenant payslip id is not reachable
+    t: Tenant B's payslip id is NotFound as Tenant A
+    src: ["PayrollOutputService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[GET /api/payroll/payslips/{tenantBPayslipId}] As Tenant A => [404] Payslip not found."
+    auto: API

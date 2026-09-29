@@ -1,0 +1,225 @@
+sheet: PYA_Source_Matrix_Bank_Accounting
+submodule: Source Matrix - Bank Advice & Accounting/GL
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-BANK-001
+    func: [F-PYA-044]
+    sc: Missing bank advice
+    t: A run with persisted results and zero active BankAdviceBatches raises Warning MissingBankAdvice
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: High
+    pre: "RUN1 has 1 persisted result and no BankAdviceBatches at all"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] => [200] Findings contains ControlCode=MissingBankAdvice, Severity=Warning"
+    auto: API
+
+  - id: PYA-BANK-002
+    func: [F-PYA-045]
+    sc: Bank advice amount mismatch
+    t: An active BankAdviceBatch whose TotalAmount does not equal the run's persisted Net raises Critical BankAdviceAmountMismatch
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "RUN2 has persisted Net=9000 but an Approved BankAdviceBatch with TotalAmount=999"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN2"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN2}/post] => [200] Findings contains ControlCode=BankAdviceAmountMismatch, ExpectedValue=9000, ActualValue=999"
+    auto: DB-assisted
+    db: "Assert the BankAdviceBatches.TotalAmount row is unchanged (999) after the reconciliation call - the source is never corrected"
+
+  - id: PYA-BANK-003
+    func: [F-PYA-046]
+    sc: Bank advice count mismatch
+    t: An active batch whose active BankAdvicePayments count does not equal the run's persisted result count raises Warning BankAdviceCountMismatch
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN3 has 3 persisted results but its active BankAdviceBatch has only 2 non-Cancelled BankAdvicePayments"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN3"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN3}/post] => [200] Findings contains ControlCode=BankAdviceCountMismatch, ExpectedValue=3, ActualValue=2"
+    auto: API
+
+  - id: PYA-BANK-004
+    func: [F-PYA-047]
+    sc: Duplicate bank payment reference
+    t: Two active BankAdvicePayments sharing the same non-empty PaymentReference raise Critical DuplicateBankPaymentReference
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "RUN4's active BankAdviceBatch has 2 BankAdvicePayments both with PaymentReference='DUP-REF-1'"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN4"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN4}/post] => [200] Findings contains ControlCode=DuplicateBankPaymentReference, Severity=Critical"
+    auto: API
+
+  - id: PYA-BANK-005
+    func: [F-PYA-044, F-PYA-045, F-PYA-046, F-PYA-047]
+    sc: Exact bank advice sources reconcile cleanly
+    t: A run whose active bank advice exactly matches persisted Net/result count with unique references raises zero bank-advice findings
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN5 has 1 persisted result (Net=9000), 1 active BankAdviceBatch (TotalAmount=9000), 1 active BankAdvicePayment with a unique reference"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN5"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN5}/post] => [200] Findings does not contain MissingBankAdvice, BankAdviceAmountMismatch, BankAdviceCountMismatch, or DuplicateBankPaymentReference"
+    auto: API
+
+  - id: PYA-GL-001
+    func: [F-PYA-048]
+    sc: Missing payroll journal
+    t: A run with persisted results and zero active PayrollJournalBatches raises Warning MissingPayrollJournal
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: High
+    pre: "RUN1 from PYA-BANK-001 (no journal batches either)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] => [200] Findings also contains ControlCode=MissingPayrollJournal, Severity=Warning"
+    auto: API
+
+  - id: PYA-GL-002
+    func: [F-PYA-049]
+    sc: Accounting unbalanced journal
+    t: An active journal batch whose TotalDebit does not equal TotalCredit raises Critical AccountingUnbalanced
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "RUN2's active PayrollJournalBatch has TotalDebit=100, TotalCredit=90"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN2"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN2}/post] => [200] Findings contains ControlCode=AccountingUnbalanced, ExpectedValue=100, ActualValue=90"
+    auto: DB-assisted
+    db: "Assert PayrollJournalBatches.TotalDebit/TotalCredit are unchanged after the call"
+
+  - id: PYA-GL-003
+    func: [F-PYA-050]
+    sc: Duplicate active journal for the same run
+    t: More than one active journal batch for the same PayrollRunId raises Critical DuplicatePayrollJournal
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "RUN3 has 2 active PayrollJournalBatches both linked to the same PayrollRunId (a data-integrity scenario, seeded directly)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN3"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN3}/post] => [200] Findings contains ControlCode=DuplicatePayrollJournal, ExpectedValue=1, ActualValue=2"
+    auto: DB-assisted
+    db: "Seed 2 active PayrollJournalBatches for the same run directly (this module never creates journals itself)"
+
+  - id: PYA-GL-004
+    func: [F-PYA-051]
+    sc: Balanced journal but total mismatches persisted net
+    t: A journal that IS balanced (debit=credit) but whose posted credit total does not equal the run's persisted Net raises Critical AccountingPayrollTotalMismatch
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "RUN4 has persisted Net=9000 but a balanced active journal with TotalDebit=TotalCredit=8000"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN4"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN4}/post] => [200] Findings contains ControlCode=AccountingPayrollTotalMismatch, ExpectedValue=9000, ActualValue=8000, and does NOT contain AccountingUnbalanced (the journal is internally balanced)"
+    auto: API
+
+  - id: PYA-GL-005
+    func: [F-PYA-052]
+    sc: Broken accounting reversal linkage
+    t: A PayrollJournalLineSource whose SourceType contains 'Reversal' but whose SourceId does not resolve to a PayrollReversal linked to this run raises Critical BrokenAccountingReversalLinkage
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Critical
+    pre: "RUN5's active journal has a line with a PayrollJournalLineSource(SourceType='PayrollReversal', SourceId=<random guid with no matching PayrollReversals row>)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN5"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN5}/post] => [200] Findings contains ControlCode=BrokenAccountingReversalLinkage"
+    auto: API
+
+  - id: PYA-GL-006
+    func: [F-PYA-053]
+    sc: Broken accounting adjustment linkage
+    t: A PayrollJournalLineSource whose SourceType contains 'Adjustment' but whose SourceId does not resolve to any PayrollAdjustment for the tenant raises Critical BrokenAccountingAdjustmentLinkage
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Critical
+    pre: "RUN6's active journal has a line with a PayrollJournalLineSource(SourceType='ManualAdjustment', SourceId=<random guid, no matching PayrollAdjustments row for this tenant>)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN6"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN6}/post] => [200] Findings contains ControlCode=BrokenAccountingAdjustmentLinkage"
+    auto: API
+
+  - id: PYA-GL-007
+    func: [F-PYA-048, F-PYA-049, F-PYA-050, F-PYA-051]
+    sc: Exact accounting sources reconcile cleanly
+    t: A run whose single active, balanced journal exactly matches persisted Net raises zero accounting findings
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN7 has persisted Net=9000 and one active journal with TotalDebit=TotalCredit=9000, no reversal/adjustment-sourced lines"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN7"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN7}/post] => [200] Findings does not contain MissingPayrollJournal, AccountingUnbalanced, DuplicatePayrollJournal, or AccountingPayrollTotalMismatch"
+    auto: API

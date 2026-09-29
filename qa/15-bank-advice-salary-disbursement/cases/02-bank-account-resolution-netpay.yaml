@@ -1,0 +1,190 @@
+sheet: BankAdv_Account_Resolution_NetPay
+submodule: Employee Bank-Account Resolution & Net-Pay Amount Selection
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-ACCT-001
+    func: [F-BANKADV-015, F-BANKADV-016]
+    sc: Single matching active salary account resolves correctly
+    t: An employee with exactly one Active, IsActive, Salary-purpose account effective on or before the pay date resolves that account's details onto the payment
+    src: "BankAdviceService.GenerateAsync (accounts query, accountRows.Count==1 branch)"
+    type: Positive
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "EMP1 has one EmployeeBankDetail: AccountPurpose=Salary, IsActive=true, Status=Active, EffectiveFrom=null"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 1 EmployeeBankDetail row
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP1's payment has AccountHolderName/BankName/IfscCode/BranchName populated from that account, ValidationStatus=Valid"
+    auto: API
+
+  - id: BANKADV-ACCT-002
+    func: [F-BANKADV-015]
+    sc: EffectiveFrom boundary against the pay date
+    t: An account whose EffectiveFrom is strictly after the batch's PayDate is excluded from resolution
+    src: "BankAdviceService.GenerateAsync (accounts query, EffectiveFrom filter)"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "EMP2 has one EmployeeBankDetail with EffectiveFrom = PayDate + 1 day, otherwise fully valid"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 1 EmployeeBankDetail row, future-dated
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP2's payment has zero matching accounts, ValidationStatus=Invalid (\"No active salary bank account is effective for the pay date.\")"
+    auto: API
+
+  - id: BANKADV-ACCT-003
+    func: [F-BANKADV-015]
+    sc: Non-salary-purpose and inactive rows are excluded
+    t: An account with AccountPurpose != Salary, or IsActive=false, or Status != Active is never matched even if otherwise complete
+    src: "BankAdviceService.GenerateAsync (accounts query)"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "EMP3 has 3 EmployeeBankDetail rows: one Gratuity-purpose, one Salary-purpose but IsActive=false, one Salary-purpose but Status=Frozen"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 3 EmployeeBankDetail rows as described
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP3's payment has zero matching accounts despite 3 rows existing, ValidationStatus=Invalid"
+    auto: DB-assisted
+    db: "EmployeeBankDetails: 3 rows exist for EMP3, none matched by the resolution filter"
+
+  - id: BANKADV-ACCT-004
+    func: [F-BANKADV-017, F-BANKADV-026]
+    sc: Zero matching accounts
+    t: An employee with no matching salary account produces an Invalid payment with empty account fields
+    src: "BankAdviceService.GenerateAsync, ValidatePayment"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "EMP4 has zero EmployeeBankDetail rows"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP4's payment: AccountHolderName/BankName/MaskedAccountNumber all empty, PaymentStatus=Failed, ValidationStatus=Invalid"
+    auto: API
+
+  - id: BANKADV-ACCT-005
+    func: [F-BANKADV-018, F-BANKADV-027]
+    sc: Ambiguous multiple matching accounts
+    t: An employee with two simultaneously active, effective salary accounts is treated identically to zero accounts - both are Invalid
+    src: "BankAdviceService.GenerateAsync (accountRows.Count==1 ? ... : null)"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "EMP5 has two EmployeeBankDetail rows, both Salary/Active/IsActive, both EffectiveFrom null"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 2 EmployeeBankDetail rows
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP5's payment has empty account fields, ValidationStatus=Invalid (\"Multiple active salary bank accounts are effective for the pay date.\")"
+    auto: API
+
+  - id: BANKADV-ACCT-006
+    func: [F-BANKADV-019]
+    sc: NetPay is taken verbatim from the payroll result
+    t: The payment's NetPay exactly equals PayrollResult.NetPay with no recalculation, rounding, or adjustment
+    src: "BankAdviceService.GenerateAsync"
+    type: Contract
+    tags: [Positive]
+    pri: P0
+    sev: High
+    pre: "EMP1's PayrollResult has NetPay = 45123.37"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP1's payment.NetPay == 45123.37 exactly"
+    auto: API
+
+  - id: BANKADV-ACCT-007
+    func: [F-BANKADV-020]
+    sc: CurrencyCode is copied from the payroll result
+    t: The payment's CurrencyCode matches the sourcing PayrollResult, not any bank-account-level currency
+    src: "BankAdviceService.GenerateAsync"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "EMP1's PayrollResult has CurrencyCode=INR"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP1's payment.CurrencyCode == \"INR\""
+    auto: API
+
+  - id: BANKADV-ACCT-008
+    func: [F-BANKADV-021, F-BANKADV-022]
+    sc: Account-number masking, including the short-account short-circuit
+    t: A long account number is masked to all-but-last-4-digits; an account number of length<=4 is returned unmasked in full
+    src: "BankAdviceService.MaskAccount"
+    type: Boundary
+    tags: [Security]
+    pri: P0
+    sev: High
+    pre: "EMP1 has account number \"1234567890\" (10 digits); EMP6 has account number \"12\" (2 digits)"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 2 EmployeeBankDetail rows
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP1's MaskedAccountNumber == \"XXXXXX7890\""
+      - "[Manual] check EMP6's MaskedAccountNumber => \"12\" (unmasked, length <= 4 short-circuit)"
+      - "[Manual] search the BankAdviceBatchDto JSON response for the full AccountNumber value => not present anywhere"
+    auto: API
+    secc: true
+
+  - id: BANKADV-ACCT-009
+    func: [F-BANKADV-023]
+    sc: Employee name composition
+    t: EmployeeName is FirstName+LastName space-joined, with a blank LastName skipped rather than leaving a trailing space
+    src: "BankAdviceService.GenerateAsync (string.Join)"
+    type: Boundary
+    tags: []
+    pri: P3
+    sev: Low
+    pre: "EMP7 has FirstName=\"Asha\", LastName=null or empty"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] EMP7's payment.EmployeeName == \"Asha\" (no trailing space)"
+    auto: API
+
+  - id: BANKADV-ACCT-010
+    func: [F-BANKADV-024]
+    sc: Bank-account master data CRUD is out of this module's scope
+    t: Employee bank-account create/update/deactivate is exercised by a different module's own CRUD surface, not this one
+    src: "Backend/HRMS.API/Controllers/EmployeeSubResourcesController.cs"
+    type: Contract
+    tags: []
+    pri: P3
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] confirm EmployeeBankDetail create/update/deactivate routes live on EmployeeSubResourcesController, outside BankAdviceController => zero overlap, no duplicate coverage needed here"
+    auto: Manual only

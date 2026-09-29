@@ -1,0 +1,275 @@
+sheet: TaxDcl_YearEnd_Run
+submodule: Year-End Tax Run Lifecycle
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-YERUN-001
+    func: [F-TAXDCL-063]
+    sc: GetRunsAsync is paged, clamped, and ordered
+    t: Runs are ordered by TaxYear descending then CreatedAtUtc descending, page size clamped to 100
+    src: "YearEndTaxService.cs GetRunsAsync"
+    type: Boundary
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "3 runs exist, TaxYear 2024/2025/2026"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.View
+    tenant: "T1 (DEMO01)"
+    data: "pageSize=500 (over the clamp)"
+    steps:
+      - "[GET /api/payroll/year-end-tax/runs?page=1&pageSize=500] => [200] page size silently clamped to 100, runs ordered TaxYear 2026, 2025, 2024"
+    auto: API
+
+  - id: TAXDCL-YERUN-002
+    func: [F-TAXDCL-064]
+    sc: CreateAsync validation
+    t: TaxYear<=0, EndDate<StartDate, and a blank TaxYearCode are each Invalid
+    src: "YearEndTaxService.cs CreateAsync"
+    type: Negative
+    tags: [Validation]
+    pri: P0
+    sev: High
+    pre: none
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "TaxYear=0; EndDate before StartDate; TaxYearCode=''"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs] TaxYear=0 => [400] Invalid, field=taxYear"
+      - "[POST /api/payroll/year-end-tax/runs] TaxYear=2026, EndDate < StartDate => [400] Invalid"
+      - "[POST /api/payroll/year-end-tax/runs] TaxYear=2026, TaxYearCode='' => [400] Invalid"
+    auto: API
+
+  - id: TAXDCL-YERUN-003
+    func: [F-TAXDCL-065]
+    sc: Duplicate TaxYear is rejected even when the prior run is Cancelled
+    t: A second run for the same TaxYear is Conflict regardless of the existing run's status
+    src: "YearEndTaxService.cs CreateAsync (unique index TenantId+TaxYear, no status carve-out)"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "A run for TaxYear=2026 already exists, Status=Cancelled"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "TaxYear=2026 (repeat)"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs] TaxYear=2026 (a Cancelled run already exists for this year) => [409] Conflict, 'A year-end tax run already exists for this tax year.'"
+    auto: API
+
+  - id: TAXDCL-YERUN-004
+    func: [F-TAXDCL-066]
+    sc: Overlapping date ranges are rejected even with a different TaxYear
+    t: A second run whose StartDate/EndDate overlaps an existing non-Cancelled run is Conflict independent of the TaxYear uniqueness check
+    src: "YearEndTaxService.cs CreateAsync (overlap query, Status != Cancelled)"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Run A: TaxYear=2026, 2026-04-01..2027-03-31, Status=Draft"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "Run B: TaxYear=2027, StartDate=2027-01-01, EndDate=2027-12-31 (overlaps Run A's window)"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs] TaxYear=2027, dates overlapping Run A => [409] Conflict, 'The requested tax-year dates overlap an existing run.'"
+    auto: API
+
+  - id: TAXDCL-YERUN-005
+    func: [F-TAXDCL-067]
+    sc: A new run starts Draft with a Created history event
+    t: CreateAsync's persisted state and history
+    src: "YearEndTaxService.cs CreateAsync -> AddHistory(Created)"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "TaxYear=2028, TaxYearCode=2028-29"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs] => [201] Status=Draft"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/history] => one event, Event=Created"
+    auto: API
+
+  - id: TAXDCL-YERUN-006
+    func: [F-TAXDCL-068]
+    sc: CalculateAsync required-status guard and the HandoffCreated lock
+    t: Calculate is rejected outside Draft/Calculated and blocked once any adjustment is HandoffCreated
+    src: "YearEndTaxService.cs CalculateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Run A is Status=Submitted; Run B is Status=Calculated but has one YearEndTaxAdjustment already at Status=HandoffCreated"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{Run A id}/calculate] Run A Status=Submitted => [409] Conflict, 'Only draft or calculated runs may be recalculated.'"
+      - "[POST /api/payroll/year-end-tax/runs/{Run B id}/calculate] Run B has a HandoffCreated adjustment => [409] Conflict, 'A run with a handed-off adjustment cannot be recalculated.'"
+    auto: API
+
+  - id: TAXDCL-YERUN-007
+    func: [F-TAXDCL-069]
+    sc: Recalculation is destructive-and-rebuilt
+    t: A second CalculateAsync call removes every prior YearEndTaxEmployee/Adjustment/Statement row before rebuilding
+    src: "YearEndTaxService.cs CalculateAsync (RemoveRange before rebuild)"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: High
+    pre: "Run already Calculated once, producing 3 YearEndTaxEmployee rows and 1 Recommended adjustment"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: "a new finalized payroll run added into scope before recalculation"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] first call => [200] 3 YearEndTaxEmployee rows, 1 adjustment"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] second call, after adding one more finalized payroll run => [200] all 3 prior YearEndTaxEmployee/Statement rows and the prior adjustment row are gone; a fresh full set is rebuilt from scratch"
+    auto: API
+
+  - id: TAXDCL-YERUN-008
+    func: [F-TAXDCL-070]
+    sc: SubmitAsync required-status guard and stamping
+    t: Submit is rejected outside Calculated and stamps SubmittedByUserId/SubmittedAtUtc on success
+    src: "YearEndTaxService.cs SubmitAsync -> TransitionAsync"
+    type: Negative
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Run is Status=Draft (never calculated)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Submit
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/submit] Status=Draft => [409] Conflict"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] Status=Calculated"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/submit] => [200] Status=Submitted, SubmittedByUserId/SubmittedAtUtc set"
+    auto: API
+
+  - id: TAXDCL-YERUN-009
+    func: [F-TAXDCL-071]
+    sc: ApproveAsync self-approval guard is opt-in only
+    t: The same user who submitted the run can approve it when the tenant has no PayrollControlConfiguration
+    src: "YearEndTaxService.cs ApproveAsync -> PayrollApprovalGuard.ValidateAsync"
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    sev: High
+    pre: "Run is Status=Submitted, SubmittedByUserId = the same user who will now call Approve; tenant has no PayrollControlConfiguration row"
+    role: Custom role R1 (holds both Submit and Approve)
+    perm: Payroll.YearEndTax.Submit, Payroll.YearEndTax.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/submit] as R1 => [200] Submitted"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/approve] as the SAME R1 user => [200] Approved - the guard never fires because the tenant has no RequireMakerChecker+PreventSelfApproval configuration"
+    secc: true
+    auto: API
+    cr: [CR-252]
+
+  - id: TAXDCL-YERUN-010
+    func: [F-TAXDCL-072]
+    sc: Approval is unconditionally blocked when BlockingIssueCount>0
+    t: The blocking-issue guard fires regardless of maker-checker configuration
+    src: "YearEndTaxService.cs TransitionAsync (next==Approved && BlockingIssueCount>0)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Run is Status=Submitted with BlockingIssueCount=1 (one employee has a TAX_PROFILE_MISSING issue)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/approve] BlockingIssueCount=1 => [409] Conflict, 'Blocking reconciliation issues must be resolved before approval.'"
+    auto: API
+
+  - id: TAXDCL-YERUN-011
+    func: [F-TAXDCL-073]
+    sc: CloseAsync requires Approved and zero blocking issues; Closed is immutable
+    t: Close fails outside Approved and with any remaining blocking issue; a closed run cannot be recalculated
+    src: "YearEndTaxService.cs CloseAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Run is Status=Submitted (not yet Approved)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Close
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/close] Status=Submitted => [409] Conflict, 'Only an approved run may be closed.'"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/approve] (BlockingIssueCount=0) => [200] Approved"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/close] => [200] Status=Closed, ClosedByUserId/ClosedAtUtc set"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] Status=Closed => [409] Conflict, 'Only draft or calculated runs may be recalculated.'"
+    auto: API
+
+  - id: TAXDCL-YERUN-012
+    func: [F-TAXDCL-074]
+    sc: CancelAsync only from Draft
+    t: A Calculated or later run can never be cancelled
+    src: "YearEndTaxService.cs CancelAsync -> TransitionAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Run is Status=Calculated"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/cancel] Status=Calculated => [409] Conflict"
+      - "[POST /api/payroll/year-end-tax/runs/{new Draft run id}/cancel] Status=Draft => [200] Status=Cancelled"
+    auto: API
+
+  - id: TAXDCL-YERUN-013
+    func: [F-TAXDCL-075]
+    sc: Cross-tenant run id is NotFound on every route
+    t: A T2 run id used by a T1 caller is NotFound on Get/Calculate/Submit/Approve/Close/Cancel/History/Export
+    src: "YearEndTaxService.cs (TenantId filter, every method)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Run exists in tenant T2 (DEMO02)"
+    role: HRAdmin (T1)
+    perm: Payroll.YearEndTax.View, Manage, Calculate, Submit, Approve, Close
+    tenant: "T1 (DEMO01)"
+    data: "runId belonging to T2"
+    steps:
+      - "[GET /api/payroll/year-end-tax/runs/{T2 runId}] as T1 HRAdmin => [404] NotFound"
+      - "[POST /api/payroll/year-end-tax/runs/{T2 runId}/calculate] as T1 HRAdmin => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: TAXDCL-YERUN-014
+    func: [F-TAXDCL-076]
+    sc: Lifecycle transitions are concurrency-guarded
+    t: A stale ConcurrencyVersion on Submit/Approve/Close/Cancel surfaces Conflict, not a 500
+    src: "YearEndTaxService.cs TransitionAsync, CloseAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Two concurrent Submit calls on the same Calculated run"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Submit
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/submit] first call commits => [200]"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/submit] second call, stale ConcurrencyVersion => [409] Conflict, 'The run changed while this command was in progress.'"
+    auto: API

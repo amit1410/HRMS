@@ -1,0 +1,430 @@
+sheet: Separation_Settlement
+submodule: Final Settlement Handoff (Separation<->Payroll orchestration), the Settlement state machine, and the remaining Exit-closure readiness blockers/idempotency not covered by Group F/G
+defaults:
+  role: HRADMIN
+  perm: "Separation.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: SEP-STL-001
+    func: [F-SEP-240]
+    sc: Settlement readiness - seven independent blockers
+    t: Readiness reports SeparationNotApproved, MissingApprovedLwd, NoticeNotFinalized, ClearanceIncomplete, PendingAssetReturn, ExitInterviewIncomplete, and EmployeeIdentityMissing independently
+    src: ["SeparationSettlementOrchestrationService.EvaluateAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.ViewAll"
+    ui: "SettlementDashboardPage"
+    steps:
+      - "[Setup] Case is still Draft (not Approved), no ApprovedLastWorkingDate, notice not finalized, clearance not started, an asset marked RecoveryRequired still PendingReturn, no exit interview assigned, employee has no AccountEmployeeCurrentLink => precondition established"
+      - "[GET /api/separation/{id}/settlement/readiness] => [200] Blockers include SeparationNotApproved, MissingApprovedLwd, NoticeNotFinalized, ClearanceIncomplete, PendingAssetReturn, ExitInterviewIncomplete, EmployeeIdentityMissing"
+      - "[Setup] All seven conditions resolved => precondition established"
+      - "[GET /api/separation/{id2}/settlement/readiness] => [200] Blockers empty"
+    auto: API
+
+  - id: SEP-STL-002
+    func: [F-SEP-241]
+    sc: Initiate settlement - links a Payroll FinalSettlementCase and is fully idempotent
+    t: Initiate calls Payroll's CreateSettlementAsync with SeparationDate=LastWorkingDate=ApprovedLastWorkingDate and SettlementDate=max(today, LWD); a second Initiate on the same case short-circuits to the linked case with no new row
+    src: ["SeparationSettlementOrchestrationService.InitiateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    ui: "SettlementDashboardPage"
+    steps:
+      - "[Setup] Readiness is clear (all seven blockers resolved) => precondition established"
+      - "[POST /api/separation/{id}/settlement/initiate] => [200/201] SeparationSettlementOrchestrations row Status=Initiated, PayrollFinalSettlementId set; FinalSettlementCases row created with SeparationDate=LastWorkingDate=ApprovedLastWorkingDate"
+      - "[POST /api/separation/{id}/settlement/initiate] repeated => [200] returns the SAME linked case, no second FinalSettlementCases row created"
+    auto: API
+
+  - id: SEP-STL-003
+    func: [F-SEP-242]
+    sc: IdempotencyKey is stored but never actually validated on replay
+    t: Re-initiating with a DIFFERENT IdempotencyKey string still short-circuits as if it matched the original key
+    src: ["SeparationSettlementOrchestrationService.InitiateAsync"]
+    type: Negative
+    pri: P1
+    cr: [CR-155]
+    steps:
+      - "[POST /api/separation/{id}/settlement/initiate] IdempotencyKey='key-A' => [200/201] initiated and linked"
+      - "[POST /api/separation/{id}/settlement/initiate] IdempotencyKey='key-B' (a DIFFERENT key, same separation) => [200] silently short-circuits to the SAME linked result as key-A, with no mismatch error - confirms the key is stored but never compared"
+    auto: API
+
+  - id: SEP-STL-004
+    func: [F-SEP-243]
+    sc: A Payroll-side create failure transitions the orchestration to Failed with the captured error
+    t: If Payroll's CreateSettlementAsync fails, the orchestration's LastFailureCode/Message record the Payroll ResultStatus/message verbatim
+    src: ["SeparationSettlementOrchestrationService.InitiateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Payroll settlement creation is forced to fail (e.g. failure-injected wage resolution) => precondition established"
+      - "[POST /api/separation/{id}/settlement/initiate] => [4xx/5xx] orchestration Status=Failed, LastFailureCode/Message populated with the underlying Payroll failure detail"
+    auto: API
+
+  - id: SEP-STL-005
+    func: [F-SEP-244]
+    sc: Retry is blocked once Finalized and re-evaluates readiness before resuming
+    t: Retry on an orchestration whose linked settlement is already Finalized is rejected; retry on a Failed orchestration re-checks readiness and resumes/re-links rather than creating a duplicate Payroll case
+    src: ["SeparationSettlementOrchestrationService.RetryAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Linked FinalSettlementCase.Status=Finalized => precondition established"
+      - "[POST /api/separation/{id}/settlement/retry] => [409] A finalized settlement cannot be retried."
+      - "[Setup] Orchestration Status=Failed, readiness now clear => precondition established"
+      - "[POST /api/separation/{id2}/settlement/retry] => [200] resumes/re-links to the existing (or a freshly created, if none existed) FinalSettlementCase - never a second case for the same separation"
+    auto: API
+
+  - id: SEP-STL-006
+    func: [F-SEP-245, F-SEP-246]
+    sc: Unpaid salary is never auto-computed; Attendance/Overtime/Comp-Off are never read by settlement calculation
+    t: UnpaidSalary exists only as a manually-addable FinalSettlementLine type; a grep-verified absence confirms settlement calculation never joins Attendance/Overtime/CompOff tables
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync (absence of UnpaidSalary auto-line and Attendance/Overtime/CompOff joins)"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.FinalSettlementCalculate"
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] employee has unpaid salary days through the LWD and outstanding approved Overtime/Comp-Off => [200] Calculated lines contain no auto-generated UnpaidSalary/Overtime/CompOff line - only loans/reimbursements/variable-pay/adjustments/benefits lines appear"
+      - "[POST /api/payroll/final-settlements/{id}/lines] LineType=Other, ComponentCode='UNPAID-SALARY', a manual Amount => [200/201] manually added - the only way this line ever appears"
+    auto: API
+
+  - id: SEP-STL-007
+    func: [F-SEP-247]
+    sc: Leave-encashment/gratuity/notice and loans/reimbursements/variable-pay/adjustments ARE integrated into calculation
+    t: A single Calculate call pulls all of these into FinalSettlementLines without a separate call per source
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Positive
+    pri: P0
+    perm: "Payroll.FinalSettlementCalculate"
+    steps:
+      - "[Setup] Employee has an outstanding Active loan, a ReadyForSettlement reimbursement claim, and a PayrollAdjustment flagged SettlementMethod=FinalSettlement => precondition established"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] gratuity+leave-encashment+notice, linked to the same FinalSettlementId => [200] GratuityCalculations row created, lines added"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] => [200] Recovery line for the loan, Reimbursement line for the claim, and a Recovery/Other line for the adjustment all present in one settlement"
+    auto: API
+
+  - id: SEP-STL-008
+    func: [F-SEP-248]
+    sc: Statutory tax computation is not integrated into final settlement at all
+    t: A grep-verified absence confirms no reference from YearEndTaxService/StatutoryPayrollService to FinalSettlement - beyond gratuity/leave/notice's own internal taxable-split, no TDS line is ever posted
+    src: ["YearEndTaxService.cs / StatutoryPayrollService.cs (absence of FinalSettlement references)"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Grep YearEndTaxService.cs and StatutoryPayrollService.cs for any reference to FinalSettlement* => zero matches, confirming statutory tax is out of scope for this settlement flow"
+    auto: Manual only
+
+  - id: SEP-STL-009
+    func: [F-SEP-249]
+    sc: Recalculation is additive, not a full rebuild
+    t: Re-running Calculate after new outstanding items appear only adds NEW lines (unique SourceType+SourceId); existing lines are never cleared or duplicated
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.FinalSettlementCalculate"
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] first call, 1 active loan => [200] 1 Recovery loan line added"
+      - "[Setup] A second loan becomes Active for the same employee => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] second call => [200] a SECOND Recovery loan line added for the new loan; the first loan's line is untouched, not duplicated"
+    auto: API
+
+  - id: SEP-STL-010
+    func: [F-SEP-250]
+    sc: Re-running gratuity calculation for the same FinalSettlementId is a no-op
+    t: Editing the gratuity policy after a first calculation does not retroactively change an already-linked calculation
+    src: ["SeparationBenefitsService.CalculateCoreAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Payroll.SeparationBenefits.Calculate"
+    steps:
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] FinalSettlementId=X, first call => [200] GratuityAmount=5000 persisted"
+      - "[Setup] The gratuity policy's formula/cap is edited to produce a materially different result => precondition established"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] SAME FinalSettlementId=X, repeated => [200] returns the ORIGINAL 5000 snapshot, unaffected by the policy edit"
+    auto: API
+
+  - id: SEP-STL-011
+    func: [F-SEP-251, F-SEP-252]
+    sc: Zero settlement passes every guard; negative settlement is only blocked at Finalize
+    t: NetSettlement=0 is Calculated/Approved/Finalized with no special case; a negative NetSettlement can be Calculated and even Approved, but Finalize rejects it
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync"]
+    type: Boundary
+    pri: P0
+    perm: "Payroll.FinalSettlementApprove / Finalize"
+    steps:
+      - "[Setup] Lines sum to NetSettlement=0 exactly => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/approve] => [200] Approved"
+      - "[POST /api/payroll/final-settlements/{id}/finalize] => [200] Finalized - zero passes with no special handling"
+      - "[Setup] A different settlement's Recovery lines exceed its earning lines, NetSettlement=-500 => precondition established"
+      - "[POST /api/payroll/final-settlements/{id2}/approve] => [200] Approved DESPITE being negative - no guard at this stage"
+      - "[POST /api/payroll/final-settlements/{id2}/finalize] => [409] Negative final settlement cannot be finalized."
+    auto: API
+
+  - id: SEP-STL-012
+    func: [F-SEP-253]
+    sc: Finalize is a true one-way immutability gate
+    t: A finalized case's lines cannot be edited, and a second Finalize call on an already-Finalized case fails
+    src: ["PayrollRetroSettlementService.FinalizeSettlementAsync"]
+    type: Boundary
+    pri: P0
+    perm: "Payroll.FinalSettlementFinalize"
+    steps:
+      - "[Setup] Settlement Status=Finalized => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/lines] attempt to add a line to a Finalized case => [409] Settlement cannot be calculated in its current state. (blocked upstream by the Calculate-only status gate)"
+      - "[POST /api/payroll/final-settlements/{id}/finalize] repeated => [409] Final settlement must be Approved."
+    auto: API
+
+  - id: SEP-STL-013
+    func: [F-SEP-254, F-SEP-255, F-SEP-256]
+    sc: Separation-Payroll settlement relationship is poll-based with a layering deviation and no reverse discovery path
+    t: GetStatusAsync reads FinalSettlementCases directly via IHrmsDbContext (not exclusively through IPayrollRetroSettlementService); Payroll never writes back into Separation's own tables; there is no Payroll-side GET-by-EmployeeId endpoint, so PayrollFinalSettlementId is only discoverable from Separation's own status response
+    src: ["SeparationSettlementOrchestrationService.GetStatusAsync (line ~30)"]
+    type: Contract
+    pri: P2
+    perm: "Separation.ViewAll"
+    steps:
+      - "[GET /api/separation/{id}/settlement] => [200] Status/PayrollSettlementStatus returned, sourced by a direct FinalSettlementCases query"
+      - "[Manual/Code] Grep PayrollRetroSettlementService.cs and SeparationSettlementOrchestrationService.cs for any write FROM Payroll INTO SeparationSettlementOrchestrations/SeparationSettlementEvents => zero matches (poll-only relationship)"
+      - "[Manual/Code] Grep for any 'GET final-settlement by employeeId' Payroll endpoint => none exists; GET /api/separation/{id}/settlement is the only discovery path for PayrollFinalSettlementId"
+    auto: API
+
+  - id: SEP-STL-014
+    func: [F-SEP-257]
+    sc: SeparationReasonCategory maps to Payroll's SeparationReason explicitly for six values; everything else silently falls to Other
+    t: Resignation/Retirement/Termination/Redundancy/Death/ContractEnd map explicitly; Absconding/MutualSeparation/Other/null all map to Other with no error raised
+    src: ["SeparationSettlementOrchestrationService.MapReason"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Separation reason category = Absconding => precondition established"
+      - "[POST /api/separation/{id}/settlement/initiate] => [200/201] FinalSettlementCases.SeparationReason=Other, no warning or error surfaced for the unmapped category"
+      - "[Setup] Separation reason category = Retirement => precondition established"
+      - "[POST /api/separation/{id2}/settlement/initiate] => [200/201] FinalSettlementCases.SeparationReason=Retirement (explicit mapping)"
+    auto: API
+
+  - id: SEP-STL-015
+    func: [F-SEP-258]
+    sc: CaptureSnapshot reflects the latest facts on every un-linked Initiate/Retry, not the facts at first attempt
+    t: If clearance/notice/LWD facts change between a Failed attempt and a successful Retry, the snapshot recorded on Retry reflects the NEW facts
+    src: ["SeparationSettlementOrchestrationService.CaptureSnapshot"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[Setup] First Initiate attempt fails (Payroll-side failure) with clearance not yet Completed => precondition established"
+      - "[Setup] Clearance subsequently completes, notice is finalized with a DIFFERENT shortfall value than at the first attempt => precondition established"
+      - "[POST /api/separation/{id}/settlement/retry] => [200] the orchestration's captured snapshot reflects the LATEST clearance/notice facts, not the state at the original failed Initiate"
+    auto: API
+
+  - id: SEP-STL-016
+    func: [F-SEP-259, F-SEP-260]
+    sc: Orchestration and Payroll settlement status enum contracts - most declared values are dead
+    t: SeparationSettlementOrchestrationStatus only ever assigns Initiated/Failed/Completed (NotReady is default/never-persisted); FinalSettlementStatus never assigns Reviewed, and Cancelled is an orphan with no writer
+    src: ["Backend/HRMS.Domain/Enums/SeparationSettlementEnums.cs", "Backend/HRMS.Domain/Enums/PayrollEnums.cs"]
+    type: Contract
+    pri: P2
+    cr: [CR-141]
+    steps:
+      - "[Manual/Code] Grep SeparationSettlementOrchestrationService.cs for every `Status = SeparationSettlementOrchestrationStatus.X` assignment => only Initiated, Failed, Completed found; Ready/InitiationPendingApproval/Processing/Cancelled never assigned"
+      - "[Manual/Code] Grep PayrollRetroSettlementService.cs for every `Status = FinalSettlementStatus.X` assignment => Draft/Calculated/Approved/Finalized found; Reviewed and Cancelled never assigned"
+    auto: Manual only
+
+  - id: SEP-STL-017
+    func: [F-SEP-261]
+    sc: Payroll.FinalSettlementCancel is a genuinely orphan permission
+    t: The permission is declared and seeded to multiple roles, but no CancelSettlementAsync method or route exists anywhere to check it
+    src: ["Backend/HRMS.Domain/Authorization/Permissions.cs", "IPayrollRetroSettlementService.cs (absence of Cancel)"]
+    type: Contract
+    pri: P2
+    cr: [CR-152]
+    steps:
+      - "[Manual/Code] Grep IPayrollRetroSettlementService.cs and PayrollRetroSettlementController.cs for 'Cancel' => zero matches; grant of Payroll.FinalSettlementCancel to any role authorizes nothing reachable"
+    auto: Manual only
+
+  - id: SEP-STL-018
+    func: [F-SEP-262]
+    sc: No settlement reversal/reopen endpoint exists once Approved/Finalized on either side
+    t: Post-finalization corrections must go through the separate PayrollRetroCase/PayrollAdjustment mechanism instead of a direct unfinalize action
+    src: ["SeparationSettlementController.cs / PayrollOutputsController.cs (absence)"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Grep SeparationSettlementController.cs and the Payroll final-settlement controller for any 'reopen'/'reverse'/'unfinalize' route => none exists"
+    auto: Manual only
+
+  - id: SEP-STL-019
+    func: [F-SEP-263]
+    sc: GET settlement status can silently write to the database
+    t: A read-permission-gated GET call self-heals the orchestration to Completed and inserts an event row on first observation of Payroll finalization, with DbUpdateConcurrencyException/InvalidOperationException surfacing as real 409/503 responses from what looks like a pure read
+    src: ["SeparationSettlementOrchestrationService.GetStatusAsync (line ~30-42)"]
+    type: Negative
+    pri: P0
+    cr: [CR-153]
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Linked FinalSettlementCase.Status has just become Finalized in Payroll; the Separation-side orchestration Status is still Initiated (not yet self-healed) => precondition established"
+      - "[GET /api/separation/{id}/settlement] => [200] response shows Status=Completed AND a database write occurred: SeparationSettlementOrchestrations.Status is now persisted as Completed with a new SeparationSettlementEvents row - a mutation triggered by a GET"
+      - "[Setup] A concurrent writer holds a conflicting lock on the same orchestration row at the moment of this self-heal => precondition established"
+      - "[GET /api/separation/{id2}/settlement] (racing) => [409] Settlement status changed concurrently. - a write-shaped failure returned from a GET"
+    auto: API
+
+  - id: SEP-STL-020
+    func: [F-SEP-264]
+    sc: Two independent, non-reconciled notice-fact tracks feed different consumers
+    t: Deliberately diverging EmployeeSeparation's notice snapshot from EmployeeEmployments' notice fields shows Separation's readiness gate and Payroll's actual money calculation read from DIFFERENT tables
+    src: ["SeparationService.GetNoticeAsync vs SeparationBenefitsService.CalculateNoticeAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] EmployeeSeparation.NoticeShortfallDays=0 (readiness-side, considers notice fully served) while EmployeeEmployments.NoticePeriod/NoticeStartDate/NoticeEndDate independently imply a shortfall (money-side) => precondition established"
+      - "[GET /api/separation/{id}/settlement/readiness] => [200] NoticeNotFinalized blocker absent (readiness passes, reading the Separation-side snapshot)"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] => [200] a nonzero NoticeRecovery line is still posted, computed independently from EmployeeEmployments - confirming the two tracks can disagree on the SAME case"
+    auto: API
+
+  - id: SEP-STL-021
+    func: [F-SEP-265]
+    sc: Settlement dashboard - server-paged, filterable by orchestration status/employee/LWD range
+    t: The dashboard correctly filters and pages
+    src: ["SeparationSettlementOrchestrationService.GetDashboardAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ViewAll"
+    ui: "SettlementDashboardPage"
+    steps:
+      - "[GET /api/separation/settlement/dashboard?status=Failed&page=1&pageSize=25] => [200] only Failed-status orchestrations returned, correct TotalCount"
+    auto: API
+
+  - id: SEP-STL-022
+    func: [F-SEP-266]
+    sc: Settlement event history omits the declared-but-never-raised SettlementReadinessEvaluated event type
+    t: History shows only initiation/link/failed/retry/completed events, never a readiness-evaluation event despite the type being declared
+    src: ["SeparationSettlementOrchestrationService.GetHistoryAsync"]
+    type: Negative
+    pri: P2
+    perm: "Separation.ViewHistory"
+    steps:
+      - "[Setup] Readiness has been checked (via GET .../readiness) 5 times, then Initiate succeeded => precondition established"
+      - "[GET /api/separation/{id}/settlement/history] => [200] events include only Initiated/Linked/Completed-family types - zero SettlementReadinessEvaluated events despite the 5 readiness checks"
+    auto: API
+
+  - id: SEP-STL-023
+    func: [F-SEP-267]
+    sc: Concurrent Initiate-vs-Initiate and Retry-vs-Retry races each resolve to exactly one surviving pair
+    t: Two simultaneous Initiate calls for the same separation produce exactly one orchestration/FinalSettlementCase pair, the loser observing the winner's result via optimistic concurrency
+    src: ["SeparationSettlementOrchestrationService.cs (ConcurrencyVersion)"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[Concurrency] Two simultaneous [POST /api/separation/{id}/settlement/initiate] calls for the same separation => exactly one FinalSettlementCases row created; the second call either short-circuits to it or receives [409] The separation was changed concurrently."
+    auto: API
+
+  - id: SEP-STL-024
+    func: [F-SEP-268]
+    sc: Settlement completion racing an LWD revision - a Finalized settlement blocks the LWD edit
+    t: If GET .../settlement self-heals to Completed concurrently with a ReviseApprovedLwd call, the LWD revision fails once the linked settlement is Finalized
+    src: ["SeparationSettlementOrchestrationService.GetStatusAsync vs SeparationService.ReviseApprovedLwdAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Setup] Linked FinalSettlementCase.Status=Finalized => precondition established"
+      - "[POST /api/separation/{id}/revise-approved-lwd] NewApprovedLastWorkingDate, Reason='Extension' => [409] blocked - a Finalized settlement prevents further approved-LWD edits"
+    auto: API
+
+  - id: SEP-STL-025
+    func: [F-SEP-269]
+    sc: A pre-commit failure at Initiate leaves a safely retryable state with no duplicate Payroll case
+    t: Injecting a failure between the orchestration write and the Payroll case link rolls back (or leaves a Failed, retryable state); a clean retry creates exactly one Payroll case, never two
+    src: ["SeparationSettlementOrchestrationService.cs"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Setup] A DbException is failure-injected between orchestration persistence and Payroll's CreateSettlementAsync return => precondition established"
+      - "[POST /api/separation/{id}/settlement/initiate] => [4xx/5xx] Status=Failed, no orphaned FinalSettlementCases row created without a matching orchestration"
+      - "[POST /api/separation/{id}/settlement/retry] clean retry => [200] exactly one FinalSettlementCases row now exists for this separation, no duplicate"
+    auto: API
+
+  - id: SEP-EXC-001
+    func: [F-SEP-210]
+    sc: ExitInterviewIncomplete blocker
+    t: Exit execution readiness requires a non-Cancelled exit interview in Completed or CompletedWithoutEmployeeResponse status
+    src: ["SeparationExitService.EvaluateAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Exit interview Status=HrInProgress (not yet Completed) => precondition established"
+      - "[GET /api/separation/exit/{id}/readiness] => [200] Blockers include ExitInterviewIncomplete"
+      - "[Setup] Exit interview Status=CompletedWithoutEmployeeResponse => precondition established"
+      - "[GET /api/separation/exit/{id2}/readiness] => [200] ExitInterviewIncomplete absent - this completion path satisfies the blocker too"
+    auto: API
+
+  - id: SEP-EXC-002
+    func: [F-SEP-211]
+    sc: FinalSettlementIncomplete blocker requires BOTH the orchestration Completed AND the linked case Finalized
+    t: An orchestration Status=Completed with a linked case still Approved (not yet Finalized) still blocks exit execution
+    src: ["SeparationExitService.EvaluateAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] SeparationSettlementOrchestration.Status=Completed but linked FinalSettlementCase.Status=Approved (not Finalized) => precondition established"
+      - "[GET /api/separation/exit/{id}/readiness] => [200] Blockers include FinalSettlementIncomplete"
+      - "[Setup] FinalSettlementCase.Status=Finalized => precondition established"
+      - "[GET /api/separation/exit/{id2}/readiness] => [200] FinalSettlementIncomplete no longer present"
+    auto: API
+
+  - id: SEP-EXC-003
+    func: [F-SEP-212]
+    sc: AssetReturnPending blocker
+    t: Any clearance-task asset still at ReturnStatus=PendingReturn blocks exit execution, regardless of the parent clearance's overall Completed status
+    src: ["SeparationExitService.EvaluateAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Clearance is Completed overall, but one asset return row is still ReturnStatus=PendingReturn (its task was Waived, bypassing the asset check) => precondition established"
+      - "[GET /api/separation/exit/{id}/readiness] => [200] Blockers include AssetReturnPending despite ClearanceIncomplete being absent"
+    auto: API
+
+  - id: SEP-EXC-004
+    func: [F-SEP-213]
+    sc: EmploymentStateInvalid blocker only applies before the employment checkpoint has executed
+    t: Readiness requires Employee.Status=Active before Execute runs; once the employment checkpoint has already committed (Status=Terminated), this specific blocker is not re-evaluated against the now-Terminated status
+    src: ["SeparationExitService.EvaluateAsync"]
+    type: Boundary
+    pri: P2
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Employee.Status has been externally set to Terminated by an unrelated process BEFORE exit execution's own employment checkpoint has run => precondition established"
+      - "[GET /api/separation/exit/{id}/readiness] => [200] Blockers include EmploymentStateInvalid"
+    auto: API
+
+  - id: SEP-EXC-005
+    func: [F-SEP-214]
+    sc: Repeated Retry after a prior successful Execute is idempotent
+    t: Calling Retry on an already-fully-executed (Closed) separation reports Succeeded with no re-mutation of any checkpoint
+    src: ["SeparationExitService.RetryAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.Manage"
+    steps:
+      - "[Setup] Exit execution already Completed (all 4 checkpoints committed, separation Closed) => precondition established"
+      - "[POST /api/separation/exit/{id}/retry] => [200] Succeeded, no checkpoint re-executed, no duplicate SeparationClosed event"
+      - "[POST /api/separation/exit/{id}/retry] repeated a second time => [200] identical result, still no re-mutation"
+    auto: API
+
+  - id: SEP-EXC-006
+    func: [F-SEP-215]
+    sc: ClosedAtUtc on the exit dashboard is sourced from the execution's CompletedAtUtc, not a dedicated column
+    t: There is no dedicated ClosedAtUtc column on EmployeeSeparation itself - the dashboard's timestamp is the execution row's CompletedAtUtc
+    src: ["SeparationExitService.GetDashboardAsync"]
+    type: Contract
+    pri: P2
+    perm: "Separation.ViewAll"
+    ui: "SeparationExitClosurePage"
+    steps:
+      - "[GET /api/separation/exit/dashboard] for a Closed separation => [200] ClosedAtUtc equals the SeparationExitExecutions row's CompletedAtUtc value exactly"
+      - "[Manual/Code] Inspect the EmployeeSeparation entity's columns => no ClosedAtUtc/ClosedDate column exists; the dashboard value is derived, not stored on the separation row"
+    auto: DB-assisted

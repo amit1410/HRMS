@@ -35,6 +35,7 @@ public sealed class EmployeeAccessScopeService(
         var managerPermission = systemRoleIds.Length > 0 && await db.RolePermissions.AsNoTracking()
             .Where(x => systemRoleIds.Contains(x.RoleId))
             .AnyAsync(x => x.Permission!.Name == Permissions.Attendance.MonthlyViewTeam, cancellationToken);
+        var broadAccessRoleIds = await GetBroadAccessRoleIdsAsync(assignments, cancellationToken);
 
         // Some trusted callers (including the API's signed test/integration tokens) establish
         // permissions in the principal without materializing role rows in the test store. The
@@ -60,11 +61,17 @@ public sealed class EmployeeAccessScopeService(
                 Permissions.EmploymentHistory.Change) == true;
             return hasEmployeeAccessPermission ? _ => true : _ => false;
         }
-        // An unscoped manual assignment is tenant-wide. System-managed assignments with no
-        // scopes (for example Manager) are intentionally not tenant-wide; they are handled by
-        // the self/direct-report branches below. Keep those two cases separate so a manager-capable
-        // user who also has a tenant-wide manual assignment does not produce a null expression.
-        if (assignments.Any(x => x.Scopes.Count == 0 && x.AssignmentSource != RoleAssignmentSource.System)) return _ => true;
+        // An unscoped assignment whose role actually carries tenant-wide employee-access permissions
+        // (TenantAdmin, SuperAdmin, HRAdmin, ...) is tenant-wide, regardless of how the assignment was
+        // recorded (AssignmentSource is provenance/audit metadata — who/what created the row — not an
+        // authorization scope signal; a System-seeded TenantAdmin assignment, e.g. from tenant
+        // provisioning or the QA automation seed, must grant the same access a manually-assigned one
+        // does). An unscoped assignment whose role has no such broad permission (for example Manager,
+        // whose reach comes from the org hierarchy, not from a dimensional UserRoleScope row) is
+        // intentionally not tenant-wide; it is handled by the self/direct-report branches below. Keep
+        // those two cases separate so a manager-capable user who also holds a tenant-wide assignment
+        // does not produce a null expression.
+        if (assignments.Any(x => x.Scopes.Count == 0 && broadAccessRoleIds.Contains(x.RoleId))) return _ => true;
 
         var employee = Expression.Parameter(typeof(Employee), "employee");
         Expression? body = linkedEmployeeId is Guid self ? Expression.Equal(Expression.Property(employee, nameof(Employee.Id)), Expression.Constant(self)) : null;
@@ -172,6 +179,58 @@ public sealed class EmployeeAccessScopeService(
     {
         var predicate = await BuildPredicateAsync(effectiveDate, cancellationToken);
         return await db.Employees.AsNoTracking().Where(predicate).AnyAsync(x => x.Id == employeeId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Role ids (from <paramref name="assignments"/>) that hold at least one permission implying
+    /// tenant-wide employee-directory reach. Used only to decide whether an *unscoped* assignment
+    /// (no <see cref="UserRoleScope"/> rows) should be treated as tenant-wide — an assignment that
+    /// does carry explicit scope rows is always resolved dimensionally regardless of this set.
+    /// <para>
+    /// A role that holds <see cref="Permissions.Attendance.MonthlyViewTeam"/> but not
+    /// <see cref="Permissions.Attendance.MonthlyViewAll"/> is excluded even if it also holds one of the
+    /// other broad permissions below: in this codebase <c>MonthlyViewTeam</c> without <c>MonthlyViewAll</c>
+    /// is exclusive to Manager (confirmed against <c>SeedData.RolePermissionMap</c>), which is
+    /// deliberately granted <see cref="Permissions.Employee.View"/> too (to read its own team's records)
+    /// but whose reach must come from the org hierarchy (self + direct reports, handled separately),
+    /// never from an unscoped assignment alone. A role that holds both (TenantAdmin holds every
+    /// permission) is not excluded — <c>MonthlyViewAll</c> takes precedence, the same ordering the
+    /// no-materialized-assignment branch above already uses.
+    /// </para>
+    /// </summary>
+    private async Task<HashSet<int>> GetBroadAccessRoleIdsAsync(IReadOnlyCollection<UserRole> assignments, CancellationToken cancellationToken)
+    {
+        var roleIds = assignments.Select(a => a.RoleId).Distinct().ToArray();
+        if (roleIds.Length == 0)
+            return [];
+
+        var broadPermissions = new[]
+        {
+            Permissions.Employee.View,
+            Permissions.Employee.Create,
+            Permissions.Employee.Edit,
+            Permissions.Employee.Delete,
+            Permissions.Employee.Export,
+            Permissions.Employee.Import,
+            Permissions.EmployeeSensitive.View,
+            Permissions.EmployeeSensitive.Edit,
+            Permissions.EmploymentHistory.View,
+            Permissions.EmploymentHistory.Change,
+            Permissions.Attendance.MonthlyViewAll,
+        };
+
+        var matches = await db.RolePermissions.AsNoTracking()
+            .Where(x => roleIds.Contains(x.RoleId) &&
+                (broadPermissions.Contains(x.Permission!.Name) || x.Permission!.Name == Permissions.Attendance.MonthlyViewTeam))
+            .Select(x => new { x.RoleId, x.Permission!.Name })
+            .ToListAsync(cancellationToken);
+
+        var broadRoleIds = matches.Where(x => x.Name != Permissions.Attendance.MonthlyViewTeam).Select(x => x.RoleId).ToHashSet();
+        var viewAllRoleIds = matches.Where(x => x.Name == Permissions.Attendance.MonthlyViewAll).Select(x => x.RoleId).ToHashSet();
+        var teamScopedOnlyRoleIds = matches.Where(x => x.Name == Permissions.Attendance.MonthlyViewTeam).Select(x => x.RoleId)
+            .Where(roleId => !viewAllRoleIds.Contains(roleId)).ToHashSet();
+        broadRoleIds.ExceptWith(teamScopedOnlyRoleIds);
+        return broadRoleIds;
     }
 
     private static string PropertyFor(RoleScopeType type) => type switch

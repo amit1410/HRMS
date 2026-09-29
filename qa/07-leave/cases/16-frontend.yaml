@@ -1,0 +1,204 @@
+sheet: Leave_Frontend
+submodule: Leave/CompOff frontend pages - loading/empty/error states, permission-gated controls, direct navigation, refresh persistence
+defaults:
+  role: EMPLOYEE
+  perm: "Leave.RequestViewOwn"
+  tenant: A
+  pre: "Tenant A signed in via the browser UI."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: LEAVE-FE-001
+    func: [F-LEAVE-300]
+    sc: My Leave Requests page - list, detail, loading/empty/error states
+    t: The page shows a skeleton while loading, an empty-state call-to-action with no requests, and a retry button on API error
+    src: ["MyLeaveRequestsPage.tsx"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[UI] Navigate to /leave-management/my-requests while the API call is in flight => loading skeleton is shown, not a blank page"
+      - "[UI] With zero requests => empty-state card with a '+ Apply for Leave' action is shown"
+      - "[UI] Force the list API to fail => an error card with a Retry button is shown, not a raw stack trace"
+      - "[UI] Click a request row's 'View Details' => detail page renders day-by-day breakdown and event history"
+    auto: UI
+
+  - id: LEAVE-FE-002
+    func: [F-LEAVE-300]
+    sc: My Leave Requests status filter is entirely client-side over the already-fetched list
+    t: Filtering by Pending/Approved/Rejected/Closed narrows the visible rows without a new API call, and an explanatory note confirms no server-side date/type filter exists yet
+    src: ["MyLeaveRequestsPage.tsx"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[UI] Select 'Pending approval' in the status filter => only PendingApproval rows remain visible; the network tab shows no new request fired"
+      - "[UI] Read the filter card's note text => it states 'Date range and Leave Type filters are not exposed by the current requests endpoint.'"
+    auto: UI
+
+  - id: LEAVE-FE-003
+    func: [F-LEAVE-301]
+    sc: Leave Request Preview -> Submit two-step flow surfaces validation errors inline
+    t: A blocked Preview (e.g. insufficient balance, notice period) shows the exact error inline and disables Submit
+    src: ["LeaveRequestPreviewPage.tsx"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[UI] Fill dates that fail MinimumAdvanceNoticeDays and click Preview => an inline error banner shows the AdvanceNoticeNotMet message; Submit remains disabled"
+      - "[UI] Fix the dates and Preview again successfully => Submit becomes enabled, and shows the computed chargeable days/balance-impact summary before the employee commits"
+    auto: UI
+
+  - id: LEAVE-FE-004
+    func: [F-LEAVE-302]
+    sc: Approvals page hides Approve/Reject for a caller without Leave.Approve
+    t: The action buttons are rendered only when can('Leave.Approve') is true, and a 409 from a race is shown as a clear message
+    src: ["LeaveApprovalsPage.tsx"]
+    type: Positive
+    pri: P0
+    role: MANAGER
+    perm: "Leave.Approve"
+    steps:
+      - "[UI] Open a Pending request's detail as the authorized manager => Approve/Reject buttons are visible and enabled"
+      - "[UI] Simulate someone else approving it first, then click Approve => the page shows 'This leave request has already been processed or is no longer pending.' rather than a raw 409 body"
+    auto: UI
+
+  - id: LEAVE-FE-005
+    func: [F-LEAVE-303]
+    sc: Team Leave Calendar renders month navigation, status-styled events, and a privacy note
+    t: Approved vs PendingApproval events are visually distinguished; an empty month shows a clear empty state
+    src: ["TeamLeaveCalendarPage.tsx"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Navigate to a month with both Approved and PendingApproval team events => events render with distinct styling per status, and the 'Showing leave for your authorized team members only' privacy note is visible"
+      - "[UI] Navigate to a month with zero team events => 'No team leave this month' empty state is shown"
+    auto: UI
+
+  - id: LEAVE-FE-006
+    func: [F-LEAVE-304]
+    sc: HR Leave Dashboard renders KPIs/widgets behind DashboardViewAll and supports the documented filters
+    t: An unauthorized role never sees the dashboard nav item or route content; filters narrow every widget together
+    src: ["LeaveDashboardPage.tsx"]
+    type: Positive
+    pri: P1
+    role: HRADMIN
+    perm: "Leave.DashboardViewAll"
+    steps:
+      - "[UI] As HRAdmin, open the Leave Dashboard => KPIs, status breakdown, aging, pending/upcoming lists render"
+      - "[UI] Apply the LeaveType filter => every widget on the page updates consistently to reflect only that LeaveType"
+    auto: UI
+
+  - id: LEAVE-FE-007
+    func: [F-LEAVE-305]
+    sc: Leave Reports page exposes each report kind as a tab with its own filter/sort/export controls
+    t: The Export CSV action downloads a file via the shared blob helper and reflects the currently-applied filters
+    src: ["LeaveReportsPage.tsx"]
+    type: Positive
+    pri: P1
+    perm: "Leave.ReportsView"
+    steps:
+      - "[UI] Switch between Requests/Balances/Usage/Accounting/Pending/Organization/Calendar tabs => each renders its own column set and controls"
+      - "[UI] Apply a status filter on the Requests tab, then click 'Export CSV' (requires Leave.ReportsExport) => the downloaded file's rows match the on-screen filtered set"
+    auto: UI
+
+  - id: LEAVE-FE-008
+    func: [F-LEAVE-306]
+    sc: Balance Import page drives Upload -> Validate -> fix errors -> Commit with a distinct 403 state
+    t: A per-row error table renders for an invalid batch; a caller lacking BalanceImport sees a clear unauthorized state, not a broken form
+    src: ["LeaveBalanceImportPage.tsx"]
+    type: Positive
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[UI] Upload a CSV with 2 invalid rows => the row-level error table shows each row's ErrorCode/ErrorMessage; Commit is disabled or scoped to valid rows only, per the service's own atomicity rule"
+      - "[UI] As HRAdmin (no Leave.BalanceImport) => the page renders a distinct 'you do not have access' state, not a form that silently 403s on submit"
+    auto: UI
+    cr: [CR-88]
+
+  - id: LEAVE-FE-009
+    func: [F-LEAVE-307]
+    sc: Leave Types/Periods/Policies list pages surface 409 Conflict distinctly from 400 validation
+    t: A duplicate code and a stale concurrency token produce different, specific inline messages
+    src: ["LeaveTypesPage.tsx", "LeavePeriodsPage.tsx", "LeavePoliciesPage.tsx"]
+    type: Positive
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.TypeManage"
+    steps:
+      - "[UI] Create a LeaveType with a Code that already exists => inline 'Conflict' message naming the duplicate, not a generic 400"
+      - "[UI] Edit a LeaveType using a stale ConcurrencyToken (edited elsewhere meanwhile) => a distinct 'Configuration changed by another user' message, prompting a refresh"
+    auto: UI
+
+  - id: LEAVE-FE-010
+    func: [F-LEAVE-308]
+    sc: Policy Editor composes every rule sub-section and reflects server-driven allowedActions
+    t: Validate/Publish/Retire buttons are enabled/disabled exactly per the version's own AllowedActions from the API, not a client-side guess
+    src: ["LeavePolicyEditorPage.tsx"]
+    type: Positive
+    pri: P0
+    role: TENANT_ADMIN
+    perm: "Leave.PolicyManage"
+    steps:
+      - "[UI] Open a Draft version => Publish is disabled until Validate succeeds; CanEdit=true so every rule tab is editable"
+      - "[UI] Open a Published version => CanEdit=false, every rule tab is read-only, and 'Begin Edit' offers to clone it into a new Draft instead"
+      - "[UI] Configure HalfDayAllowed/SandwichMode/AttachmentRequirement/a Clubbing rule on a Draft, then Validate => confirm whether the UI surfaces any warning before Publish, given none of these are actually usable at runtime (CR-81)"
+    auto: UI
+    cr: [CR-81]
+
+  - id: LEAVE-FE-011
+    func: [F-LEAVE-309]
+    sc: Working Day Calendar page manages Holidays and Weekly-Off configurations in two tabs
+    t: Deactivating a Holiday shows it as inactive rather than removing the row; Weekly-Off has no deactivate action, only Create/Update
+    src: ["LeaveWorkingDayCalendarPage.tsx"]
+    type: Positive
+    pri: P1
+    role: TENANT_ADMIN
+    perm: "Leave.PolicyManage"
+    steps:
+      - "[UI] Deactivate a Holiday => the row remains visible in the list, shown as Inactive, not removed"
+      - "[UI] Weekly-Off Configuration tab => confirm there is no Delete/Deactivate action, only Create and Update (asymmetric with Holidays)"
+    auto: UI
+
+  - id: LEAVE-FE-012
+    func: [F-LEAVE-310]
+    sc: Comp-Off pages live under Attendance, not Leave, and are permission-gated per the Attendance.CompOff.* family
+    t: My Comp-Off (self-service) and Comp-Off Operations (manager/HR) are separate pages with separate gates
+    src: ["CompOffPage.tsx", "CompOffOperationsPage.tsx"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Attendance.CompOff.ViewSelf"
+    steps:
+      - "[UI] As a plain Employee, navigate to /attendance/comp-off => balance/earnings/ledger tabs render self-service data only"
+      - "[UI] Attempt to navigate directly to Comp-Off Operations (no nav-item link exists for this role) => the page's own canOperate client-side gate (canAny of ViewTeam/ViewAll/Manage/Approve) renders 'You do not have access to Comp-Off operations.' - note this is a FRONTEND-only gate; the underlying API has no declarative permission at all (CR-82), so this page's client-side check is the only thing standing between an Employee and the raw data if they call the API directly instead of using the UI"
+    auto: UI
+    cr: [CR-82]
+
+  - id: LEAVE-FE-013
+    func: [F-LEAVE-311]
+    sc: Direct navigation to a permission-gated route without the required permission is denied uniformly
+    t: Typing a Leave admin URL directly (no nav-item click) renders the same route-guard-denied state as every other module
+    src: ["any LeaveXxxPage via the app's route guard"]
+    type: Security
+    pri: P1
+    role: EMPLOYEE
+    steps:
+      - "[UI] As a plain Employee, type /leave-management/policies directly into the address bar => the same 'not authorized' route-guard page renders as clicking a hypothetically-visible nav item would have, not a partially-rendered admin page"
+      - "[UI] Same for /attendance/comp-off/operations (a page with NO nav-item at all) => still denied by the frontend's own permission check, confirming CR-82's finding that only client-side/service-side logic protects this route, not a declarative API attribute"
+    auto: UI
+
+  - id: LEAVE-FE-014
+    func: [F-LEAVE-312]
+    sc: A page refresh re-fetches data and re-applies the permission gate
+    t: F5 on any Leave page does not serve stale cached data or bypass the permission check
+    src: ["any LeaveXxxPage"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] On My Leave Requests, approve a request via a second session, then refresh (F5) the first session's page => the refreshed view reflects the new status, not a stale cached one"
+      - "[UI] Refresh on a permission-gated admin page as an authorized role, then have an admin revoke that permission, then refresh again => the page now correctly denies access post-refresh"
+    auto: UI

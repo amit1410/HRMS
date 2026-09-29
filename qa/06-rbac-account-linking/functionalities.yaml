@@ -1,0 +1,1984 @@
+# Functionality registry for Module 6 - RBAC / Role Management / Account<->Employee Linking / Access Control.
+# Every test case references one or more of these ids; the builder fails if a functionality has zero cases
+# or a case references an unknown id.
+#
+# Discovered implementation (authoritative source, read directly - not assumed from docs/ or the brief's
+# expected-role list):
+#   Backend/HRMS.Domain/Authorization/Permissions.cs, RoleNames.cs
+#   Backend/HRMS.Domain/Entities/Role.cs, Permission.cs, RolePermission.cs, User.cs, UserRole.cs,
+#     UserRoleAssignmentScope.cs, UserRoleAssignmentEvent.cs, AccountEmployeeCurrentLink.cs,
+#     AccountEmployeeLinkEvent.cs, AuthorizationConfigurationEvent.cs
+#   Backend/HRMS.Domain/Enums/RoleAssignmentSource.cs, RoleScopeType.cs, UserRoleAssignmentEventType.cs,
+#     AuthorizationConfigurationEventType.cs
+#   Backend/HRMS.API/Controllers/RoleAssignmentsController.cs, AccountEmployeeLinksController.cs,
+#     PageAccessController.cs (+ NavigationController), MeController.cs
+#   Backend/HRMS.API/Security/HasPermissionAttribute.cs
+#   Backend/HRMS.Application/Services/RoleAssignmentService.cs, AccountEmployeeLinkService.cs,
+#     PageAccessService.cs, RoleResolutionService.cs, RoleScopeResolver.cs, EmployeeRoleProvisioningService.cs,
+#     ManagerRoleProvisioningService.cs, AuthService.cs (GetCurrentUserAsync/IssueTokensAsync/
+#     ResolveEmployeeIdentityAsync/LoadAuthorizationAsync), EmployeeIdentityResolver.cs,
+#     EmployeeEmploymentService.cs (the EnsureForManagerEmployeeAsync call site)
+#   Backend/HRMS.Application/Authorization/ApplicationPageCatalog.cs
+#   Backend/HRMS.Application/DTOs/Roles/RoleAssignmentDtos.cs, DTOs/AccountEmployeeLinks/
+#     AccountEmployeeLinkDtos.cs, DTOs/Authorization/PageAccessDtos.cs, DTOs/Auth/AuthenticatedUserDto.cs
+#   Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RoleIds, PermissionIds, RolePermissionMap)
+#   Frontend/HRMS.Web/src/pages/administration/RoleManagementPage.tsx, PageAccessManagementPage.tsx,
+#     AccountEmployeeLinksPage.tsx; src/auth/permissions.ts; src/layout/navigation.ts
+#   Existing xUnit: RoleAssignmentServiceTests, RoleAssignmentConcurrencyTests, AccountEmployeeLinkServiceTests,
+#     AccountEmployeeLinkEndpointTests, RoleResolutionServiceTests, RoleScopeResolverTests,
+#     MySqlPageAccessAuthorizationIntegrationTests, AuthorizationMatrixTests, SeedDataTests
+#   Existing Vitest: RoleManagementPage.test.tsx, PageAccessManagementPage.test.tsx,
+#     AccountEmployeeLinksPage.test.tsx, auth/permissions.mirror.test.ts, layout/navigation.test.ts
+#
+# ── The actual role inventory (source-verified, NOT the brief's example list) ──────────────────────────
+# 14 roles exist, ALL seeded/fixed with hardcoded ids (SeedData.RoleIds) - there is NO create/edit/delete
+# Role Master API anywhere in the codebase. RoleAssignmentsController exposes only GET .../roles (list) and
+# PageAccessController exposes GET/PUT of a role's PERMISSION SET (not the role row itself - name/description
+# are immutable, seeded). The roles: SuperAdmin, TenantAdmin, HRAdmin, HRManager, Manager, Employee,
+# AccountLinkAdministrator, AccountLinkAuditor, EmployeeRelationshipOfficer (ERO), HRBP, TimeManager, IT,
+# Accounts, SuperHR. Employee and Manager are "system-managed": RoleAssignmentService.AssignAsync/RevokeAsync
+# explicitly reject a manual assign/revoke of either (F-RBAC-036), and GetRolesAsync's assignableOnly=true
+# filters them out of the assignable list.
+#
+# ── The single highest-impact finding in this module ───────────────────────────────────────────────────
+# PageAccessService.UpdateAsync (PUT /api/page-access/roles/{roleId}), gated only by PageAccess.Manage, lets
+# the caller replace ANY role's ENTIRE permission set with ANY subset of Permissions.All - with no check that
+# the caller already holds the permissions being granted, no carve-out for RoleManagement.* or
+# AccountEmployeeLink.* (the very carve-out SuperAdmin/TenantAdmin are deliberately denied via
+# RolePermissionMap), and no restriction on which role id is targeted (including SuperAdmin's or
+# TenantAdmin's own row). PageAccess.Manage is held by SuperAdmin, TenantAdmin, HRAdmin and SuperHR
+# (SeedData.RolePermissionMap). HRAdmin holds no RoleManagement.* permission at all and SuperHR holds only
+# RoleManagement.View/AssignmentView (not AssignmentManage) - both can nonetheless reach full role
+# administration, and both can grant themselves AccountEmployeeLink.Manage (defeating the
+# AccountEmployeeLink carve-out entirely), through this one endpoint. See CR-66.
+
+functionalities:
+  # ── A. Role Master / Inventory (list-only; no create/edit/delete Role Master API exists) ──────────────
+  - id: F-RBAC-001
+    name: List all roles (GET /api/role-assignments/roles), ordered by name
+    group: Role Master
+    status: Implemented
+    ui: "RoleManagementPage Roles tab"
+    api: "GET /api/role-assignments/roles"
+    service: "RoleAssignmentService.GetRolesAsync"
+    permission: "RoleAssignment.View"
+    db: "Roles"
+
+  - id: F-RBAC-002
+    name: "assignableOnly=true excludes the two system-managed roles (Employee, Manager) from the list"
+    group: Role Master
+    status: Implemented
+    ui: "n/a - the frontend always calls assignableOnly=false and filters Employee/Manager client-side instead (AssignDialog); the API's own assignableOnly=true path is reachable only by a direct API call"
+    api: "GET /api/role-assignments/roles?assignableOnly=true"
+    service: "RoleAssignmentService.GetRolesAsync (x.Name is not (RoleNames.Employee or RoleNames.Manager))"
+    permission: "RoleAssignment.View"
+    db: "Roles"
+
+  - id: F-RBAC-003
+    name: There is no Role Master create/edit/delete/deactivate API - roles are a fixed, seeded, hardcoded-id catalog of exactly 14 rows
+    group: Role Master
+    status: Needs clarification
+    ui: "RoleManagementPage Roles tab is read-only (no Create/Edit/Delete button anywhere in RolesView)"
+    api: "n/a - no POST/PUT/DELETE route exists under /api/role-assignments/roles or any other controller"
+    service: "SeedData.RoleIds (hardcoded per-role int id, explicitly NOT derived from RoleNames.All position, to survive reordering)"
+    permission: "n/a"
+    db: "Roles (14 rows, ValueGeneratedNever ids)"
+    cr: [CR-66]
+
+  - id: F-RBAC-004
+    name: A role's DISPLAYED permission set is fully editable (grant/revoke any of Permissions.All) via Page Access Management, even though the role row itself (name/description) cannot be created, renamed or deleted
+    group: Role Master
+    status: Implemented
+    ui: "PageAccessManagementPage (role selector + per-page/action checkboxes + Save Configuration)"
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions, AuthorizationConfigurationEvents"
+    cr: [CR-66]
+
+  - id: F-RBAC-005
+    name: Duplicate role name/code cannot be tested - there is no create endpoint through which a duplicate could be submitted
+    group: Role Master
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-RBAC-006
+    name: An invalid/unknown roleId on the matrix or update endpoints is rejected with 404, not 400 or 500
+    group: Role Master
+    status: Implemented
+    ui: "n/a"
+    api: "GET/PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.BuildMatrixAsync / UpdateAsync (SingleOrDefaultAsync(x => x.Id == roleId))"
+    permission: "PageAccess.View / PageAccess.Manage"
+    db: "Roles"
+
+  - id: F-RBAC-007
+    name: Roles are shared platform reference data, not rows scoped by TenantId - the same Role.Id (e.g. HRBP=10) is used across every tenant database
+    group: Role Master
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/role-assignments/roles"
+    service: "Role entity (no TenantId column); SeedData.RoleIds comment explaining why ids are hardcoded rather than positional"
+    permission: "n/a"
+    db: "Roles"
+
+  - id: F-RBAC-008
+    name: Role sorting/filtering/paging on the Roles tab is entirely client-side (search-as-you-type over the already-fetched full list); the API itself returns the whole unpaged list
+    group: Role Master
+    status: Implemented
+    ui: "RoleManagementPage RolesView search box"
+    api: "GET /api/role-assignments/roles"
+    service: "n/a"
+    permission: "RoleAssignment.View"
+    db: "n/a"
+
+  - id: F-RBAC-009
+    name: "'System managed' badge on the Roles tab is computed client-side from a hardcoded SYSTEM_ROLES set (Employee, Manager), independent of the assignableOnly server flag"
+    group: Role Master
+    status: Implemented
+    ui: "RoleManagementPage RolesView 'Management Type' column"
+    api: "n/a"
+    service: "n/a (frontend SYSTEM_ROLES constant duplicates the server's Employee/Manager special-case)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-RBAC-010
+    name: Tenant isolation for the role list is a non-issue by construction - GetRolesAsync reads the whole (tenant-independent) Roles table once a caller is authenticated to any tenant
+    group: Role Master
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/role-assignments/roles"
+    service: "RoleAssignmentService.GetRolesAsync (no TenantId filter - Roles carries none)"
+    permission: "RoleAssignment.View"
+    db: "Roles"
+
+  # ── B. Role Permissions (the matrix; grant/revoke via Page Access Management) ──────────────────────────
+  - id: F-RBAC-011
+    name: The permission matrix for a role lists every catalogued page, each page's CanView (any RequiredPermissions granted) and each action's individually Allowed flag
+    group: Role Permissions
+    status: Implemented
+    ui: "PageAccessManagementPage page/action checkbox grid"
+    api: "GET /api/page-access/roles/{roleId}"
+    service: "PageAccessService.BuildMatrixAsync"
+    permission: "PageAccess.View"
+    db: "RolePermissions, Roles"
+
+  - id: F-RBAC-012
+    name: The 9 seeded roles' exact default permission sets, one functionality per role (source - SeedData.RolePermissionMap)
+    group: Role Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/page-access/roles/{roleId}"
+    service: "SeedData.RolePermissionMap"
+    permission: "PageAccess.View"
+    db: "RolePermissions"
+    ex: ["xU:SeedDataTests.Role_permission_grants_match_the_seed_map"]
+
+  - id: F-RBAC-013
+    name: "SuperAdmin and TenantAdmin are both granted every permission in Permissions.All EXCEPT the three AccountEmployeeLink.* permissions - an explicit, deliberate carve-out"
+    group: Role Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/page-access/roles/{roleId}"
+    service: "SeedData.RolePermissionMap[SuperAdmin]/[TenantAdmin] (DomainPermissions.All.Where(x => !x.StartsWith(\"AccountEmployeeLink.\")))"
+    permission: "PageAccess.View"
+    db: "RolePermissions"
+
+  - id: F-RBAC-014
+    name: HRAdmin holds a broad Employee/Attendance/Payroll/Separation/PageAccess permission set but ZERO RoleManagement.* permissions - cannot open or use Role Management's assignment screen at all
+    group: Role Permissions
+    status: Implemented
+    ui: "n/a (HRAdmin never sees the 'Role Management' nav item - it requires RoleAssignment.View)"
+    api: "GET /api/role-assignments/roles"
+    service: "SeedData.RolePermissionMap[HRAdmin]"
+    permission: "RoleAssignment.View (absent for HRAdmin)"
+    db: "RolePermissions"
+
+  - id: F-RBAC-015
+    name: SuperHR holds RoleManagement.View and RoleManagement.AssignmentView but NOT RoleManagement.AssignmentManage - can browse Role Management's Assignments/Roles/History tabs read-only but cannot assign or revoke a role
+    group: Role Permissions
+    status: Implemented
+    ui: "RoleManagementPage 'Assign Role' button hidden for SuperHR (canManage = can(assignmentManage))"
+    api: "POST /api/role-assignments/users/{userId} (SuperHR gets 403)"
+    service: "SeedData.RolePermissionMap[SuperHR]"
+    permission: "RoleAssignment.AssignmentManage (absent for SuperHR)"
+    db: "RolePermissions"
+
+  - id: F-RBAC-016
+    name: PUT /api/page-access/roles/{roleId} grants requested permissions not already held (adds RolePermission rows) and revokes currently-held permissions not in the request (removes RolePermission rows) in one call - a full-replace semantic, not additive
+    group: Role Permissions
+    status: Implemented
+    ui: "PageAccessManagementPage Save Configuration"
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions"
+
+  - id: F-RBAC-017
+    name: Every grant and every revoke writes an immutable AuthorizationConfigurationEvent (RolePermissionGranted/RolePermissionRevoked) carrying the permission code, actor, reason and old/new value
+    group: Role Permissions
+    status: Implemented
+    ui: "PageAccessManagementPage History tab"
+    api: "PUT /api/page-access/roles/{roleId} then GET /api/page-access/history"
+    service: "PageAccessService.UpdateAsync / GetHistoryAsync"
+    permission: "PageAccess.Manage / PageAccess.View"
+    db: "AuthorizationConfigurationEvents"
+
+  - id: F-RBAC-018
+    name: An unknown permission string in the update request is rejected with 400 before any write occurs
+    group: Role Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.UpdateAsync (Permissions.All.ToHashSet check)"
+    permission: "PageAccess.Manage"
+    db: "none"
+
+  - id: F-RBAC-019
+    name: Duplicate permission names in the request body are collapsed (Distinct, ordinal) before processing - submitting the same permission twice is not an error
+    group: Role Permissions
+    status: Implemented
+    ui: "n/a (checkbox UI cannot itself produce duplicates; only a direct API call can)"
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.UpdateAsync (request.Permissions.Distinct(StringComparer.Ordinal))"
+    permission: "PageAccess.Manage"
+    db: "none"
+
+  - id: F-RBAC-020
+    name: "PageAccessService.UpdateAsync applies to ANY roleId with no restriction on which role is targeted, no check that the caller's OWN role already holds the permissions being granted, and no carve-out for RoleManagement.* or AccountEmployeeLink.* - a caller holding only PageAccess.Manage can grant their own role every permission in Permissions.All, including AccountEmployeeLink.Manage and RoleManagement.AssignmentManage"
+    group: Role Permissions
+    status: Needs clarification
+    ui: "PageAccessManagementPage (role selector includes every role, including the caller's own and SuperAdmin/TenantAdmin's)"
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions"
+    cr: [CR-66]
+
+  - id: F-RBAC-021
+    name: A revoke-then-re-grant of the same permission on the same role produces two distinct, separately-timestamped audit events, not one merged event
+    group: Role Permissions
+    status: Implemented
+    ui: "PageAccessManagementPage History tab"
+    api: "PUT /api/page-access/roles/{roleId} (twice)"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "AuthorizationConfigurationEvents"
+
+  - id: F-RBAC-022
+    name: The permission-matrix update runs inside a Serializable transaction
+    group: Role Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.UpdateAsync (BeginTransactionAsync(IsolationLevel.Serializable))"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions, AuthorizationConfigurationEvents"
+
+  - id: F-RBAC-023
+    name: A permission held through TWO different roles a user holds is reported once (deduplicated), not twice, in the effective/JWT permission list
+    group: Role Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/auth/me (or login response)"
+    service: "AuthService.LoadAuthorizationAsync (.Distinct().OrderBy)"
+    permission: "n/a (authenticated)"
+    db: "RolePermissions"
+
+  - id: F-RBAC-024
+    name: Removing one of two roles that both grant the same permission leaves the permission in effect (retained through the remaining role)
+    group: Role Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/role-assignments/{assignmentId}/revoke then GET /api/auth/me"
+    service: "AuthService.LoadAuthorizationAsync; RoleAssignmentService.RevokeAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles, RolePermissions"
+
+  - id: F-RBAC-025
+    name: "A permission/role change takes effect on the user's NEXT token refresh, not on the already-issued access token - the access token embeds Roles/Permissions as claims at mint time and is not re-evaluated per request"
+    group: Role Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/page-access/roles/{roleId} (as admin), then the affected user's already-open session keeps old claims until POST /api/auth/refresh"
+    service: "AuthService.IssueTokensAsync (comment: 'Roles and permissions are re-read from the database, so an administrator's change takes effect on the next refresh')"
+    permission: "n/a"
+    db: "RolePermissions"
+
+  - id: F-RBAC-026
+    name: GET /api/auth/me (current-user) re-reads roles/permissions from the database on every call, so it reflects a permission change immediately even while the caller's access token still carries the stale claim set
+    group: Role Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/auth/me"
+    service: "AuthService.GetCurrentUserAsync (calls LoadAuthorizationAsync fresh, independent of the bearer token's own claims)"
+    permission: "n/a (authenticated)"
+    db: "UserRoles, RolePermissions"
+
+  - id: F-RBAC-027
+    name: Only effective-dated role assignments (EffectiveFrom<=today<=EffectiveTo) contribute permissions - a Scheduled or Expired assignment's role is excluded from both the JWT and GET /api/auth/me
+    group: Role Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/auth/me"
+    service: "RoleResolutionService.GetEffectiveRoleIdsAsync"
+    permission: "n/a"
+    db: "UserRoles"
+    ex: ["xU:RoleResolutionServiceTests.Active_assignment_resolves_and_effective_end_date_is_inclusive", "xU:RoleResolutionServiceTests.Future_assignment_does_not_resolve_before_its_start_date", "xU:RoleResolutionServiceTests.Expired_assignment_does_not_resolve"]
+
+  # ── C. User-Role Assignment ────────────────────────────────────────────────────────────────────────────
+  - id: F-RBAC-028
+    name: List role assignments, paged, filterable by role/status/source/search, ordered by EffectiveFrom desc
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage Assignments tab"
+    api: "GET /api/role-assignments"
+    service: "RoleAssignmentService.GetAssignmentsAsync"
+    permission: "RoleAssignment.View"
+    db: "UserRoles, Users, AccountEmployeeCurrentLinks, Employees, UserRoleAssignmentEvents"
+    ex: ["xU:RoleAssignmentServiceTests.Assignment_listing_returns_authoritative_statuses_and_server_side_filters"]
+
+  - id: F-RBAC-029
+    name: "Status is computed server-side (Active/Scheduled/Expired/Revoked), not stored - Revoked wins over the date-derived status even if EffectiveTo has not yet passed"
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage status Badge"
+    api: "GET /api/role-assignments"
+    service: "RoleAssignmentService.Map (status computation order: revoked, then Scheduled, then Expired, else Active)"
+    permission: "RoleAssignment.View"
+    db: "UserRoleAssignmentEvents"
+
+  - id: F-RBAC-030
+    name: Search matches the assigned user's name/email OR, via the account's current employee link, the linked employee's code/name
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage Assignments search box"
+    api: "GET /api/role-assignments?search="
+    service: "RoleAssignmentService.GetAssignmentsAsync"
+    permission: "RoleAssignment.View"
+    db: "Users, AccountEmployeeCurrentLinks, Employees"
+
+  - id: F-RBAC-031
+    name: List candidates for role assignment - active users in the caller's tenant, excluding the caller themselves, with their linked employee's department/designation/location if any
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage AssignDialog user selector"
+    api: "GET /api/role-assignments/candidates"
+    service: "RoleAssignmentService.GetCandidatesAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "Users, AccountEmployeeCurrentLinks, Employees"
+    ex: ["xU:RoleAssignmentServiceTests.Role_management_candidates_are_tenant_scoped_and_do_not_require_link_permissions"]
+
+  - id: F-RBAC-032
+    name: Get all role assignments for a specific user
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage AssignmentDetails 'All roles for this user'"
+    api: "GET /api/role-assignments/users/{userId}"
+    service: "RoleAssignmentService.GetUserAssignmentsAsync"
+    permission: "RoleAssignment.View"
+    db: "UserRoles"
+
+  - id: F-RBAC-033
+    name: Assign a role to a user with explicit EffectiveFrom (required) and optional EffectiveTo; EffectiveTo before EffectiveFrom is rejected
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage AssignDialog"
+    api: "POST /api/role-assignments/users/{userId}"
+    service: "RoleAssignmentService.AssignAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles, UserRoleAssignmentEvents"
+    ex: ["xU:RoleAssignmentServiceTests.Manual_assignment_persists_explicit_dates_actor_reason_and_event"]
+
+  - id: F-RBAC-034
+    name: A user can hold the same role in TWO non-overlapping effective periods, or multiple DIFFERENT roles concurrently, without one assignment overwriting another
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage AssignmentDetails 'All roles for this user' list"
+    api: "POST /api/role-assignments/users/{userId} (multiple calls)"
+    service: "RoleAssignmentService.AssignAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles"
+    ex: ["xU:RoleAssignmentServiceTests.User_can_hold_multiple_manual_roles_without_overwriting_assignments"]
+
+  - id: F-RBAC-035
+    name: An overlapping assignment of the SAME role to the SAME user (effective periods intersect) is rejected with 409 Conflict
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage AssignDialog error banner"
+    api: "POST /api/role-assignments/users/{userId}"
+    service: "RoleAssignmentService.AssignAsync (overlap probe before insert, inside a Serializable transaction, retried up to 3 times on deadlock)"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles"
+    ex: ["xU:RoleAssignmentServiceTests.Invalid_and_overlapping_periods_are_rejected_but_adjacent_periods_are_allowed"]
+
+  - id: F-RBAC-036
+    name: "Employee and Manager roles are system-managed: a manual assign OR revoke of either is rejected (400 Invalid), regardless of the caller's permissions"
+    group: Assignment
+    status: Implemented
+    ui: "AssignDialog role dropdown excludes both (roles.filter(!SYSTEM_ROLES.has))"
+    api: "POST /api/role-assignments/users/{userId} (roleId = Employee or Manager's id)"
+    service: "RoleAssignmentService.AssignAsync / RevokeAsync (role.Name is RoleNames.Employee or RoleNames.Manager)"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles"
+    ex: ["xU:RoleAssignmentServiceTests.System_roles_cannot_be_manually_assigned_or_revoked"]
+
+  - id: F-RBAC-037
+    name: Revoking a role that is not currently assigned to that user, or an already-fully-revoked assignment, is reported distinctly (NotFound vs. an idempotent 'already revoked' success) rather than crashing
+    group: Assignment
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/role-assignments/{assignmentId}/revoke"
+    service: "RoleAssignmentService.RevokeAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles"
+
+  - id: F-RBAC-038
+    name: Revoke accepts an explicit EffectiveTo (defaults to today) that cannot precede the assignment's own EffectiveFrom; it writes a Revoked event and closes the assignment's EffectiveTo
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage RevokeDialog"
+    api: "POST /api/role-assignments/{assignmentId}/revoke"
+    service: "RoleAssignmentService.RevokeAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles, UserRoleAssignmentEvents"
+    ex: ["xU:RoleAssignmentServiceTests.Revocation_writes_an_immutable_audit_event_and_closes_the_period"]
+
+  - id: F-RBAC-039
+    name: Assigning a role with a scope disallowed for that role (e.g. a Department scope on IT/Accounts/SuperHR, which allow none) is rejected; duplicate scope rows (same type+entity) in one request are rejected
+    group: Assignment
+    status: Implemented
+    ui: "AssignDialog scope fieldset (hidden entirely for roles with no allowed scope types)"
+    api: "POST /api/role-assignments/users/{userId}"
+    service: "RoleAssignmentService.AssignAsync (ScopesAllowed, duplicate GroupBy check)"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoleAssignmentScopes"
+    ex: ["xU:RoleAssignmentServiceTests.Invalid_scope_and_duplicate_scope_are_rejected"]
+
+  - id: F-RBAC-040
+    name: Only HRBP, Employee Relationship Officer and Time Manager may carry a scope at all (any RoleScopeType value); every other role (including HRAdmin, HRManager, IT, Accounts, SuperHR, AccountLinkAdministrator/Auditor) must be tenant-wide (zero scopes)
+    group: Assignment
+    status: Implemented
+    ui: "AssignDialog SCOPE_TYPES map"
+    api: "POST /api/role-assignments/users/{userId}"
+    service: "RoleAssignmentService.ScopesAllowed"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoleAssignmentScopes"
+
+  - id: F-RBAC-041
+    name: "The frontend's scope-type dropdown for HRBP/ERO/Time Manager offers a NARROWER subset of RoleScopeType than the backend actually accepts (e.g. SubDepartment, Section, SubSection, Function, SubFunction, Country are backend-legal for all three roles but absent from the UI's SCOPE_TYPES map)"
+    group: Assignment
+    status: Needs clarification
+    ui: "RoleManagementPage AssignDialog SCOPE_TYPES constant"
+    api: "POST /api/role-assignments/users/{userId} (a UI-unreachable scope type, sent directly)"
+    service: "RoleAssignmentService.ScopesAllowed (Enum.GetValues<RoleScopeType>() - all 16 values - for these three roles)"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoleAssignmentScopes"
+    cr: [CR-67]
+
+  - id: F-RBAC-042
+    name: Each requested scope's entity id must exist in the caller's own tenant for its dimension (Department, Grade, WorkLocation, etc.); a nonexistent or cross-tenant id is rejected as Invalid
+    group: Assignment
+    status: Implemented
+    ui: "AssignDialog scope-value dropdown (populated from tenant-scoped master lookups)"
+    api: "POST /api/role-assignments/users/{userId}"
+    service: "RoleAssignmentService.ScopeExistsAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "Departments, Grades, WorkLocations, Designations, CostCenters, HoldingCompanies, LinesOfBusiness, Organisations, SubDepartments, Sections, SubSections, Functions, SubFunctions, EmployeeTypes, Countries"
+
+  - id: F-RBAC-043
+    name: "SuperHR is a privileged role assignment: only an existing SuperHR may assign SuperHR to another account, and an actor cannot self-assign it"
+    group: Assignment
+    status: Implemented
+    ui: "AssignDialog shows a 'Super HR warning' banner when that role is selected"
+    api: "POST /api/role-assignments/users/{userId} (roleId = SuperHR's id)"
+    service: "RoleAssignmentService.AssignAsync (HasRoleAsync(actorId, SuperHR) check; actorId==userId rejected)"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles"
+    ex: ["xU:RoleAssignmentServiceTests.Super_hr_requires_existing_authority_and_cannot_be_self_assigned"]
+
+  - id: F-RBAC-044
+    name: "Because ONLY SuperAdmin and TenantAdmin actually hold RoleManagement.AssignmentManage in the seeded matrix, the 'only an existing SuperHR may grant SuperHR' rule can currently only ever be exercised by a SuperAdmin/TenantAdmin acting as the assigner - no seeded SuperHR account can itself call this endpoint to promote a peer, unless a SuperHR account first uses the CR-66 PageAccess.Manage path to grant its own role AssignmentManage"
+    group: Assignment
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/role-assignments/users/{userId}"
+    service: "SeedData.RolePermissionMap (only SuperAdmin/TenantAdmin hold RoleManagement.AssignmentManage)"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "n/a"
+    cr: [CR-66]
+
+  - id: F-RBAC-045
+    name: Revoking the tenant's LAST currently-effective SuperHR assignment (with an EffectiveTo at or before today) is rejected with 409 - the tenant must always retain at least one effective SuperHR
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage RevokeDialog error"
+    api: "POST /api/role-assignments/{assignmentId}/revoke"
+    service: "RoleAssignmentService.RevokeAsync (anotherActive probe for SuperHR only)"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles"
+    ex: ["xU:RoleAssignmentServiceTests.Super_hr_revocation_preserves_the_last_active_assignment"]
+
+  - id: F-RBAC-046
+    name: Assignment and revocation history is per-user and per-assignment, ordered chronologically, immutable (append-only UserRoleAssignmentEvents), and tenant-isolated
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage History tab / AssignmentDetails 'View History'"
+    api: "GET /api/role-assignments/{assignmentId}/history, GET /api/role-assignments/users/{userId}/history"
+    service: "RoleAssignmentService.GetAssignmentHistoryAsync / GetUserHistoryAsync"
+    permission: "RoleAssignment.AssignmentViewHistory"
+    db: "UserRoleAssignmentEvents"
+    ex: ["xU:RoleAssignmentServiceTests.Role_assignment_history_is_tenant_isolated"]
+
+  - id: F-RBAC-047
+    name: Every history event records who performed it (PerformedByUserId) and why (Reason) - System-sourced events (auto-provisioning) carry no PerformedByUserId
+    group: Assignment
+    status: Implemented
+    ui: "RoleManagementPage History tab 'Performed By'/'Reason' columns"
+    api: "GET /api/role-assignments/users/{userId}/history"
+    service: "RoleAssignmentService.Event"
+    permission: "RoleAssignment.AssignmentViewHistory"
+    db: "UserRoleAssignmentEvents"
+
+  - id: F-RBAC-048
+    name: There is no maker-checker / approval workflow anywhere in role assignment - AssignAsync/RevokeAsync take effect immediately on a single authorized call
+    group: Assignment
+    status: Implemented
+    ui: "n/a (AssignDialog submits directly; no pending/approve step)"
+    api: "POST /api/role-assignments/users/{userId}"
+    service: "RoleAssignmentService.AssignAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles"
+
+  - id: F-RBAC-049
+    name: An actor CAN assign or revoke a role for themselves (no explicit self-assignment guard exists on RoleAssignmentService.AssignAsync/RevokeAsync, unlike AccountEmployeeLinkService's explicit self-link prohibition) - the only self-protection in this module is SuperHR's own narrower rule (F-RBAC-043)
+    group: Assignment
+    status: Needs clarification
+    ui: "AssignDialog does not exclude the signed-in user from the candidate list"
+    api: "POST /api/role-assignments/users/{ownUserId}"
+    service: "RoleAssignmentService.AssignAsync (no actorId==userId check outside the SuperHR branch)"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles"
+    cr: [CR-68]
+
+  - id: F-RBAC-050
+    name: Assigning/revoking a role for a user in a different tenant, or a nonexistent user, is rejected as NotFound (Account not found) - the tenant filter and an explicit existence check both apply
+    group: Assignment
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/role-assignments/users/{crossTenantUserId}"
+    service: "RoleAssignmentService.AssignAsync (Users.AnyAsync(x.TenantId == tenantId))"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "Users"
+
+  - id: F-RBAC-051
+    name: A nonexistent roleId on assign is rejected as NotFound
+    group: Assignment
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/role-assignments/users/{userId}"
+    service: "RoleAssignmentService.AssignAsync (Roles.SingleOrDefaultAsync)"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "Roles"
+
+  - id: F-RBAC-052
+    name: A concurrent duplicate/overlapping assignment race (two simultaneous assigns of the same role to the same user) leaves exactly one UserRole row and resolves via Serializable-transaction retry with a bounded 3-attempt deadlock loop
+    group: Assignment
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/role-assignments/users/{userId} (concurrent)"
+    service: "RoleAssignmentService.AssignAsync (attempt loop, IsDeadlock classifier)"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles"
+    ex: ["xU:RoleAssignmentConcurrencyTests.Concurrent_overlapping_assignments_leave_one_assignment_and_one_event", "xU:RoleAssignmentConcurrencyTests.Concurrent_non_overlapping_assignments_both_succeed_and_persist_events"]
+
+  # ── D. Default Employee Role auto-provisioning ────────────────────────────────────────────────────────
+  - id: F-RBAC-053
+    name: "Linking (or Replacing) an account to an employee auto-provisions the seeded Employee role for that user - System-sourced, effective from today, reason 'Employee account link'"
+    group: Employee Role
+    status: Implemented
+    ui: "n/a (silent side-effect of AccountEmployeeLinksPage's Link/Replace action)"
+    api: "POST /api/account-employee-links/users/{userId}/link (or /replace)"
+    service: "EmployeeRoleProvisioningService.EnsureForLinkedEmployeeAsync (invoked from AccountEmployeeLinkService.MutateAsync)"
+    permission: "AccountEmployeeLink.Manage"
+    db: "UserRoles, UserRoleAssignmentEvents"
+
+  - id: F-RBAC-054
+    name: The Employee role is granted at most once per user - a second Link/Replace (e.g. after an intervening unlink-then-relink) does not create a duplicate UserRoles row if the Employee role assignment is still present
+    group: Employee Role
+    status: Implemented
+    ui: "n/a"
+    api: "POST .../link then .../unlink then .../link again"
+    service: "EmployeeRoleProvisioningService.EnsureForLinkedEmployeeAsync (UserRoles.AnyAsync guard)"
+    permission: "AccountEmployeeLink.Manage"
+    db: "UserRoles"
+
+  - id: F-RBAC-055
+    name: Employee-role provisioning is NOT triggered by Employee creation itself, nor by Employment History changes - only by a successful Link or Replace on AccountEmployeeLinkService; creating an Employee row with no linked account grants no role to anyone
+    group: Employee Role
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees (create), independently of any link call"
+    service: "EmployeeService.CreateAsync (no role-provisioning call anywhere in the Employee create/update path)"
+    permission: "Employee.Create"
+    db: "UserRoles (unaffected)"
+
+  - id: F-RBAC-056
+    name: "Unlinking an account does NOT revoke its previously-provisioned Employee role - the role assignment (and every permission it grants) remains in effect after the link that caused it is gone"
+    group: Employee Role
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/unlink, then GET /api/role-assignments/users/{userId}"
+    service: "AccountEmployeeLinkService.MutateAsync (Unlink branch never calls any *RoleProvisioning service - only Link/Replace do, since target is null on Unlink)"
+    permission: "AccountEmployeeLink.Manage"
+    db: "UserRoles (unchanged by Unlink)"
+    cr: [CR-69]
+
+  - id: F-RBAC-057
+    name: Linking an employee who is ALREADY the AfterEmployeeId of a prior link event for a DIFFERENT (now-unlinked) user does not retroactively touch that other user's roles - provisioning is scoped strictly to the userId of the current Link/Replace call
+    group: Employee Role
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/link"
+    service: "EmployeeRoleProvisioningService.EnsureForLinkedEmployeeAsync (tenantId+userId+employeeId scoped)"
+    permission: "AccountEmployeeLink.Manage"
+    db: "UserRoles"
+
+  - id: F-RBAC-058
+    name: Employee-role provisioning proceeds identically for a terminated/inactive employee's account IF the link itself was already established before termination - provisioning only runs at Link/Replace time, and CR-53's own carry-forward finding means nothing later revokes it (see also CR-69)
+    group: Employee Role
+    status: Implemented
+    ui: "n/a"
+    api: "n/a - not independently re-triggerable after the fact"
+    service: "EmployeeRoleProvisioningService.EnsureForLinkedEmployeeAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "UserRoles"
+    cr: [CR-53]
+
+  - id: F-RBAC-059
+    name: If the seeded Employee role is somehow missing from the Roles table, provisioning logs a warning and silently returns rather than throwing - a Link/Replace still succeeds, just without granting the role
+    group: Employee Role
+    status: Implemented
+    ui: "n/a"
+    api: "n/a - not reachable against the seeded database; documented defensive branch"
+    service: "EmployeeRoleProvisioningService.EnsureForLinkedEmployeeAsync (roleId is null branch)"
+    permission: "n/a"
+    db: "Roles"
+
+  - id: F-RBAC-060
+    name: Employee-role provisioning and the link mutation happen inside the SAME database transaction and the same SaveChangesAsync call as the link event itself - an audit-write failure rolls back both together
+    group: Employee Role
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/link"
+    service: "AccountEmployeeLinkService.MutateAsync (single BeginTransactionAsync .. SaveChangesAsync .. CommitAsync wrapping both the link event and the role provisioning)"
+    permission: "AccountEmployeeLink.Manage"
+    db: "UserRoles, AccountEmployeeLinkEvents, AccountEmployeeCurrentLinks"
+    ex: ["xU:AccountEmployeeLinkServiceTests.Audit_failure_rolls_back_the_event_and_current_state_together"]
+
+  # ── E. Manager Role auto-provisioning ─────────────────────────────────────────────────────────────────
+  - id: F-RBAC-061
+    name: "Recording an employment change with a ManagerId provisions the seeded Manager role for that manager's LINKED account - System-sourced, effective today, reason 'Reporting manager assignment' - ONLY if the manager is presently a current (non-superseded, not-yet-ended) manager on at least one EmployeeEmploymentHistory row"
+    group: Manager Role
+    status: Implemented
+    ui: "n/a (silent side-effect of EmploymentSectionForm's 'Add employment change' when a manager is set)"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "ManagerRoleProvisioningService.EnsureForManagerEmployeeAsync, called from EmployeeEmploymentService.CreateChangeAsync"
+    permission: "EmploymentHistory.Change"
+    db: "UserRoles, UserRoleAssignmentEvents, EmployeeEmploymentHistory"
+
+  - id: F-RBAC-062
+    name: If the newly-assigned manager employee has NO linked account (AccountEmployeeCurrentLinks lookup misses), provisioning is a silent no-op - nothing to grant a role to, and no error surfaces to the employment-change caller
+    group: Manager Role
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history (ManagerId belongs to an unlinked employee)"
+    service: "ManagerRoleProvisioningService.EnsureForManagerEmployeeAsync (link is null branch, returns immediately)"
+    permission: "EmploymentHistory.Change"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-063
+    name: The Manager role is granted at most once per manager's linked account - a second/third direct report assigned to the same already-Manager-role-holding account does not create a duplicate UserRoles row
+    group: Manager Role
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id1}/employment-history then POST /api/employees/{id2}/employment-history (same manager)"
+    service: "ManagerRoleProvisioningService.EnsureForLinkedEmployeeAsync (alreadyAssigned guard)"
+    permission: "EmploymentHistory.Change"
+    db: "UserRoles"
+
+  - id: F-RBAC-064
+    name: "A future-dated employment change naming a manager (EffectiveFrom in the future) STILL provisions the Manager role today - EnsureForManagerEmployeeAsync's own 'is currently a manager' probe checks EffectiveTo (or null) >= today, not EffectiveFrom <= today, so a not-yet-effective manager assignment is enough"
+    group: Manager Role
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history (ManagerId set, EffectiveFrom in the future)"
+    service: "ManagerRoleProvisioningService.EnsureForManagerEmployeeAsync (x.EffectiveTo == null || x.EffectiveTo >= today - no lower bound against EffectiveFrom)"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmploymentHistory, UserRoles"
+    cr: [CR-70]
+
+  - id: F-RBAC-065
+    name: "Manager role provisioning is deliberately additive/one-way - there is no code path anywhere that REMOVES the Manager role once a manager's last direct report is reassigned elsewhere (documented in the service's own XML doc comment)"
+    group: Manager Role
+    status: Needs clarification
+    ui: "n/a (RoleManagementPage never shows an automatic revoke for Manager)"
+    api: "n/a - no removal endpoint reachable for a System-sourced Manager assignment (also blocked by F-RBAC-036's system-role guard)"
+    service: "ManagerRoleProvisioningService (XML doc: 'Role assignment is deliberately additive... never removed here')"
+    permission: "n/a"
+    db: "UserRoles"
+    cr: [CR-71]
+
+  - id: F-RBAC-066
+    name: "There is no startup/seed reconciliation job that re-scans all current manager relationships and back-fills missing Manager role assignments - provisioning fires only at the moment an employment-history change is recorded"
+    group: Manager Role
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "repo-wide search: ManagerRoleProvisioningService is invoked from exactly one call site (EmployeeEmploymentService.CreateChangeAsync) and DatabaseInitializer performs no manager-role reconciliation pass"
+    permission: "n/a"
+    db: "n/a"
+    cr: [CR-72]
+
+  - id: F-RBAC-067
+    name: A manager assigned via the LEGACY full-record path (Employee.ReportingManagerId, set through PUT /api/employees/{id}) does NOT trigger Manager-role provisioning - only a POST to the Employment History endpoint does
+    group: Manager Role
+    status: Needs clarification
+    ui: "n/a"
+    api: "PUT /api/employees/{id} (ReportingManagerId changed)"
+    service: "EmployeeService.UpdateAsync (no ManagerRoleProvisioning call anywhere in this method)"
+    permission: "Employee.Edit"
+    db: "UserRoles (unaffected)"
+    cr: [CR-72]
+
+  - id: F-RBAC-068
+    name: A manager with multiple current direct reports is provisioned the Manager role exactly once, at whichever direct report's employment change is recorded first
+    group: Manager Role
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{reportA}/employment-history, POST /api/employees/{reportB}/employment-history (same manager)"
+    service: "ManagerRoleProvisioningService.EnsureForLinkedEmployeeAsync"
+    permission: "EmploymentHistory.Change"
+    db: "UserRoles"
+
+  - id: F-RBAC-069
+    name: A former manager (every direct report reassigned away, or the manager's own employment ended) is never automatically stripped of the Manager role or its scope-narrowing effect on the Employee module (see also Module 5's CR-57)
+    group: Manager Role
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "ManagerRoleProvisioningService (additive-only, per F-RBAC-065)"
+    permission: "n/a"
+    db: "UserRoles"
+    cr: [CR-71]
+
+  - id: F-RBAC-070
+    name: A manager who currently has zero direct reports (never assigned any, or all reassigned) simply never receives the Manager role in the first place - EnsureForManagerEmployeeAsync's own precondition (AnyAsync ManagerId == employeeId) is false
+    group: Manager Role
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "ManagerRoleProvisioningService.EnsureForManagerEmployeeAsync"
+    permission: "n/a"
+    db: "EmployeeEmploymentHistory"
+
+  # ── F. Account <-> Employee Linking ───────────────────────────────────────────────────────────────────
+  - id: F-RBAC-071
+    name: Get an account's current link state (Unlinked / Linked / Invalid) plus the latest event id ('revision') used for optimistic concurrency on the next mutation
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage 'Current link' section"
+    api: "GET /api/account-employee-links/users/{userId}"
+    service: "AccountEmployeeLinkService.GetUserAsync / ReadStateAsync"
+    permission: "AccountEmployeeLink.View"
+    db: "Users, AccountEmployeeCurrentLinks, Employees, AccountEmployeeLinkEvents"
+
+  - id: F-RBAC-072
+    name: Get link state by employee id instead of user id (reverse lookup); an unlinked employee reports Unlinked with no user context rather than 404
+    group: Account Link
+    status: Implemented
+    ui: "n/a (no dedicated frontend surface for the reverse lookup)"
+    api: "GET /api/account-employee-links/employees/{employeeId}"
+    service: "AccountEmployeeLinkService.GetEmployeeAsync"
+    permission: "AccountEmployeeLink.View"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-073
+    name: "'Invalid' link state: the current-link row's EmployeeId no longer resolves to a real Employee (orphaned link) - reported distinctly from Unlinked, with no crash"
+    group: Account Link
+    status: Needs clarification
+    ui: "AccountEmployeeLinksPage 'The saved link points to an unavailable employee.'"
+    api: "GET /api/account-employee-links/users/{userId}"
+    service: "AccountEmployeeLinkService.ReadStateAsync (employee is null branch)"
+    permission: "AccountEmployeeLink.View"
+    db: "AccountEmployeeCurrentLinks, Employees"
+
+  - id: F-RBAC-074
+    name: List user candidates for linking - active users in the tenant, excluding the caller, regardless of whether they already have a current link (an already-linked user still appears in this list)
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage account selector"
+    api: "GET /api/account-employee-links/candidates/users"
+    service: "AccountEmployeeLinkService.GetUserCandidatesAsync / CandidatesAsync"
+    permission: "AccountEmployeeLink.View + AccountEmployeeLink.Manage"
+    db: "Users"
+    ex: ["xU:AccountEmployeeLinkServiceTests.Linked_accounts_remain_selectable_while_linked_employees_leave_new_link_candidates"]
+
+  - id: F-RBAC-075
+    name: List employee candidates for linking - ONLY employees with NO current link (an already-linked employee is excluded), each flagged Eligible/Ineligible by current employment status
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage employee selector"
+    api: "GET /api/account-employee-links/candidates/employees"
+    service: "AccountEmployeeLinkService.GetEmployeeCandidatesAsync / CandidatesAsync"
+    permission: "AccountEmployeeLink.View + AccountEmployeeLink.Manage"
+    db: "Employees, AccountEmployeeCurrentLinks"
+    ex: ["xU:AccountEmployeeLinkServiceTests.Linked_accounts_remain_selectable_while_linked_employees_leave_new_link_candidates"]
+
+  - id: F-RBAC-076
+    name: Candidate search requires at least 2 characters when supplied (shorter is rejected as Invalid); pageSize is capped at 50
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage search inputs (no client-side length guard - relies on the API's 400)"
+    api: "GET /api/account-employee-links/candidates/users?search=a"
+    service: "AccountEmployeeLinkService.CandidatesAsync"
+    permission: "AccountEmployeeLink.View + AccountEmployeeLink.Manage"
+    db: "none"
+
+  - id: F-RBAC-077
+    name: Link an unlinked account to an eligible employee, with a mandatory reason (1-500 chars) and the current revision (null is valid for a never-linked account)
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage 'Link / replace'"
+    api: "POST /api/account-employee-links/users/{userId}/link"
+    service: "AccountEmployeeLinkService.LinkAsync / MutateAsync"
+    permission: "AccountEmployeeLink.View + AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks, AccountEmployeeLinkEvents"
+    ex: ["xU:AccountEmployeeLinkServiceTests.Link_unlink_and_relink_append_events_and_require_the_current_revision"]
+
+  - id: F-RBAC-078
+    name: An employee is 'eligible for a new link' only if (a) not yet joined and Status=Active, or (b) already joined, Status=Active, and has exactly one current non-superseded EmploymentHistory row whose EmploymentStatus is Active; a Terminated/Resigned/inactive/no-current-history employee is rejected as Conflict
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage employee candidate 'Eligibility' column (Eligible/Ineligible is a display hint only, not itself the enforcement)"
+    api: "POST /api/account-employee-links/users/{userId}/link"
+    service: "AccountEmployeeLinkService.EligibleForNewLinkAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "Employees, EmployeeEmploymentHistory"
+
+  - id: F-RBAC-079
+    name: Linking to an employee who already has a current link (by ANY user) is rejected as Conflict ('Employee is already linked'), race-checked at write time in addition to the candidate list's exclusion
+    group: Account Link
+    status: Implemented
+    ui: "n/a (race not reachable through the UI's own candidate list, only via two concurrent direct calls)"
+    api: "POST /api/account-employee-links/users/{userId}/link"
+    service: "AccountEmployeeLinkService.MutateAsync (AccountEmployeeCurrentLinks.AnyAsync(EmployeeId == targetId))"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-080
+    name: Linking an account that already has a current link is rejected as Conflict ('The account is already linked') - Link is strictly for an unlinked account; Replace is the only path to change an existing link
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage submit() picks replaceAccount automatically when state.data.status === 'Linked'"
+    api: "POST /api/account-employee-links/users/{userId}/link (already linked)"
+    service: "AccountEmployeeLinkService.MutateAsync (operation == 'Link' && current is not null)"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-081
+    name: Linking a user to the SAME employee they are already linked to is rejected the same way as any other already-linked case (Conflict) - re-linking identical state is not a silent no-op
+    group: Account Link
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/link (employeeId == current link's employeeId)"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-082
+    name: An invalid/nonexistent userId or employeeId on link is reported as NotFound (Account not found / Employee not found) distinctly
+    group: Account Link
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/link"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "Users, Employees"
+
+  - id: F-RBAC-083
+    name: A cross-tenant employeeId (belonging to a different tenant than the caller) resolves as if it does not exist, since Employees.SingleOrDefaultAsync is filtered by the global TenantId query filter
+    group: Account Link
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/link (employeeId from Tenant B)"
+    service: "AccountEmployeeLinkService.MutateAsync (_db.Employees.SingleOrDefaultAsync - tenant-filtered)"
+    permission: "AccountEmployeeLink.Manage"
+    db: "Employees"
+
+  - id: F-RBAC-084
+    name: A cross-tenant userId is likewise indistinguishable from a nonexistent one, since Users.SingleOrDefaultAsync is tenant-filtered
+    group: Account Link
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{crossTenantUserId}/link"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "Users"
+
+  - id: F-RBAC-085
+    name: An inactive user account (IsActive=false) cannot be the SUBJECT of a link mutation - rejected as Conflict ('The account is inactive'), even by a caller who otherwise holds Manage
+    group: Account Link
+    status: Implemented
+    ui: "n/a (an inactive user still appears in the account selector per F-RBAC-074, but the mutation itself fails)"
+    api: "POST /api/account-employee-links/users/{inactiveUserId}/link"
+    service: "AccountEmployeeLinkService.MutateAsync (!subject.IsActive)"
+    permission: "AccountEmployeeLink.Manage"
+    db: "Users"
+
+  - id: F-RBAC-086
+    name: "An operator with AccountEmployeeLink.Manage cannot change THEIR OWN link (link, unlink or replace) - hard-blocked server-side (Forbidden) AND hidden client-side (the account dropdown filters out the signed-in user's own id)"
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage account <select> (users.data?.filter(item => item.id !== user?.id))"
+    api: "POST /api/account-employee-links/users/{ownUserId}/link"
+    service: "AccountEmployeeLinkService.MutateAsync (_tenant.UserId == userId -> Forbidden)"
+    permission: "AccountEmployeeLink.Manage"
+    db: "n/a"
+
+  - id: F-RBAC-087
+    name: Unlink requires the caller to supply the CURRENT link's exact linkId, employeeId and revision (optimistic concurrency); a stale/mismatched value of any of the three is rejected as Conflict ('Link state changed'), never silently applied against a different link than the caller saw
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage unlink() (reads the freshest state.data before calling)"
+    api: "POST /api/account-employee-links/users/{userId}/unlink"
+    service: "AccountEmployeeLinkService.MutateAsync (actualRevision/current.LinkId/current.EmployeeId equality checks)"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks"
+    ex: ["xU:AccountEmployeeLinkServiceTests.Link_unlink_and_relink_append_events_and_require_the_current_revision"]
+
+  - id: F-RBAC-088
+    name: After Unlink, the employee becomes a link candidate again (reappears in GET candidates/employees) and the user's current-link state reports Unlinked
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage (refreshSelected + loadCandidates both re-run after unlink)"
+    api: "POST /api/account-employee-links/users/{userId}/unlink then GET .../candidates/employees"
+    service: "AccountEmployeeLinkService.MutateAsync / GetEmployeeCandidatesAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-089
+    name: Replace atomically swaps the current link for a new employee in ONE call - the old AccountEmployeeCurrentLinks row is removed and a new one added in the same SaveChangesAsync, never leaving the account transiently unlinked
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage submit() (replaceAccount branch)"
+    api: "POST /api/account-employee-links/users/{userId}/replace"
+    service: "AccountEmployeeLinkService.MutateAsync (ReplaceAsync)"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks, AccountEmployeeLinkEvents"
+    ex: ["xU:AccountEmployeeLinkServiceTests.Replacement_is_atomic_rejects_occupied_targets_and_preserves_the_original_link"]
+
+  - id: F-RBAC-090
+    name: Replace to an employee already linked elsewhere (occupied target) is rejected as Conflict and the ORIGINAL link is preserved unchanged (no partial unlink)
+    group: Account Link
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/replace (newEmployeeId already linked to another user)"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks"
+    ex: ["xU:AccountEmployeeLinkServiceTests.Replacement_is_atomic_rejects_occupied_targets_and_preserves_the_original_link"]
+
+  - id: F-RBAC-091
+    name: Replace to the SAME employee the account is already linked to is rejected as Conflict ('Replacement target must differ')
+    group: Account Link
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/replace (newEmployeeId == current employeeId)"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-092
+    name: A reason is mandatory (non-blank, <=500 chars) for Link, Unlink AND Replace alike - a missing or oversized reason is rejected as Invalid before any state is read
+    group: Account Link
+    status: Implemented
+    ui: "AccountEmployeeLinksPage textarea (maxLength=500, submit button disabled while blank)"
+    api: "POST /api/account-employee-links/users/{userId}/link"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "none"
+
+  - id: F-RBAC-093
+    name: Unlinking (and replacing) a terminated/resigned employee's account is permitted by the same rules as any other current link - EligibleForNewLinkAsync only gates NEW links, never an unlink of an existing one, so a CR-53 terminated employee's link can be removed if desired but nothing requires it
+    group: Account Link
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/unlink"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks"
+    cr: [CR-53]
+
+  # ── G. Account<->Employee Linking permissions (View / ViewHistory / Manage carve-out) ────────────────
+  - id: F-RBAC-094
+    name: "The controller stacks BOTH [HasPermission(View)] and [HasPermission(Manage)] on every mutating action (link/unlink/replace/candidates) - ASP.NET Core's multiple-Authorize-attribute semantics require BOTH to hold (logical AND), so Manage alone (without View) is insufficient"
+    group: Linking Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/link"
+    service: "AccountEmployeeLinksController (stacked [HasPermission] attributes, AllowMultiple=true)"
+    permission: "AccountEmployeeLink.View AND AccountEmployeeLink.Manage"
+    db: "n/a"
+
+  - id: F-RBAC-095
+    name: A role holding ONLY AccountEmployeeLink.View (e.g. AccountLinkAuditor, which holds View+ViewHistory but not Manage) can read current state and history but gets 403 on link/unlink/replace/candidates
+    group: Linking Permissions
+    status: Implemented
+    ui: "AccountEmployeeLinksPage 'Eligible employees'/'Link / replace' section hidden entirely for a View-only caller (canManage=false)"
+    api: "POST /api/account-employee-links/users/{userId}/link (AccountLinkAuditor)"
+    service: "AccountEmployeeLinkService.CheckAsync"
+    permission: "AccountEmployeeLink.Manage (absent for AccountLinkAuditor)"
+    db: "n/a"
+
+  - id: F-RBAC-096
+    name: A role holding ONLY AccountEmployeeLink.ViewHistory (without View) is blocked from the history endpoint's OWN attribute set - History is gated on ViewHistory alone (not stacked with View), so ViewHistory alone IS sufficient there, unlike the mutating actions
+    group: Linking Permissions
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/account-employee-links/users/{userId}/history"
+    service: "AccountEmployeeLinksController.History ([HasPermission(AccountEmployeeLink.ViewHistory)] only)"
+    permission: "AccountEmployeeLink.ViewHistory"
+    db: "AccountEmployeeLinkEvents"
+
+  - id: F-RBAC-097
+    name: A role holding Manage without View cannot exist as a reachable state through the seeded matrix (both AccountLinkAdministrator entries always pair View+Manage) - directly testable only via the CR-66 Page Access Management path
+    group: Linking Permissions
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/link (a role granted Manage only, via Page Access Management)"
+    service: "AccountEmployeeLinksController"
+    permission: "AccountEmployeeLink.Manage (without View)"
+    db: "n/a"
+    cr: [CR-66]
+
+  - id: F-RBAC-098
+    name: A role holding NONE of the three AccountEmployeeLink permissions gets 403 on every route under /api/account-employee-links, and the 'Account–Employee Links' nav item is hidden entirely (requires accountEmployeeLink.view)
+    group: Linking Permissions
+    status: Implemented
+    ui: "n/a (nav item absent)"
+    api: "GET /api/account-employee-links/users/{userId}"
+    service: "AccountEmployeeLinksController"
+    permission: "AccountEmployeeLink.View"
+    db: "n/a"
+
+  - id: F-RBAC-099
+    name: "SuperAdmin and TenantAdmin are EXCLUDED from AccountEmployeeLink.* by RolePermissionMap's explicit .Where(x => !x.StartsWith(\"AccountEmployeeLink.\")) filter - a SuperAdmin gets 403 on every account-employee-link route despite holding literally every other permission in the system (see also Module 5's EMP-SEC-012)"
+    group: Linking Permissions
+    status: Implemented
+    ui: "n/a (SuperAdmin does not see the nav item either)"
+    api: "GET /api/account-employee-links/users/{userId} (as SuperAdmin)"
+    service: "SeedData.RolePermissionMap[SuperAdmin]"
+    permission: "AccountEmployeeLink.View (absent for SuperAdmin)"
+    db: "n/a"
+
+  - id: F-RBAC-100
+    name: "The AccountEmployeeLink carve-out is intentionally separated from the general domain-permission aggregation pattern used elsewhere (SuperAdmin/TenantAdmin get 'everything else' automatically) - but it is enforced only by what RolePermissionMap happens to grant, and PageAccessService.UpdateAsync has no equivalent carve-out logic at all (CR-66), so the separation is a seed-data convention, not a structural guarantee"
+    group: Linking Permissions
+    status: Needs clarification
+    ui: "n/a"
+    api: "PUT /api/page-access/roles/{superAdminRoleId} (permissions: [...Permissions.All])"
+    service: "PageAccessService.UpdateAsync (no AccountEmployeeLink.* exclusion of any kind)"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions"
+    cr: [CR-66]
+
+  # ── H. Self-service identity (/api/auth/me, EmployeeIdentityResolver) ────────────────────────────────
+  - id: F-RBAC-101
+    name: The authenticated-user payload (login response and GET /api/auth/me) carries an EmployeeIdentity block with Status (Unlinked/Linked/Invalid), the link's Revision/LinkId, the linked employee's display name/code, an EmploymentEligibility classification, and the business date the classification was computed against
+    group: Self-Service Identity
+    status: Implemented
+    ui: "layout/navigation.ts visibleNavItems (requiresEmployeeIdentity gate)"
+    api: "GET /api/auth/me"
+    service: "AuthService.GetCurrentUserAsync / ResolveEmployeeIdentityAsync"
+    permission: "n/a (authenticated)"
+    db: "AccountEmployeeCurrentLinks, AccountEmployeeLinkEvents, Employees, EmployeeEmploymentHistory"
+
+  - id: F-RBAC-102
+    name: "EmploymentEligibility takes exactly one of: NotLinked, RequiresReview (Invalid link), FutureJoining (DateOfJoining in the future), NoApplicableEmployment (zero or more than one current history row), ActiveEmployment, or Separated (current history row's EmploymentStatus or the Employee's own Status is not Active)"
+    group: Self-Service Identity
+    status: Implemented
+    ui: "n/a (not surfaced directly in any page read so far; used only for eligibility semantics)"
+    api: "GET /api/auth/me"
+    service: "AuthService.ResolveEmployeeIdentityAsync"
+    permission: "n/a"
+    db: "Employees, EmployeeEmploymentHistory"
+
+  - id: F-RBAC-103
+    name: "A CR-53 terminated employee's linked account still reports EmployeeIdentity.Status='Linked' (the link itself is untouched) but EmploymentEligibility='Separated' - distinguishing 'still linked' from 'still actively employed'"
+    group: Self-Service Identity
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/auth/me (as a terminated employee's still-active account)"
+    service: "AuthService.ResolveEmployeeIdentityAsync"
+    permission: "n/a"
+    db: "Employees, EmployeeEmploymentHistory"
+    cr: [CR-53]
+
+  - id: F-RBAC-104
+    name: "Roles and Permissions on /api/auth/me are entirely independent of EmployeeIdentity/EmploymentEligibility - a Separated employee's account keeps every role/permission its UserRoles rows grant; nothing in RBAC reduces access because the linked employee record says Separated"
+    group: Self-Service Identity
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/auth/me"
+    service: "AuthService.GetCurrentUserAsync (LoadAuthorizationAsync and ResolveEmployeeIdentityAsync are fully independent queries)"
+    permission: "n/a"
+    db: "UserRoles, RolePermissions"
+    cr: [CR-53]
+
+  - id: F-RBAC-105
+    name: An unlinked account reports EmployeeIdentity.Status='Unlinked', EmploymentEligibility='NotLinked', and nav items flagged requiresEmployeeIdentity (My Profile, Apply Leave, My Attendance, etc.) are hidden from navigation
+    group: Self-Service Identity
+    status: Implemented
+    ui: "layout/navigation.ts visibleNavItems"
+    api: "GET /api/auth/me"
+    service: "AuthService.ResolveEmployeeIdentityAsync"
+    permission: "n/a"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-106
+    name: Replacing a link changes the reported linked employee on the very next /api/auth/me or link-state read, with no caching lag (both read fresh from the database)
+    group: Self-Service Identity
+    status: Implemented
+    ui: "n/a"
+    api: "POST .../replace then GET /api/auth/me"
+    service: "AuthService.ResolveEmployeeIdentityAsync"
+    permission: "n/a"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-107
+    name: An inactive User (IsActive=false) is rejected at GetCurrentUserAsync with 403, before EmployeeIdentity is even resolved - the CR-53 gap is that Employee termination never SETS IsActive=false, not that an inactive user's /me is mishandled once it is false
+    group: Self-Service Identity
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/auth/me (IsActive=false)"
+    service: "AuthService.GetCurrentUserAsync"
+    permission: "n/a"
+    db: "Users"
+
+  - id: F-RBAC-108
+    name: EmployeeIdentityResolver.ResolveCurrentAsync (used by other self-service features, e.g. My Profile) never falls back to matching by email or employee code - an unlinked account gets a clean NotFound rather than an accidental identity match
+    group: Self-Service Identity
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/me/profile (unlinked account)"
+    service: "EmployeeIdentityResolver.ResolveCurrentAsync"
+    permission: "n/a (authenticated)"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-109
+    name: EmployeeIdentityResolver reports Conflict ('requires administrator review'), not a crash, when the current-link row is orphaned (its EmployeeId no longer resolves) - mirrors AccountEmployeeLinkService's own Invalid-state handling
+    group: Self-Service Identity
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/me/profile (orphaned link)"
+    service: "EmployeeIdentityResolver.ResolveCurrentAsync"
+    permission: "n/a"
+    db: "AccountEmployeeCurrentLinks, Employees"
+
+  # ── I. Page Access ─────────────────────────────────────────────────────────────────────────────────────
+  - id: F-RBAC-110
+    name: "The page catalog is a small, fixed, code-defined set of 9 pages (Dashboard, Employees List/Detail, Leave Dashboard/Approvals, Attendance Dashboard, Leave Reports, Role Management, Page Access Management, Account-Employee Links) - not itself editable through any API; only which permissions map to which role is editable"
+    group: Page Access
+    status: Implemented
+    ui: "PageAccessManagementPage page/module grid"
+    api: "GET /api/page-access/roles/{roleId}"
+    service: "ApplicationPageCatalog.All"
+    permission: "PageAccess.View"
+    db: "none (in-code constant)"
+
+  - id: F-RBAC-111
+    name: A page is CanView for a role if the role holds ANY ONE of that page's RequiredPermissions (OR, not AND) - and each of a page's individual Actions is independently Allowed by its own single permission
+    group: Page Access
+    status: Implemented
+    ui: "PageAccessManagementPage per-page 'View' checkbox + per-action checkboxes"
+    api: "GET /api/page-access/roles/{roleId}"
+    service: "PageAccessService.BuildMatrixAsync"
+    permission: "PageAccess.View"
+    db: "RolePermissions"
+
+  - id: F-RBAC-112
+    name: "The Role Management page's OWN required permission is RoleManagement.AssignmentView, not RoleManagement.View or .Manage - so SuperHR (View+AssignmentView) sees the page, but a hypothetical role holding only RoleManagement.View (with no AssignmentView) would NOT"
+    group: Page Access
+    status: Needs clarification
+    ui: "layout/navigation.ts 'Role Management' nav item (permission: roleManagement.assignmentView)"
+    api: "GET /api/auth/navigation"
+    service: "ApplicationPageCatalog (ADMIN.ROLE_MANAGEMENT page's RequiredPermissions = [AssignmentView])"
+    permission: "RoleManagement.AssignmentView"
+    db: "n/a"
+
+  - id: F-RBAC-113
+    name: Real-time navigation (GET /api/auth/navigation) is computed from the caller's EFFECTIVE role ids for TODAY, grouped by page's ModuleCode, and includes only pages with at least one granted RequiredPermission
+    group: Page Access
+    status: Implemented
+    ui: "Sidebar (rendered from this endpoint independently of the client-side navigation.ts NAV_ITEMS mirror)"
+    api: "GET /api/auth/navigation"
+    service: "PageAccessService.GetNavigationAsync"
+    permission: "n/a (Authorize only)"
+    db: "UserRoles, RolePermissions"
+
+  - id: F-RBAC-114
+    name: "Backend navigation (ApplicationPageCatalog, 9 pages) and the frontend's own NAV_ITEMS (layout/navigation.ts, ~50+ items across Leave/Attendance/Payroll/Separation) are TWO INDEPENDENT catalogs - the frontend sidebar is actually driven by NAV_ITEMS/visibleNavItems, not by GET /api/auth/navigation's smaller catalog, so the two can (and do) disagree on what exists"
+    group: Page Access
+    status: Needs clarification
+    ui: "Sidebar.tsx (uses layout/navigation.ts, not api/pageAccess navigation)"
+    api: "GET /api/auth/navigation vs. the client-side NAV_ITEMS constant"
+    service: "ApplicationPageCatalog.All (9 entries) vs. NAV_ITEMS (far more)"
+    permission: "n/a"
+    db: "none"
+    cr: [CR-73]
+
+  - id: F-RBAC-115
+    name: Direct URL navigation to a permission-gated route the caller lacks still reaches client-side route guards (RequirePermission) which redirect/deny - but the definitive boundary is always the API's own [HasPermission] 403, proven by calling the underlying endpoint directly with the same token
+    group: Page Access
+    status: Implemented
+    ui: "RequirePermission route guard"
+    api: "any [HasPermission]-guarded endpoint, called directly"
+    service: "n/a"
+    permission: "varies"
+    db: "n/a"
+
+  - id: F-RBAC-116
+    name: Page Access history (AuthorizationConfigurationEvents) is filterable by role, user, assignment id, event type and a from/to date window, paged
+    group: Page Access
+    status: Implemented
+    ui: "PageAccessManagementPage History tab filters"
+    api: "GET /api/page-access/history"
+    service: "PageAccessService.GetHistoryAsync"
+    permission: "PageAccess.View"
+    db: "AuthorizationConfigurationEvents"
+
+  - id: F-RBAC-117
+    name: Preview a specific user's effective access - their currently-effective role assignments (with scope), the union of permissions those roles grant, the pages that union unlocks, and a computed 'has manager access' flag
+    group: Page Access
+    status: Implemented
+    ui: "PageAccessManagementPage 'Preview User Access'"
+    api: "GET /api/page-access/users/{userId}/preview"
+    service: "PageAccessService.GetUserPreviewAsync"
+    permission: "PageAccess.View"
+    db: "UserRoles, RolePermissions, AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-118
+    name: "'Has manager access' in the preview is computed the SAME way Module 5's CR-57 finding describes - Attendance.Monthly.ViewTeam held AND a linked employee id present - reusing an Attendance-module permission as the signal, independent of any RoleManagement permission"
+    group: Page Access
+    status: Needs clarification
+    ui: "PageAccessManagementPage preview 'Manager access' field"
+    api: "GET /api/page-access/users/{userId}/preview"
+    service: "PageAccessService.GetUserPreviewAsync (permissions.Contains(Attendance.MonthlyViewTeam) && employeeId is not null)"
+    permission: "PageAccess.View"
+    db: "RolePermissions, AccountEmployeeCurrentLinks"
+    cr: [CR-74]
+
+  - id: F-RBAC-119
+    name: Search users for the preview picker by name/email, capped at 50 results, tenant-scoped
+    group: Page Access
+    status: Implemented
+    ui: "PageAccessManagementPage 'Search user'"
+    api: "GET /api/page-access/users?search="
+    service: "PageAccessService.SearchUsersAsync"
+    permission: "PageAccess.View"
+    db: "Users"
+
+  - id: F-RBAC-120
+    name: An inactive/removed role (a roleId that no longer resolves, or a role a user's assignment has since been revoked from) is excluded from that user's preview automatically, since only currently-effective UserRoles rows are read
+    group: Page Access
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/page-access/users/{userId}/preview"
+    service: "PageAccessService.GetUserPreviewAsync"
+    permission: "PageAccess.View"
+    db: "UserRoles"
+
+  - id: F-RBAC-121
+    name: A refreshed session (new access token) immediately reflects any Page Access Management change made before that refresh - consistent with F-RBAC-025
+    group: Page Access
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/page-access/roles/{roleId} then POST /api/auth/refresh"
+    service: "AuthService.IssueTokensAsync"
+    permission: "n/a"
+    db: "RolePermissions"
+
+  - id: F-RBAC-122
+    name: Page Access endpoints are tenant-agnostic reference-data reads/writes (Roles/RolePermissions/Permission are not TenantId-scoped) EXCEPT AuthorizationConfigurationEvents and the user-preview/search calls, which ARE tenant-filtered - a Page Access change made in one tenant's session actually applies to the SAME role across every tenant that shares the seeded role catalog
+    group: Page Access
+    status: Needs clarification
+    ui: "n/a"
+    api: "PUT /api/page-access/roles/{roleId} (as Tenant A's HRAdmin, roleId = the shared 'HRBP' role's id)"
+    service: "PageAccessService.UpdateAsync (db.Roles/db.RolePermissions carry no TenantId filter at all)"
+    permission: "PageAccess.Manage"
+    db: "Roles, RolePermissions"
+    cr: [CR-75]
+
+  # ── J. Authorization Scope (RoleScopeResolver / EmployeeAccessScopeService interplay) ──────────────────
+  - id: F-RBAC-123
+    name: "A scoped role assignment (HRBP/ERO/TimeManager with one or more UserRoleAssignmentScope rows) applies to an employee only if EVERY scope dimension present matches that employee's CURRENT effective employment snapshot for the given date - dimensions are AND'd, but multiple VALUES within one dimension are OR'd (alternatives)"
+    group: Scope Authorization
+    status: Implemented
+    ui: "n/a (enforced entirely server-side; the Employee module's row-level filtering consumes this)"
+    api: "n/a (a resolver service, not its own endpoint - exercised indirectly through Employee-module list/detail scope)"
+    service: "RoleScopeResolver.AppliesAsync"
+    permission: "n/a"
+    db: "EmployeeEmploymentHistory (via IEffectiveEmploymentResolver)"
+    ex: ["xU:RoleScopeResolverTests.Department_scope_uses_the_effective_employment_snapshot_for_the_requested_date", "xU:RoleScopeResolverTests.Non_matching_department_scope_is_rejected_and_no_scope_is_tenant_wide", "xU:RoleScopeResolverTests.Multiple_values_in_one_dimension_are_alternatives"]
+
+  - id: F-RBAC-124
+    name: A role assignment with ZERO scope rows always applies (tenant-wide) - the empty-scopes case is the explicit short-circuit in RoleScopeResolver.AppliesAsync
+    group: Scope Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "RoleScopeResolver.AppliesAsync (assignment.Scopes.Count == 0 -> true)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-RBAC-125
+    name: If the target employee has NO current effective employment record for the requested date, a scoped assignment never applies to them (resolved.Employment is null -> false) - even a tenant-wide role's OWN scope check is bypassed only because it has no scopes, not because a null employment snapshot is treated as a wildcard
+    group: Scope Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "RoleScopeResolver.AppliesAsync"
+    permission: "n/a"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-RBAC-126
+    name: HRBP/ERO/TimeManager scopes can be defined over any of 16 RoleScopeType dimensions (HoldingCompany, Lob, Organisation, Department, SubDepartment, Section, SubSection, Function, SubFunction, Country, Location, WorkLocation, CostCenter, Grade, Designation, EmployeeType); a two-dimension scope (e.g. Department=Engineering AND Grade=G3) requires an employee to match BOTH
+    group: Scope Authorization
+    status: Implemented
+    ui: "AssignDialog scope fieldset (multiple 'Add' calls build a multi-dimension scope)"
+    api: "POST /api/role-assignments/users/{userId}"
+    service: "RoleScopeResolver.AppliesAsync (GroupBy ScopeType, .All(group matches))"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoleAssignmentScopes"
+
+  - id: F-RBAC-127
+    name: "The Manager role's OWN scope narrowing (self + direct reports) is NOT implemented through UserRoleAssignmentScope/RoleScopeResolver at all - it is Module 5's CR-57 finding: EmployeeAccessScopeService keys off the Attendance.MonthlyViewTeam permission plus the caller's OWN linked employee id, entirely independent of this module's scope-assignment mechanism"
+    group: Scope Authorization
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/employees (as Manager)"
+    service: "EmployeeAccessScopeService.BuildPredicateAsync (Module 5); RoleScopeResolver is a SEPARATE mechanism used elsewhere"
+    permission: "Attendance.Monthly.ViewTeam"
+    db: "EmployeeEmploymentHistory"
+    cr: [CR-57]
+
+  - id: F-RBAC-128
+    name: An HRBP scoped to Department=Engineering sees/authorizes only employees whose CURRENT employment is in Engineering; an employee whose employment moved to Finance yesterday falls out of scope from today, even though the HRBP's own role assignment is unchanged
+    group: Scope Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "n/a (exercised through whichever consuming module calls RoleScopeResolver, e.g. Leave/Payroll in later modules)"
+    service: "RoleScopeResolver.AppliesAsync"
+    permission: "n/a"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-RBAC-129
+    name: An employee OUTSIDE every dimension of an HRBP's scope is excluded even if they match on some (but not all) dimensions - partial dimension matches never satisfy an AND across dimensions
+    group: Scope Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "RoleScopeResolver.AppliesAsync"
+    permission: "n/a"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-RBAC-130
+    name: A tenant-wide HR role (HRAdmin, HRManager, SuperHR, Accounts) never carries scope rows (F-RBAC-040) and so is authorized for every employee in the tenant by definition, wherever RoleScopeResolver (or an equivalent per-module scope check) is consulted
+    group: Scope Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "RoleScopeResolver.AppliesAsync (Scopes.Count==0 short-circuit)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-RBAC-131
+    name: TenantAdmin is authorized tenant-wide for every RBAC/scope-consuming decision by virtue of holding nearly every domain permission outright (F-RBAC-013), not through any scope mechanism
+    group: Scope Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "SeedData.RolePermissionMap[TenantAdmin]"
+    permission: "n/a"
+    db: "n/a"
+
+  # ── K. Role combinations ───────────────────────────────────────────────────────────────────────────────
+  - id: F-RBAC-132
+    name: "Employee + Manager (the two system-managed roles held together, the common case for anyone who manages at least one direct report): permissions are the UNION of both maps - Leave.Approve (Manager) plus Leave.RequestCreate/RequestViewOwn (Employee) coexist with no conflict or precedence rule"
+    group: Role Combinations
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/auth/me"
+    service: "AuthService.LoadAuthorizationAsync (plain union across all effective role ids)"
+    permission: "n/a"
+    db: "RolePermissions"
+
+  - id: F-RBAC-133
+    name: "Employee + HRBP (a self-service employee who is ALSO a scoped HR business partner): the account's OWN self-service permissions (Leave.RequestViewOwn etc.) are unaffected by the HRBP role's scope - scope rows attach to the HRBP UserRole assignment only, never narrowing the Employee role's own grants"
+    group: Role Combinations
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/auth/me"
+    service: "AuthService.LoadAuthorizationAsync"
+    permission: "n/a"
+    db: "RolePermissions, UserRoleAssignmentScopes"
+
+  - id: F-RBAC-134
+    name: "Manager + HRBP: Manager's narrower self+direct-report Employee-module scope (CR-57, keyed on Attendance.MonthlyViewTeam) and HRBP's explicit dimension-based scope (RoleScopeResolver) are two INDEPENDENT scope mechanisms that both apply - a consuming module must union or otherwise reconcile both, and this module's own services do not merge them into one predicate"
+    group: Role Combinations
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "EmployeeAccessScopeService (Module 5) vs RoleScopeResolver (this module) - no shared code path"
+    permission: "n/a"
+    db: "n/a"
+    cr: [CR-57]
+
+  - id: F-RBAC-135
+    name: "HRBP + Time Manager (both scoped roles, potentially with DIFFERENT scope dimensions/values): each role's scope is evaluated independently against its own UserRoleAssignmentScope rows - an employee in HRBP's scope but not Time Manager's is authorized under the HRBP-granted permissions but not the Time-Manager-granted ones, for the same user"
+    group: Role Combinations
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "RoleScopeResolver.AppliesAsync (invoked once per UserRole assignment, not once per user)"
+    permission: "n/a"
+    db: "UserRoleAssignmentScopes"
+
+  - id: F-RBAC-136
+    name: "Accounts + Employee: Accounts holds only Employee.View (tenant-wide, no scope) - combined with the Employee role's self-service permission set, the account gets tenant-wide employee read PLUS its own self-service Leave/Payroll/Separation actions, still as a UNION with no page/permission lost from either role"
+    group: Role Combinations
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/auth/me"
+    service: "AuthService.LoadAuthorizationAsync"
+    permission: "n/a"
+    db: "RolePermissions"
+
+  - id: F-RBAC-137
+    name: "IT + Employee: IT holds User.View/.Edit and AccountEmployeeLink.View (but not .Manage) - combined with Employee's self-service grants, the account can view/edit User rows and view (not perform) account-employee links, alongside its own self-service actions"
+    group: Role Combinations
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/auth/me"
+    service: "AuthService.LoadAuthorizationAsync"
+    permission: "n/a"
+    db: "RolePermissions"
+
+  - id: F-RBAC-138
+    name: "HR Admin + Manager: HRAdmin's broad tenant-wide Employee-module access dominates - the Employee-module scope narrowing that would otherwise apply to a bare Manager role (CR-57) does not narrow HRAdmin's own Employee.View, since the scope predicate is evaluated per available Employee.* permission and HRAdmin holds Employee.View directly with no MonthlyViewTeam-only narrowing"
+    group: Role Combinations
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees (as HRAdmin+Manager combined)"
+    service: "EmployeeAccessScopeService.BuildPredicateAsync (Module 5)"
+    permission: "Employee.View"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-RBAC-139
+    name: Self-service identity (/api/auth/me EmployeeIdentity block) is entirely unaffected by which roles a user holds or how many - it is derived solely from the account's own AccountEmployeeCurrentLinks row, independent of role combination
+    group: Role Combinations
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/auth/me"
+    service: "AuthService.ResolveEmployeeIdentityAsync"
+    permission: "n/a"
+    db: "AccountEmployeeCurrentLinks"
+
+  # ── L. Privilege escalation ────────────────────────────────────────────────────────────────────────────
+  - id: F-RBAC-140
+    name: "A caller holding only PageAccess.Manage (e.g. HRAdmin or SuperHR, neither of which holds RoleManagement.AssignmentManage) can grant their OWN role RoleManagement.AssignmentManage via PUT /api/page-access/roles/{ownRoleId}, then use the newly-granted permission to assign themselves - or anyone - further roles, including privileged ones"
+    group: Privilege Escalation
+    status: Needs clarification
+    ui: "PageAccessManagementPage role selector includes the caller's own role"
+    api: "PUT /api/page-access/roles/{roleId} then POST /api/role-assignments/users/{userId}"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions, UserRoles"
+    cr: [CR-66]
+
+  - id: F-RBAC-141
+    name: A caller holding only PageAccess.Manage can grant their own role AccountEmployeeLink.Manage, defeating the deliberate carve-out that excludes even SuperAdmin/TenantAdmin from that permission family
+    group: Privilege Escalation
+    status: Needs clarification
+    ui: "PageAccessManagementPage"
+    api: "PUT /api/page-access/roles/{roleId} (permissions includes AccountEmployeeLink.Manage)"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions"
+    cr: [CR-66]
+
+  - id: F-RBAC-142
+    name: A caller cannot change another user's roles without RoleManagement.AssignmentManage - confirmed 403 for every role that lacks it (HRManager, HRBP, ERO, TimeManager, IT, Accounts, AccountLinkAdministrator/Auditor, SuperHR)
+    group: Privilege Escalation
+    status: Implemented
+    ui: "RoleManagementPage 'Assign Role' button hidden without the permission"
+    api: "POST /api/role-assignments/users/{userId}"
+    service: "RoleAssignmentsController ([HasPermission(RoleManagement.AssignmentManage)])"
+    permission: "RoleManagement.AssignmentManage"
+    db: "n/a"
+
+  - id: F-RBAC-143
+    name: A direct API call to assign/revoke/link bypassing the UI entirely is authorized identically to a UI-originated call - there is no separate, weaker server-side check reachable only from the UI path (all enforcement is in the controller/service, none in the React layer)
+    group: Privilege Escalation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/role-assignments/users/{userId} (curl/direct call, valid token, insufficient permission)"
+    service: "RoleAssignmentsController"
+    permission: "varies"
+    db: "n/a"
+
+  - id: F-RBAC-144
+    name: Manipulating the roleId in an assign request to an id from a DIFFERENT (but existing) role than intended succeeds normally (ids are just validated to exist) - there is no cross-check that the roleId 'belongs' to any particular grouping, so a client-side role-name/id mismatch bug would silently assign the wrong role
+    group: Privilege Escalation
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/role-assignments/users/{userId} (roleId manipulated to an unexpected but real role)"
+    service: "RoleAssignmentService.AssignAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "Roles"
+
+  - id: F-RBAC-145
+    name: Manipulating the userId in an assign/link request to a user outside the caller's own tenant is rejected as NotFound (F-RBAC-050/F-RBAC-084) - cross-tenant privilege escalation via userId substitution is blocked at the tenant-filtered lookup
+    group: Privilege Escalation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/role-assignments/users/{crossTenantUserId}"
+    service: "RoleAssignmentService.AssignAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "Users"
+
+  - id: F-RBAC-146
+    name: A Tenant-A-held role id used against a Tenant-B-authenticated caller's assignment call is NOT rejected specially as 'wrong tenant role' - because Roles are shared/global (F-RBAC-007), the SAME role id is valid in every tenant, so there is no 'use of another tenant's role id' condition to test; the isolation boundary is entirely on the userId/employeeId side
+    group: Privilege Escalation
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/role-assignments/users/{tenantBUserId} (as Tenant A, using a roleId - valid in every tenant)"
+    service: "RoleAssignmentService.AssignAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "Roles, Users"
+
+  - id: F-RBAC-147
+    name: There is no 'deleted/inactive role' state to test against (F-RBAC-003) - every seeded role id is permanently valid; the closest analog is an assignment whose EffectiveTo has passed (Expired), which is excluded from effective permissions but the UserRoles row itself is never deleted
+    group: Privilege Escalation
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "Roles"
+
+  - id: F-RBAC-148
+    name: Attempting an AccountEmployeeLink mutation while holding the general domain-aggregation permission set (SuperAdmin/TenantAdmin, i.e. 'everything else') without the AccountEmployeeLink carve-out permissions is reliably rejected 403 - confirming the carve-out holds THROUGH THE NORMAL ASSIGNMENT PATH (contrast with CR-66's Page Access Management bypass)
+    group: Privilege Escalation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/link (as SuperAdmin)"
+    service: "AccountEmployeeLinkService.CheckAsync"
+    permission: "AccountEmployeeLink.Manage (absent for SuperAdmin)"
+    db: "n/a"
+    ex: ["xU:AccountEmployeeLinkEndpointTests.Broad_admin_claims_do_not_bypass_live_link_grants", "xU:AccountEmployeeLinkServiceTests.View_history_and_manage_are_independent_and_broad_admin_roles_do_not_gain_link_grants"]
+
+  # ── M. Audit / History ────────────────────────────────────────────────────────────────────────────────
+  - id: F-RBAC-149
+    name: Role assignment history is append-only (UserRoleAssignmentEvents rows are never updated or deleted) and immutable from the API's perspective - no endpoint exists to edit or remove a history event
+    group: Audit
+    status: Implemented
+    ui: "RoleManagementPage History tab (read-only table)"
+    api: "GET /api/role-assignments/{assignmentId}/history"
+    service: "RoleAssignmentService.HistoryQuery"
+    permission: "RoleAssignment.AssignmentViewHistory"
+    db: "UserRoleAssignmentEvents"
+
+  - id: F-RBAC-150
+    name: Account-employee link history is append-only, sequence-numbered per subject user (AccountEmployeeLinkEvent.Sequence), and every event records the actor, before/after employee, reason and a correlation id
+    group: Audit
+    status: Implemented
+    ui: "AccountEmployeeLinksPage 'Link history' section"
+    api: "GET /api/account-employee-links/users/{userId}/history"
+    service: "AccountEmployeeLinkService.GetHistoryAsync"
+    permission: "AccountEmployeeLink.ViewHistory"
+    db: "AccountEmployeeLinkEvents"
+
+  - id: F-RBAC-151
+    name: A Replace event's history row records BOTH BeforeEmployeeId and AfterEmployeeId in the same event, distinguishing it from a Link event (BeforeEmployeeId forced null) and an Unlink event (AfterEmployeeId null, NewLinkId null)
+    group: Audit
+    status: Implemented
+    ui: "AccountEmployeeLinksPage history list ('Replace: <reason>')"
+    api: "GET /api/account-employee-links/users/{userId}/history"
+    service: "AccountEmployeeLinkService.MutateAsync (evt construction per operation)"
+    permission: "AccountEmployeeLink.ViewHistory"
+    db: "AccountEmployeeLinkEvents"
+
+  - id: F-RBAC-152
+    name: Page Access permission-matrix changes are audited in AuthorizationConfigurationEvents with the actor, tenant, old/new value and a truncated reason - distinct from the Role/AccountEmployeeLink audit trails, its own dedicated event store
+    group: Audit
+    status: Implemented
+    ui: "PageAccessManagementPage History tab"
+    api: "GET /api/page-access/history"
+    service: "PageAccessService.UpdateAsync / GetHistoryAsync"
+    permission: "PageAccess.View"
+    db: "AuthorizationConfigurationEvents"
+
+  - id: F-RBAC-153
+    name: An actor without the relevant *.ViewHistory (or PageAccess.View) permission is rejected 403 on every history endpoint - history access is itself permission-gated, not open to anyone who can view current state
+    group: Audit
+    status: Implemented
+    ui: "AccountEmployeeLinksPage 'History is not available because your account lacks AccountEmployeeLink.ViewHistory.'"
+    api: "GET /api/account-employee-links/users/{userId}/history"
+    service: "AccountEmployeeLinksController"
+    permission: "AccountEmployeeLink.ViewHistory"
+    db: "n/a"
+
+  - id: F-RBAC-154
+    name: Cross-tenant history access is blocked identically to any other cross-tenant read - a Tenant-B assignment id or user id queried from Tenant A returns NotFound, never another tenant's audit rows
+    group: Audit
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/role-assignments/{tenantBAssignmentId}/history"
+    service: "RoleAssignmentService.GetAssignmentHistoryAsync (tenant-filtered existence check first)"
+    permission: "RoleAssignment.AssignmentViewHistory"
+    db: "UserRoles"
+
+  # ── N. Concurrency ─────────────────────────────────────────────────────────────────────────────────────
+  - id: F-RBAC-155
+    name: Two simultaneous Link attempts for the same never-linked account both racing on a null revision are serialized by the AccountEmployeeCurrentLinks table's own PK/lookup and the transaction wrapping each MutateAsync call - the loser sees the winner's new state on retry and its own attempt is rejected as Conflict ('The account is already linked')
+    group: Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/link (concurrent)"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-156
+    name: Two admins concurrently linking the SAME employee to two DIFFERENT accounts race on the employee-not-yet-linked check - the loser is rejected as Conflict ('Employee is already linked'), confirmed by the AnyAsync probe running inside the same transaction as the insert
+    group: Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userIdA}/link, POST /api/account-employee-links/users/{userIdB}/link (same employeeId, concurrent)"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-RBAC-157
+    name: A concurrent Replace racing against another Replace/Unlink on the same account is rejected by the SAME optimistic-revision check as any other mutation - the second caller's stale revision no longer matches the latest event id
+    group: Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{userId}/replace (concurrent, stale revision)"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "AccountEmployeeCurrentLinks, AccountEmployeeLinkEvents"
+
+  - id: F-RBAC-158
+    name: Simultaneous duplicate role assignment (same user+role+overlapping period, submitted twice concurrently) leaves exactly one UserRoles row and one Assigned event, resolved by the Serializable-transaction retry loop
+    group: Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/role-assignments/users/{userId} (concurrent, identical payload)"
+    service: "RoleAssignmentService.AssignAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles"
+    ex: ["xU:RoleAssignmentConcurrencyTests.Concurrent_overlapping_assignments_leave_one_assignment_and_one_event"]
+
+  - id: F-RBAC-159
+    name: A simultaneous assign and revoke targeting the SAME assignment do not corrupt the audit trail - each writes its own event, and the final UserRoles.EffectiveTo reflects whichever transaction committed last, with no partially-written row
+    group: Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/role-assignments/users/{userId} + POST /api/role-assignments/{assignmentId}/revoke (concurrent)"
+    service: "RoleAssignmentService.AssignAsync / RevokeAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "UserRoles, UserRoleAssignmentEvents"
+
+  # ── O. Tenant Isolation ───────────────────────────────────────────────────────────────────────────────
+  - id: F-RBAC-160
+    name: Tenant B cannot view Tenant A's role ASSIGNMENTS - GET /api/role-assignments is filtered by the caller's own resolved TenantId with no cross-tenant parameter accepted anywhere in the query
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/role-assignments (as Tenant B)"
+    service: "RoleAssignmentService.GetAssignmentsAsync"
+    permission: "RoleAssignment.View"
+    db: "UserRoles"
+
+  - id: F-RBAC-161
+    name: Tenant B CAN see the same shared Role catalog Tenant A sees (roles are not tenant-scoped, F-RBAC-007) - this is expected behavior, not a leak, and is explicitly worth distinguishing from an actual tenant-isolation gap
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/role-assignments/roles (as Tenant B)"
+    service: "RoleAssignmentService.GetRolesAsync"
+    permission: "RoleAssignment.View"
+    db: "Roles"
+
+  - id: F-RBAC-162
+    name: Tenant B cannot assign a role to a Tenant A user - rejected NotFound at the tenant-filtered user lookup (F-RBAC-050)
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/role-assignments/users/{tenantAUserId} (as Tenant B)"
+    service: "RoleAssignmentService.AssignAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "Users"
+
+  - id: F-RBAC-163
+    name: Tenant B cannot view Tenant A's Users (candidate list, GET /api/role-assignments/candidates) - the candidate query is tenant-filtered
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/role-assignments/candidates (as Tenant B)"
+    service: "RoleAssignmentService.GetCandidatesAsync"
+    permission: "RoleAssignment.AssignmentManage"
+    db: "Users"
+
+  - id: F-RBAC-164
+    name: Tenant B cannot link a Tenant A account - rejected NotFound (F-RBAC-084)
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{tenantAUserId}/link (as Tenant B)"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "Users"
+
+  - id: F-RBAC-165
+    name: Tenant B cannot link a Tenant A employee - rejected NotFound (F-RBAC-083)
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/account-employee-links/users/{tenantBUserId}/link (employeeId belongs to Tenant A, as Tenant B)"
+    service: "AccountEmployeeLinkService.MutateAsync"
+    permission: "AccountEmployeeLink.Manage"
+    db: "Employees"
+
+  - id: F-RBAC-166
+    name: Tenant B cannot view Tenant A's link history - AccountEmployeeLinkEvents are read by SubjectUserId with no explicit TenantId filter in the query itself, but SubjectUserId only ever resolves to a real, currently-resolvable identity within the CALLER's tenant context in practice since userId is validated tenant-scoped upstream on every mutating path; a GET of a Tenant-A userId's history from Tenant B is nonetheless verified to return nothing linkable
+    group: Tenant Isolation
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/account-employee-links/users/{tenantAUserId}/history (as Tenant B)"
+    service: "AccountEmployeeLinkService.GetHistoryAsync (events filtered by SubjectUserId only, NOT also by TenantId, unlike GetAssignmentHistoryAsync's explicit tenantId filter)"
+    permission: "AccountEmployeeLink.ViewHistory"
+    db: "AccountEmployeeLinkEvents"
+    cr: [CR-76]
+
+  - id: F-RBAC-167
+    name: Tenant B cannot manipulate Tenant A's Page Access role-permission grants for a TENANT-SPECIFIC reason (roles are shared, so 'manipulate' here means the write itself succeeds and affects Tenant A too - see F-RBAC-122/CR-75, which is the real isolation gap to test rather than a false negative)
+    group: Tenant Isolation
+    status: Needs clarification
+    ui: "n/a"
+    api: "PUT /api/page-access/roles/{roleId} (as Tenant B, targeting the shared role catalog)"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions"
+    cr: [CR-75]
+
+  - id: F-RBAC-168
+    name: Tenant B cannot resolve a Tenant A employee's identity through the preview/candidate endpoints - every employee-facing query in this module (candidates, preview, role assignment mapping) is tenant-filtered on Employees
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/page-access/users/{tenantAUserId}/preview (as Tenant B)"
+    service: "PageAccessService.GetUserPreviewAsync"
+    permission: "PageAccess.View"
+    db: "UserRoles"
+
+  # ── P. Frontend ────────────────────────────────────────────────────────────────────────────────────────
+  - id: F-RBAC-169
+    name: RoleManagementPage's three tabs (Assignments/Roles/History) load and filter independently; History is fetched lazily (only once the History tab is first opened) and only if the caller holds AssignmentViewHistory
+    group: Frontend
+    status: Implemented
+    ui: "RoleManagementPage selectTab/loadHistory"
+    api: "GET /api/role-assignments/users/{userId}/history (N calls, one per visible assignment)"
+    service: "n/a"
+    permission: "RoleAssignment.AssignmentViewHistory"
+    db: "n/a"
+    ex: ["V:pages/administration/RoleManagementPage.test.tsx::renders assignments and system-managed Employee behavior", "V:pages/administration/RoleManagementPage.test.tsx::filters assignments and renders the roles tab"]
+
+  - id: F-RBAC-170
+    name: The AssignDialog offers only manually-assignable roles (system roles pre-filtered) and its scope fieldset is entirely hidden for a role with no allowed scope type, shown otherwise
+    group: Frontend
+    status: Implemented
+    ui: "RoleManagementPage AssignDialog"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+    ex: ["V:pages/administration/RoleManagementPage.test.tsx::opens assignment flow and does not offer system roles"]
+
+  - id: F-RBAC-171
+    name: The Assignments tab issues ONE aggregate, server-filtered request per filter change (search/role/status/source), never a per-row follow-up call - confirmed by an existing Vitest spy assertion
+    group: Frontend
+    status: Implemented
+    ui: "RoleManagementPage loadAssignments"
+    api: "GET /api/role-assignments?search=&roleId=&status=&source="
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+    ex: ["V:pages/administration/RoleManagementPage.test.tsx::uses the aggregate assignment endpoint with server-side filters and no per-user requests"]
+
+  - id: F-RBAC-172
+    name: PageAccessManagementPage's 'Save Configuration' button and every permission checkbox are disabled for a caller who can view (PageAccess.View) but lacks PageAccess.Manage - a read-only preview of the matrix
+    group: Frontend
+    status: Implemented
+    ui: "PageAccessManagementPage checkbox disabled={!canManage}"
+    api: "n/a"
+    service: "n/a"
+    permission: "PageAccess.Manage"
+    db: "n/a"
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::renders the authorized page and loads the role matrix"]
+
+  - id: F-RBAC-173
+    name: Toggling a page's own 'View' checkbox toggles ALL of that page's RequiredPermissions and every action permission together (bulk grant/revoke); saving sends exactly the resulting permission set
+    group: Frontend
+    status: Implemented
+    ui: "PageAccessManagementPage togglePage"
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "n/a"
+    permission: "PageAccess.Manage"
+    db: "n/a"
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::changes roles, toggles actions, and saves the expected permission codes"]
+
+  - id: F-RBAC-174
+    name: A direct route visit to /page-access-management without PageAccess.View is denied by the route guard (RequirePermission), not merely hidden from navigation
+    group: Frontend
+    status: Implemented
+    ui: "RequirePermission on the /page-access-management route"
+    api: "n/a"
+    service: "n/a"
+    permission: "PageAccess.View"
+    db: "n/a"
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::denies a direct route visit without PageAccess.View"]
+
+  - id: F-RBAC-175
+    name: AccountEmployeeLinksPage hides the entire 'Eligible employees'/link-mutation section for a caller without Manage, even when View is present - a read-only current-state view remains
+    group: Frontend
+    status: Implemented
+    ui: "AccountEmployeeLinksPage canManage gate"
+    api: "n/a"
+    service: "n/a"
+    permission: "AccountEmployeeLink.Manage"
+    db: "n/a"
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::hides mutation controls without Manage even when View is present"]
+
+  - id: F-RBAC-176
+    name: Selecting an account re-fetches BOTH current state and history in parallel, and re-selecting the same account again re-fetches fresh state rather than reusing a stale cached value
+    group: Frontend
+    status: Implemented
+    ui: "AccountEmployeeLinksPage refreshSelected"
+    api: "GET /api/account-employee-links/users/{userId}, GET .../history"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::keeps the account selected, refreshes current state/history, and preserves the linked employee outside candidates", "V:pages/administration/AccountEmployeeLinksPage.test.tsx::reloads with an already-linked account and reselecting it retrieves persisted state"]
+
+  - id: F-RBAC-177
+    name: A caller with View but not ViewHistory sees an explicit inline message explaining the missing permission instead of an empty history list or a raw 403
+    group: Frontend
+    status: Implemented
+    ui: "AccountEmployeeLinksPage 'History is not available because your account lacks AccountEmployeeLink.ViewHistory.'"
+    api: "n/a (history call is not even issued)"
+    service: "n/a"
+    permission: "AccountEmployeeLink.ViewHistory"
+    db: "n/a"
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::does not request history when ViewHistory is absent and explains the permission"]
+
+  - id: F-RBAC-178
+    name: A 403 on the history call (for a caller who technically has the nav-visible permission claim but is denied server-side, e.g. a stale token) is rendered as an explicit forbidden message, distinct from a genuinely-empty history list
+    group: Frontend
+    status: Implemented
+    ui: "AccountEmployeeLinksPage ResourceMessage 'forbidden' branch"
+    api: "GET /api/account-employee-links/users/{userId}/history (403)"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::shows a history 403 as forbidden instead of empty history"]
+
+  - id: F-RBAC-179
+    name: An error reading current-link state is shown distinctly from a genuinely Unlinked result (network/API failure vs. legitimate empty state)
+    group: Frontend
+    status: Implemented
+    ui: "AccountEmployeeLinksPage ResourceMessage 'error' vs 'ready+Unlinked' branches"
+    api: "GET /api/account-employee-links/users/{userId} (error)"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::distinguishes current-link request errors from an unlinked result"]
+
+  - id: F-RBAC-180
+    name: The Link/Replace submit button and the Unlink button are both disabled until a mandatory reason is entered (client-side convenience mirroring the server's own mandatory-reason validation)
+    group: Frontend
+    status: Implemented
+    ui: "AccountEmployeeLinksPage submit/unlink button disabled states"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-RBAC-181
+    name: A Link/Unlink/Replace conflict (409, e.g. a stale revision from a concurrent change elsewhere) is surfaced as the server's own message text, not a generic failure banner
+    group: Frontend
+    status: Implemented
+    ui: "AccountEmployeeLinksPage submit()/unlink() catch block (setMessage(toApiError(error).message))"
+    api: "POST /api/account-employee-links/users/{userId}/link (409)"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-RBAC-182
+    name: RoleManagementPage's RevokeDialog defaults the revocation date to today and floors it at the assignment's own EffectiveFrom (min attribute), and shows a confirmation summary of the assignment being revoked before committing
+    group: Frontend
+    status: Implemented
+    ui: "RoleManagementPage RevokeDialog"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-RBAC-183
+    name: The Roles tab's client-side search filters by both role name and description, case-insensitively, with an explicit empty-state message and a one-click clear
+    group: Frontend
+    status: Implemented
+    ui: "RoleManagementPage RolesView search"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-RBAC-184
+    name: PageAccessManagementPage's history tab loads paged results with role/user/event-type/date-range filters, each filter change resetting to page 1
+    group: Frontend
+    status: Implemented
+    ui: "PageAccessManagementPage history filters"
+    api: "GET /api/page-access/history"
+    service: "n/a"
+    permission: "PageAccess.View"
+    db: "n/a"
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::loads paged authorization history with readable permission changes"]
+
+  - id: F-RBAC-185
+    name: PageAccessManagementPage's 'Preview User Access' section renders effective roles, the permission union, tenant-wide role count, manager-access flag and accessible pages together, plus a short recent-changes feed for that user
+    group: Frontend
+    status: Implemented
+    ui: "PageAccessManagementPage preview section"
+    api: "GET /api/page-access/users/{userId}/preview, GET /api/page-access/history?userId="
+    service: "n/a"
+    permission: "PageAccess.View"
+    db: "n/a"
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::previews a selected user with effective roles, permissions, pages, scopes, and manager access"]

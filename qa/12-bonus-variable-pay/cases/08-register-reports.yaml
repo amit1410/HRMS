@@ -1,0 +1,143 @@
+sheet: VPay_Register_Reports
+submodule: Award register paging/filters, the Payroll Reports variable-pay export, and analytics reconciliation
+defaults:
+  role: HRADMIN
+  perm: "Payroll.VariablePay.View"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.VariablePay.View / Payroll.Reports.View granted, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: VPAY-REG-001
+    func: [F-VPAY-087]
+    sc: The award register is a true paged, filterable endpoint
+    t: EmployeeId/PlanId/Status/PeriodFrom/PeriodTo filters each narrow the result set, ordered by AwardPeriodFrom descending then AwardNumber
+    src: ["VariablePayService.GetAwardsAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/payroll/variable-pay-awards?status=Approved] => [200] only Approved awards returned"
+      - "[GET /api/payroll/variable-pay-awards?employeeId={employeeId}] => [200] only that employee's awards returned"
+    auto: API
+
+  - id: VPAY-REG-002
+    func: [F-VPAY-088]
+    sc: Page/PageSize are inline-clamped even with no registered validator
+    t: An oversized PageSize is clamped to 100 and a non-positive Page is clamped to 1, unlike qa/11-loans-advances' CR-191
+    src: ["VariablePayService.GetAwardsAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/payroll/variable-pay-awards?page=0&pageSize=99999] => [200] Page=1, effective PageSize capped at 100 (result count never exceeds 100)"
+    auto: API
+
+  - id: VPAY-REG-003
+    func: [F-VPAY-089]
+    sc: PeriodFrom/PeriodTo filter independently, not as a single overlap range
+    t: PeriodFrom filters AwardPeriodFrom>=from; PeriodTo filters AwardPeriodTo<=to
+    src: ["VariablePayService.GetAwardsAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/payroll/variable-pay-awards?periodFrom=2026-06-01] => [200] only awards whose AwardPeriodFrom>=2026-06-01 are returned"
+      - "[GET /api/payroll/variable-pay-awards?periodTo=2026-06-30] => [200] only awards whose AwardPeriodTo<=2026-06-30 are returned"
+    auto: API
+
+  - id: VPAY-REG-004
+    func: [F-VPAY-090]
+    sc: Get returns a single award, NotFound otherwise
+    t: A known award id returns its full DTO; an unknown id is NotFound
+    src: ["VariablePayService.GetAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/payroll/variable-pay-awards/{id}] => [200] full award DTO returned"
+      - "[GET /api/payroll/variable-pay-awards/{unknownId}] => [404] Variable-pay award not found."
+    auto: API
+
+  - id: VPAY-REG-005
+    func: [F-VPAY-091]
+    sc: The Payroll Reports variable-pay endpoint sources settlements, not awards
+    t: GetVariablePayAsync returns per-settlement rows (Amount/TaxableAmount/NonTaxableAmount/SettlementDate/Reference), distinct from the award-level register
+    src: ["PayrollReportsService.GetVariablePayAsync"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] Amount=400 => [200] one VariablePaySettlement created"
+      - "[GET /api/payroll/reports/variable-pay] => [200] one row with Amount=400, AwardNumber matching the award, SettlementDate set - not the award's own CalculatedAmount/Status"
+    auto: API
+
+  - id: VPAY-REG-006
+    func: [F-VPAY-091]
+    sc: The variable-pay report filters by PayrollRunId and EmployeeId
+    t: Supplying either filter narrows the settlement rows returned
+    src: ["PayrollReportsService.GetVariablePayAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/payroll/reports/variable-pay?payrollRunId={runId}] => [200] only settlements carrying that PayrollRunId are returned"
+    auto: API
+
+  - id: VPAY-REG-007
+    func: [F-VPAY-092]
+    sc: The variable-pay CSV export matches the report's own columns
+    t: The exported CSV carries EmployeeId/EmployeeCode/AwardId/AwardNumber/PayrollRunId/Amount/TaxableAmount/NonTaxableAmount/SettlementDate/Reference
+    src: ["PayrollReportsService.CsvVariablePayAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[GET /api/payroll/reports/export?type=variable-pay] => [200] text/csv response, header row exactly EmployeeId,EmployeeCode,AwardId,AwardNumber,PayrollRunId,Amount,TaxableAmount,NonTaxableAmount,SettlementDate,Reference"
+    auto: API
+
+  - id: VPAY-REG-008
+    func: [F-VPAY-093]
+    sc: The payroll-run-level VariablePayTotal is structurally always zero
+    t: A calculated payroll run's VariablePayTotal/PayrollControlTotalsDto figure remains 0 regardless of how many awards were settled that period, because no PayrollResultComponent is ever tagged CalculationSource='VariablePay'
+    src: ["PayrollAnalyticsService.cs (Source('VariablePay') helper); PayrollCalculationEngine.cs"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    cr: [CR-205]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] SettlementType=Payroll, PayrollRunId=runX, Amount=1000 => [200] settlement recorded, referencing runX"
+      - "[GET /api/payroll/analytics/control-totals?payrollRunId=runX] => [200] VariablePayTotal=0, unaffected by the settlement just recorded"
+    auto: API
+
+  - id: VPAY-REG-009
+    func: [F-VPAY-094]
+    sc: The DuplicateVariablePaySettlement reconciliation finding correctly detects a genuine duplicate
+    t: Two VariablePaySettlement rows sharing (PayrollRunId, VariablePayAwardId) surface a Critical reconciliation finding
+    src: ["PayrollAnalyticsService.cs (DuplicateVariablePaySettlement finding)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Insert two VariablePaySettlement rows for the same (PayrollRunId, VariablePayAwardId) directly (bypassing the app-level duplicate check) => two rows persisted"
+      - "[POST /api/payroll/reconciliation/{id}/generate] => [200] a Critical finding Code=DuplicateVariablePaySettlement is present in the results"
+    auto: DB-assisted
+
+  - id: VPAY-REG-010
+    func: [F-VPAY-095]
+    sc: The 'VariablePay' settlement-category reconciliation is keyed on LineType=Bonus, not a variable-pay-specific line type
+    t: A grep confirms the reconciliation check cannot distinguish a variable-pay-sourced Bonus line from any other Bonus-type FinalSettlementLine
+    src: ["PayrollAnalyticsService.cs (line ~309, 'VariablePay' => x.LineType == FinalSettlementLineType.Bonus)"]
+    type: Boundary
+    pri: P2
+    tags: [Configuration]
+    steps:
+      - "[Manual/Code] Grep PayrollAnalyticsService.cs for the 'VariablePay' reconciliation category => filters strictly by FinalSettlementLineType.Bonus, with no SourceType=='VariablePayAward' narrowing"
+    auto: Manual only
+
+  - id: VPAY-REG-011
+    func: [F-VPAY-096]
+    sc: No CSV/export exists for the award-level register itself
+    t: There is no dedicated export endpoint returning Calculated/Approved/Outstanding totals per award, distinct from the settlement-level report
+    src: ["n/a"]
+    type: Contract
+    pri: P3
+    cr: [CR-205]
+    steps:
+      - "[Manual/Code] Grep PayrollReportsController.cs/VariablePayController.cs for an award-register CSV/export route => none exists; only GET /api/payroll/reports/variable-pay (settlement-level) and its CSV export are present"
+    auto: Manual only

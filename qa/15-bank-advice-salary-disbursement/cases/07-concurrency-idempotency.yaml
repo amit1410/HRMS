@@ -1,0 +1,116 @@
+sheet: BankAdv_Concurrency_Idempotency
+submodule: Concurrency & Idempotency
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-CONC-001
+    func: [F-BANKADV-061]
+    sc: Compare-and-swap pattern across every transition
+    t: Prepare/Approve/Cancel/Export all reject a stale ConcurrencyVersion with a graceful Conflict, never a 500
+    src: "BankAdviceService.SetPreparedAsync, ApproveAsync, CancelAsync, ExportAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "For each of Prepare/Approve/Cancel/Export, a batch at the eligible source status is loaded by two concurrent callers"
+    role: HRAdmin (custom role holding all BankAdvice permissions)
+    perm: Payroll.BankAdvice.Validate, Approve, Cancel, Export
+    tenant: "T1 (DEMO01)"
+    data: 4 batches, one per transition under test
+    steps:
+      - "[Manual] for each of Prepare/Approve/Cancel/Export in turn: caller A completes the transition first, then caller B repeats the same call using the pre-A ConcurrencyVersion => [409] Conflict every time, never a 500/unhandled exception"
+    auto: API
+
+  - id: BANKADV-CONC-002
+    func: [F-BANKADV-062]
+    sc: CONFIRMED - uncaught race on concurrent Generate
+    t: Two simultaneous Generate calls for the same run, both passing the active-batch pre-check before either commits, can produce an unhandled exception instead of a graceful Conflict for the race loser
+    src: "BankAdviceService.GenerateAsync (full method - no try/catch DbUpdateException around SaveChangesAsync)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (Approved) has no active batch yet, one eligible employee"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] fire two concurrent POST /api/payroll/runs/{RUN1}/bank-advice requests such that both pass the AnyAsync pre-check before either SaveChangesAsync commits => one succeeds [200]; the other either surfaces as an unhandled 500 (the confirmed uncaught-race shape) or, if the timing instead serializes the two SaveChangesAsync calls at the DB level, a benign duplicate-key failure - either way, NOT a graceful [409] Conflict message"
+    auto: Manual only
+    cr: [CR-269]
+
+  - id: BANKADV-CONC-003
+    func: [F-BANKADV-063]
+    sc: Unique index prevents duplicate payroll-result membership
+    t: The DB-level unique index on (TenantId, BankAdviceBatchId, PayrollResultId) backstops the application logic against a payroll result being duplicated within one batch
+    src: "BankAdvicePaymentConfiguration (unique index)"
+    type: Integration-Concurrency
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] check the migration/model snapshot for a unique index on BankAdvicePayments(TenantId, BankAdviceBatchId, PayrollResultId) => present in both provider chains"
+    auto: Manual only
+
+  - id: BANKADV-CONC-004
+    func: [F-BANKADV-064]
+    sc: Unique index prevents duplicate payment references
+    t: The DB-level unique index on (TenantId, PaymentReference) prevents any two payments tenant-wide from sharing a reference
+    src: "BankAdvicePaymentConfiguration (unique index)"
+    type: Integration-Concurrency
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] check the migration/model snapshot for a unique index on BankAdvicePayments(TenantId, PaymentReference) => present in both provider chains"
+    auto: Manual only
+
+  - id: BANKADV-CONC-005
+    func: [F-BANKADV-065]
+    sc: Unique index prevents duplicate batch numbers
+    t: The DB-level unique index on (TenantId, BatchNumber) prevents duplicate batch numbers tenant-wide
+    src: "BankAdviceBatchConfiguration (unique index)"
+    type: Integration-Concurrency
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] check the migration/model snapshot for a unique index on BankAdviceBatches(TenantId, BatchNumber) => present in both provider chains"
+    auto: Manual only
+
+  - id: BANKADV-CONC-006
+    func: [F-BANKADV-066]
+    sc: No stale snapshot after a mutating call
+    t: A Get immediately following any lifecycle transition reflects the just-committed state, never a stale cached snapshot
+    src: "BankAdviceService.ApproveAsync, CancelAsync, ExportAsync, SetPreparedAsync (db.ClearChangeTracker())"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "BATCH1 is Prepared"
+    role: HRAdmin (custom role holding BankAdvice.Approve, View)
+    perm: Payroll.BankAdvice.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/approve] => [200] response.Status == \"Approved\""
+      - "[GET /api/payroll/bank-advice/{BATCH1}] immediately after => [200] Status == \"Approved\" (matches the approve response, not a stale \"Prepared\")"
+    auto: API

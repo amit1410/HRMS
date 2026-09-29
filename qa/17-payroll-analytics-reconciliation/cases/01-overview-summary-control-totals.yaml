@@ -1,0 +1,227 @@
+sheet: PYA_Overview_Summary_ControlTotals
+submodule: Run Overview, Summary & Control Totals
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-OVW-001
+    func: [F-PYA-001]
+    sc: Overview happy path
+    t: A caller holding Payroll.Analytics.View retrieves the overview for a Calculated payroll run in their own tenant
+    src: "PayrollAnalyticsController.Overview; PayrollAnalyticsService.GetOverviewAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RUN1 (Calculated) has 3 persisted, current Calculated PayrollResults"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/overview] => [200] response includes RunNumber, Status=Calculated, EmployeeCount=3, and non-null Gross/Deduction/Net/EmployerContribution/Tax totals"
+    auto: API
+
+  - id: PYA-OVW-002
+    func: [F-PYA-001]
+    sc: Overview - run not found
+    t: A random/unknown runId returns NotFound
+    src: "PayrollAnalyticsService.LoadRunAsync"
+    type: Negative
+    tags: []
+    pri: P2
+    sev: Medium
+    pre: none
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=<random guid>"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RANDOM-GUID}/overview] => [404] Payroll run not found"
+    auto: API
+
+  - id: PYA-OVW-003
+    func: [F-PYA-002]
+    sc: Overview totals only count current, Calculated results
+    t: A Failed or superseded (IsCurrent=false) PayrollResult for the run is excluded from EmployeeCount and every monetary total
+    src: "PayrollAnalyticsService.Results (Where IsCurrent && Status=Calculated)"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RUN2 has 2 current Calculated results plus 1 IsCurrent=false result and 1 Status=Failed result for other employees"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN2"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN2}/overview] => [200] EmployeeCount=2 and GrossTotal reflects only the 2 current Calculated results"
+    auto: DB-assisted
+    db: "Assert PayrollResults table actually contains the excluded rows, unmodified, confirming they were filtered, not deleted"
+
+  - id: PYA-OVW-004
+    func: [F-PYA-003]
+    sc: Overview reflects active bank advice and accounting totals, excluding Cancelled batches
+    t: BankAdviceTotal sums only non-Cancelled BankAdviceBatches, and AccountingDebitTotal/AccountingCreditTotal sum only non-Cancelled PayrollJournalBatches
+    src: "PayrollAnalyticsService.GetOverviewAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RUN3 has 1 Approved BankAdviceBatch (9000), 1 Cancelled BankAdviceBatch (500), 1 Posted PayrollJournalBatch (debit=credit=9000), and 1 Cancelled PayrollJournalBatch (debit=credit=1)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN3"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN3}/overview] => [200] BankAdviceTotal=9000 (Cancelled batch excluded), AccountingDebitTotal=9000, AccountingCreditTotal=9000 (Cancelled journal excluded)"
+    auto: API
+
+  - id: PYA-OVW-005
+    func: [F-PYA-004]
+    sc: Overview open/critical finding counts
+    t: OpenFindings counts every Open-status finding for the run across all reconciliation versions; CriticalFindings is the Open-and-Critical-severity subset
+    src: "PayrollAnalyticsService.GetOverviewAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RUN4 has a generated post-payroll reconciliation with 1 Critical Open finding and 1 Warning Open finding; a second, older reconciliation version has 1 Critical finding already Resolved"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN4"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN4}/overview] => [200] OpenFindings=2, CriticalFindings=1 (the Resolved Critical finding from the older version is excluded from both counts)"
+    auto: API
+
+  - id: PYA-OVW-006
+    func: [F-PYA-005]
+    sc: Overview anomaly count
+    t: AnomalyCount reflects only Open PayrollAnomalyFlags scoped to this run
+    src: "PayrollAnalyticsService.GetOverviewAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN5 has 1 employee with persisted NetPay=-50 (post-payroll reconciliation already generated, producing 1 Open NegativeNetPay anomaly flag)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN5"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN5}/overview] => [200] AnomalyCount=1"
+    auto: API
+
+  - id: PYA-OVW-007
+    func: [F-PYA-006, F-PYA-010]
+    sc: Run summary happy path with active bank/accounting evidence
+    t: GetRunSummaryAsync returns RunType, Status, the full control-totals object, and non-null bank/accounting totals when active batches exist
+    src: "PayrollAnalyticsController.Summary; PayrollAnalyticsService.GetRunSummaryAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RUN3 from PYA-OVW-004 (active bank advice + balanced posted journal)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN3"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN3}/summary] => [200] RunType and Status match RUN3, Totals is a full PayrollControlTotalsDto, BankAdviceTotal=9000, AccountingDebitTotal=9000, AccountingCreditTotal=9000"
+    auto: API
+
+  - id: PYA-OVW-008
+    func: [F-PYA-006]
+    sc: Run summary reports null, not zero, bank/accounting totals when no active batch/journal exists
+    t: A run with zero active BankAdviceBatches and zero active PayrollJournalBatches reports BankAdviceTotal/AccountingDebitTotal/AccountingCreditTotal as null, distinguishing "no evidence yet" from "evidence totals to zero"
+    src: "PayrollAnalyticsService.GetRunSummaryAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Medium
+    pre: "RUN6 (Calculated) has 2 persisted results and no bank advice or journal batches at all"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN6"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN6}/summary] => [200] bankAdviceTotal, accountingDebitTotal, and accountingCreditTotal are all null in the JSON response, not 0"
+    auto: API
+
+  - id: PYA-OVW-009
+    func: [F-PYA-007, F-PYA-008]
+    sc: Control totals sub-totals via CalculationSource substring match
+    t: EarningsTotal/DeductionTotal/GrossTotal/NetPayTotal/EmployerContributionTotal come from persisted PayrollResults, and ReimbursementTotal/LoanRecoveryTotal/VariablePayTotal/AdjustmentTotal come from a case-insensitive CalculationSource substring match over PayrollResultComponents
+    src: "PayrollAnalyticsService.GetControlTotalsAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RUN1 has one PayrollResultComponent with CalculationSource='reimbursement' (lowercase) for 100 and one with CalculationSource='LoanRecoveryAdjustment' for 50"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/control-totals] => [200] ReimbursementTotal includes the 100 despite the lowercase source string, and LoanRecoveryTotal includes the 50 despite 'LoanRecoveryAdjustment' only partially matching 'Loan'"
+    auto: API
+    cr: [CR-303]
+
+  - id: PYA-OVW-010
+    func: [F-PYA-009]
+    sc: Control totals Tax is always 0, regardless of persisted statutory results
+    t: A run with real, non-zero persisted PayrollStatutoryResults still reports TaxTotal=0 in both control totals and overview
+    src: "PayrollAnalyticsService.Totals (static helper)"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN4 has persisted PayrollStatutoryResults totaling 2700 in TotalAmount across PF/ESI/PT/TDS"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN4"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN4}/control-totals] => [200] TaxTotal=0 despite 2700 in real persisted statutory results"
+    auto: API
+    cr: [CR-303]
+
+  - id: PYA-OVW-011
+    func: [F-PYA-011]
+    sc: Summary and control-totals CSV export happy path
+    t: SummaryCsv and ControlTotalsCsv each return a single-data-row, RFC 4180 escaped, UTF-8-BOM CSV matching their JSON counterpart's values
+    src: "PayrollAnalyticsService.ExportRunSummaryAsync, ExportControlTotalsAsync"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Medium
+    pre: "RUN1 from PYA-OVW-001"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/summary.csv] => [200] Content-Type text/csv; body starts with a UTF-8 BOM, header row, and exactly 1 data row matching the JSON summary"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/control-totals.csv] => [200] same shape, values matching the JSON control-totals response"
+    auto: API
+
+  - id: PYA-OVW-012
+    func: [F-PYA-006, F-PYA-007, F-PYA-010]
+    sc: Summary and control-totals require the run to resolve for the caller's tenant
+    t: A runId that exists but belongs to a different tenant returns NotFound/Unauthorized from both endpoints
+    src: "PayrollAnalyticsService.LoadRunAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "RUN-T2 exists under Tenant T2 (DEMO02)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View, tenant T1)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-T2 (belongs to T2)"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-T2}/summary] (authenticated to T1) => [404] Payroll run not found"
+      - "[GET /api/payroll/analytics/runs/{RUN-T2}/control-totals] (authenticated to T1) => [404] Payroll run not found"
+    auto: API

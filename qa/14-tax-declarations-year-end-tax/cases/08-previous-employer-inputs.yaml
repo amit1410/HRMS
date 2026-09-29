@@ -1,0 +1,160 @@
+sheet: TaxDcl_PreviousEmployer
+submodule: Previous Employer Inputs
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-PREVEMP-001
+    func: [F-TAXDCL-093]
+    sc: AddPreviousEmployerAsync run-state gating
+    t: A missing run is NotFound; an Approved/Closed/Cancelled run rejects new input
+    src: "YearEndTaxService.cs AddPreviousEmployerAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Run A does not exist (random id); Run B is Status=Closed"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{random GUID}/previous-employer] => [404] NotFound"
+      - "[POST /api/payroll/year-end-tax/runs/{Run B id}/previous-employer] Run B Status=Closed => [409] Conflict, 'Previous-employer input cannot be changed in the current run state.'"
+    auto: API
+
+  - id: TAXDCL-PREVEMP-002
+    func: [F-TAXDCL-094]
+    sc: Validation of EmployerName and monetary fields, and employee existence
+    t: A blank EmployerName, a negative monetary field, and a cross-tenant/nonexistent employee are all rejected
+    src: "YearEndTaxService.cs AddPreviousEmployerAsync"
+    type: Negative
+    tags: [Validation, Tenant-Isolation]
+    pri: P0
+    sev: High
+    pre: "Run is Status=Draft"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "EmployerName=''; TaxableIncome=-100; EmployeeId=<random GUID>"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/previous-employer] EmployerName='' => [400] Invalid, field=input"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/previous-employer] TaxableIncome=-100 => [400] Invalid"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/previous-employer] EmployeeId=<random GUID> => [404] NotFound, 'Employee was not found in the current tenant.'"
+    auto: API
+
+  - id: TAXDCL-PREVEMP-003
+    func: [F-TAXDCL-095]
+    sc: Duplicate (RunId, EmployeeId, EmployerReference) is rejected
+    t: A second add with the identical employer reference for the same run/employee is Conflict
+    src: "YearEndTaxService.cs AddPreviousEmployerAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "An input already exists for EmployeeId=E1, EmployerReference=ACME-2025"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "EmployeeId=E1, EmployerReference=ACME-2025 (repeat)"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/previous-employer] EmployeeId=E1, EmployerReference=ACME-2025 (duplicate) => [409] Conflict, 'This previous-employer source already exists for the run.'"
+    auto: API
+
+  - id: TAXDCL-PREVEMP-004
+    func: [F-TAXDCL-096]
+    sc: A new input starts Submitted, not Draft, with a run-level history event
+    t: AddPreviousEmployerAsync's persisted status and its PreviousEmployerAdded history event
+    src: "YearEndTaxService.cs AddPreviousEmployerAsync -> AddHistory"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "EmployerName=Acme Corp, TaxableIncome=200000, TaxDeducted=15000"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/previous-employer] => [201] Status=Submitted (not Draft)"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/history] => includes Event=PreviousEmployerAdded"
+    auto: API
+
+  - id: TAXDCL-PREVEMP-005
+    func: [F-TAXDCL-097, F-TAXDCL-098]
+    sc: "CONFIRMED DEFECT - a previous-employer input can never be picked up by any calculation"
+    t: No endpoint ever advances Status to Approved, and CalculateAsync only reads Status=Approved rows
+    src: "YearEndTaxService.cs (full grep for YearEndTaxPreviousEmployerStatus.Approved assignment - zero matches); CalculateAsync's own previous query"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    pre: "A previous-employer input is added with TaxableIncome=200000, TaxDeducted=15000, EligibleDeductionAmount=10000, Status=Submitted (the only status this API can ever produce)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage, Calculate
+    tenant: "T1 (DEMO01)"
+    data: as described
+    steps:
+      - "[Manual] full grep of TaxDeclarationsController.cs/YearEndTaxController.cs/YearEndTaxService.cs for a review/approve/reject endpoint on YearEndTaxPreviousEmployerInput => zero matches"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] EXPECTED PreviousEmployerTaxableIncome=200000 to be reflected in the employee's row; ACTUAL PreviousEmployerTaxableIncome=0 - the Submitted-only row is silently excluded by CalculateAsync's Status==Approved filter, and no API can ever change that"
+    secc: true
+    auto: API
+    cr: [CR-250]
+
+  - id: TAXDCL-PREVEMP-006
+    func: [F-TAXDCL-099]
+    sc: UpdatePreviousEmployerAsync run-state gating, validation, status reset, and concurrency
+    t: Update is rejected on a Closed run, rejects negative amounts, resets Status to Submitted, and is concurrency-guarded
+    src: "YearEndTaxService.cs UpdatePreviousEmployerAsync"
+    type: Negative
+    tags: [Validation, Integration-Concurrency]
+    pri: P1
+    sev: Medium
+    pre: "Input exists on a Draft run"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "TaxableIncome=-500 (invalid); then TaxableIncome=210000 (valid update)"
+    steps:
+      - "[PUT /api/payroll/year-end-tax/runs/{id}/previous-employer/{inputId}] TaxableIncome=-500 => [400] Invalid, field=input"
+      - "[PUT /api/payroll/year-end-tax/runs/{id}/previous-employer/{inputId}] TaxableIncome=210000 => [200] Status reset to Submitted, ConcurrencyVersion incremented"
+      - "[PUT /api/payroll/year-end-tax/runs/{id}/previous-employer/{inputId}] repeat with the now-stale ConcurrencyVersion loaded before the prior update committed => [409] Conflict"
+    auto: API
+
+  - id: TAXDCL-PREVEMP-007
+    func: [F-TAXDCL-100]
+    sc: Cross-tenant previous-employer actions are NotFound
+    t: A T2 run/input id used by a T1 caller is NotFound
+    src: "YearEndTaxService.cs (TenantId filter)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Run and input exist in tenant T2"
+    role: HRAdmin (T1)
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "runId/inputId belonging to T2"
+    steps:
+      - "[PUT /api/payroll/year-end-tax/runs/{T2 runId}/previous-employer/{T2 inputId}] as T1 HRAdmin => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: TAXDCL-PREVEMP-008
+    func: [F-TAXDCL-093]
+    sc: Add succeeds while run is Draft or Calculated (before Approved/Closed/Cancelled)
+    t: A positive add path confirming the eligible run-status window
+    src: "YearEndTaxService.cs AddPreviousEmployerAsync"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "Run is Status=Calculated"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "EmployerName=Beta Inc"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/previous-employer] run Status=Calculated => [201] created (Calculated is still an eligible state)"
+    auto: API

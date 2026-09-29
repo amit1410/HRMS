@@ -1,0 +1,183 @@
+# Clarification / QA-Risk register for Module 3. None of these are confirmed defects. Each is exposed by
+# one or more test cases (`cr: [CR-xx]`). `classification` starts "Open - awaiting decision".
+# Numbering continues after Module 2's highest id (CR-27).
+clarifications:
+  - id: CR-28
+    title: "Generic Master Management DELETE does not check references for the 'departments' and 'designations' kinds"
+    observation: >
+      MasterManagementService.HasReferencesAsync is a switch on the master kind, with an explicit case for
+      holding-companies, lines-of-business, organisations, sub-departments, sections, sub-sections,
+      functions, sub-functions, grades, employee-types, work-locations, cost-centers,
+      position-change-reasons and countries. There is no case for 'departments' or 'designations': both
+      fall through to the method's final `return false`. DELETE /api/masters/departments/{id} and
+      DELETE /api/masters/designations/{id} will therefore always report "no references" and proceed to
+      set IsActive=false, even when the department/designation has employees assigned or (for a
+      department) child sub-departments - unlike DELETE /api/departments/{id} and
+      DELETE /api/designations/{id}, whose dedicated services explicitly count referencing employees and
+      return 409 Conflict instead of deactivating.
+    risk: >
+      Not data-destructive (both paths only ever set IsActive=false, never delete a row), but a caller who
+      reaches the generic route - directly, or via a future UI wiring - loses the "this is still in use"
+      warning the dedicated Departments/Designations screens give, and a department can be silently retired
+      out from under assigned employees without the confirmation dialog's number-of-employees message.
+    source: "Backend/HRMS.Application/Services/MasterManagementService.cs (HasReferencesAsync); DepartmentService.cs/DesignationService.cs (DeleteAsync employee-count guard)"
+    classification: Open - awaiting decision
+
+  - id: CR-29
+    title: "Department and Designation are each reachable through two independent write paths with different permissions and different safety checks"
+    observation: >
+      The same Departments/Designations tables are written by two unrelated code paths:
+      (1) /api/departments and /api/designations, gated by Department.Create/Edit/Delete and
+      Designation.Create/Edit/Delete respectively, running DepartmentService/DesignationService's own
+      validation and delete guard; and (2) /api/masters/departments and /api/masters/designations,
+      gated by Geography.Manage only, running MasterManagementService's generic validation (Code
+      1-20 chars/charset, Name 1-200 chars) and the reference gap described in CR-28. A caller who holds
+      Geography.Manage but neither Department.* nor Designation.* can create, edit or deactivate
+      departments/designations entirely through the second path, bypassing the permission the dedicated
+      pages are gated on.
+    risk: >
+      Role design intent (per SeedData.RolePermissionMap) keeps Geography.Manage and Department/Designation
+      permissions bundled together on every seeded role that has either (HRAdmin and
+      SuperAdmin/TenantAdmin), so this is not currently exploitable by a seeded role - but nothing in the
+      authorization model prevents a future or tenant-defined role from separating them, at which point the
+      two permissions would silently stop being equivalent gates over the same data.
+    source: "Backend/HRMS.API/Controllers/DepartmentsController.cs vs MasterManagementController.cs; DepartmentService.cs vs MasterManagementService.cs; SeedData.cs RolePermissionMap"
+    classification: Open - awaiting decision
+
+  - id: CR-30
+    title: "Master lookup (dropdown) endpoints are gated by a different permission than the master's own CRUD endpoints"
+    observation: >
+      GET /api/masters/{kind} (list/detail for all 15 generic kinds) requires Geography.View.
+      GET /api/master-data/{kind} (the lookup/dropdown endpoint for the same 15 kinds, used to populate
+      forms elsewhere) requires Department.View for most kinds, Designation.View for designations, and
+      EmploymentHistory.View for position-change-reasons - none of which is Geography.View. A role holding
+      Geography.View but not Department.View (there is no seeded example, but nothing in the authorization
+      model forbids it) could browse the full Masters admin list for e.g. Grades or Cost Centers yet be
+      refused by the dropdown endpoint the Employee/Employment forms use for the same data.
+    risk: >
+      Confusing rather than unsafe today (every seeded role that has Geography.View for these kinds also
+      has Department.View), but the two permissions gate the same underlying rows for two different
+      purposes without any documented reason they should diverge.
+    source: "Backend/HRMS.API/Controllers/MasterManagementController.cs vs MasterLookupController.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-31
+    title: "Bank is a fully modeled tenant master with no create/update/delete surface anywhere in the product"
+    observation: >
+      Bank has an entity, an EF configuration with per-tenant unique (Code) and (Name) indexes, and seed
+      data (SeedData.Banks) - the same shape as every other generic master. It is deliberately absent from
+      MasterManagementService.DefinitionFor (so /api/masters/banks 404s with "Master type is not
+      supported") and from MasterImportService.Supported (so bulk import is unavailable). The only API
+      surface is the read-only GET /api/master-data/banks lookup, and the frontend's MasterManagementPage
+      'definitions' has no 'banks' entry. A tenant can only ever assign the banks seeded for it; it cannot
+      add, rename or deactivate one through the product.
+    risk: >
+      If tenants are expected to maintain their own bank list (the entity's own doc comment describes it as
+      tenant-configurable, mirroring Department's phrasing), this is a functionality gap rather than a bug -
+      but it is worth confirming deliberately, since every sibling master of the same shape (Cost Center,
+      Work Location, etc.) does have full CRUD.
+    source: "Backend/HRMS.Domain/Entities/Bank.cs; MasterManagementService.cs (DefinitionFor); MasterImportService.cs (Supported); MasterLookupController.cs (GetBanks only)"
+    classification: Open - awaiting decision
+
+  - id: CR-32
+    title: "There is no frontend write path for Country, State or City despite all three having complete backend CRUD"
+    observation: >
+      StatesController and CitiesController implement full GET/POST/PUT/DELETE with their own validators
+      and services, symmetrical to CountriesController - but MasterManagementPage.tsx's 'definitions' record
+      (the sole masters admin surface) has no 'states' or 'cities' entry at all (the catalogue nav shows a
+      static "Location management is unavailable because no Location master is defined" notice), and its
+      'countries' entry deliberately forces canCreate/canEdit/canDelete to false, calling the read-only
+      generic /api/masters/countries route rather than the fully-writable dedicated /api/countries route.
+      A repository-wide search finds api/countries.ts's `listCountries` used only for read-only dropdowns
+      (EmployeeCodeConfigurationPage, employee reference options, Leave Policy configuration, the Leave
+      working-day calendar) - no frontend code calls POST/PUT/DELETE on /api/countries, /api/states or
+      /api/cities anywhere.
+    risk: >
+      A tenant administrator cannot add or edit a country, state or city through the product even though the
+      backend fully supports all three; the only way to populate this data today is a direct API call or
+      seed data. This also means Country/State/City creation, uniqueness and hierarchy behavior can only be
+      exercised as API-only test cases in this suite - there is no UI path to verify any of it.
+    source: "Frontend/HRMS.Web/src/pages/masters/MasterManagementPage.tsx (definitions, master-unsupported notice, kind !== 'countries' guards); Frontend/HRMS.Web/src/api/countries.ts, states.ts, cities.ts; Backend/HRMS.API/Controllers/CountriesController.cs, StatesController.cs, CitiesController.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-33
+    title: "Generic master Name validation allows 200 characters; every backing table column is 100"
+    observation: >
+      MasterManagementService.WriteAsync rejects a Name only when it is empty or longer than 200 characters
+      ("name.Length is 0 or > 200"). Every EF configuration for the 15 generic-engine entities
+      (DepartmentConfiguration, DesignationConfiguration, HoldingCompanyConfiguration, LobConfiguration,
+      OrganisationConfiguration, SubDepartmentConfiguration, SectionConfiguration, SubSectionConfiguration,
+      FunctionConfiguration, SubFunctionConfiguration, GradeConfiguration, EmployeeTypeConfiguration,
+      WorkLocationConfiguration, CostCenterConfiguration, PositionChangeReasonConfiguration) declares
+      Name with HasMaxLength(100). A name between 101 and 200 characters passes the service's own check and
+      is only ever caught - or not - when SaveChangesAsync executes against a real provider (SQL Server
+      truncates or throws depending on ANSI_WARNINGS/ANSI_PADDING; MySQL depends on sql_mode; SQLite, the
+      suite's default test provider, enforces no length limit at all and will silently accept it).
+    risk: >
+      A 101-200 character name is reported to the client as accepted (200/201) on SQLite, but the same
+      request against SQL Server or MySQL production data may raise an unhandled DbUpdateException (surfaced
+      as a 500, not the 400 a validation error would produce) or silently truncate depending on provider
+      configuration - the exact behavior needs a provider-specific check, which the SQLite-default test
+      suite cannot expose (see CLAUDE.md's "SQLite passing is not evidence of SQL Server/MySQL behavior").
+    source: "Backend/HRMS.Application/Services/MasterManagementService.cs (WriteAsync); Backend/HRMS.Infrastructure/Persistence/Configurations/DepartmentConfiguration.cs (representative of all 15)"
+    classification: Open - awaiting decision
+
+  - id: CR-34
+    title: "A single 'Geography' permission pair gates every generic organizational master, not just Country/State/City"
+    observation: >
+      Permissions.Geography.View/Manage is the authorization check on MasterManagementController (all 15
+      generic kinds: holding companies, LOB, organisations, sub-departments, sections, sub-sections,
+      functions, sub-functions, grades, employee types, work locations, cost centers, position change
+      reasons - none of which is geographic data) as well as on CountriesController/StatesController/
+      CitiesController (which are geographic) and on MasterImportController (bulk import for the same 15
+      generic kinds). There is no separate permission for, say, "Organization Structure" versus
+      "Geography" - a role granted Geography.Manage to maintain the country/state/city list can also
+      create, edit and deactivate every holding company, grade, cost center, etc., and vice versa.
+    risk: >
+      Not unsafe under the current seeded roles (only SuperAdmin/TenantAdmin/HRAdmin hold Geography.Manage,
+      and all three are already broad HR-administration roles), but the permission name does not describe
+      its actual scope, which risks a future role being granted "just geography" access and unexpectedly
+      gaining full organizational-hierarchy management, or vice versa.
+    source: "Backend/HRMS.Domain/Authorization/Permissions.cs (Geography class); MasterManagementController.cs, MasterImportController.cs, CountriesController.cs, StatesController.cs, CitiesController.cs (all use Permissions.Geography.*)"
+    classification: Open - awaiting decision
+
+  - id: CR-35
+    title: "HasReferencesAsync checks for child-master rows only on 2 of the 4 hierarchical kinds that have a master directly below them"
+    observation: >
+      MasterManagementService.HasReferencesAsync checks whether child master rows still point at the record
+      being deleted for 'holding-companies' (checks LinesOfBusiness.HoldingCompanyId) and 'functions'
+      (checks SubFunctions.FunctionId), in addition to employment references. For 'sub-departments' (which
+      has Sections as a child master, via Section.SubDepartmentId) and 'sections' (which has SubSections as
+      a child master, via SubSection.SectionId), the switch case checks ONLY employment-history references
+      and never queries the child table at all. Deactivating a Sub Department or Section that still has
+      active child Sections/Sub Sections succeeds with no 409, leaving those children pointing at an
+      inactive parent (the same "stale but not cascaded" state CR-28 describes for Department/Designation,
+      reached here through a different, narrower gap: the case exists, it is just incomplete).
+    risk: >
+      Not data-destructive (Section/SubSection FKs are nullable and nothing is deleted), but it is an
+      inconsistent application of the same "does this have children below it" rule the code already applies
+      to Holding Company and Function - a Sub Department or Section can be silently retired out from under
+      structure that still organizationally depends on it, with no warning, while the otherwise-identical
+      Holding Company/Function case does warn.
+    source: "Backend/HRMS.Application/Services/MasterManagementService.cs (HasReferencesAsync: compare the 'holding-companies'/'functions' cases against the 'sub-departments'/'sections' cases)"
+    classification: Open - awaiting decision
+
+  - id: CR-36
+    title: "Master lookup search uses a raw .Contains() with no case normalization, unlike the generic engine's list search"
+    observation: >
+      MasterManagementService.ListAsync (used by GET /api/masters/{kind}) explicitly lower-cases both sides
+      before comparing: `EF.Property<string>(x, "Code").ToLower().Contains(search)`, guaranteeing
+      case-insensitive search on every provider. MasterLookupService's QueryAsync/QuerySortedAsync (used by
+      every GET /api/master-data/{kind} dropdown endpoint) instead does a raw
+      `EF.Property<string>(e, "Code").Contains(search)` with no ToLower on either side, for all 15 generic
+      kinds plus Banks. Whether 'eng' matches a code stored as 'ENG' then depends entirely on the database
+      provider's default string-comparison collation.
+    risk: >
+      SQL Server's default collation is case-insensitive, so this is invisible there and on the SQLite
+      in-memory test suite this repository defaults to (SQLite's LIKE-based Contains translation is
+      case-insensitive for ASCII by default) - but MySQL's comparison behavior depends on the configured
+      collation (CLAUDE.md already calls out MySQL/SQL Server provider divergences for other reasons), so a
+      case-sensitive MySQL collation would make the lookup/dropdown search behave differently from the
+      Masters admin list's search for the exact same data.
+    source: "Backend/HRMS.Application/Services/MasterLookupService.cs (QueryAsync/QuerySortedAsync/GetLinesOfBusinessAsync etc.) vs MasterManagementService.cs (ListAsync)"
+    classification: Open - awaiting decision

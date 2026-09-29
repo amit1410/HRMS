@@ -1,0 +1,323 @@
+# Module 17 QA-risk register. Numbering continues after Module 16's CR-289
+# (qa/16-gl-accounting-integration/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces
+# evidence relevant to a product decision that has not been made yet. Classification starts
+# 'Open - awaiting decision'. CR-290, CR-292, CR-293, CR-294, CR-296, CR-297, CR-299, and CR-300 are
+# exceptions: they document confirmed source-level defects (a broken concurrency-safety convention,
+# dead permissions/enum members/lifecycle states, and DTO fields that never carry the values their
+# name/type promise), not merely design ambiguities, and are classified accordingly.
+
+clarifications:
+  - id: CR-290
+    title: "CONFIRMED DEFECT (headline) - PayrollVarianceControl.ConcurrencyVersion and PayrollReconciliation.ConcurrencyVersion are unenforced, never-incremented decorative integers; PayrollReconciliationFinding has no concurrency protection at all"
+    observation: >
+      PayrollAnalyticsConfiguration.cs configures 4 entity types and never calls
+      .IsConcurrencyToken() anywhere in the file. This breaks with the established convention used
+      throughout the rest of this codebase: AttendanceMonthlyConfiguration, AttendanceWorkflowConfigurations,
+      BankAdviceConfiguration, and CompOffConfiguration all call
+      `.Property(x => x.ConcurrencyVersion).IsConcurrencyToken()` (some with `.HasDefaultValue(1)` too).
+      PayrollVarianceControl and PayrollReconciliation both declare a ConcurrencyVersion int property
+      that visually matches this exact convention, but it is wired as a plain column - EF never adds
+      it to the UPDATE's WHERE clause, and Apply()/UpdateControlAsync/GenerateReconciliationAsync
+      never increment it either. PayrollReconciliationFinding does not even declare the property.
+      PayrollAnalyticsConcurrencyTests.cs's own catch(DbUpdateConcurrencyException) branches around
+      ActOnFindingAsync races are consequently unreachable dead code paths - the exception type they
+      guard against cannot be thrown by this schema.
+    risk: >
+      Two administrators updating the same PayrollVarianceControl at the same time, or two reviewers
+      concurrently acknowledging/resolving the same PayrollReconciliationFinding, silently last-write-
+      wins with no conflict ever surfaced to either caller - one caller's Note/Reference/threshold
+      change is silently discarded rather than rejected with a 409, which is the opposite of the
+      auditability this reconciliation feature exists to provide.
+    source: "Backend/HRMS.Infrastructure/Persistence/Configurations/PayrollAnalyticsConfiguration.cs (all 4 configurations, read in full - zero .IsConcurrencyToken() calls); Backend/HRMS.Infrastructure/Persistence/Configurations/AttendanceMonthlyConfiguration.cs, BankAdviceConfiguration.cs, CompOffConfiguration.cs (confirmed sibling convention); Backend/HRMS.Tests/PayrollAnalyticsConcurrencyTests.cs (catch(DbUpdateConcurrencyException) branches)"
+    classification: Confirmed defect
+
+  - id: CR-291
+    title: "HEADLINE FINDING - no seeded role except SuperAdmin/TenantAdmin holds any of the 8 Payroll.Analytics*/Reconciliation*/Exceptions* permissions, out of the box"
+    observation: >
+      A full grep of Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs for all 8 permission
+      constants (AnalyticsView/AnalyticsConfigure/ReconciliationView/ReconciliationGenerate/
+      ReconciliationAcknowledge/ReconciliationResolve/ExceptionsView/ExceptionsManage) returns matches
+      only in the permission-id-assignment dictionary (ids 190-197) - never inside any role's
+      RolePermissionMap array. SuperAdmin and TenantAdmin hold all 8 only via the blanket
+      DomainPermissions.All grant. HRAdmin, HRManager, SuperHR, and the role literally named
+      "Accounts" all hold zero of the 8. This is the identical shape to qa/15's CR-263 and qa/16's
+      CR-274.
+    risk: >
+      A tenant relying on any seeded role other than SuperAdmin/TenantAdmin cannot view a payroll
+      run's analytics overview, generate a reconciliation, acknowledge/resolve a finding, or view the
+      exceptions register out of the box - including the role named "Accounts", the one role whose
+      name most directly suggests it should own payroll reconciliation and control-total review. This
+      is now the THIRD consecutive Payroll-output module (BankAdvice, GL Accounting, Analytics) with
+      this identical seeding gap.
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, full-file grep for the 8 permission constants - zero matches outside the id-assignment dictionary; HRAdmin/HRManager/SuperHR/Accounts/IT/Manager/Employee role arrays all read in full)"
+    classification: Open - awaiting decision
+
+  - id: CR-292
+    title: "CONFIRMED DEFECT - Payroll.Exceptions.Manage is declared and seeded but gates zero endpoints; there is no code path that ever mutates a PayrollAnomalyFlag"
+    observation: >
+      Permissions.Payroll.ExceptionsManage (seeded id 197) exists purely in the permission-id
+      dictionary. PayrollExceptionsController's only two actions (List, Export) both require
+      Payroll.Exceptions.View. IPayrollAnalyticsService has no AcknowledgeAnomalyAsync,
+      ResolveAnomalyAsync, or any method touching PayrollAnomalyFlags beyond the two creation sites
+      inside GenerateReconciliationAsync. PayrollAnomalyFlag's own AcknowledgedAtUtc/
+      AcknowledgedByUserId/ResolutionNote fields are declared and never assigned by any code.
+    risk: >
+      A tenant that grants a role Payroll.Exceptions.Manage, expecting it to unlock an action to
+      triage the exceptions register (the permission's own name strongly implies write access), gets
+      nothing - the permission is indistinguishable in effect from holding no payroll permission at
+      all.
+    source: "Backend/HRMS.Domain/Authorization/Permissions.cs (ExceptionsManage declared); Backend/HRMS.API/Controllers/PayrollAnalyticsController.cs (PayrollExceptionsController, both actions read); Backend/HRMS.Application/Abstractions/IPayrollAnalyticsService.cs (full interface, no anomaly-mutation method); Backend/HRMS.Domain/Entities/PayrollAnalytics.cs (PayrollAnomalyFlag fields declared, never assigned outside GenerateReconciliationAsync's own creation sites)"
+    classification: Confirmed defect
+
+  - id: CR-293
+    title: "CONFIRMED DEFECT - 7 of PayrollControlScope's 8 members can be saved on a control but are never evaluated by anything"
+    observation: >
+      CreateControlAsync/UpdateControlAsync accept any PayrollControlScope value (PayrollRun/
+      Employee/Component/Department/CostCenter/Statutory/BankAdvice/Accounting) with no server-side
+      restriction. GenerateReconciliationAsync's only control-evaluation loop is
+      `foreach (var control in controls.Where(x => x.Scope == PayrollControlScope.PayrollRun))` -
+      every other Scope value is silently excluded from evaluation, forever, regardless of how the
+      control is configured. Every PayrollReconciliationFinding the service itself constructs
+      (Finding()/FindingForRun()) is also hard-coded to Scope=PayrollRun, so the other 7 members never
+      even appear as a finding's own tag either.
+    risk: >
+      An administrator configuring an Employee-scoped or Department-scoped control (both names
+      strongly implying a per-employee or per-department threshold) believes they have added a
+      meaningful control; the control is persisted, listed, and returned by every read endpoint as if
+      active, but is never once compared against anything. This is silent, not merely unimplemented -
+      there is no validation error, warning, or documentation surfacing the gap to the caller.
+    source: "Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (GenerateReconciliationAsync's controls.Where(x => x.Scope == PayrollControlScope.PayrollRun) filter; Finding()/FindingForRun() both hard-code Scope=PayrollRun); Backend/HRMS.Domain/Enums/PayrollEnums.cs (PayrollControlScope, 8 members)"
+    classification: Confirmed defect
+
+  - id: CR-294
+    title: "CONFIRMED DEFECT - a PayrollRun-scoped control configured with ComponentAmount, BankAdviceTotal, or GLTotal always compares its threshold against a hard-coded 0, never the real metric"
+    observation: >
+      The run-level control-evaluation switch in GenerateReconciliationAsync implements exactly 6 of
+      PayrollControlMetric's 9 members (GrossPay/NetPay/TotalDeduction/EmployeeCount/Tax/
+      EmployerContribution) with an explicit `_ => 0m` default for the remaining 3
+      (ComponentAmount/BankAdviceTotal/GLTotal). A control configured with one of those 3 metrics and
+      a small AbsoluteThreshold (e.g. 1) will therefore ALWAYS fire (since |0| is never > a positive
+      threshold, it in fact never fires either way - the actual behaviour is metric-blind, not merely
+      inaccurate) regardless of the run's real component/bank-advice/GL totals.
+    risk: >
+      An administrator who names a control "GL total exceeds 1,000,000" using Metric=GLTotal and
+      Scope=PayrollRun receives a control that can never meaningfully trigger, because its evaluated
+      `actual` is always 0 - not the run's real AccountingDebitTotal/AccountingCreditTotal (both of
+      which the Overview/Summary endpoints DO correctly compute elsewhere in this same service).
+    source: "Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (GenerateReconciliationAsync's `actual` switch expression, `_ => 0m` default arm)"
+    classification: Confirmed defect
+
+  - id: CR-295
+    title: "PayrollControlAction.BlockApproval/BlockFinalization are stored and returned but enforce nothing anywhere in the payroll lifecycle"
+    observation: >
+      A full grep of Backend/HRMS.Application/Services/PayrollRunService.cs and
+      Backend/HRMS.Application/Services/PayrollApprovalGuard.cs for "PayrollVarianceControl",
+      "PayrollControlAction", "BlockApproval", and "BlockFinalization" returns zero matches. A control
+      (or a hard-coded finding such as NoPayrollResults) tagged BlockApproval/BlockFinalization is
+      persisted, returned in PayrollFindingDto.Action, and visible on every findings/reconciliation
+      read - but a payroll run can still be Approved or Finalized while that finding remains Open.
+      The phase design doc (docs/phase-7s-...) does state "analytics does not automatically block
+      payroll unless the existing lifecycle explicitly consumes such a control", which frames this as
+      an intentional integration boundary rather than an oversight - but no such consumption exists
+      anywhere in the codebase today.
+    risk: >
+      A control or finding named/tagged "BlockApproval" reads, to any operator inspecting the API or
+      a future UI, as an enforced gate. It is purely descriptive metadata today. A tenant relying on
+      it to prevent approving a payroll run with a critical reconciliation finding open has no such
+      protection.
+    source: "Backend/HRMS.Application/Services/PayrollRunService.cs, PayrollApprovalGuard.cs (full grep, zero matches for the control/action types); Backend/HRMS.Domain/Enums/PayrollEnums.cs (PayrollControlAction, 4 members); docs/phase-7s-payroll-analytics-reconciliation-controls.md (explicit integration-boundary statement)"
+    classification: Open - awaiting decision
+
+  - id: CR-296
+    title: "CONFIRMED DEFECT - the frontend wires 2 of 22 backend endpoints and has no navigation entry to its own single page"
+    observation: >
+      Frontend/HRMS.Web/src/api/payrollAnalytics.ts exports exactly 3 functions
+      (getPayrollAnalyticsOverview, getPayrollVariance, generatePayrollReconciliation) covering 2 read
+      endpoints and 1 write endpoint out of this module's 22. PayrollAnalyticsPage.tsx itself only
+      ever calls getPayrollAnalyticsOverview - getPayrollVariance and generatePayrollReconciliation
+      are dead exports, called from nowhere in the repository (confirmed by a full-repo grep). The
+      page renders a 7-tile summary grid with no variance table, no findings list, no
+      generate-reconciliation button, no controls administration, no exceptions register, and no CSV
+      export link. Control totals, department/cost-center summaries, component variance, and all 4
+      analytics CSV exports plus the 2 exceptions CSV/list endpoints have no UI representation
+      whatsoever. Separately, Frontend/HRMS.Web/src/layout/navigation.ts has zero entries mentioning
+      "Analytics"/"Reconciliation"/"Exceptions" for Payroll, and a full-repo grep for the literal route
+      path "payroll/analytics" confirms no other page links to it - the only way to reach the page is
+      typing the URL directly with a valid ?runId= query string.
+    risk: >
+      A tenant granted every one of the 8 backend permissions in this module still cannot, through
+      the product's own UI, generate a reconciliation, review a finding, review the exceptions
+      register, configure a control, or export any of the 5 CSVs this module provides - the entire
+      feature is API-only in practice, and the one page that does exist is unreachable without
+      already knowing its URL and a valid payroll run id.
+    source: "Frontend/HRMS.Web/src/api/payrollAnalytics.ts (read in full); Frontend/HRMS.Web/src/pages/payroll/PayrollAnalyticsPage.tsx (read in full); Frontend/HRMS.Web/src/layout/navigation.ts (grepped for Analytics/Reconciliation/Exceptions - zero matches); full-repo grep for \"payroll/analytics\" (zero other referencing pages)"
+    classification: Confirmed defect
+
+  - id: CR-297
+    title: "CONFIRMED DEFECT - PayrollReconciliation.Status is permanently stuck at Generated; Acknowledged and Superseded are unreachable"
+    observation: >
+      PayrollReconciliationStatus declares 3 members (Generated/Acknowledged/Superseded) and the
+      entity defaults to Generated. A full grep of PayrollAnalyticsService.cs for
+      "ReconciliationStatus." returns zero assignment sites anywhere in the file - the property is
+      set once, at construction, and never touched again, including when every one of a
+      reconciliation's own findings has since been individually Resolved, or when a strictly newer
+      version has since been generated for the same run+type (which would be the natural moment to
+      mark the prior version Superseded).
+    risk: >
+      An API consumer or future UI cannot distinguish "this reconciliation is still the live,
+      actionable one" from "this reconciliation has been fully worked through" or "this reconciliation
+      has been superseded by version N+1" by reading Status alone - every row, at every point in its
+      lifecycle, reports Generated. The per-finding Status field is the only place this information
+      actually lives.
+    source: "Backend/HRMS.Domain/Entities/PayrollAnalytics.cs (PayrollReconciliation.Status, PayrollReconciliationStatus enum, 3 members); Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (full-file grep for \"ReconciliationStatus.\" - zero assignment matches)"
+    classification: Confirmed defect
+
+  - id: CR-298
+    title: "12 of PayrollAnomalyType's 14 members have zero corresponding functionality; only NegativeNetPay and ZeroNetPay are ever constructed"
+    observation: >
+      PayrollAnomalyType declares HighGrossVariance/HighNetVariance/HighDeductionVariance/
+      PopulationMismatch/BankMismatch/AccountingMismatch/StatutoryMismatch/DuplicateSettlement/
+      MissingConfiguration/MissingSource/UnexpectedEmployee/MissingEmployee in addition to
+      NegativeNetPay/ZeroNetPay - only the latter two are ever passed to the private Anomaly()
+      constructor, both from inside GenerateReconciliationAsync's post-payroll branch. Several of the
+      unused members have an obvious literal correspondence to an already-implemented
+      PayrollReconciliationFinding control code (e.g. BankMismatch vs. the finding codes
+      MissingBankAdvice/BankAdviceAmountMismatch/BankAdviceCountMismatch/DuplicateBankPaymentReference)
+      - the finding mechanism and the anomaly-flag/exceptions-register mechanism are structurally
+      similar (both carry Severity/Metric/CurrentValue/ComparisonValue/Message) but are two entirely
+      disjoint code paths today. The phase doc's own Deferred section lists "machine-learning anomaly
+      detection ... predictive payroll ... arbitrary analytics scripting" as future scope, which
+      partially - but not completely - explains the gap for the variance-based anomaly types.
+    risk: >
+      The Exceptions register (Payroll.Exceptions.View, the "anomaly detection/flags" surface this
+      module's own name promises) can only ever show 2 of 14 documented anomaly categories. A tenant
+      reviewing "exceptions" for bank/accounting/statutory mismatches will find them under Findings
+      (a different endpoint, a different permission, and run-scoped rather than tenant-wide) instead,
+      with no anomaly-flag equivalent ever created for those same conditions.
+    source: "Backend/HRMS.Domain/Enums/PayrollEnums.cs (PayrollAnomalyType, 14 members); Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (full-file grep for Anomaly( call sites - exactly 2, both for NegativeNetPay/ZeroNetPay); docs/phase-7s-payroll-analytics-reconciliation-controls.md (Deferred section)"
+    classification: Open - awaiting decision
+
+  - id: CR-299
+    title: "CONFIRMED DEFECT - PayrollVarianceRowDto.Flags is always an empty array and Classification is always one of exactly 2 fixed strings, regardless of variance magnitude"
+    observation: >
+      PayrollVarianceRowDto.Flags is typed IReadOnlyList<string>, and Classification's name and the
+      surrounding GrossVariancePercent/DeductionVariancePercent/NetVariancePercent fields all suggest
+      a real severity/anomaly classification. The private Variance() helper that constructs every row
+      hard-codes Flags to `[]` unconditionally, and Classification to exactly "NewValue" (no prior
+      result for this employee) or "NormalComparable" (a prior result exists) - there is no third
+      value and no threshold-driven branch. A row with a 1000% gross-pay increase and a row with a
+      0.01% increase both classify as "NormalComparable" and both carry an empty Flags array.
+    risk: >
+      Any caller (API consumer or a future UI) attempting to surface "which employees have an unusual
+      variance this run" by reading Classification or Flags will find nothing distinguishing them -
+      the actual variance percent fields must be independently thresholded by the caller; the DTO's
+      own Classification/Flags fields carry no signal at all beyond "is there a prior period to
+      compare against".
+    source: "Backend/HRMS.Application/DTOs/Payroll/PayrollAnalyticsDtos.cs (PayrollVarianceRowDto shape); Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (private static Variance() helper, Flags hard-coded to [], Classification hard-coded to one of 2 literals)"
+    classification: Confirmed defect
+
+  - id: CR-300
+    title: "CONFIRMED DEFECT - SortBy/SortDescending are accepted on every list endpoint in this module and silently ignored by all of them"
+    observation: >
+      PagedQuery.cs documents SortBy as "Field to order by. Must be one of the endpoint's supported
+      fields" and states "An unrecognized value is rejected instead of silently ignored, so a client
+      never believes it sorted when it did not" - describing the INTENDED, repository-wide contract.
+      GetVarianceAsync/GetFindingsAsync/GetExceptionsAsync/ListControlsAsync in
+      PayrollAnalyticsService.cs each hard-code their own fixed ordering (EmployeeCode ascending;
+      GeneratedAtUtc descending then Id; CreatedAtUtc descending then Id; Code ascending,
+      respectively) and never read query.SortBy or query.SortDescending anywhere in the file. A
+      caller supplying sortBy=anything or even a nonsense value receives 200 OK with the endpoint's
+      own fixed order, never the documented rejection.
+    risk: >
+      A caller relying on the documented PagedQuery contract (reject an unsupported sort field rather
+      than silently ignore it) to validate its own sortBy input against this API gets no such
+      validation from any endpoint in this module - sorting requests are a complete no-op rather than
+      either honored or rejected.
+    source: "Backend/HRMS.Application/Common/PagedQuery.cs (SortBy/SortDescending doc comments); Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (GetVarianceAsync/GetFindingsAsync/GetExceptionsAsync/ListControlsAsync, full-file grep for \"SortBy\"/\"SortDescending\" - zero matches in this file)"
+    classification: Confirmed defect
+
+  - id: CR-301
+    title: "The Exceptions register has no filter by AnomalyType, Severity, Status, payroll run, or any date/period range - only free-text Search on EmployeeCode/Message"
+    observation: >
+      PayrollExceptionsController's List action binds the shared PagedQuery (Page/PageSize/Search/
+      SortBy/SortDescending) with no additional query parameters, and GetExceptionsAsync's only
+      filter beyond tenant scoping is the Search substring match. There is no payrollRunId, no
+      anomalyType, no severity, no status, and no createdFrom/createdTo parameter anywhere on this
+      endpoint or its CSV export.
+    risk: >
+      A tenant with a large, long-running Exceptions register (which grows across every payroll run,
+      forever, per CR's own tenant-wide scoping) has no way to narrow it to "this month" or "Critical
+      only" or "unresolved" through the API - every list/export call returns the same tenant-wide,
+      unbounded set modulo a page window and a two-field text search.
+    source: "Backend/HRMS.API/Controllers/PayrollAnalyticsController.cs (PayrollExceptionsController, both actions); Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (GetExceptionsAsync, ExportExceptionsAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-302
+    title: "The default (unspecified compareRunId) variance/component-variance comparison run is picked by recency alone, not by completion status"
+    observation: >
+      GetVarianceAsync/GetComponentVarianceAsync's default-comparison lookup filters only on
+      TenantId, matching RunType, Id != the requested run, and Status != Cancelled - it does not
+      require Status=Calculated/Approved/Finalized. A Draft or Processing run of the same RunType,
+      more recent by PayrollPeriod.EndDate than any completed run, is a valid candidate and would be
+      selected as the implicit baseline even though it may have zero (or partial) persisted
+      PayrollResults.
+    risk: >
+      A default variance comparison against an incomplete run silently produces a "NewValue"
+      classification for every employee (since the incomplete run has no Calculated results to
+      compare against) rather than comparing against the last genuinely completed run of the same
+      type - which may be what a caller omitting compareRunId actually expects.
+    source: "Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (GetVarianceAsync, GetComponentVarianceAsync - default comparisonId lookup, Status != Cancelled is the only status filter)"
+    classification: Open - awaiting decision
+
+  - id: CR-303
+    title: "CONFIRMED DEFECT - PayrollControlTotalsDto.TaxTotal is always a hard-coded 0, never the run's real persisted statutory tax total"
+    observation: >
+      The private static Totals() helper that both GetOverviewAsync and GetControlTotalsAsync call
+      returns a fixed literal 0m for the Tax element of its tuple regardless of input, with a comment-
+      free `_ => 0m`-equivalent constant. GetControlTotalsAsync's own PayrollControlTotalsDto.TaxTotal
+      is populated directly from this always-zero value, even though PayrollStatutoryResults (read
+      elsewhere in this very service, inside AddSourceFindingsAsync) contains the real, persisted tax
+      figures for the same run.
+    risk: >
+      Both the run overview and the control-totals/summary CSV export report TaxTotal=0 for every
+      payroll run, regardless of how much statutory tax was actually withheld and persisted - a
+      caller reconciling payroll totals against a separate statutory report will find this field
+      permanently useless.
+    source: "Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (private static Totals() helper, Tax element hard-coded to 0m); Backend/HRMS.Application/DTOs/Payroll/PayrollAnalyticsDtos.cs (PayrollControlTotalsDto.TaxTotal)"
+    classification: Confirmed defect
+
+  - id: CR-305
+    title: "CONFIRMED DEFECT - every CSV export action returns 400 BadRequest for ANY failure, including NotFound/Unauthorized, instead of the status code its JSON counterpart would use"
+    observation: >
+      VarianceCsv, FindingsCsv, SummaryCsv, ControlTotalsCsv, and the Exceptions Export action all
+      share the identical pattern: `var result = await service.Export...Async(...); if
+      (!result.Succeeded) return BadRequest(result.Message); return File(...);` - bypassing
+      Result<T>.ToActionResult() entirely, which every other (JSON) action in this module uses and
+      which correctly maps NotFound to 404, Unauthorized to 401, and Conflict to 409. A request for
+      variance.csv against a run belonging to another tenant (which the JSON /variance endpoint
+      correctly reports as 404) instead returns 400 with the same "Payroll run not found." message
+      body.
+    risk: >
+      A client that branches on HTTP status code (e.g. treating 404 as "does not exist, stop
+      retrying" vs. 400 as "malformed request, fix the call") is misled by every CSV export in this
+      module - the same underlying condition (tenant mismatch, missing run) reports a different,
+      less-specific status code than its own JSON sibling endpoint one path over.
+    source: "Backend/HRMS.API/Controllers/PayrollAnalyticsController.cs (VarianceCsv, FindingsCsv, SummaryCsv, ControlTotalsCsv, PayrollExceptionsController.Export - all 5 actions read; each uses `if (!result.Succeeded) return BadRequest(result.Message)` instead of `.ToActionResult()`)"
+    classification: Confirmed defect
+
+  - id: CR-304
+    title: "accept-exception is gated by the same permission as resolve; there is no separate Payroll.Reconciliation.AcceptException permission"
+    observation: >
+      PayrollReconciliationController's Accept action (POST findings/{id}/accept-exception) carries
+      [HasPermission(Permissions.Payroll.ReconciliationResolve)] - the identical attribute used by the
+      Resolve action, rather than a distinct permission. Any caller who can resolve a finding can also
+      formally accept it as an exception (a materially different outcome - AcceptedException vs.
+      Resolved - with different downstream implications for audit/compliance review) and vice versa.
+    risk: >
+      A tenant wanting to grant "can mark a finding as resolved because it was actually fixed" without
+      also granting "can wave through a finding as an accepted risk exception" (a meaningfully
+      different governance decision) cannot express that distinction with the permissions this module
+      exposes today.
+    source: "Backend/HRMS.API/Controllers/PayrollAnalyticsController.cs (PayrollReconciliationController.Accept and .Resolve actions, both attributed with Permissions.Payroll.ReconciliationResolve)"
+    classification: Open - awaiting decision

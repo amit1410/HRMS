@@ -1,0 +1,88 @@
+sheet: VPay_Audit_History
+submodule: Award history trail, append-only proof, and the Override-caused gap in that trail
+defaults:
+  role: HRADMIN
+  perm: "Payroll.VariablePay.ViewHistory"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.VariablePay.ViewHistory granted and an award with lifecycle activity exists, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: VPAY-AUD-001
+    func: [F-VPAY-109]
+    sc: History returns rows ordered by OccurredAtUtc descending, NotFound for an unknown award
+    t: The most recent event appears first; an unknown or cross-tenant award id is NotFound
+    src: ["VariablePayService.GetHistoryAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/payroll/variable-pay-awards/{id}/history] award with Generate+Submit+Approve history => [200] rows ordered newest first (AwardApproved, then AwardSubmitted, then AwardCalculated/AwardGenerated)"
+      - "[GET /api/payroll/variable-pay-awards/{unknownId}/history] => [404] Variable-pay award not found."
+    auto: API
+
+  - id: VPAY-AUD-002
+    func: [F-VPAY-110]
+    sc: Every genuinely persisted mutation writes its own history row except Override
+    t: Generate/Submit/Approve/Reject/Cancel/Settle each add a row; Override's AddHistory call is silently discarded
+    src: ["VariablePayService.cs (AddHistory call sites vs. actual persistence)"]
+    type: Boundary
+    pri: P0
+    cr: [CR-201]
+    steps:
+      - "[GET /api/payroll/variable-pay-awards/{id}/history] after Generate+Submit+Approve+Settle(partial) => [200] four distinct event types present: AwardGenerated, AwardCalculated, AwardSubmitted, AwardApproved, PartiallyPaid"
+      - "[POST /api/payroll/variable-pay-awards/{overridableId}/override] AllowManualOverride=true version, OverrideAmount=1, Reason='x' => [200] apparent success"
+      - "[GET /api/payroll/variable-pay-awards/{overridableId}/history] => [200] no AwardOverridden row was added, contradicting the apparent success above"
+    auto: API
+
+  - id: VPAY-AUD-003
+    func: [F-VPAY-111]
+    sc: History rows are append-only from the API surface
+    t: No update or delete endpoint exists for VariablePayAwardHistory
+    src: ["VariablePayController.cs (full route grep - no PUT/DELETE for history)"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Grep VariablePayController.cs for any PUT/DELETE route under variable-pay-awards/{id}/history => none exists"
+    auto: Manual only
+
+  - id: VPAY-AUD-004
+    func: [F-VPAY-112]
+    sc: History rows record the acting user's identity consistently
+    t: ActorUserId on each persisted history row matches the tenant context user who performed that action
+    src: ["VariablePayService.cs (ActorUserId assignment)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/submit] signed in as UserA => [200] Status=Submitted"
+      - "[GET /api/payroll/variable-pay-awards/{id}/history] => [200] the AwardSubmitted row's ActorUserId=UserA"
+    auto: API
+
+  - id: VPAY-AUD-005
+    func: [F-VPAY-113]
+    sc: History rows retain a reconstructable amount trail
+    t: The AwardApproved row carries OriginalAmount=CalculatedAmount and NewAmount=ApprovedAmount
+    src: ["VariablePayService.GetHistoryAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/approve] award CalculatedAmount=10000 => [200] ApprovedAmount=10000"
+      - "[GET /api/payroll/variable-pay-awards/{id}/history] => [200] AwardApproved row: OriginalAmount=10000, NewAmount=10000, VariablePayPlanVersionId set, Reason='Award approved.'"
+    auto: API
+
+  - id: VPAY-AUD-006
+    func: [F-VPAY-114]
+    sc: ViewHistory is a distinct permission from View on both admin and ESS routes
+    t: A role holding View but not ViewHistory can read the award's current state but not its history
+    src: ["VariablePayController.cs (HasPermission attributes)"]
+    type: Authorization
+    pri: P1
+    role: HRADMIN
+    perm: "Payroll.VariablePay.View"
+    tags: [Authorization]
+    steps:
+      - "[GET /api/payroll/variable-pay-awards/{id}] signed in with ONLY Payroll.VariablePay.View granted => [200] award returned"
+      - "[GET /api/payroll/variable-pay-awards/{id}/history] same user (ViewHistory NOT granted) => [403] Forbidden"
+    auto: API

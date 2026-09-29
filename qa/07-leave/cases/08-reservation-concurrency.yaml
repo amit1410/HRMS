@@ -1,0 +1,212 @@
+sheet: Leave_Concurrency
+submodule: Balance reservation lifecycle, employee-scoped locking, deadlock retry, and MySQL/SQL Server provider parity
+defaults:
+  role: EMPLOYEE
+  perm: "Leave.RequestCreate"
+  tenant: A
+  pre: "Tenant A signed in; Allocated-entitlement LeaveType with a sufficient starting balance unless stated."
+  data: "n/a unless stated."
+  sev: Critical
+  reg: true
+
+cases:
+  - id: LEAVE-CONC-001
+    func: [F-LEAVE-175]
+    sc: Reservation draws from the oldest-expiring grant(s) first, spanning multiple grants if needed
+    t: A request larger than the single oldest grant's own AvailableQuantity is split across two grants, oldest-expiry first
+    src: ["LeaveBalanceAccountingService.ApplyGrantAllocationsAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] Two LeaveEntitlementGrants: Grant A (ExpiresOn='2027-03-31', Available=3) and Grant B (ExpiresOn='2027-12-31', Available=10) => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests] Requesting 5 chargeable days => [201] LeaveBalanceReservationAllocations show 3 reserved against Grant A and 2 against Grant B - the nearer-expiry grant is exhausted first"
+    auto: DB-assisted
+
+  - id: LEAVE-CONC-002
+    func: [F-LEAVE-176]
+    sc: Approval consumes the existing reservation rather than creating a new one
+    t: Reserved transfers to Consumed on both the aggregate balance and the underlying grant/allocation rows
+    src: ["LeaveBalanceAccountingService.ConsumeReservationAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: MANAGER
+    perm: "Leave.Approve"
+    steps:
+      - "[POST /api/leave-requests/{requestId}/approve] => [200]"
+      - "[GET /api/leave-balances/mine] As the requester => [200] Reserved decreased by the chargeable quantity, Consumed increased by the same amount, Available unchanged from what it was right after submission"
+    auto: API
+
+  - id: LEAVE-CONC-003
+    func: [F-LEAVE-176]
+    sc: Approving a request with no matching reservation (an inconsistent state) is rejected
+    t: A direct-data-manipulated PendingApproval request with its LeaveBalanceReservationAllocation rows removed fails to approve
+    src: ["LeaveBalanceAccountingService.ConsumeReservationAsync"]
+    type: Boundary
+    pri: P1
+    role: MANAGER
+    perm: "Leave.Approve"
+    steps:
+      - "[Manual/DB] Delete the LeaveBalanceReservationAllocation rows for a still-PendingApproval request => the forced/simulated state is established for the steps below"
+      - "[POST /api/leave-requests/{requestId}/approve] => [409] 'AllocatedReservationNotFound'"
+    auto: DB-assisted
+
+  - id: LEAVE-CONC-004
+    func: [F-LEAVE-177]
+    sc: Rejection releases the reservation
+    t: Reserved decreases and Available increases back by the chargeable quantity
+    src: ["LeaveBalanceAccountingService.ReleaseReservationAsync"]
+    type: Positive
+    pri: P0
+    role: MANAGER
+    perm: "Leave.Approve"
+    steps:
+      - "[POST /api/leave-requests/{requestId}/reject] => [200]"
+      - "[GET /api/leave-balances/mine] As the requester => [200] Reserved back to 0 for this request's quantity, Available restored to its pre-submission level"
+    auto: API
+
+  - id: LEAVE-CONC-005
+    func: [F-LEAVE-178]
+    sc: Withdrawal releases the reservation identically to rejection
+    t: A still-PendingApproval request withdrawn by its own employee releases the reservation
+    src: ["LeaveRequestWithdrawalService.AttemptAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/leave-requests/{requestId}/withdraw] => [200]"
+      - "[GET /api/leave-balances/mine] => [200] Available restored"
+    auto: API
+
+  - id: LEAVE-CONC-006
+    func: [F-LEAVE-179]
+    sc: Cancellation restores CONSUMED quantity, the inverse of approval's consume
+    t: Cancelling an Approved request moves the quantity from Consumed back to Available, not a second release
+    src: ["LeaveBalanceAccountingService.RestoreConsumptionAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/leave-requests/{approvedRequestId}/cancel] => [200]"
+      - "[GET /api/leave-balances/mine] => [200] Consumed decreased by the chargeable quantity, Available increased by the same amount"
+    auto: API
+
+  - id: LEAVE-CONC-007
+    func: [F-LEAVE-180, F-LEAVE-181]
+    sc: Two concurrent submissions for the same employee are serialized; over-reservation is impossible
+    t: Firing two simultaneous submit requests whose combined quantity exceeds Available results in exactly one success and one Conflict
+    src: ["LeaveRequestSubmissionService.SubmitAttemptAsync", "IEmployeeSerializationLock"]
+    type: Integration-Concurrency
+    pri: P0
+    smoke: true
+    data: "Available=5; Request X asks for 3 days, Request Y (concurrently) asks for 3 different days"
+    steps:
+      - "[POST /api/leave-requests] Fire Request X and Request Y CONCURRENTLY (same employee, same balance) => exactly ONE of {X,Y} returns [201]; the other returns [409] 'InsufficientLeaveBalance'"
+      - "[GET /api/leave-balances/mine] => [200] Reserved reflects only the winning request's quantity - no over-reservation occurred"
+    auto: DB-assisted
+
+  - id: LEAVE-CONC-008
+    func: [F-LEAVE-182]
+    sc: A transient deadlock is retried up to 3 attempts before failing cleanly
+    t: An injected transient deadlock on the first 2 attempts succeeds on the 3rd; exhausting all 3 returns a clean Conflict, never a 500
+    src: ["LeaveRequestSubmissionRetryPolicy.ExecuteAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[Manual/DB] Inject a classified-deadlock exception on submission attempts 1 and 2; let attempt 3 succeed => [201] the request is created, having silently retried twice"
+      - "[Manual/DB] Inject a classified-deadlock exception on ALL 3 attempts => [409] 'ConcurrencyConflict: ... after the maximum deadlock retry attempts' - no unhandled exception propagates"
+    auto: DB-assisted
+
+  - id: LEAVE-CONC-009
+    func: [F-LEAVE-183]
+    sc: "MySQL: deadlock 1213 is retried, lock-wait-timeout 1205 is deliberately NOT retried"
+    t: On the MySQL provider, a classified deadlock is retried per the standard policy; a lock-wait-timeout error surfaces as an immediate conflict with no retry
+    src: ["MySqlLeaveRequestSubmissionLock"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[Manual/DB, MySQL] Force a 1213 deadlock on submission => retried per LeaveRequestSubmissionRetryPolicy, eventually succeeding or exhausting to Conflict"
+      - "[Manual/DB, MySQL] Force a 1205 lock-wait-timeout => the operation fails IMMEDIATELY as a conflict, with NO retry attempt - confirmed via attempt-count/log inspection"
+    auto: DB-assisted
+
+  - id: LEAVE-CONC-010
+    func: [F-LEAVE-184]
+    sc: "SQL Server's own lock/deadlock-classification path is exercised only under its own provider-specific harness"
+    t: A concurrent submission race under SQL Server's UPDLOCK/HOLDLOCK semantics behaves identically to the MySQL case in OUTCOME (no over-reservation), via a materially different lock implementation
+    src: ["SqlServerLeaveRequestSubmissionLock", "SqlServerLeaveRequestSubmissionDeadlockClassifier"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[Manual/DB, SQL Server] Fire two concurrent submissions exceeding combined Available balance => exactly one succeeds, the other Conflicts - same outcome as the MySQL/SQLite cases, confirmed under SQL Server's own locking"
+    auto: DB-assisted
+
+  - id: LEAVE-CONC-011
+    func: [F-LEAVE-185]
+    sc: An abandoned in-flight claim (worker crash) is eventually reclaimed via lease expiry
+    t: A LeaveAccrualOccurrence or LeaveReminderDelivery left 'Processing'/'Claimed' past its own lease window becomes reclaimable, not stuck forever
+    src: ["LeaveAccrualProcessor.ClaimAsync", "LeaveApprovalReminderProcessor.TryClaimAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Force an occurrence/delivery row into 'Processing'/'Claimed' with LeaseExpiresAtUtc/LastAttemptAtUtc in the past (simulating an abandoned claim) => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] Run the processor again => the row is reclaimed and completes normally, rather than being permanently skipped"
+    auto: DB-assisted
+
+  - id: LEAVE-PROV-001
+    func: [F-LEAVE-313]
+    sc: "SQLite-only passing is not evidence of provider-specific behavior"
+    t: Confirm the default xUnit run (SQLite in-memory) is explicitly documented as non-authoritative for locking/deadlock/concurrency-token behavior
+    src: ["TestSupport/SqliteInMemoryDatabase"]
+    type: Contract
+    pri: P2
+    tags: [Environment]
+    steps:
+      - "[Manual] Run `dotnet test Backend/HRMS.Tests/HRMS.Tests.csproj --filter FullyQualifiedName~Leave` with no HRMS_MYSQL_TEST_CONNECTION/HRMS_SQLSERVER_TEST_CONNECTION set => all in-process Leave tests pass on SQLite; note in the run report that this proves NOTHING about MySQL/SQL Server locking per CLAUDE.md's own documented convention"
+    auto: Manual only
+
+  - id: LEAVE-PROV-002
+    func: [F-LEAVE-314]
+    sc: MySQL-tagged Leave concurrency classes skip silently without the env var
+    t: Running the suite with HRMS_MYSQL_TEST_CONNECTION absent produces a GREEN run that proves nothing about MySQL locking
+    src: ["MySqlLeaveHttpIntegrationTests, MySqlLeaveLifecycleIntegrationTests, MySqlLeaveRequestValidationIntegrationTests, MySqlLeaveAccrualIntegrationTests, MySqlLeaveReminderConcurrencyTests"]
+    type: Contract
+    tags: [Environment]
+    pri: P1
+    steps:
+      - "[Manual] Run the full suite with HRMS_MYSQL_TEST_CONNECTION unset => [Pass] every MySqlLeave*Tests class reports Skipped, not Passed; a naive 'green build' reading would incorrectly claim MySQL parity"
+    auto: Manual only
+
+  - id: LEAVE-PROV-003
+    func: [F-LEAVE-315]
+    sc: SQL Server-tagged Leave concurrency classes skip silently without the env var
+    t: Running the suite with HRMS_SQLSERVER_TEST_CONNECTION(+_SERVER/_AUTH) absent produces the same false-green risk for SQL Server
+    src: ["SqlServerLeaveRequestSubmissionConcurrencyTests, SqlServerLeaveRequestApprovalConcurrencyTests, SqlServerLeaveRequestCancellationConcurrencyTests, SqlServerLeaveRequestWithdrawalConcurrencyTests, SqlServerLeaveRequestRequestLimitConcurrencyTests, SqlServerLeaveRequestSubmissionDeadlockTests"]
+    type: Contract
+    tags: [Environment]
+    pri: P1
+    steps:
+      - "[Manual] Run the full suite with HRMS_SQLSERVER_TEST_CONNECTION unset => [Pass] every SqlServerLeaveRequest*Tests class reports Skipped, not Passed"
+    auto: Manual only
+
+  - id: LEAVE-PROV-004
+    func: [F-LEAVE-316]
+    sc: "No SQL-Server-provider-acceptance class exists for accrual/period-close replay - a coverage gap in its own right"
+    t: Confirm the test-class inventory has a MySQL accrual-replay class but no SQL Server equivalent
+    src: ["MySqlLeaveAccrualIntegrationTests"]
+    type: Contract
+    tags: [Environment]
+    pri: P2
+    steps:
+      - "[Manual] Search Backend/HRMS.Tests for a SqlServerLeaveAccrual*Tests or SqlServerLeavePeriodClose*Tests class => none found; this is itself a coverage gap that should be tracked, not just a 'run it manually against SQL Server' item"
+    auto: Manual only
+
+  - id: LEAVE-PROV-005
+    func: [F-LEAVE-317]
+    sc: Unique-constraint conflicts must raise the same classified Conflict on MySQL and SQL Server as on SQLite
+    t: A duplicate LeaveType Code, a duplicate idempotencyKey, and a duplicate Balance-Import row combination all resolve to Conflict (409) identically across all three providers
+    src: ["LeaveRequestSubmissionService.IsIdempotencyViolation", "LeaveConfigurationService.CreateLeaveTypeAsync"]
+    type: Contract
+    tags: [Environment]
+    pri: P1
+    steps:
+      - "[Manual/DB, MySQL] Trigger a duplicate LeaveType code and a duplicate idempotencyKey race under the MySQL provider => both surface as 409 Conflict, matching the SQLite-observed behavior"
+      - "[Manual/DB, SQL Server] Repeat under SQL Server (2601/2627 duplicate-key numbers, the ones IsIdempotencyViolation explicitly checks) => confirm the SAME 409 Conflict outcome"
+    auto: DB-assisted

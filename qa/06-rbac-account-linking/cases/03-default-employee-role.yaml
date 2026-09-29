@@ -1,0 +1,166 @@
+sheet: RBAC_EmployeeRole
+submodule: Default Employee Role auto-provisioning
+defaults:
+  role: HR_ADMIN
+  perm: "AccountEmployeeLink.Manage"
+  tenant: A
+  pre: "Tenant A signed in as an AccountLinkAdministrator-equivalent caller (AccountEmployeeLink.View + .Manage) unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: RBAC-EMPROLE-001
+    func: [F-RBAC-053]
+    sc: Link auto-provisions the Employee role
+    t: Linking an account to an eligible employee grants the Employee role, System-sourced, effective today
+    src: ["EmployeeRoleProvisioningService.EnsureForLinkedEmployeeAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/role-assignments/users/{userId}] Before linking => [200] no Employee-role assignment present"
+      - "[POST /api/account-employee-links/users/{userId}/link] Link to an eligible unlinked employee, reason='onboarding' => [200] Linked"
+      - "[GET /api/role-assignments/users/{userId}] Call => [200] a new Employee-role assignment: assignmentSource='System', effectiveFrom=today, reason='Employee account link', isSystemManaged=true"
+    auto: API
+
+  - id: RBAC-EMPROLE-002
+    func: [F-RBAC-053]
+    sc: Replace also auto-provisions the Employee role
+    t: Replacing a link also runs Employee-role provisioning (idempotently, since the role is typically already held)
+    src: ["EmployeeRoleProvisioningService.EnsureForLinkedEmployeeAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/replace] Replace the current link with a new eligible employee, reason='correction' => [200]"
+      - "[GET /api/role-assignments/users/{userId}] Call => [200] the Employee role is present (either newly granted, or already-held and untouched)"
+    auto: API
+
+  - id: RBAC-EMPROLE-003
+    func: [F-RBAC-054, F-RBAC-057]
+    sc: No duplicate Employee role on repeated linking
+    t: Unlink then re-link (or link then replace) does not create a second Employee-role UserRoles row
+    src: ["EmployeeRoleProvisioningService.EnsureForLinkedEmployeeAsync (UserRoles.AnyAsync guard)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] Link => [200] Employee role granted (1 row)"
+      - "[POST /api/account-employee-links/users/{userId}/unlink] Unlink => [200]"
+      - "[POST /api/account-employee-links/users/{userId}/link] Re-link to a (different, eligible) employee => [200]"
+      - "[GET /api/role-assignments/users/{userId}] Call => [200] exactly ONE Employee-role assignment row exists, not two"
+    auto: API
+
+  - id: RBAC-EMPROLE-004
+    func: [F-RBAC-055]
+    sc: Employee creation alone does not grant any role
+    t: Creating an Employee record with no account link performs zero role provisioning
+    src: ["EmployeeService.CreateAsync"]
+    type: Negative
+    pri: P1
+    perm: "Employee.Create"
+    steps:
+      - "[POST /api/employees/personal-details] Create a brand-new employee, no link performed => [201]"
+      - "[GET /api/account-employee-links/employees/{newEmployeeId}] Call => [200] Unlinked"
+      - "[GET /api/role-assignments] Search for any assignment mentioning the new employee's code => [200] none exist - no role was auto-granted to anyone"
+    auto: API
+
+  - id: RBAC-EMPROLE-005
+    func: [F-RBAC-055]
+    sc: Employee creation BEFORE account linking
+    t: An employee created first, then linked afterward, is provisioned only at the moment of the link call
+    src: ["EmployeeRoleProvisioningService"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/employees/personal-details] Create an employee (no link) => [201]"
+      - "[GET /api/role-assignments/users/{someExistingUnlinkedUserId}] Before link => [200] no Employee role"
+      - "[POST /api/account-employee-links/users/{someExistingUnlinkedUserId}/link] Link to the just-created employee => [200]"
+      - "[GET /api/role-assignments/users/{someExistingUnlinkedUserId}] Call => [200] Employee role now present"
+    auto: API
+
+  - id: RBAC-EMPROLE-006
+    func: [F-RBAC-055]
+    sc: Account creation BEFORE employee linking
+    t: A pre-existing user account with no link gains the Employee role only once actually linked, regardless of how long it existed unlinked
+    src: ["EmployeeRoleProvisioningService"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/role-assignments/users/{longUnlinkedUserId}] Confirm no Employee role for an account that has existed unlinked => [200] absent"
+      - "[POST /api/account-employee-links/users/{longUnlinkedUserId}/link] Link it now => [200]"
+      - "[GET /api/role-assignments/users/{longUnlinkedUserId}] Call => [200] Employee role now present"
+    auto: API
+
+  - id: RBAC-EMPROLE-007
+    func: [F-RBAC-056]
+    sc: Unlink does NOT revoke the Employee role
+    t: After unlinking, the previously auto-granted Employee role and its permissions remain in effect
+    src: ["AccountEmployeeLinkService.MutateAsync (Unlink branch calls no role-provisioning service)"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] Link => [200] Employee role granted"
+      - "[GET /api/auth/me] As that user => [200] permissions includes Leave.RequestCreate (an Employee-role permission)"
+      - "[POST /api/account-employee-links/users/{userId}/unlink] Unlink, reason='data correction' => [200]"
+      - "[GET /api/role-assignments/users/{userId}] Call => [200] the Employee-role UserRoles row is STILL present, unchanged"
+      - "[GET /api/auth/me] As that (now-unlinked) user, after a token refresh => [200] permissions STILL includes Leave.RequestCreate - the role survives the unlink"
+    auto: API
+    cr: [CR-69]
+
+  - id: RBAC-EMPROLE-008
+    func: [F-RBAC-036, F-RBAC-056]
+    sc: There is no supported way to remove the auto-granted Employee role
+    t: A manual revoke attempt on the System-sourced Employee-role assignment is rejected the same way any system-role revoke is
+    src: ["RoleAssignmentService.RevokeAsync"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    perm: "RoleAssignment.AssignmentManage"
+    steps:
+      - "[POST /api/role-assignments/{employeeRoleAssignmentId}/revoke] Attempt to revoke the auto-provisioned Employee role, even after unlinking the account => [400] System-managed roles cannot be revoked manually"
+    auto: API
+    cr: [CR-69]
+
+  - id: RBAC-EMPROLE-009
+    func: [F-RBAC-058, F-RBAC-093]
+    sc: CR-53 effect - terminated employee's account keeps the Employee role
+    t: Terminating the linked employee (Status=Terminated via Separation, or a direct position-status change) does not touch the account's Employee-role assignment
+    src: ["EmployeeRoleProvisioningService", "SeparationExitService (Module 5)"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] Link an account to an active employee => [200] Employee role granted"
+      - "[PUT /api/employees/{employeeId}] Set Status=Terminated via the legacy full-record path (holding only Employee.Edit, per Module 5 CR-53) => [200]"
+      - "[GET /api/role-assignments/users/{userId}] Call => [200] the Employee-role assignment is still Active - nothing about the termination touched it"
+      - "[GET /api/auth/me] As that user (still User.IsActive=true per CR-53) => [200] login still works, permissions still include every Employee-role grant"
+    auto: API
+    cr: [CR-53]
+
+  - id: RBAC-EMPROLE-010
+    func: [F-RBAC-059]
+    sc: Missing Employee role in the catalog is handled defensively
+    t: If the seeded Employee role were absent, provisioning logs a warning and the link itself still succeeds (documented defensive branch, not independently reachable against the seeded database)
+    src: ["EmployeeRoleProvisioningService.EnsureForLinkedEmployeeAsync"]
+    type: Contract
+    pri: P3
+    steps:
+      - "[GET /api/role-assignments/roles] Confirm the Employee role exists in the seeded catalog => [200] present - this defensive branch is not reachable through the seeded demo database and is documented here rather than executed"
+    auto: Manual only
+
+  - id: RBAC-EMPROLE-011
+    func: [F-RBAC-060]
+    sc: Role provisioning and the link event share one transaction
+    t: A failure while saving the link/role-provisioning changes rolls back both together, leaving neither a partial link nor an orphaned role grant
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] Trigger a link where the underlying SaveChangesAsync is made to fail (test harness beforeSaveHook) => [500 or equivalent handled failure] the call fails"
+      - "[GET /api/account-employee-links/users/{userId}] Call => [200] Unlinked - no partial state"
+      - "[GET /api/role-assignments/users/{userId}] Call => [200] no Employee-role row was left behind by the rolled-back attempt"
+    auto: API
+    ex: ["xU:AccountEmployeeLinkServiceTests.Audit_failure_rolls_back_the_event_and_current_state_together"]

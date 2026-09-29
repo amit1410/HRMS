@@ -1,0 +1,114 @@
+sheet: Loans_Register_Reports
+submodule: Loan Register and Reports - paging contract, filters, and the unpaginated admin/ESS listing
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Loans.View"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.Loans.View granted, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-REG-001
+    func: [F-LOAN-079]
+    sc: The register returns a true paged result
+    t: GetRegisterAsync returns Page/PageSize/TotalCount alongside the current page's rows
+    src: ["PayrollLoanService.GetRegisterAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/payroll/loans/register?page=1&pageSize=20] => [200] response includes items, page=1, pageSize=20, totalCount reflecting the tenant's full loan count"
+    auto: API
+
+  - id: LOAN-REG-002
+    func: [F-LOAN-079]
+    sc: Register filters narrow the result set
+    t: ProductId, ProductType, EmployeeId, Status and From/To date filters each correctly narrow the rows returned
+    src: ["PayrollLoanService.GetRegisterAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/payroll/loans/register?status=Active] => [200] only Active loans returned"
+      - "[GET /api/payroll/loans/register?productType=SalaryAdvance] => [200] only SalaryAdvance-type loans returned"
+      - "[GET /api/payroll/loans/register?employeeId={e1}] => [200] only loans for employee e1 returned"
+    auto: API
+
+  - id: LOAN-REG-003
+    func: [F-LOAN-080]
+    sc: An oversized PageSize is not rejected or capped
+    t: A PageSize far beyond the app's usual MaxPageSize=100 is accepted verbatim
+    src: ["PayrollLoanService.cs (no LoanRegisterQuery validator)"]
+    type: Boundary
+    pri: P1
+    tags: [Validation]
+    cr: [CR-191]
+    steps:
+      - "[GET /api/payroll/loans/register?page=1&pageSize=5000] => [200] up to 5000 rows returned in one page (no 400 rejecting PageSize>100, unlike other paged endpoints in the app)"
+    auto: API
+
+  - id: LOAN-REG-004
+    func: [F-LOAN-080]
+    sc: A non-positive Page value is not rejected server-side
+    t: Page=0 or a negative Page reaches the unguarded Skip() calculation with no upfront validation error
+    src: ["PayrollLoanService.cs (no LoanRegisterQuery validator)"]
+    type: Boundary
+    pri: P1
+    tags: [Validation]
+    cr: [CR-191]
+    steps:
+      - "[GET /api/payroll/loans/register?page=0&pageSize=20] => no 400 Invalid-page-number response is returned prior to the Skip() calculation; behavior depends entirely on the underlying provider's handling of a negative Skip"
+    auto: API
+
+  - id: LOAN-REG-005
+    func: [F-LOAN-081]
+    sc: NextDueDate and recovered totals are computed live, not stored
+    t: Recorded totals reflect the live sum over LoanRepayments after a manual repayment, without a separate refresh step
+    src: ["PayrollLoanService.GetRegisterAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{id}/repayments] Amount=1000 => [200] repayment recorded"
+      - "[GET /api/payroll/loans/register?employeeId={ownerId}] => [200] the loan's row immediately reflects PrincipalRecovered/InterestRecovered/TotalRecovered including the just-recorded repayment, and NextDueDate is the earliest remaining Scheduled/PartiallyRecovered installment"
+    auto: API
+
+  - id: LOAN-REG-006
+    func: [F-LOAN-082]
+    sc: The admin loan listing hard-caps at 500 with no paging
+    t: GET /api/payroll/loans accepts no page/pageSize parameters and truncates silently past 500 rows
+    src: ["PayrollLoanService.GetLoansAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Validation]
+    cr: [CR-192]
+    steps:
+      - "[Manual/DB] Seed 501 EmployeeLoan rows for the tenant => 501 rows exist"
+      - "[GET /api/payroll/loans] => [200] exactly 500 rows are returned (the 501st most-recently-requested loan is silently omitted); the response carries no total-count or hasMore indicator signalling truncation occurred"
+    auto: DB-assisted
+
+  - id: LOAN-REG-007
+    func: [F-LOAN-082]
+    sc: The ESS listing shares the same unpaginated 500-row cap
+    t: GET /api/me/loans is likewise capped at 500 with no page/pageSize input
+    src: ["PayrollLoansController.MyLoans -> PayrollLoanService.GetLoansAsync"]
+    type: Boundary
+    pri: P2
+    role: EMPLOYEE
+    perm: "Payroll.Loans.Request"
+    tags: [Validation]
+    cr: [CR-192]
+    steps:
+      - "[GET /api/me/loans] => [200] returns up to the caller's own 500 most-recently-requested loans, ordered by RequestedAtUtc descending, with no pagination parameters accepted"
+    auto: API
+
+  - id: LOAN-REG-008
+    func: [F-LOAN-083]
+    sc: No CSV/export endpoint exists for the Loan Register
+    t: A full route grep confirms Loans has no dedicated register export route, unlike Payroll Reports/Analytics/Reimbursements
+    src: ["Backend/HRMS.API/Controllers/PayrollLoansController.cs (full route grep for export/csv)"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Grep PayrollLoansController.cs for 'export' or 'csv' => zero matches; the only listing routes are loan-products, loans, loans/register, none of which support a file-download response"
+    auto: Manual only

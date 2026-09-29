@@ -1,0 +1,171 @@
+sheet: VPay_Approval_Rejection
+submodule: Submit / Approve / Reject lifecycle, Submit-skipping and self-approval gap
+defaults:
+  role: HRADMIN
+  perm: "Payroll.VariablePay.Approve"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.VariablePay.Submit/Approve granted and a Calculated award exists, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: VPAY-APR-001
+    func: [F-VPAY-043]
+    sc: Submit transitions Calculated to Submitted only
+    t: Submit succeeds from Calculated; a second Submit call on an already-Submitted award is Conflict
+    src: ["VariablePayService.SubmitAsync -> TransitionAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/submit] award Status=Calculated => [200] Status=Submitted"
+      - "[POST /api/payroll/variable-pay-awards/{id}/submit] award Status=Submitted (repeat) => [409] Invalid variable-pay award lifecycle transition."
+    auto: API
+
+  - id: VPAY-APR-002
+    func: [F-VPAY-044]
+    sc: Approve accepts a still-Calculated award directly, skipping Submit
+    t: An award never submitted can still be Approved directly from Calculated
+    src: ["VariablePayService.ApproveAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/approve] award Status=Calculated (never submitted), signed in as a different user than the generator => [200] Status=Approved"
+    auto: API
+
+  - id: VPAY-APR-003
+    func: [F-VPAY-045]
+    sc: Self-approval guard never fires when Submit was skipped
+    t: The same user who generated the award approves it directly with no Forbidden response
+    src: ["VariablePayService.ApproveAsync"]
+    type: Security
+    pri: P0
+    secc: true
+    cr: [CR-204]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] signed in as UserX, employeeId => [200] award created, CreatedByUserId=UserX, Status=Calculated"
+      - "[POST /api/payroll/variable-pay-awards/{id}/approve] signed in as the SAME UserX (never submitted) => [200] Status=Approved - the self-approval guard never triggers because SubmittedByUserId is null"
+    auto: API
+
+  - id: VPAY-APR-004
+    func: [F-VPAY-045]
+    sc: Self-approval guard DOES fire when the same user submitted
+    t: The submitter of an award is blocked from approving their own Submitted award
+    src: ["VariablePayService.ApproveAsync"]
+    type: Security
+    pri: P0
+    secc: true
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/submit] signed in as UserX => [200] Status=Submitted, SubmittedByUserId=UserX"
+      - "[POST /api/payroll/variable-pay-awards/{id}/approve] signed in as the SAME UserX => [403] The maker cannot approve the same award."
+    auto: API
+
+  - id: VPAY-APR-005
+    func: [F-VPAY-046]
+    sc: Approve recomputes the tax split from ApprovedAmount and stamps approval metadata
+    t: Approve sets ApprovedAmount=CalculatedAmount, recomputes TaxableAmount/NonTaxableAmount, and stamps ApprovedAtUtc/ApprovedByUserId
+    src: ["VariablePayService.ApproveAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/approve] award CalculatedAmount=10000, TaxTreatment=PartiallyTaxable(40%) => [200] ApprovedAmount=10000, TaxableAmount=4000, NonTaxableAmount=6000, ApprovedAtUtc and ApprovedByUserId set"
+    auto: API
+
+  - id: VPAY-APR-006
+    func: [F-VPAY-047]
+    sc: Approve is a status-keyed compare-and-swap
+    t: A concurrent second Approve attempt against an already-transitioned award loses the race with Conflict
+    src: ["VariablePayService.ApproveAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Integration-Concurrency]
+    steps:
+      - "[Manual/Code] Two concurrent Approve calls against the same Calculated award => exactly one succeeds (200, Status=Approved); the other receives [409] Variable-pay award was modified by another operation."
+    auto: DB-assisted
+
+  - id: VPAY-APR-007
+    func: [F-VPAY-048]
+    sc: Approve appends an AwardApproved history row
+    t: A successful Approve records the original CalculatedAmount and new ApprovedAmount in history
+    src: ["VariablePayService.ApproveAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/approve] => [200] Status=Approved"
+      - "[GET /api/payroll/variable-pay-awards/{id}/history] => [200] latest row EventType=AwardApproved, OriginalAmount=CalculatedAmount, NewAmount=ApprovedAmount"
+    auto: API
+
+  - id: VPAY-APR-008
+    func: [F-VPAY-049]
+    sc: Reject is allowed from Submitted or Calculated and requires a reason
+    t: Reject succeeds from either source status; a blank reason is Invalid
+    src: ["VariablePayService.RejectAsync -> TransitionAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/reject] award Status=Calculated, reason='' => [400] A reason is required."
+      - "[POST /api/payroll/variable-pay-awards/{id}/reject] award Status=Calculated, reason='Budget exceeded' => [200] Status=Rejected"
+    auto: API
+
+  - id: VPAY-APR-009
+    func: [F-VPAY-050]
+    sc: Submit/Reject/Cancel have no self-approval check of any kind
+    t: The award's own generator can Submit, Reject, and Cancel it with no actor-identity restriction (unlike Approve's narrow SubmittedByUserId check)
+    src: ["VariablePayService.TransitionAsync (full method)"]
+    type: Security
+    pri: P1
+    secc: true
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] signed in as UserX => [200] award created, Status=Calculated"
+      - "[POST /api/payroll/variable-pay-awards/{id}/reject] signed in as the SAME UserX, reason='Self-rejected' => [200] Status=Rejected - no actor-identity check blocks this"
+    auto: API
+
+  - id: VPAY-APR-010
+    func: [F-VPAY-051]
+    sc: A terminal-status award cannot be re-submitted or re-rejected
+    t: Submit/Reject on an Approved, Rejected, or Cancelled award is Conflict
+    src: ["VariablePayService.TransitionAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{approvedId}/submit] award Status=Approved => [409] Invalid variable-pay award lifecycle transition."
+      - "[POST /api/payroll/variable-pay-awards/{rejectedId}/reject] award Status=Rejected, reason='again' => [409] Invalid variable-pay award lifecycle transition."
+    auto: API
+
+  - id: VPAY-APR-011
+    func: [F-VPAY-052]
+    sc: A cross-tenant award id on approve/reject is NotFound
+    t: Approving/Rejecting a Tenant A award while signed in as Tenant B is NotFound, not Forbidden
+    src: ["VariablePayService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{tenantAAwardId}/approve] signed in as Tenant B HRAdmin => [404] Variable-pay award not found."
+    auto: API
+
+  - id: VPAY-APR-012
+    func: [F-VPAY-053]
+    sc: Every transition appends an append-only history row
+    t: Submit/Reject/Cancel each write a history row with previous/next status, actor, and reason
+    src: ["VariablePayService.TransitionAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/submit] => [200] Status=Submitted"
+      - "[GET /api/payroll/variable-pay-awards/{id}/history] => [200] row EventType=AwardSubmitted, PreviousStatus=Calculated, NewStatus=Submitted"
+    auto: API
+
+  - id: VPAY-APR-013
+    func: [F-VPAY-054]
+    sc: TransitionAsync's compare-and-swap protects Submit/Reject/Cancel against a lost race identically to Approve
+    t: A concurrent second Submit against an already-Submitted award loses with Conflict
+    src: ["VariablePayService.TransitionAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Integration-Concurrency]
+    steps:
+      - "[Manual/Code] Two concurrent Submit calls against the same Calculated award => exactly one succeeds (200); the other receives [409] Variable-pay award was modified by another operation."
+    auto: DB-assisted

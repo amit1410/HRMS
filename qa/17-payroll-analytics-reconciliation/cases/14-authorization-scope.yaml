@@ -1,0 +1,246 @@
+sheet: PYA_Authorization_Scope
+submodule: Authorization & Permission Scope
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-AUTHZ-001
+    func: [F-PYA-103]
+    sc: Every analytics read endpoint requires Payroll.Analytics.View
+    t: A caller with zero payroll permissions receives Forbidden on overview/summary/control-totals/departments/cost-centers/variance/components/findings
+    src: "PayrollAnalyticsController (all 8 read actions)"
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "RUN1 exists; caller holds no Payroll.* permission"
+    role: Employee (custom role holding zero Payroll.* permissions)
+    perm: "n/a (negative case)"
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/overview] => [403] Forbidden"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/summary] => [403] Forbidden"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/control-totals] => [403] Forbidden"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/departments] => [403] Forbidden"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/cost-centers] => [403] Forbidden"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/variance] => [403] Forbidden"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/components] => [403] Forbidden"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/findings] => [403] Forbidden"
+    auto: API
+
+  - id: PYA-AUTHZ-002
+    func: [F-PYA-104]
+    sc: analytics-controls List vs. Create/Update require different permissions
+    t: A caller holding only Payroll.Analytics.View can list controls but is Forbidden on Create/Update; a caller holding only Payroll.Analytics.Configure is Forbidden on List
+    src: "PayrollAnalyticsControlsController"
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "CTRL1 exists"
+    role: "Role A (holds only Payroll.Analytics.View); Role B (holds only Payroll.Analytics.Configure)"
+    perm: "Payroll.Analytics.View / Payroll.Analytics.Configure"
+    tenant: "T1 (DEMO01)"
+    data: "id=CTRL1"
+    steps:
+      - "[GET /api/payroll/analytics-controls] (Role A) => [200] succeeds"
+      - "[POST /api/payroll/analytics-controls] {...} (Role A) => [403] Forbidden"
+      - "[PUT /api/payroll/analytics-controls/{CTRL1-ID}] {...} (Role A) => [403] Forbidden"
+      - "[GET /api/payroll/analytics-controls] (Role B) => [403] Forbidden"
+    auto: API
+
+  - id: PYA-AUTHZ-003
+    func: [F-PYA-105]
+    sc: Reconciliation generate vs. view require different permissions
+    t: A caller holding only Payroll.Reconciliation.View is Forbidden on pre/post generate; a caller holding only Payroll.Reconciliation.Generate is Forbidden on Get
+    src: "PayrollReconciliationController"
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "RUN1 exists; RECON1 exists"
+    role: "Role A (holds only Payroll.Reconciliation.View); Role B (holds only Payroll.Reconciliation.Generate)"
+    perm: "Payroll.Reconciliation.View / Payroll.Reconciliation.Generate"
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1, id=RECON1"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/pre] (Role A) => [403] Forbidden"
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] (Role A) => [403] Forbidden"
+      - "[GET /api/payroll/reconciliation/{RECON1}] (Role B) => [403] Forbidden"
+    auto: API
+
+  - id: PYA-AUTHZ-004
+    func: [F-PYA-106]
+    sc: Acknowledge, resolve, and accept-exception each check their own declared permission attribute
+    t: The 3 finding-action endpoints carry the permission attributes documented in F-PYA-106 - acknowledge=Acknowledge, resolve=Resolve, accept-exception=Resolve
+    src: "PayrollReconciliationController (attribute inspection)"
+    type: Authorization
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "FINDING1 is Open"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Acknowledge only)
+    perm: Payroll.Reconciliation.Acknowledge
+    tenant: "T1 (DEMO01)"
+    data: "id=FINDING1"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING1}/acknowledge] {} (holding only Acknowledge) => [200] succeeds"
+      - "[POST /api/payroll/reconciliation/findings/{FINDING1}/resolve] {} (same role, still holding only Acknowledge) => [403] Forbidden"
+      - "[POST /api/payroll/reconciliation/findings/{FINDING1}/accept-exception] {} (same role, still holding only Acknowledge) => [403] Forbidden"
+    auto: API
+
+  - id: PYA-AUTHZ-005
+    func: [F-PYA-107]
+    sc: Exceptions.Manage does not unlock either exceptions endpoint
+    t: A caller holding ONLY Payroll.Exceptions.Manage (not View) is Forbidden on both list and export - Manage gates nothing in this module
+    src: "PayrollExceptionsController"
+    type: Authorization
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (custom role holding ONLY Payroll.Exceptions.Manage)
+    perm: Payroll.Exceptions.Manage
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/exceptions] (holding only Exceptions.Manage) => [403] Forbidden"
+      - "[GET /api/payroll/exceptions/export.csv] (holding only Exceptions.Manage) => [403] Forbidden"
+    auto: API
+    cr: [CR-292]
+
+  - id: PYA-AUTHZ-006
+    func: [F-PYA-108]
+    sc: Analytics.View alone cannot configure controls
+    t: Duplicate/complementary check to PYA-AUTHZ-002 focused specifically on the Create action's 403 body
+    src: "PayrollAnalyticsControlsController.Create"
+    type: Authorization
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (custom role holding ONLY Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "code='X'"
+    steps:
+      - "[POST /api/payroll/analytics-controls] {code:'X', name:'X', scope:'PayrollRun', metric:'GrossPay', absoluteThreshold:1, effectiveFrom:'2026-01-01'} (holding only Analytics.View) => [403] Forbidden"
+    auto: API
+
+  - id: PYA-AUTHZ-007
+    func: [F-PYA-109]
+    sc: Acknowledge alone cannot resolve or accept-exception
+    t: Duplicate/complementary check confirming the reverse direction of PYA-AUTHZ-004 explicitly for accept-exception
+    src: "PayrollReconciliationController.Accept"
+    type: Authorization
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "FINDING2 is Open"
+    role: HRAdmin (custom role holding ONLY Payroll.Reconciliation.Acknowledge)
+    perm: Payroll.Reconciliation.Acknowledge
+    tenant: "T1 (DEMO01)"
+    data: "id=FINDING2"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING2}/accept-exception] {} (holding only Acknowledge) => [403] Forbidden"
+    auto: API
+
+  - id: PYA-AUTHZ-008
+    func: [F-PYA-110]
+    sc: A missing/expired bearer token returns Unauthorized uniformly
+    t: A request with no Authorization header, and separately an expired token, both return 401 before any permission check for a representative sample of endpoints
+    src: "All 4 controllers (JWT bearer authentication pipeline)"
+    type: Authorization
+    tags: [Negative, Security]
+    pri: P0
+    sev: High
+    pre: "RUN1 exists"
+    role: n/a (unauthenticated / expired token)
+    perm: "n/a"
+    tenant: "T1 (DEMO01)"
+    data: "no Authorization header | expired JWT"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/overview] (no Authorization header) => [401] Unauthorized"
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/pre] (expired bearer token) => [401] Unauthorized"
+      - "[GET /api/payroll/exceptions] (no Authorization header) => [401] Unauthorized"
+    auto: API
+
+  - id: PYA-AUTHZ-009
+    func: [F-PYA-111]
+    sc: No seeded role except SuperAdmin/TenantAdmin holds any of the 8 permissions
+    t: A user assigned the seeded HRAdmin role (unmodified) is Forbidden on every endpoint in this module
+    src: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap)"
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "A user is assigned the SEEDED (unmodified) HRAdmin role, not a custom role"
+    role: "HRAdmin (seeded, unmodified)"
+    perm: "n/a (negative case)"
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/overview] (seeded HRAdmin) => [403] Forbidden"
+      - "[GET /api/payroll/exceptions] (seeded HRAdmin) => [403] Forbidden"
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/pre] (seeded HRAdmin) => [403] Forbidden"
+    auto: API
+    cr: [CR-291]
+
+  - id: PYA-AUTHZ-010
+    func: [F-PYA-112]
+    sc: A minimally-scoped custom role reaches exactly its one gated endpoint
+    t: A custom role holding only Payroll.Exceptions.View can list exceptions but is Forbidden on every other endpoint in this module
+    src: "All 4 controllers"
+    type: Authorization
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 exists"
+    role: "Custom role holding ONLY Payroll.Exceptions.View"
+    perm: Payroll.Exceptions.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/exceptions] => [200] succeeds"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/overview] => [403] Forbidden"
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/pre] => [403] Forbidden"
+      - "[GET /api/payroll/analytics-controls] => [403] Forbidden"
+    auto: API
+
+  - id: PYA-AUTHZ-011
+    func: [F-PYA-113]
+    sc: Every action carries an explicit permission attribute; none are AllowAnonymous
+    t: A structural review of the 4 controllers confirms every action has exactly one [HasPermission] attribute and none carry [AllowAnonymous]
+    src: "PayrollAnalyticsController.cs (all 4 controller classes, full source review)"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a (static source review)
+    perm: "n/a"
+    tenant: "n/a"
+    data: none
+    steps:
+      - "[Manual] read Backend/HRMS.API/Controllers/PayrollAnalyticsController.cs end to end => every one of the 22 actions has exactly one [HasPermission(...)] attribute; zero [AllowAnonymous] attributes anywhere in the file"
+    auto: Manual only
+
+  - id: PYA-AUTHZ-012
+    func: [F-PYA-114]
+    sc: A platform-admin bearer token cannot authorize any tenant endpoint in this module
+    t: A valid PlatformBearer token (even for a Platform SuperAdmin) is rejected by every endpoint in this module, which all require a resolved tenant-scoped JWT
+    src: "Middleware order: platform routing before tenant shard resolution; [HasPermission] policies are tenant-JWT-based"
+    type: Security
+    tags: [Authorization, Negative]
+    pri: P0
+    sev: Critical
+    pre: "A valid Platform SuperAdmin PlatformBearer token is available"
+    role: "Platform SuperAdmin (PlatformBearer token, no tenant JWT)"
+    perm: "n/a (negative case)"
+    tenant: "T1 (DEMO01)"
+    data: "Authorization: Bearer <platform token>"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/overview] (Authorization header carries a PlatformBearer token) => [401] Unauthorized (the tenant-scoped JWT bearer scheme rejects it outright)"
+    auto: API

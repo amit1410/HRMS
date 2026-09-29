@@ -1,0 +1,466 @@
+sheet: Separation_Initiation
+submodule: Separation initiation (self-service and HR-initiated), reason master data, and the EmployeeSeparationStatus state machine
+defaults:
+  role: EMPLOYEE
+  perm: "Separation.CreateSelf"
+  tenant: A
+  pre: "Tenant A signed in as an active, linked Employee, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: SEP-INIT-001
+    func: [F-SEP-001]
+    sc: Employee submits a valid self-resignation
+    t: A well-formed resignation request with a valid reason and LWD succeeds and lands Draft
+    src: ["SeparationService.CreateSelfAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/separation/me] ReasonId=<active reason>, RequestDate=today, ProposedLastWorkingDate=today+30, Remarks='Relocating' => [200/201] Status=Draft"
+    auto: API
+
+  - id: SEP-INIT-002
+    func: [F-SEP-002]
+    sc: Self-service never accepts a client-supplied employee id
+    t: An unlinked account attempting self-resignation is NotFound, not silently succeeding as some other employee
+    src: ["SeparationService.CreateSelfAsync", "IEmployeeIdentityResolver.ResolveCurrentAsync"]
+    type: Security
+    pri: P0
+    steps:
+      - "[POST /api/separation/me] As a user account with no AccountEmployeeCurrentLink => [404] no employee identity linked"
+    auto: API
+
+  - id: SEP-INIT-003
+    func: [F-SEP-003]
+    sc: HR/Admin initiates an employer separation for a specific employee
+    t: An HR-initiated case succeeds and is stamped EmployerInitiated
+    src: ["SeparationService.CreateForEmployeeAsync"]
+    type: Positive
+    pri: P0
+    role: HRADMIN
+    perm: "Separation.Initiate"
+    steps:
+      - "[POST /api/separation/employees/{employeeId}] ReasonId=<employer-allowed reason>, RequestDate=today, ProposedLastWorkingDate=today+45 => [200/201] Status=Draft, SeparationType=EmployerInitiated"
+    auto: API
+
+  - id: SEP-INIT-004
+    func: [F-SEP-004]
+    sc: Employer-initiated creation always stamps InitiatedBy=Hr; Manager/System are never produced
+    t: The InitiatedBy field on an HR-created case is Hr regardless of the caller's role, and no code path ever produces Manager or System
+    src: ["SeparationService.CreateForEmployeeAsync"]
+    type: Boundary
+    pri: P2
+    role: HRADMIN
+    steps:
+      - "[POST /api/separation/employees/{employeeId}] => [200/201] InitiatedBy=Hr"
+      - "[GET /api/separation/{id}] => [200] InitiatedBy=Hr (never Manager or System, confirmed by design - CR-136)"
+    auto: API
+    cr: [CR-136]
+
+  - id: SEP-INIT-005
+    func: [F-SEP-005]
+    sc: Missing/unknown reason is rejected
+    t: A ReasonId that does not exist in the tenant is Invalid
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/separation/me] ReasonId=<random guid> => [400] Separation reason was not found in the tenant."
+    auto: API
+
+  - id: SEP-INIT-006
+    func: [F-SEP-006]
+    sc: Inactive or out-of-effective-window reason is rejected
+    t: An inactive reason, and a reason whose effective window excludes today, are both rejected
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Reason R1 is IsActive=false => precondition established"
+      - "[POST /api/separation/me] ReasonId=R1 => [400] Separation reason is inactive or outside its effective dates."
+      - "[Setup] Reason R2 has EffectiveFrom=tomorrow => precondition established"
+      - "[POST /api/separation/me] ReasonId=R2 => [400] Separation reason is inactive or outside its effective dates."
+    auto: API
+
+  - id: SEP-INIT-007
+    func: [F-SEP-007]
+    sc: Invalid reason for the initiator type
+    t: An employee cannot use an employer-only reason; HR cannot use an employee-only reason
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Reason R has EmployeeInitiatedAllowed=false => precondition established"
+      - "[POST /api/separation/me] ReasonId=R => [400] This separation reason is not allowed for the selected initiator."
+    auto: API
+
+  - id: SEP-INIT-008
+    func: [F-SEP-008]
+    sc: Proposed LWD before the request date is rejected
+    t: ProposedLastWorkingDate earlier than RequestDate fails validation
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/separation/me] RequestDate=today, ProposedLastWorkingDate=yesterday => [400] Last working date cannot precede the request date."
+    auto: API
+
+  - id: SEP-INIT-009
+    func: [F-SEP-009]
+    sc: Already-separated / already-active-case employee cannot create a second case
+    t: An employee with an existing non-terminal case gets Conflict on a second creation attempt
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Negative
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/separation/me] first request => [200/201] Draft"
+      - "[POST /api/separation/me] second request, same employee => [409] The employee already has an active separation case."
+    auto: API
+
+  - id: SEP-INIT-010
+    func: [F-SEP-010]
+    sc: Concurrent duplicate self-resignation race resolves to exactly one Draft
+    t: Two parallel self-resignation submissions for the same employee never both succeed
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire two concurrent POST /api/separation/me calls for the same employee via Task.WhenAll => exactly ONE succeeds [200/201]; the other fails [409]; exactly 1 Draft row exists in the database afterward"
+    auto: DB-assisted
+
+  - id: SEP-INIT-011
+    func: [F-SEP-011, F-SEP-012]
+    sc: HR-initiated creation for a nonexistent or cross-tenant employee is denied
+    t: An unknown employeeId is NotFound; a Tenant B employeeId from Tenant A's HR context is also NotFound, not Forbidden
+    src: ["SeparationService.CreateForEmployeeAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    role: HRADMIN
+    tenant: A
+    steps:
+      - "[POST /api/separation/employees/{randomGuid}] => [404] Employee not found."
+      - "[POST /api/separation/employees/{tenantBEmployeeId}] As Tenant A HRAdmin => [404] Employee not found - no data leaked about the foreign-tenant employee's existence"
+    auto: API
+
+  - id: SEP-INIT-012
+    func: [F-SEP-013]
+    sc: An already-Terminated employee (via a side channel, no active case) can still have a new case created
+    t: Only the active-case check gates creation, never Employee.Status itself
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Boundary
+    pri: P2
+    role: HRADMIN
+    steps:
+      - "[Setup] Employee E1 has Employee.Status=Terminated (set via a side channel, not via Separation) but has zero non-terminal separation cases => precondition established"
+      - "[POST /api/separation/employees/{E1}] => [200/201] Draft - creation succeeds despite the pre-existing Terminated status"
+    auto: DB-assisted
+
+  - id: SEP-INIT-013
+    func: [F-SEP-014]
+    sc: Same-day separation is accepted
+    t: RequestDate == ProposedLastWorkingDate passes creation with no minimum-notice check
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/separation/me] RequestDate=today, ProposedLastWorkingDate=today => [200/201] Draft"
+    auto: API
+
+  - id: SEP-INIT-014
+    func: [F-SEP-015]
+    sc: Backdated request date is accepted
+    t: A RequestDate in the past is not rejected - creation never compares dates to "today"
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/separation/me] RequestDate=30 days ago, ProposedLastWorkingDate=15 days ago => [200/201] Draft"
+    auto: API
+
+  - id: SEP-INIT-015
+    func: [F-SEP-016]
+    sc: SeparationNumber format and NoticePeriodDays pre-seed
+    t: A newly-created case gets a SEP-{yyyy}-{16-char-guid} number and a display-only NoticePeriodDays value
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/separation/me] => [200/201] SeparationNumber matches ^SEP-\\d{4}-[A-Za-z0-9]{16}$; NoticePeriodDays equals EmployeeEmployment.NoticePeriod at creation time"
+    auto: API
+
+  - id: SEP-INIT-016
+    func: [F-SEP-017]
+    sc: A Created event is appended on successful creation
+    t: The history immediately shows exactly one Created event after creation
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Positive
+    pri: P2
+    perm: "Separation.ViewHistory"
+    steps:
+      - "[POST /api/separation/me] => [200/201] Draft"
+      - "[GET /api/separation/{id}/history] => [200] exactly 1 event, EventType=Created"
+    auto: API
+
+  - id: SEP-INIT-017
+    func: [F-SEP-018, F-SEP-019]
+    sc: Reason master CRUD - create/update requires Code, Name, and valid effective window
+    t: Missing Code/Name and EffectiveTo before EffectiveFrom are both rejected
+    src: ["SeparationService.CreateReasonAsync", "UpdateReasonAsync"]
+    type: Negative
+    pri: P1
+    role: HRADMIN
+    perm: "Separation.Manage"
+    steps:
+      - "[POST /api/separation/reasons] Code='', Name='' => [400] Reason code and name are required."
+      - "[POST /api/separation/reasons] Code='R1', Name='Resignation', EffectiveFrom=2026-06-01, EffectiveTo=2026-01-01 => [400] Effective To cannot precede Effective From."
+    auto: API
+
+  - id: SEP-INIT-018
+    func: [F-SEP-020]
+    sc: Duplicate reason Code is rejected
+    t: Creating a second reason with a Code already used in the tenant Conflicts
+    src: ["SeparationService.CreateReasonAsync"]
+    type: Negative
+    pri: P1
+    role: HRADMIN
+    perm: "Separation.Manage"
+    steps:
+      - "[POST /api/separation/reasons] Code='RESIGN' (first) => [200/201]"
+      - "[POST /api/separation/reasons] Code='RESIGN' (second) => [409] A separation reason with this code already exists."
+    auto: API
+
+  - id: SEP-INIT-019
+    func: [F-SEP-018]
+    sc: List reasons is available to any ViewSelf holder
+    t: An ordinary employee can list active reasons to populate the resignation form
+    src: ["SeparationService.GetReasonsAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[GET /api/separation/reasons] => [200] list ordered by DisplayOrder then Code"
+    auto: API
+
+  # ── State machine ──
+  - id: SEP-SM-001
+    func: [F-SEP-021]
+    sc: EmployeeSeparationStatus declared order is fixed
+    t: The enum's declared literal order is Draft, Submitted, ManagerReview, HrReview, Approved, Rejected, Withdrawn, NoticePeriod, ReadyForExit, Exited, Cancelled, Closed
+    src: ["Backend/HRMS.Domain/Enums/SeparationEnums.cs"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Inspect EmployeeSeparationStatus declaration order => matches Draft, Submitted, ManagerReview, HrReview, Approved, Rejected, Withdrawn, NoticePeriod, ReadyForExit, Exited, Cancelled, Closed exactly"
+    auto: Manual only
+
+  - id: SEP-SM-002
+    func: [F-SEP-022]
+    sc: Submitted, NoticePeriod, Exited, Cancelled are never reachable
+    t: No sequence of valid API calls ever produces a case whose persisted Status is one of these four values
+    src: ["SeparationService.cs"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/Code] Repo-wide grep of `Status = EmployeeSeparationStatus.X` assignments => only Draft/ManagerReview/HrReview/Rejected/Withdrawn/Approved/ReadyForExit/Closed are ever assigned"
+      - "[GET /api/separation/{id}] across the full lifecycle exercised by every other case in this module => Status is never observed as Submitted, NoticePeriod, Exited, or Cancelled"
+    auto: Manual only
+    cr: [CR-129]
+
+  - id: SEP-SM-003
+    func: [F-SEP-023, F-SEP-024]
+    sc: Submit transitions Draft directly to ManagerReview (employee) or HrReview (employer)
+    t: A Draft self-resignation submits to ManagerReview; a Draft employer-initiated case submits to HrReview
+    src: ["SeparationService.SubmitCoreAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/separation/me] => [200/201] Draft (self, EmployeeInitiated)"
+      - "[POST /api/separation/{id}/submit] => [200] Status=ManagerReview"
+      - "[POST /api/separation/employees/{empId}] as HRAdmin => [200/201] Draft (EmployerInitiated)"
+      - "[POST /api/separation/{employerCaseId}/submit] as HRAdmin => [200] Status=HrReview"
+    auto: API
+
+  - id: SEP-SM-004
+    func: [F-SEP-024]
+    sc: Submit is rejected unless the case is exactly Draft
+    t: Submitting an already-Submitted (ManagerReview) case Conflicts
+    src: ["SeparationService.SubmitCoreAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/separation/me] => [200/201] Draft"
+      - "[POST /api/separation/{id}/submit] first call => [200] ManagerReview"
+      - "[POST /api/separation/{id}/submit] second call, same case => [409] Separation cannot transition from ManagerReview to Submitted."
+    auto: API
+
+  - id: SEP-SM-005
+    func: [F-SEP-029]
+    sc: Withdraw from Draft and from ManagerReview both succeed for the initiator
+    t: The initiating employee can withdraw while in Draft or ManagerReview
+    src: ["SeparationService.WithdrawAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/separation/me] => [200/201] Draft"
+      - "[POST /api/separation/{id}/withdraw] => [200] Status=Withdrawn"
+      - "[POST /api/separation/me] second case => [200/201] Draft"
+      - "[POST /api/separation/{id2}/submit] => [200] ManagerReview"
+      - "[POST /api/separation/{id2}/withdraw] => [200] Status=Withdrawn"
+    auto: API
+
+  - id: SEP-SM-006
+    func: [F-SEP-029]
+    sc: Only the initiating employee can withdraw
+    t: A different employee (even a manager) attempting to withdraw someone else's case is Forbidden
+    src: ["SeparationService.WithdrawAsync"]
+    type: Security
+    pri: P0
+    steps:
+      - "[POST /api/separation/{colleaguesCaseId}/withdraw] As a different employee => [403] Only the initiating employee can withdraw this request."
+    auto: API
+
+  - id: SEP-SM-007
+    func: [F-SEP-025, F-SEP-026]
+    sc: ManagerReview transitions - approve to HrReview, reject to Rejected
+    t: Manager approve moves the case forward; manager reject terminates it
+    src: ["SeparationService.ManagerApproveAsync", "ManagerRejectAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: MANAGER
+    perm: "Separation.ManagerReview"
+    steps:
+      - "[POST /api/separation/{id}/manager-approve] As the effective manager => [200] Status=HrReview"
+      - "[Setup] a second Draft->ManagerReview case => precondition established"
+      - "[POST /api/separation/{id2}/manager-reject] Comments='Business needs' => [200] Status=Rejected"
+    auto: API
+
+  - id: SEP-SM-008
+    func: [F-SEP-027, F-SEP-028]
+    sc: HrReview transitions - approve to Approved (with notice snapshot), reject to Rejected
+    t: HR approve stamps the full notice/LWD snapshot and moves to Approved; HR reject terminates it
+    src: ["SeparationService.HrApproveAsync", "HrRejectAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: HRADMIN
+    perm: "Separation.HrReview"
+    steps:
+      - "[POST /api/separation/{id}/hr-approve] => [200] Status=Approved, ApprovedLastWorkingDate set, NoticePeriodDays/NoticeStartDate/NoticeEndDate/NoticeServedDays/NoticeShortfallDays all stamped"
+      - "[Setup] a second HrReview case => precondition established"
+      - "[POST /api/separation/{id2}/hr-reject] Comments='Not approved' => [200] Status=Rejected"
+    auto: API
+
+  - id: SEP-SM-009
+    func: [F-SEP-030]
+    sc: Rejected and Withdrawn are terminal
+    t: No further transition (submit, approve, withdraw) is possible from either state
+    src: ["SeparationService.cs"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Case is Rejected => precondition established"
+      - "[POST /api/separation/{id}/submit] => [409] Separation cannot transition from Rejected to Submitted."
+      - "[POST /api/separation/{id}/withdraw] => [409] Separation cannot transition from Rejected to Withdrawn."
+    auto: API
+
+  - id: SEP-SM-010
+    func: [F-SEP-031]
+    sc: Approved -> ReadyForExit happens only via Clearance completion, never inside SeparationService
+    t: Approving HR review alone does not move the case to ReadyForExit; only ClearanceService.CompleteAsync does
+    src: ["ClearanceService.CompleteAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.Clearance.Complete"
+    steps:
+      - "[Setup] Case is Approved, no clearance started yet => precondition established"
+      - "[GET /api/separation/{id}] => [200] Status=Approved (not ReadyForExit)"
+      - "[POST /api/separation/clearance/for/{id}/start] then [POST /api/separation/clearance/{clearanceId}/complete] with all mandatory tasks cleared => [200] Status=ReadyForExit"
+    auto: API
+
+  - id: SEP-SM-011
+    func: [F-SEP-032]
+    sc: -> Closed is set only by exit execution
+    t: No other module operation ever produces Status=Closed
+    src: ["SeparationExitService.ExecuteAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.Manage"
+    steps:
+      - "[Manual/Code] Repo-wide grep of `Status = EmployeeSeparationStatus.Closed` assignments => exactly one assignment site: SeparationExitService.ExecuteAsync's final-closure step"
+      - "[POST /api/separation/exit/{id}/execute] against a fully-ready case => [200] Status=Closed"
+    auto: API
+
+  - id: SEP-SM-012
+    func: [F-SEP-033]
+    sc: A Closed case is still counted as "active" for the one-active-case-per-employee guard
+    t: Attempting to create a new separation for an employee whose only case is Closed is blocked, since Closed is not in Terminal
+    src: ["SeparationService.CreateCoreAsync"]
+    type: Boundary
+    pri: P1
+    role: HRADMIN
+    steps:
+      - "[Setup] Employee E1's only separation case is Closed (fully exited) => precondition established"
+      - "[POST /api/separation/employees/{E1}] => [409] The employee already has an active separation case. - even though the prior case is fully Closed"
+    auto: DB-assisted
+    cr: [CR-130]
+
+  - id: SEP-SM-013
+    func: [F-SEP-034]
+    sc: A repeated already-terminal action is Conflict, never idempotent success
+    t: A second manager-approve on an already-HrReview case fails, unlike the deliberate idempotent no-op in ReviseApprovedLwdAsync
+    src: ["SeparationService.LoadForActionAsync"]
+    type: Negative
+    pri: P1
+    role: MANAGER
+    perm: "Separation.ManagerReview"
+    steps:
+      - "[POST /api/separation/{id}/manager-approve] first call => [200] HrReview"
+      - "[POST /api/separation/{id}/manager-approve] second call, same case => [409] Separation must be in ManagerReview status."
+    auto: API
+
+  - id: SEP-SM-014
+    func: [F-SEP-035]
+    sc: Full case history is append-only and chronological
+    t: Every transition appends exactly one new event, and history is ordered ascending by OccurredAtUtc
+    src: ["SeparationService.GetHistoryAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ViewHistory"
+    steps:
+      - "[Setup] Draft->ManagerReview->HrReview->Approved full sequence => precondition established"
+      - "[GET /api/separation/{id}/history] => [200] events in ascending OccurredAtUtc order: Created, Submitted, ManagerApproved, HrApproved (+ NoticeRequirementSnapshotted, NoticePeriodActivated)"
+    auto: API
+
+  - id: SEP-SM-015
+    func: [F-SEP-036, F-SEP-037]
+    sc: Get single case and list all cases (tenant-wide, capped 500)
+    t: ViewAll returns the full tenant list desc by CreatedDate; a single-case GET returns full detail
+    src: ["SeparationService.GetAsync", "GetAllAsync"]
+    type: Positive
+    pri: P1
+    role: HRADMIN
+    perm: "Separation.ViewAll"
+    steps:
+      - "[GET /api/separation] => [200] list desc by CreatedDate, capped at 500"
+      - "[GET /api/separation/{id}] => [200] full EmployeeSeparationDto including ConcurrencyVersion"
+    auto: API
+
+  - id: SEP-SM-016
+    func: [F-SEP-038]
+    sc: Self current-case and self-history
+    t: An employee sees their own latest non-terminal case and their full personal history
+    src: ["SeparationService.GetCurrentSelfAsync", "GetMineAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[GET /api/separation/me/current] => [200] latest non-terminal case, or [404] No active separation case exists. if none"
+      - "[GET /api/separation/me/history] => [200] all of the caller's own cases desc by CreatedDate"
+    auto: API

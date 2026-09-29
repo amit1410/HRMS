@@ -1,0 +1,218 @@
+sheet: Platform_Tenant_Retry
+submodule: Retry Provisioning
+defaults:
+  role: PLATFORM_ADMIN
+  perm: PlatformTenant.Create
+  tenant: None (platform identity domain)
+  pre: "QA platform.localhost stack; an Inactive tenant produced by a controlled onboarding failure (see PLAT-CREATE-020) is available for each case that needs one."
+  data: "RetryPlatformTenantRequest {firstName, lastName, initialAdminEmail}."
+  sev: High
+  reg: true
+
+cases:
+  - id: PLAT-RETRY-001
+    func: [F-PLAT-19, F-PLAT-20]
+    sc: Successful retry activates a previously failed tenant
+    t: Retrying an Inactive tenant whose provisioning target is now reachable completes onboarding
+    src: ["PlatformTenantService.RetryProvisioningAsync"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "Using an Inactive tenant produced by a controlled failure, restore reachability of its target database => target reachable"
+      - "[POST /api/platform/tenants/{id}/retry-provisioning] Send {firstName, lastName, initialAdminEmail} => [200] 'Tenant provisioning retry completed successfully.', data.status='Active'"
+      - "[POST /api/auth/login] Sign in at the tenant's host with the returned temporary password => [200] roles=['TenantAdmin']"
+    db: "Catalog Tenants.Status='Active'; tenant shard Users/UserRoles created; tenant shard Tenants row synchronized (TenantCode/Host/ShardKey/Status)."
+    auto: API
+
+  - id: PLAT-RETRY-002
+    func: [F-PLAT-19]
+    sc: Only an Inactive tenant is eligible
+    t: Retry is refused for an Active or Suspended tenant
+    src: ["PlatformTenantService.RetryProvisioningAsync (tenant.Status != Inactive)"]
+    type: Negative
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/platform/tenants/{Tenant A id}/retry-provisioning] Attempt against Tenant A, which is Active => [409] 'Only an Inactive tenant can be retried. Active and Suspended tenants are not eligible.'"
+      - "[POST /api/platform/tenants/{suspended tenant id}/retry-provisioning] Attempt against a DB-assisted Suspended tenant => [409] same message"
+    auto: API
+
+  - id: PLAT-RETRY-003
+    func: [F-PLAT-19]
+    sc: Mandatory retry fields
+    t: FirstName, LastName and InitialAdminEmail are all required
+    src: ["RetryPlatformTenantRequestValidator"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants/{inactive id}/retry-provisioning] Send {} => [400] field errors for firstName, lastName, initialAdminEmail"
+      - "[POST /api/platform/tenants/{inactive id}/retry-provisioning] Send only firstName+lastName => [400] initialAdminEmail required"
+    auto: API
+    ex: ["xU:PlatformTenantRecoveryValidatorTests.Retry_requires_a_new_or_existing_initial_admin_identity"]
+
+  - id: PLAT-RETRY-004
+    func: [F-PLAT-19]
+    sc: InitialAdminEmail format on retry
+    t: A malformed retry admin email is rejected
+    src: ["RetryPlatformTenantRequestValidator (EmailAddress)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/platform/tenants/{inactive id}/retry-provisioning] InitialAdminEmail='not-an-email' => [400]"
+    auto: API
+
+  - id: PLAT-RETRY-005
+    func: [F-PLAT-19]
+    sc: Retry re-validates the tenant's own stored identity, not client input
+    t: The service re-checks the tenant's own TenantCode/Host/ShardKey shape and uniqueness, since retry accepts no identity fields from the caller
+    src: ["PlatformTenantService.RetryProvisioningAsync (ValidateNormalizedValues(tenant.TenantCode, tenant.Host, tenant.ShardKey, true))"]
+    type: Security
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants/{inactive id}/retry-provisioning] Confirm the request body cannot influence TenantCode/Host/ShardKey (RetryPlatformTenantRequest has no such fields) => contract-verified"
+      - "If a DB-assisted edit makes the tenant's own stored ShardKey collide with another tenant's between failure and retry, attempt retry => [409] 'Tenant routing identity is no longer unique; operator diagnosis is required.'"
+    db: "DB-assisted setup: another tenant's ShardKey set to match, to force the collision."
+    auto: DB-assisted
+
+  - id: PLAT-RETRY-006
+    func: [F-PLAT-21]
+    sc: Retry enforces the Development host format even outside Development
+    t: A non-Development tenant whose host does not match <workspace>.localhost cannot be retried
+    src: ["PlatformTenantService.RetryProvisioningAsync (ValidateNormalizedValues(..., true) - hardcoded true, unlike Create's _environment.IsDevelopment())"]
+    type: Negative
+    tags: [Boundary, Configuration]
+    pri: P1
+    sev: High
+    pre: "Requires a non-Development QA deployment with an Inactive tenant whose host is a normal production-style domain (not <workspace>.localhost); otherwise NOT EXECUTED - environment unavailable."
+    steps:
+      - "[POST /api/platform/tenants/{inactive id}/retry-provisioning] Attempt retry against that instance => [400] 'Development tenant hosts must use the supported <workspace>.localhost format.', even though the deployment is not Development and the host was presumably valid when the tenant was first created"
+    sec: "Confirms F-PLAT-21/CR-26: a legitimately non-Development-hosted tenant that fails onboarding may become permanently un-retryable through this endpoint."
+    cr: [CR-26]
+    auto: DB-assisted
+
+  - id: PLAT-RETRY-007
+    func: [F-PLAT-20]
+    sc: Retry is idempotent for an existing, correctly-configured administrator
+    t: Retrying after a partial success that already created the correct TenantAdmin does not create a duplicate
+    src: ["PlatformTenantService.CreateInitialAdminAsync (existing branch, hasTenantAdminRole)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    pre: "Requires a failure scenario where the initial admin was created but a later phase (e.g. TenantActivation) failed, leaving the tenant Inactive with the admin already present."
+    steps:
+      - "[POST /api/platform/tenants/{id}/retry-provisioning] Retry with the SAME initialAdminEmail as the already-created admin => [200] succeeds; temporaryPassword in the response is empty/absent (no new password generated, per CreateInitialAdminAsync's early-return for an existing valid admin)"
+      - "[POST /api/auth/login] Confirm the ORIGINAL password (from the first, partially-successful attempt) still works => [200]"
+    db: "No duplicate Users row for the admin email; exactly one UserRoles(TenantAdmin) row."
+    auto: DB-assisted
+
+  - id: PLAT-RETRY-008
+    func: [F-PLAT-20]
+    sc: Retry refuses an existing-but-broken administrator account
+    t: If the email already used matches an inactive user or a user without TenantAdmin, retry fails rather than silently reusing it
+    src: ["PlatformTenantService.CreateInitialAdminAsync (throw InvalidOperationException)"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    sev: High
+    pre: "DB-assisted: leave a Users row for the admin email that is either IsActive=false or lacks the TenantAdmin role."
+    steps:
+      - "[POST /api/platform/tenants/{id}/retry-provisioning] Retry with an initialAdminEmail matching that broken account => [409] 'Tenant provisioning retry failed. The tenant remains Inactive for operator diagnosis.'"
+    db: "The broken Users row is left untouched (not silently repaired or deleted)."
+    auto: DB-assisted
+
+  - id: PLAT-RETRY-009
+    func: [F-PLAT-20]
+    sc: Retry can change the initial administrator's identity
+    t: Retrying with a different initialAdminEmail than a prior failed attempt creates that different administrator instead
+    src: ["PlatformTenantService.CreateInitialAdminAsync (email is a service parameter, not fixed per tenant)"]
+    type: Positive
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/platform/tenants/{id}/retry-provisioning] Retry with a NEW initialAdminEmail different from any prior attempt => [200] succeeds; the new email becomes the TenantAdmin"
+      - "[POST /api/auth/login] Sign in at the tenant's host with the new admin's returned credentials => [200]"
+    auto: API
+
+  - id: PLAT-RETRY-010
+    func: [F-PLAT-19, F-PLAT-05]
+    sc: Retry is also gated by the invitation/SMTP configuration
+    t: Retry is refused outside Development without a configured SMTP invitation provider, same as Create
+    src: ["PlatformTenantService.RetryProvisioningAsync (InitialAdministratorInvitationsConfigured)"]
+    type: Negative
+    tags: [Configuration]
+    pri: P1
+    pre: "Requires a non-Development QA deployment with Email:Provider not Smtp; otherwise NOT EXECUTED - environment unavailable."
+    steps:
+      - "[POST /api/platform/tenants/{inactive id}/retry-provisioning] Attempt retry against that instance => [400] 'Initial administrator invitations are not configured. Retry is unavailable until the SMTP invitation provider is configured.'"
+    auto: API
+
+  - id: PLAT-RETRY-011
+    func: [F-PLAT-10, F-PLAT-20]
+    sc: MySQL retry validates the existing database's history before proceeding
+    t: Retrying a MySQL-backed tenant whose database already exists re-validates migration history exactly as a first attempt would
+    src: ["TenantProvisioningService.PrepareMySqlDatabaseAsync"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "Cross-reference PLAT-PROV-005/006/007 executed via the retry-provisioning endpoint instead of create => same outcomes (accept current/prefix history; refuse unexpected history)"
+    auto: DB-assisted
+
+  - id: PLAT-RETRY-012
+    func: [F-PLAT-19]
+    sc: Retry on an unknown tenant
+    t: A well-formed but non-existent id returns 404
+    src: ["PlatformTenantService.RetryProvisioningAsync (tenant is null)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants/{random GUID}/retry-provisioning] Send a valid body => [404] 'Tenant was not found.'"
+    auto: API
+
+  - id: PLAT-RETRY-013
+    func: [F-PLAT-24]
+    sc: Retry requires PlatformTenant.Create
+    t: A platform user without PlatformTenant.Create cannot retry provisioning
+    src: ["[PlatformPermission(PlatformPermissions.TenantCreate)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: PLATFORM_VIEWER
+    steps:
+      - "[POST /api/platform/tenants/{inactive id}/retry-provisioning] As PLATFORM_VIEWER => [403]"
+    auto: API
+
+  - id: PLAT-RETRY-014
+    func: [F-PLAT-19]
+    sc: Cache-Control on the retry response
+    t: "The retry response, which may carry a temporary password, sets Cache-Control: no-store"
+    src: ["PlatformTenantsController.RetryProvisioning (Response.Headers.CacheControl = 'no-store')"]
+    type: Security
+    tags: [Configuration]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/platform/tenants/{inactive id}/retry-provisioning] Inspect response headers on success => Cache-Control: no-store"
+    auto: API
+
+  - id: PLAT-RETRY-015
+    func: [F-PLAT-19, F-PLAT-32]
+    sc: Retry is unreachable at a tenant host
+    t: POST .../retry-provisioning at a customer host is blocked before authentication
+    src: ["PlatformRequestRoutingMiddleware"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    tenant: A
+    steps:
+      - "[POST /api/platform/tenants/{inactive id}/retry-provisioning] Call at the Tenant A host with a valid platform token => [404]"
+    auto: API

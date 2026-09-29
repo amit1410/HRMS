@@ -1,0 +1,375 @@
+# Module 5 QA-risk register. Numbering continues after Module 4's CR-46 (qa/04-employee-code/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. classification starts 'Open - awaiting decision'.
+#
+# CR-28, CR-29, CR-44, CR-45 and CR-46 are carried forward from Modules 3 and 4 (per the brief's explicit
+# dependency list) because Employee Management test cases exercise their practical impact directly. Each
+# entry below is a short cross-reference, not a restatement - see the cited module's own clarifications.yaml
+# for the full observation/risk/source text. They are re-declared here only so a Module 5 case's `cr:` field
+# resolves against THIS module's own registry (qa/tools/build_test_catalogue.py validates `cr:` per module).
+
+clarifications:
+  - id: CR-28
+    title: "(carried forward from Module 3) Generic Master Management DELETE does not check references for 'departments'/'designations'"
+    observation: "See qa/03-masters/clarifications.yaml#CR-28 for the full observation. Relevant here because Employment History references Department/Designation by id, so a department silently deactivated through the generic /api/masters/departments route (no employee-count guard) can leave employment records pointing at a master an HR user believed was still protected."
+    risk: "Employee Management cases in this module test only the Employment-side symptom (an inactive Department/Designation is rejected only when NEWLY selected, never retroactively re-checked) - the deactivation-path gap itself remains Module 3's finding."
+    source: "qa/03-masters/clarifications.yaml (CR-28); Backend/HRMS.Application/Services/EmployeeEmploymentService.cs (ValidateEmploymentReferencesAsync, active-only-if-changing)"
+    classification: Open - awaiting decision
+
+  - id: CR-29
+    title: "(carried forward from Module 3) Department and Designation are reachable through two independent write paths with different permissions"
+    observation: "See qa/03-masters/clarifications.yaml#CR-29 for the full observation. Relevant here because Employment History's Department/Designation dropdowns are populated by whichever master list a given role can read, so the two write paths' different permission gates can produce a directory that looks inconsistent to different roles."
+    risk: "Not independently re-tested by this module beyond confirming Employment's own Department/Designation reference validation is indifferent to which write path last touched the master row."
+    source: "qa/03-masters/clarifications.yaml (CR-29)"
+    classification: Open - awaiting decision
+
+  - id: CR-44
+    title: "(carried forward from Module 4) HRAdmin performs Initial Employment but holds neither EmployeeCodeConfiguration.View nor .Manage"
+    observation: "See qa/04-employee-code/clarifications.yaml#CR-44 for the full observation. Confirmed still true from the Employee-module side: SeedData.RolePermissionMap[RoleNames.HRAdmin] (and HRManager, and SuperHR) hold EmploymentHistory.Change - the permission that actually triggers Initial Employment code assignment - but none of the three hold EmployeeCodeConfiguration.View/.Manage."
+    risk: "An HRAdmin/HRManager/SuperHR whose Initial Employment attempt fails on a code-generation error (no active configuration version, no matching rule, etc.) cannot open the Configuration or Preview screens to diagnose why, without escalation."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[HRAdmin/HRManager/SuperHR]); qa/04-employee-code/clarifications.yaml (CR-44)"
+    classification: Open - awaiting decision
+
+  - id: CR-45
+    title: "(carried forward from Module 4) Simple-mode generated codes have no application-level duplicate guard, unlike Rule-Based"
+    observation: "See qa/04-employee-code/clarifications.yaml#CR-45 for the full observation. Exercised from the Employee side at Initial Employment: EmployeeEmploymentService.AssignPendingEmployeeCodeAsync's Simple branch assigns the composed code directly with no AnyAsync duplicate probe, unlike the Rule-Based branch a few lines below it."
+    risk: "A Simple-mode collision at Initial Employment (reachable via seeded/imported data, a manual-to-auto mode switch, or a rewound counter) surfaces as an unhandled DbUpdateException (500) instead of the handled 409 Conflict every other duplicate-code path in this feature returns."
+    source: "Backend/HRMS.Application/Services/EmployeeEmploymentService.cs (AssignPendingEmployeeCodeAsync); qa/04-employee-code/clarifications.yaml (CR-45)"
+    classification: Open - awaiting decision
+
+  - id: CR-46
+    title: "(carried forward from Module 4) EmployeeCodeRuleRequest.Conditions/Segments lists are not null-checked before use"
+    observation: "See qa/04-employee-code/clarifications.yaml#CR-46 for the full observation. Not directly reachable through any Employee Management endpoint (it is a rule-authoring gap in EmployeeCodeConfigurationService.SaveRuleAsync) - re-declared here only because Employee Code integration cases in this module reference the same Rule-Based generation pipeline that CR-46's gap sits inside."
+    risk: "No additional Employee-side risk beyond Module 4's own finding."
+    source: "qa/04-employee-code/clarifications.yaml (CR-46)"
+    classification: Open - awaiting decision
+
+  - id: CR-47
+    title: "The employee directory List endpoint and the CSV Export endpoint filter and sort by two different data sources for the same query parameters"
+    observation: >
+      EmployeeService.GetAsync (the on-screen list) calls ApplyEffectiveFilters/ApplyEffectiveSort, which
+      resolve Department/Designation/Status/ReportingManagerId from the employee's CURRENT
+      EmployeeEmploymentHistory record when one exists, falling back to the legacy Employee.* snapshot
+      columns only when no history exists yet. EmployeeService.ExportAsync instead calls the plain
+      ApplyFilters/ApplySort, which read ONLY the legacy Employee.* snapshot columns, never
+      EmployeeEmploymentHistory, regardless of whether a history record exists.
+    risk: >
+      For any employee whose snapshot columns have not been (or, for a future-dated change, will not yet
+      have been) synced from Employment History, filtering or sorting the List and the Export by the exact
+      same Department/Designation/Status/ReportingManagerId parameter can return a different employee set
+      or a different ordering - a materially different result for what the Export feature's own doc-comment
+      calls "the whole filtered set" of what is on screen.
+    source: "Backend/HRMS.Application/Services/EmployeeService.cs (ApplyEffectiveFilters/ApplyEffectiveSort vs ApplyFilters/ApplySort, GetAsync vs ExportAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-48
+    title: "EmployeeAccessScopeService's row-level scope predicate is applied inconsistently across Employee-module read paths"
+    observation: >
+      EmployeeService.GetAsync and GetByIdAsync both call _accessScope.BuildPredicateAsync before returning
+      data. EmployeeService.ExportAsync and GetSensitiveDetailsAsync do not call it at all - only the EF
+      global TenantId query filter applies to either method.
+    risk: >
+      A scope-restricted role assignment (e.g. a department- or grade-scoped HR role, or the Manager role's
+      self+direct-reports narrowing) that holds Employee.Export can export every employee in the tenant, not
+      just the rows the same role would see through GET /api/employees. Similarly, a scope-restricted role
+      holding EmployeeSensitive.View can read another employee's raw Aadhaar/PAN/UAN/PF/ESIC/Mediclaim values
+      through /sensitive-details even when that employee falls outside the role's list/detail scope.
+    source: "Backend/HRMS.Application/Services/EmployeeService.cs (ExportAsync, GetSensitiveDetailsAsync - neither calls _accessScope.BuildPredicateAsync, unlike GetAsync/GetByIdAsync); EmployeeAccessScopeService.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-49
+    title: "AuditQuery has no dedicated FluentValidation validator, and its SortBy/SortDescending fields are accepted but silently ignored"
+    observation: >
+      Every other paged query in this module (EmployeeQuery) is backed by a registered validator
+      (EmployeeQueryValidator) that rejects an out-of-range Page/PageSize or an unrecognized SortBy with 400.
+      AuditQuery (Backend/HRMS.Application/DTOs/Employees/AuditQuery.cs) has no validator registered anywhere
+      under Backend/HRMS.Application/Validators/. EmployeeAuditService.GetAsync hardcodes
+      `OrderByDescending(l => l.CreatedDate).ThenByDescending(l => l.Id)` regardless of what SortBy/
+      SortDescending the query specifies, and never rejects an unsupported sort field either.
+    risk: >
+      GET .../audit-log?pageSize=99999 does not 400 - QueryablePagingExtensions.ToPagedResultAsync silently
+      clamps it to 100 and returns 200. A caller who sets sortBy=oldValue (or any other field) gets no error
+      and no effect - the module-wide design principle PagedQueryValidator's own doc-comment states ("An
+      unsupported sort field is rejected rather than ignored... silently falling back to a default order
+      would let a client believe a report was sorted by a column that was never applied") is not applied to
+      this one query type.
+    source: "Backend/HRMS.Application/DTOs/Employees/AuditQuery.cs; Backend/HRMS.Application/Services/EmployeeAuditService.cs (GetAsync); Backend/HRMS.Application/Validators/Common/PagedQueryValidator.cs (doc-comment)"
+    classification: Open - awaiting decision
+
+  - id: CR-50
+    title: "Employee Import is scaffolding only - creating an import batch never parses or processes a file, and no employee row is ever created by this path"
+    observation: >
+      POST /api/import?fileName= (gated by the same Employee.Import permission the Employee module seeds)
+      is handled by ImportBatchService.ImportAsync, which creates an ImportBatch row (Status=Pending,
+      TotalRows=0) and returns. No CSV/Excel parsing occurs anywhere in the call chain, and no code path from
+      this endpoint ever creates, updates, or references an Employee row.
+    risk: >
+      A caller (or a future UI) invoking this endpoint would reasonably expect an import to actually import
+      employees; instead a batch record is created and nothing else happens, silently, with a 200/201-style
+      success response rather than a 501/"not implemented" signal.
+    source: "Backend/HRMS.Application/Services/ImportBatchService.cs (ImportAsync); repo-wide search finding no frontend page calls the import endpoint at all"
+    classification: Open - awaiting decision
+
+  - id: CR-51
+    title: "An employment change's EffectiveFrom may never be earlier than today's business date, for ANY ChangeReason including Correction"
+    observation: >
+      EmployeeEmploymentService.CreateChangeAsync's `request.EffectiveFrom < validationDate` check is
+      unconditional and runs before the Correction same-day-supersede branch is even reached - so a
+      genuinely backdated correction (e.g. fixing a data-entry mistake for a change that should have been
+      recorded last week) cannot be recorded through this endpoint at all. Only a same-day (Correction) or
+      future-dated change is ever accepted.
+    risk: >
+      HR users correcting historical data have no supported path through this API once the intended
+      effective date has passed - not even under the ChangeReason literally named for that purpose
+      (Correction). Whether this is deliberate (protect the append-only history's integrity) or an
+      unaddressed gap (no real correction workflow for past dates) has not been confirmed.
+    source: "Backend/HRMS.Application/Services/EmployeeEmploymentService.cs (CreateChangeAsync, the EffectiveFrom < validationDate guard evaluated ahead of the Correction/sameDayRecords branch)"
+    classification: Open - awaiting decision
+
+  - id: CR-52
+    title: "Four of eleven backend Employee sub-resources have zero frontend representation: Education, Additional Info, Documents, and the Audit Log"
+    observation: >
+      EmployeeFormPage.tsx and EmployeeDetailPage.tsx's TABS list renders 8 sections (Personal, Contact,
+      Address, Family, Bank, Previous Employment, Employment, Supervisor). The remaining backend
+      sub-resources - Education (GET/POST/PUT/DELETE .../education), Additional Info (GET/PUT
+      .../additional-info), Documents (GET/POST/DELETE .../documents), and the Audit Log (GET
+      .../audit-log) - have working API client functions in api/employeeSubsections.ts, but a repo-wide
+      search finds no page or component anywhere in Frontend/HRMS.Web/src that calls
+      getEducationRecords/createEducationRecord/getDocuments/uploadDocument/getAdditionalInfo/
+      upsertAdditionalInfo/getAuditLog outside that api module itself.
+    risk: >
+      Either this is dead/ahead-of-schedule backend surface with no UI yet, or a frontend gap for shipped
+      backend functionality (an HR user can never enter Education history, Additional Info, upload a
+      Document, or review the Audit Log except through a direct API call) - not confirmed which, and worth a
+      product decision before further UI work builds around the existing 8-tab assumption.
+    source: "Frontend/HRMS.Web/src/pages/employees/EmployeeFormPage.tsx, EmployeeDetailPage.tsx (TABS const); Frontend/HRMS.Web/src/api/employeeSubsections.ts (unused exports); Backend/HRMS.API/Controllers/EmployeeSubResourcesController.cs (education/additional-info/documents/audit-log routes)"
+    classification: Open - awaiting decision
+
+  - id: CR-53
+    title: "Terminated/Resigned employees keep an active portal login - no Employee or Employment endpoint ever revokes it"
+    observation: >
+      SeparationExitService.cs (the sanctioned exit workflow) atomically sets
+      `employee.Status = EmployeeStatus.Terminated` AND, when a portal account is linked, `user.IsActive =
+      false`. Neither EmployeeService.UpdateAsync (the full PUT /api/employees/{id} replace) nor
+      EmployeeEmploymentService.CreateChangeAsync (a position-change/employment-history POST with
+      EmploymentStatus=Terminated/Resigned) ever touches User.IsActive - confirmed by a repo-wide search
+      showing `user.IsActive = false` is set only inside SeparationExitService.cs. Additionally,
+      EmployeePortalAccountService.RevokeAsync can only revoke a still-PENDING invitation ("Only a pending
+      invitation can be revoked.") - there is no API at all to deactivate an already-active portal account
+      outside the Separation workflow.
+    risk: >
+      An HR user holding only Employee.Edit (no Separation permissions) can set Status=Terminated with a
+      valid DateOfLeaving via a plain PUT, or record a Terminated/Resigned EmploymentStatus via a position
+      change, and it saves successfully - but the employee's linked portal login remains fully active and
+      usable indefinitely, unless someone separately runs them through the Separation module. This is the
+      single highest-impact finding in this module's research: a terminated employee can retain system
+      access through a side channel that bypasses the sanctioned off-boarding workflow entirely.
+    source: "Backend/HRMS.Application/Services/SeparationExitService.cs (the user.IsActive=false write); EmployeeService.cs (UpdateAsync); EmployeeEmploymentService.cs (CreateChangeAsync); EmployeePortalAccountService.cs (RevokeAsync's pending-only guard)"
+    classification: Open - awaiting decision
+
+  - id: CR-54
+    title: "A 'LegacyConflict' manager-resolution status blocks the ENTIRE Supervisor upsert, including unrelated L2-L5/Time/ERO/CHRO edits"
+    observation: >
+      EmployeeSupervisorService.ValidateDirectManagerAsync calls EmployeeManagerResolver.ResolveAsync and,
+      when the result is EmployeeManagerResolutionStatus.LegacyConflict (the deprecated
+      Employee.ReportingManagerId disagrees with current Employment History's ManagerId), rejects the WHOLE
+      PUT /api/employees/{id}/supervisor request - "Legacy direct-manager assignments conflict with
+      Employment. Reconcile them before changing additional roles." - even when the caller's actual intent
+      was only to set/change an unrelated field such as the ERO or Time Manager.
+    risk: >
+      An HR user trying to assign a Time Manager or ERO to an employee whose legacy/employment manager data
+      has drifted apart (for any historical reason) cannot do so until someone reconciles the unrelated L1
+      conflict first - there is no way to save the L2-L5/Time/ERO/CHRO fields independently of that check.
+    source: "Backend/HRMS.Application/Services/EmployeeSupervisorService.cs (ValidateDirectManagerAsync, the LegacyConflict branch)"
+    classification: Open - awaiting decision
+
+  - id: CR-55
+    title: "EmployeeScopeAuthorizationFilter returns 404, not 403, for an out-of-scope-but-same-tenant employee on every sub-resource route"
+    observation: >
+      Every action on EmployeeSubResourcesController runs behind a class-level
+      EmployeeScopeAuthorizationFilter, which resolves the route's employee id and calls
+      IEmployeeAccessScopeService.CanAccessEmployeeAsync; when the caller's computed scope excludes that
+      employee, the filter returns a bare 404 NotFound - not a 403 Forbidden - even though the caller may
+      hold the exact permission (e.g. Employee.Edit) the action's own [HasPermission] attribute requires.
+    risk: >
+      Authorization for Employee sub-resources is a THREE-axis decision (authentication, declared
+      permission, AND row-level scope), not the two-axis permission-name-vs-403 model the rest of the API
+      generally follows. A tester who assumes "holds the permission => 200, lacks it => 403" will
+      misdiagnose a scope-filtered 404 as a not-found record rather than an authorization boundary - this is
+      a deliberate information-hiding choice (never reveal that an out-of-scope employee id exists) but is
+      easy to miss without an explicit test.
+    source: "Backend/HRMS.API/Filters/EmployeeScopeAuthorizationFilter.cs; Backend/HRMS.Application/Services/EmployeeAccessScopeService.cs (CanAccessEmployeeAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-56
+    title: "Deleting an employee only guards against the legacy ReportingManagerId FK; EmployeeEmploymentHistory.ManagerId's own FK is configured to SetNull, not Restrict, on delete"
+    observation: >
+      EmployeeService.DeleteAsync's direct-reports guard is `_db.Employees.CountAsync(e =>
+      e.ReportingManagerId == id)` - it checks only the legacy flat column. Confirmed directly from
+      EmployeeEmploymentHistoryConfiguration.cs: the ManagerId foreign key is configured
+      `.HasForeignKey(e => e.ManagerId).OnDelete(DeleteBehavior.SetNull)` - NOT Restrict. An employee who is
+      a manager only via EmployeeEmploymentHistory.ManagerId (e.g. their ReportingManagerId column has not
+      been synced to a history-only or future-dated manager assignment) is therefore not blocked by the
+      app-level guard, AND the database itself will not reject the delete - it will silently null out
+      ManagerId on every historical employment record that referenced them.
+    risk: >
+      A manager whose direct reports were assigned purely through Employment History (rather than the
+      legacy column) can be hard-deleted with no warning, permanently erasing "who this employee's manager
+      was on this historical record" from every affected EmployeeEmploymentHistory row - a genuine, confirmed
+      data-integrity gap, not merely a theoretical one, since the EF configuration explicitly chooses
+      SetNull over Restrict for this specific relationship.
+    source: "Backend/HRMS.Application/Services/EmployeeService.cs (DeleteAsync, the ReportingManagerId-only guard); Backend/HRMS.Infrastructure/Persistence/Configurations/EmployeeEmploymentHistoryConfiguration.cs (ManagerId FK, OnDelete(DeleteBehavior.SetNull))"
+    classification: Open - awaiting decision
+
+  - id: CR-57
+    title: "The Manager role's Employee.View is silently narrowed to self+direct-reports through a cross-module permission coupling that is invisible from Permissions.cs alone"
+    observation: >
+      EmployeeAccessScopeService.BuildPredicateAsync checks, in order: Attendance.MonthlyViewAll (full
+      access) -> Attendance.MonthlyViewTeam + a linked employee id (self + DIRECT reports only, via
+      ReportingManagerId/EmploymentHistory.ManagerId == the caller's own linked employee id) -> else any
+      Employee.* permission grants full tenant access. The seeded Manager role holds Employee.View AND
+      Attendance.MonthlyViewTeam (for its own attendance purposes) but not MonthlyViewAll, so the
+      TEAM-scope branch wins for the entire Employee directory - list, detail, and every sub-resource -
+      even though HRManager/Accounts/etc. (which lack MonthlyViewTeam) get full tenant access from the very
+      same Employee.View permission.
+    risk: >
+      A Manager sees only themselves and their direct reports in the Employee directory - a second-level
+      report (a report of a report) is invisible, since the predicate checks only the direct
+      ReportingManagerId/ManagerId edge, not the full reporting chain. This scoping rule is driven entirely
+      by an ATTENDANCE permission constant, not any Employee-module permission, which is non-obvious to
+      anyone reading Permissions.cs or SeedData.cs in isolation.
+    source: "Backend/HRMS.Application/Services/EmployeeAccessScopeService.cs (BuildPredicateAsync); Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[RoleNames.Manager])"
+    classification: Open - awaiting decision
+
+  - id: CR-58
+    title: "No optimistic-concurrency (rowversion) token exists on Employee or any of its sub-resource entities"
+    observation: >
+      A repo-wide search of every Employee*Configuration.cs under
+      Backend/HRMS.Infrastructure/Persistence/Configurations finds exactly one `.IsRowVersion()`/
+      IsConcurrencyToken call in the entire Employee-module schema - EmployeeCodeSequenceConfiguration.cs
+      (Module 4's sequence-allocation entity). Employee, EmployeeContact, EmployeeAddress,
+      EmployeeBankDetail, EmployeeSupervisor, EmployeeEmployment, EmployeeEmploymentHistory, EmployeeFamily,
+      EmployeeEducation, EmployeePreviousEmployment, EmployeeAdditionalInfo and EmployeeDocument all have NO
+      concurrency token at all - unlike CLAUDE.md's documented SQL-Server-rowversion-vs-MySQL-app-managed-
+      token pattern used elsewhere in the codebase (e.g. Employee Code sequences), that pattern is simply
+      absent for the Employee entity family.
+    risk: >
+      Two concurrent full PUT /api/employees/{id} requests (or two concurrent sub-resource upserts) against
+      the same record are last-write-wins with no 409/412 for a stale read - the second writer's version
+      silently overwrites the first's, with no signal to either caller that a concurrent edit occurred.
+    source: "Backend/HRMS.Infrastructure/Persistence/Configurations/Employee*Configuration.cs (grep for IsRowVersion/IsConcurrencyToken across the whole family, versus EmployeeCodeSequenceConfiguration.cs's single instance)"
+    classification: Open - awaiting decision
+
+  - id: CR-59
+    title: "SupervisorType has no L4/L5/Ero/Chro members, so the eligible-candidate dropdown endpoint has no data source for those four DTO-exposed slots"
+    observation: >
+      Backend/HRMS.Domain/Enums/SupervisorType.cs is a flags enum with exactly `None, L1, L2, L3, Other, HR,
+      Time`. EmployeeSupervisorRequest/EmployeeSupervisorDto expose L4ManagerId, L5ManagerId, EroId and
+      ChroManagerId, each validated only for "exists, Active, same-tenant, not-self" - but GET
+      .../supervisor-options?type= parses its `type` parameter as a SupervisorType name, so no call with
+      type=L4, type=L5, type=Ero or type=Chro can ever succeed (Enum.TryParse fails - 400 "Invalid supervisor
+      type").
+    risk: >
+      A caller (or a future UI) filling the L4/L5/ERO/CHRO manager fields has no server-provided,
+      eligibility-filtered candidate list to choose from - those four ids can only be supplied from
+      somewhere else the client already has them (e.g. typed in, or copied from another screen), unlike
+      L1/L2/L3/Other/HR/Time, which all have a working options endpoint.
+    source: "Backend/HRMS.Domain/Enums/SupervisorType.cs; Backend/HRMS.Application/DTOs/Employees/EmployeeSupervisorRequest.cs/EmployeeSupervisorDto.cs (L4ManagerId/L5ManagerId/EroId/ChroManagerId); EmployeeSupervisorService.cs (GetSupervisorOptionsAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-60
+    title: "Family nominee-percentage validation is per-record only; nothing sums a single employee's nominees across all Family records"
+    observation: >
+      EmployeeFamilyRequestValidator validates a single request's NomineePercentage in [0.01, 100] when
+      IsNominee is true. Neither EmployeeFamilyService.CreateAsync nor UpdateAsync sums the OTHER existing
+      Family records already marked as nominees for the same employee before accepting a new/changed one.
+    risk: >
+      Two (or more) Family members can each be saved as a 100%-share nominee for the same employee, and the
+      API accepts both - a statutory/compliance-relevant total that silently exceeds 100% with no warning
+      anywhere in the stack.
+    source: "Backend/HRMS.Application/Validators/Employees/EmployeeFamilyRequestValidator.cs (NomineePercentage, single-record bound only); Backend/HRMS.Application/Services/EmployeeFamilyService.cs (CreateAsync/UpdateAsync, no aggregate check)"
+    classification: Open - awaiting decision
+
+  - id: CR-61
+    title: "'Same as Current Address' has no server-side enforcement - it is a persisted flag with no read effect, and the actual copy is a client-only convenience at save time"
+    observation: >
+      EmployeeContact.SameAsCurrentAddress is written verbatim by EmployeeContactService.UpsertAsync and
+      never read back by EmployeeAddressService or EmployeeContactService to copy Current into Permanent -
+      confirmed by a repo-wide search finding no code path in either service reads the flag. Separately,
+      AddressDetailsForm.tsx DOES mirror Current's field values into the Permanent block client-side at the
+      moment "Same as Current" is checked and disables the Permanent inputs while it stays checked - but this
+      mirroring happens only in the browser, at save time, and is re-sent on every subsequent save.
+    risk: >
+      If Current is later changed through any path that does not go through this exact form flow with the
+      checkbox still checked (a different API caller, a future bulk-edit tool, or simply unchecking then
+      never re-checking it), Permanent silently stops tracking Current - nothing server-side keeps the two in
+      sync, despite the flag persisting as if it were a live setting rather than a one-time copy instruction.
+    source: "Backend/HRMS.Application/Services/EmployeeContactService.cs, EmployeeAddressService.cs (SameAsCurrentAddress never read); Frontend/HRMS.Web/src/pages/employees/AddressDetailsForm.tsx (client-side mirror-on-check/mirror-on-save logic)"
+    classification: Open - awaiting decision
+
+  - id: CR-62
+    title: "Full-record vs. Personal-Details create/update disagree on whether EmployeeSensitive.Edit is a hard permission gate"
+    observation: >
+      POST /api/employees and PUT /api/employees/{id} stack `[HasPermission(Permissions.EmployeeSensitive.
+      Edit)]` at the controller - a caller without it gets 403. POST /api/employees/personal-details and PUT
+      /api/employees/{id}/personal-details require only Employee.Create/.Edit; whether the request's
+      sensitive fields (Aadhaar/PAN/UAN/ESIC/PF/Mediclaim) are actually persisted is decided silently inside
+      EmployeeService.ApplyPersonalDetails via a passed-through canEditSensitive claim check - with NO error
+      returned when a caller lacking EmployeeSensitive.Edit submits values for those fields; they are simply
+      dropped (create) or left unchanged (update).
+    risk: >
+      A caller submitting Aadhaar/PAN/etc. through the Personal-Details endpoint without
+      EmployeeSensitive.Edit receives 201/200 with those fields silently absent from the saved record,
+      rather than any 403 or field-level rejection indicating they were not applied - a materially different
+      failure mode from the full-record path's hard 403 for the identical class of data.
+    source: "Backend/HRMS.API/Controllers/EmployeesController.cs (stacked [HasPermission] on the full create/update actions vs. the personal-details actions); Backend/HRMS.Application/Services/EmployeeService.cs (ApplyPersonalDetails, canEditSensitive)"
+    classification: Open - awaiting decision
+
+  - id: CR-63
+    title: "Every audit-log row written from EmployeeSubResourcesController hardcodes EmployeeCode=null"
+    observation: >
+      EmployeeSubResourcesController's private LogAuditAsync helper always calls
+      _auditService.LogChangeAsync(employeeId, null!, module, ...) - the second positional parameter is
+      employeeCode, hard-coded null!, for every mutating action across Contact/Address/Family/Education/
+      PreviousEmployment/BankDetail/Supervisor/AdditionalInfo/Employment/EmploymentHistory/Documents.
+    risk: >
+      EmployeeAuditLogDto.EmployeeCode is always null for every sub-resource audit entry, even though the
+      entity/DTO clearly carries a column intended to show which employee (by code, not just id) a given
+      audit row belongs to - anyone reading the Audit Log for a code-search or export purpose gets nothing
+      useful from that column.
+    source: "Backend/HRMS.API/Controllers/EmployeeSubResourcesController.cs (LogAuditAsync, the hardcoded null! employeeCode argument)"
+    classification: Open - awaiting decision
+
+  - id: CR-64
+    title: "No xUnit test file exists for EmployeeManagerResolver as a standalone unit, nor for EmployeeFamilyService, EmployeeEducationService, EmployeePreviousEmploymentService, EmployeeDocumentService, EmployeeAdditionalInfoService, or EmployeeAddressService"
+    observation: >
+      A repo-wide filename search under Backend/HRMS.Tests finds no EmployeeFamily*.cs, EmployeeEducation*.
+      cs, EmployeePreviousEmployment*.cs, EmployeeDocument*.cs, EmployeeAdditionalInfo*.cs, EmployeeAddress*.
+      cs or EmployeeManagerResolver*.cs test file. EmployeeManagerResolver's behavior is exercised only
+      indirectly, through EmployeeEmploymentHardeningTests' employment-change scenarios; the six services
+      named above have no dedicated automated coverage at all, at any layer (only their frontend forms have
+      component-level Vitest coverage, and only for Address/Bank/Contact/Employment - Family and Previous
+      Employment have no Vitest file either).
+    risk: >
+      Every case in this module's Family/Education/Previous-Employment/Documents/Additional-Info sheets is
+      the FIRST automated-adjacent (even if only manual, mapped-to-none) coverage these services will have
+      had documented against them.
+    source: "repo-wide filename search under Backend/HRMS.Tests and Frontend/HRMS.Web/src for the classes/components named above"
+    classification: Open - awaiting decision
+
+  - id: CR-65
+    title: "Address upsert has no database-level unique constraint on (TenantId, EmployeeId, AddressType) matching the app-level lookup key"
+    observation: >
+      EmployeeAddressConfiguration.cs declares `HasIndex(e => new { e.TenantId, e.EmployeeId, e.AddressType
+      }).IsUnique()` - so the database DOES enforce this uniquely. EmployeeAddressService.UpsertAsync finds
+      the existing row via a plain FirstOrDefaultAsync before deciding insert-vs-update; two concurrent
+      first-ever POSTs for the same (employee, type) pair could both observe "no existing row" and both
+      attempt an insert, with the SECOND one failing at the database's unique index rather than being
+      handled as an application-level upsert race.
+    risk: >
+      Confirm whether a concurrent double-POST for the same Address type surfaces as a handled Conflict (like
+      Contact's official-email race) or an unhandled 500 - EmployeeAddressService does not show the same
+      "catch DbUpdateException, re-probe, return Conflict" pattern EmployeeService.CreateAsync/UpdateAsync and
+      EmployeeContactService.UpsertAsync use for their own unique-index races.
+    source: "Backend/HRMS.Infrastructure/Persistence/Configurations/EmployeeAddressConfiguration.cs (the unique index exists); Backend/HRMS.Application/Services/EmployeeAddressService.cs (UpsertAsync, no DbUpdateException retry/Conflict handling visible)"
+    classification: Open - awaiting decision

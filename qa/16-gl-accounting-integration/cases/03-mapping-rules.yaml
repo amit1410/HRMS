@@ -1,0 +1,237 @@
+sheet: GLAcc_Mapping_Rules
+submodule: GL Mapping Rules
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-MAP-001
+    func: [F-GLACC-019]
+    sc: Mapping target version must exist, be Active, and belong to the tenant
+    t: CreateMappingAsync/UpdateMappingAsync both return NotFound for a nonexistent, non-Active, or cross-tenant version
+    src: "PayrollAccountingService.SaveMappingAsync"
+    type: Negative
+    tags: [Boundary, Tenant-Isolation]
+    pri: P0
+    sev: High
+    pre: "Version V_T2 belongs to tenant T2 (DEMO02)"
+    role: HRAdmin (T1, custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/versions/{randomGuid}/mappings] {mappingType:'NetPayable', creditAccountId:X} => [404] NotFound"
+      - "[POST /api/payroll/accounting/versions/{V_T2}/mappings] as a T1 user => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: GLACC-MAP-002
+    func: [F-GLACC-020]
+    sc: A mapping requires at least one valid source discriminator
+    t: A request with no SalaryComponentId, no StatutoryType, MappingType!=NetPayable, and an unsupported MappingType is rejected
+    src: "PayrollAccountingService.SaveMappingAsync (supportedMapping check)"
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    sev: Medium
+    pre: "V1 is an Active version"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: "mappingType='Earnings', no salaryComponentId, no statutoryType"
+    steps:
+      - "[POST /api/payroll/accounting/versions/{V1}/mappings] {mappingType:'Earnings', debitAccountId:X, creditAccountId:Y} => [400] Invalid (salary component, statutory type, or supported source required)"
+      - "[POST /api/payroll/accounting/versions/{V1}/mappings] {mappingType:'NetPayable', creditAccountId:Y} (no source needed for NetPayable) => [200] created"
+    auto: API
+
+  - id: GLACC-MAP-003
+    func: [F-GLACC-021]
+    sc: Mapped accounts must be active and belong to the tenant
+    t: Referencing an inactive account, or an account from another tenant, on any of the 3 account fields returns Conflict
+    src: "PayrollAccountingService.SaveMappingAsync (accountIds validation)"
+    type: Negative
+    tags: [Tenant-Isolation, Boundary]
+    pri: P0
+    sev: High
+    pre: "Account INACTIVE1 in T1 has IsActive=false; account T2_ACCT belongs to T2 (DEMO02)"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/versions/{V1}/mappings] {mappingType:'NetPayable', creditAccountId:{INACTIVE1}} => [409] Conflict"
+      - "[POST /api/payroll/accounting/versions/{V1}/mappings] {mappingType:'NetPayable', creditAccountId:{T2_ACCT}} as a T1 user => [409] Conflict"
+    auto: API
+    secc: true
+
+  - id: GLACC-MAP-004
+    func: [F-GLACC-022]
+    sc: Duplicate active mapping for the same discriminator is blocked
+    t: A second active mapping with the same ConfigurationVersionId+SalaryComponentId+StatutoryType+MappingType is Conflict; updating the original row itself is not blocked
+    src: "PayrollAccountingService.SaveMappingAsync (duplicate AnyAsync)"
+    type: Negative
+    tags: [Idempotency]
+    pri: P1
+    sev: Medium
+    pre: "Mapping M1 already exists for V1, SalaryComponentId=BASIC, MappingType=Earnings, IsActive=true"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/versions/{V1}/mappings] {salaryComponentId:BASIC, mappingType:'Earnings', debitAccountId:X, creditAccountId:Y} => [409] Conflict (Duplicate accounting mapping)"
+      - "[PUT /api/payroll/accounting/mappings/{M1}] {salaryComponentId:BASIC, mappingType:'Earnings', debitAccountId:X, creditAccountId:Z} => [200] update of M1 itself succeeds"
+    auto: API
+    reg: true
+
+  - id: GLACC-MAP-005
+    func: [F-GLACC-023]
+    sc: Priority ordering resolves among multiple active candidates
+    t: When two active mappings both match a component's SalaryComponentId, GenerateAsync selects the one with the lowest Priority value
+    src: "PayrollAccountingService.GenerateAsync (OrderBy Priority)"
+    type: Contract
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Two active mappings for the same SalaryComponentId=BASIC exist: M1 Priority=1 (account ACC_A), M2 Priority=2 (account ACC_B)"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] => [200] the BASIC component's line uses ACC_A (M1, lower Priority), not ACC_B"
+    auto: DB-assisted
+    db: "Assert PayrollJournalLines.PayrollGLAccountId matches M1's DebitAccountId for the BASIC component"
+
+  - id: GLACC-MAP-006
+    func: [F-GLACC-024]
+    sc: Deactivate is the only removal path; no hard delete exists
+    t: DeactivateMappingAsync sets IsActive=false and returns NotFound for a nonexistent/cross-tenant id
+    src: "PayrollAccountingService.DeactivateMappingAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Mapping M1 exists and is IsActive=true"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[DELETE /api/payroll/accounting/mappings/{M1}] => [200] Success, M1 deactivated"
+      - "[GET /api/payroll/accounting/configurations] => [200] M1 no longer participates in generation (IsActive=false) but its row still exists"
+      - "[DELETE /api/payroll/accounting/mappings/{randomGuid}] => [404] NotFound"
+    auto: DB-assisted
+    db: "Assert PayrollGLMappings row for M1 still exists with IsActive=false (no hard delete)"
+
+  - id: GLACC-MAP-007
+    func: [F-GLACC-025]
+    sc: All 23 mapping types are individually creatable
+    t: Every declared PayrollGLMappingType value can be persisted on a mapping row
+    src: "Backend/HRMS.Domain/Enums/PayrollEnums.cs (PayrollGLMappingType)"
+    type: Contract
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: "V1 is an Active version"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: "23 mappings, one per MappingType, each with the accounts its type semantically implies"
+    steps:
+      - "[Manual] for each of the 23 PayrollGLMappingType values, POST a mapping using a statutoryType or a supported-source MappingType as discriminator => [200] all 23 created and individually retrievable"
+    auto: Manual only
+
+  - id: GLACC-MAP-008
+    func: [F-GLACC-026]
+    sc: All 3 account fields are independently optional at save time
+    t: A mapping can be saved with only one of Debit/Credit/EmployerContributionAccountId populated; enforcement of which is required happens only at Generate time
+    src: "PayrollAccountingService.SaveMappingAsync"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "V1 is an Active version"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: "mappingType='NetPayable', only creditAccountId set"
+    steps:
+      - "[POST /api/payroll/accounting/versions/{V1}/mappings] {mappingType:'NetPayable', creditAccountId:X} (debitAccountId omitted) => [200] created successfully"
+    auto: API
+
+  - id: GLACC-MAP-009
+    func: [F-GLACC-027]
+    sc: EmployerContributionAccountId has no effect on generated journal lines
+    t: Setting EmployerContributionAccountId on a mapping does not change which account an employer-contribution component's lines post to
+    src: "PayrollAccountingService.GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Mapping for an EmployerContribution-flagged component sets DebitAccountId=ACC_A, CreditAccountId=ACC_B, and EmployerContributionAccountId=ACC_C (a third, distinct account)"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] => [200] the employer-contribution component's lines post to ACC_A (debit) and ACC_B (credit) only - ACC_C never appears on any line"
+    auto: DB-assisted
+    db: "Assert no PayrollJournalLine.PayrollGLAccountId equals ACC_C's id"
+    cr: [CR-283]
+
+  - id: GLACC-MAP-010
+    func: [F-GLACC-028]
+    sc: Cross-tenant version id on CreateMapping
+    t: CreateMappingAsync for a version id belonging to another tenant returns NotFound, not Forbidden
+    src: "PayrollAccountingService.SaveMappingAsync (TenantId filter)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "V_T2 is an Active version belonging to tenant T2 (DEMO02)"
+    role: HRAdmin (T1, custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/versions/{V_T2}/mappings] as a T1 user => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: GLACC-MAP-011
+    func: [F-GLACC-029]
+    sc: Update cannot move a mapping to a different configuration version
+    t: UpdateMappingAsync always resolves ConfigurationVersionId from the mapping's own current row, ignoring any version id supplied in a different way
+    src: "PayrollAccountingService.SaveMappingAsync"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "Mapping M1 belongs to version V1; version V2 also exists and is Active"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[PUT /api/payroll/accounting/mappings/{M1}] {mappingType:'NetPayable', creditAccountId:X} => [200] M1's ConfigurationVersionId remains V1"
+    auto: API
+
+  - id: GLACC-MAP-012
+    func: [F-GLACC-030]
+    sc: No dimension fields exist on the mapping model
+    t: A full field read of PayrollGLMappingRequest/PayrollGLMapping confirms no CostCenterId/DepartmentId/LocationId field exists
+    src: "Backend/HRMS.Application/DTOs/Payroll/PayrollAccountingDtos.cs, Backend/HRMS.Domain/Entities/PayrollAccounting.cs"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] read PayrollGLMappingRequest/PayrollGLMappingDto/PayrollGLMapping's full field lists => no CostCenterId, DepartmentId, or LocationId field on any of the three"
+    auto: Manual only
+    cr: [CR-287]

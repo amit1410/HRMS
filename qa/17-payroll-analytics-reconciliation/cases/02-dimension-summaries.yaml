@@ -1,0 +1,190 @@
+sheet: PYA_Dimension_Summaries
+submodule: Department & Cost Center Dimension Summaries
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-DIM-001
+    func: [F-PYA-012]
+    sc: Department summary happy path
+    t: GetDepartmentSummaryAsync groups by the run-employee's own DepartmentId and reports per-department employee count, result count, and monetary totals
+    src: "PayrollAnalyticsController.Departments; PayrollAnalyticsService.GetDepartmentSummaryAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RUN1 has 4 employees: 2 in Department A (Gross 1000 each), 2 in Department B (Gross 2000 each)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/departments] => [200] 2 rows returned; Department A row has EmployeeCount=2, GrossTotal=2000; Department B row has EmployeeCount=2, GrossTotal=4000"
+    auto: API
+
+  - id: PYA-DIM-002
+    func: [F-PYA-012]
+    sc: Cost center summary happy path
+    t: GetCostCenterSummaryAsync groups by the run-employee's own CostCenterId, independent of Department
+    src: "PayrollAnalyticsService.GetCostCenterSummaryAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RUN1 from PYA-DIM-001, all 4 employees share Cost Center X"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/cost-centers] => [200] 1 row for Cost Center X with EmployeeCount=4, GrossTotal=6000"
+    auto: API
+
+  - id: PYA-DIM-003
+    func: [F-PYA-013]
+    sc: Dimension summary uses the run-employee's historical snapshot, not the employee's current assignment
+    t: An employee transferred to a new Department AFTER the payroll run's employment snapshot date still groups under their historical (as-of-run) Department, not their current one
+    src: "PayrollAnalyticsService.GetDimensionSummaryAsync (PayrollRunEmployees.DepartmentId)"
+    type: Boundary
+    tags: []
+    pri: P0
+    sev: High
+    pre: "RUN2 (period ending 2026-08-31) captured Employee E9 under Department A; E9 was transferred to Department B on 2026-09-15 (after the run)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN2"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN2}/departments] => [200] E9's persisted result is grouped under Department A, matching the run's own snapshot date, not E9's current Department B"
+    auto: DB-assisted
+    db: "Assert PayrollRunEmployees.DepartmentId for E9's RUN2 row is unchanged (still Department A) after the later transfer"
+
+  - id: PYA-DIM-004
+    func: [F-PYA-014]
+    sc: Null historical dimension groups as UNCLASSIFIED
+    t: A run-employee row with a null DepartmentId groups into a single UNCLASSIFIED / 'Historical dimension unavailable' row rather than being dropped
+    src: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN3 has 3 employees with a Department snapshot and 1 employee whose PayrollRunEmployee.DepartmentId is null"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN3"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN3}/departments] => [200] one row has code='UNCLASSIFIED' and name='Historical dimension unavailable' with EmployeeCount=1, and the run's total across all rows still accounts for all 4 employees"
+    auto: API
+
+  - id: PYA-DIM-005
+    func: [F-PYA-015]
+    sc: Stale (deleted/renamed) historical dimension id falls back to UNCLASSIFIED
+    t: A historical DepartmentId that no longer resolves to a live Departments row (deleted since the run) also falls back to the same UNCLASSIFIED code/name, not the stale id
+    src: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "RUN4's PayrollRunEmployee snapshot references a DepartmentId that has since been hard-deleted from Departments"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN4"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN4}/departments] => [200] the affected employee's row falls back to code='UNCLASSIFIED', not an error or the raw stale guid"
+    auto: DB-assisted
+    db: "Delete the referenced Departments row directly, then call the endpoint"
+
+  - id: PYA-DIM-006
+    func: [F-PYA-016]
+    sc: Dimension rows are ordered by Code ascending
+    t: Department summary rows are returned sorted by their own Code field, UNCLASSIFIED included in ordinary string order
+    src: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "RUN3 from PYA-DIM-004 (codes 'DEPT-A', 'DEPT-B', 'DEPT-C', and one UNCLASSIFIED row)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN3"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN3}/departments] => [200] rows are ordered DEPT-A, DEPT-B, DEPT-C, UNCLASSIFIED (plain ordinal string order)"
+    auto: API
+
+  - id: PYA-DIM-007
+    func: [F-PYA-017]
+    sc: Dimension totals reconcile to run-level control totals
+    t: The sum of GrossTotal/DeductionTotal/NetPayTotal across every department row equals the run's own GetControlTotalsAsync figures
+    src: "PayrollAnalyticsService.GetDimensionSummaryAsync, GetControlTotalsAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: High
+    pre: "RUN1 from PYA-DIM-001"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/control-totals] => [200] GrossTotal=6000"
+      - "[GET /api/payroll/analytics/runs/{RUN1}/departments] => [200] sum of every row's GrossTotal also equals 6000"
+    auto: API
+
+  - id: PYA-DIM-008
+    func: [F-PYA-018]
+    sc: EarningsTotal equals GrossTotal on every dimension row
+    t: PayrollDimensionSummaryDto never distinguishes earnings from gross at the dimension level - both fields are always equal
+    src: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "RUN1 from PYA-DIM-001"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN1}/departments] => [200] every row's EarningsTotal equals its own GrossTotal exactly"
+    auto: API
+
+  - id: PYA-DIM-009
+    func: [F-PYA-019]
+    sc: Dimension summaries require the run to resolve for the caller's tenant
+    t: A runId belonging to a different tenant returns NotFound/Unauthorized from both dimension endpoints
+    src: "PayrollAnalyticsService.LoadRunAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "RUN-T2 exists under Tenant T2 (DEMO02)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View, tenant T1)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-T2"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-T2}/departments] (authenticated to T1) => [404] Payroll run not found"
+      - "[GET /api/payroll/analytics/runs/{RUN-T2}/cost-centers] (authenticated to T1) => [404] Payroll run not found"
+    auto: API
+
+  - id: PYA-DIM-010
+    func: [F-PYA-012, F-PYA-014]
+    sc: Dimension summary on a run with zero persisted results returns an empty list, not an error
+    t: A Draft/Prepared run with no persisted Calculated PayrollResults returns 200 with an empty department/cost-center array
+    src: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "RUN5 (Draft) has zero persisted PayrollResults"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN5"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN5}/departments] => [200] empty array"
+    auto: API

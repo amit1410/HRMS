@@ -1,0 +1,142 @@
+sheet: Stat_PayrollIntegration
+submodule: Payroll Integration and Retro/Recalculation Impact
+defaults:
+  tenant: "T1 (DEMO01)"
+  role: "PayrollAdmin (with Payroll.Statutory.View granted)"
+  perm: "Payroll.Statutory.View"
+  reg: true
+
+cases:
+  - id: STAT-INT-001
+    func: [F-STAT-051]
+    sc: Regular payroll run integration
+    t: Statutory EmployeeAmount/EmployerAmount feed into the PayrollResult's TotalDeductions/EmployerContributions
+    src: "Backend/HRMS.Application/Services/PayrollCalculationEngine.cs CalculateEmployeeAsync"
+    type: Positive
+    tags: [Integration-Concurrency]
+    pri: P0
+    sev: High
+    pre: "A Prepared regular payroll run with one eligible employee, PF/Esi applicable, pre-statutory TotalDeductions=1000, EmployerContributions=0"
+    data: "PF EmployeeAmount=1200, EmployerAmount=1200; Esi EmployeeAmount=175, EmployerAmount=650"
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] calculate the run => [200] Calculated"
+      - "[GET /api/payroll/runs/{id}/results/{employeeId}] => [200] TotalDeductions = 1000 + 1200 + 175 = 2375; EmployerContributions = 0 + 1200 + 650 = 1850"
+    auto: API
+
+  - id: STAT-INT-002
+    func: [F-STAT-052]
+    sc: Off-cycle run integration
+    t: The identical statutory integration runs for OffCycle/Supplementary runs via CalculateAdjustmentOnlyAsync
+    src: "Backend/HRMS.Application/Services/PayrollCalculationEngine.cs CalculateAdjustmentOnlyAsync"
+    type: Positive
+    tags: [Integration-Concurrency]
+    pri: P1
+    sev: Medium
+    pre: "A Prepared OffCycle run for an employee with a matching approved PayrollAdjustment whose component IS included in the active ProvidentFund version's StatutoryComponentBasis"
+    data: "adjustment amount=5000, PF EmployeeRate=12"
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] calculate the off-cycle run => [200] Calculated"
+      - "[GET /api/payroll/runs/{id}/results/{employeeId}] => [200] the off-cycle result's own TotalDeductions includes a ProvidentFund deduction computed against the adjustment amount, proving statutory calculation is not skipped for off-cycle/adjustment-only runs"
+    auto: API
+
+  - id: STAT-INT-003
+    func: [F-STAT-053]
+    sc: A statutory failure fails the whole employee, no partial result
+    t: A failed statutory calculation (ambiguous or missing basis) produces PayrollCalculationErrorCode.StatutoryCalculationFailed and no partial PayrollResult
+    src: "Backend/HRMS.Application/Services/PayrollCalculationEngine.cs CalculateEmployeeAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    pre: "An employee whose profile applies to a statutory type with an ambiguous priority tie (per STAT-CALC-004)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] calculate the run => [200] Payroll calculation completed with errors."
+      - "[GET /api/payroll/runs/{id}/errors] => [200] one PayrollCalculationError with ErrorCode=StatutoryCalculationFailed for the affected employee"
+      - "[GET /api/payroll/runs/{id}/results/{employeeId}] => [404] no PayrollResult exists for this employee on this run at all - there is no partial result containing only the non-statutory components"
+    auto: API
+
+  - id: STAT-INT-004
+    func: [F-STAT-054]
+    sc: Statutory deduction can independently trigger NegativeNetPay
+    t: Adding statutory EmployeeAmount after an otherwise-non-negative net pay can still trigger the NegativeNetPay guard
+    src: "Backend/HRMS.Application/Services/PayrollCalculationEngine.cs CalculateEmployeeAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    pre: "An employee whose pre-statutory NetPay is 500 (positive) but whose statutory EmployeeAmount alone (e.g. a high-rate PF/Esi/PT slab) exceeds 500"
+    data: "pre-statutory NetPay=500, statutory EmployeeAmount=800"
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] calculate the run => [200] Payroll calculation completed with errors."
+      - "[GET /api/payroll/runs/{id}/errors] => [200] PayrollCalculationErrorCode.NegativeNetPay, message 'Total deductions exceed gross earnings after statutory deductions.' - distinct from the pre-statutory NegativeNetPay message"
+    auto: API
+
+  - id: STAT-INT-005
+    func: [F-STAT-055, F-STAT-056]
+    sc: Recalculation never cleans up prior attempt's statutory rows
+    t: Recalculating a payroll run leaves the prior attempt's PayrollStatutoryResult rows untouched
+    src: "Backend/HRMS.Application/Services/PayrollCalculationEngine.cs CalculateAsync; StatutoryPayrollService.CalculateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    pre: "A Calculated payroll run with employee E1's statutory results already persisted from attempt #1 (one PF row, one Esi row)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] with recalculate=true (a second attempt, same or changed inputs) => [200] recalculation completed; E1 gets a NEW PayrollResult id (CalculationVersion incremented, old PayrollResult.IsCurrent=false)"
+      - "[DB] query PayrollStatutoryResults for E1's run => the ORIGINAL attempt's PF/Esi rows still exist, unmarked and undeleted, alongside the NEW attempt's own PF/Esi rows (four total statutory rows for one employee/run)"
+    db: "PayrollStatutoryResults retains rows from both attempts with no IsCurrent/attempt marker distinguishing them"
+    auto: DB-assisted
+    cr: [CR-219]
+
+  - id: STAT-INT-006
+    func: [F-STAT-057, F-STAT-058]
+    sc: CONFIRMED DEFECT - the results endpoint returns the union of every attempt
+    t: GetResultsAsync(runId, employeeId) returns duplicated statutory rows from every retained calculation attempt after a recalculation
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs GetResultsAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    pre: "Following STAT-INT-005's setup: two attempts' worth of PayrollStatutoryResult rows exist for employee E1 on this run (one PF+Esi pair per attempt)"
+    data: none
+    steps:
+      - "[GET /api/payroll/runs/{id}/results/{employeeId}/statutory] => [200] returns FOUR rows (2x ProvidentFund, 2x Esi) instead of the two that belong to the CURRENT PayrollResult - the response has no field distinguishing which pair is current"
+      - "[Manual] inspect the (TenantId, PayrollResultId, StatutoryType) unique index (F-STAT-047) => it does NOT prevent this accumulation, since each attempt's rows reference a DIFFERENT PayrollResultId"
+    db: "PayrollStatutoryResults query is unfiltered by PayrollResultId/attempt"
+    auto: API
+    cr: [CR-219]
+
+  - id: STAT-INT-007
+    func: [F-STAT-059]
+    sc: Retro run uses its own period's effective configuration
+    t: A retro/off-cycle run recalculates against whatever profile/configuration is effective as of ITS OWN PeriodEndDate, unaffected by a later profile/configuration change
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "A regular run for period ending 2026-01-31 already Calculated under ProvidentFund EmployeeRate=12; the rate is later changed (a new configuration version, EmployeeRate=13, effective 2026-02-01) before an off-cycle run for the SAME January period is generated"
+    data: "January PeriodEndDate=2026-01-31; new rate effective 2026-02-01"
+    steps:
+      - "[POST /api/payroll/runs/{offCycleRunId}/calculate] an off-cycle run whose own PayrollPeriod also ends 2026-01-31 => [200] Calculated using the RATE THAT WAS EFFECTIVE ON 2026-01-31 (12%), not the newer 13% rate that only takes effect 2026-02-01"
+    auto: API
+
+  - id: STAT-INT-008
+    func: [F-STAT-060]
+    sc: Attempt-scoped components vs non-attempt-scoped statutory results compound the ambiguity
+    t: A recalculation that changes the underlying salary components produces new statutory results while the old attempt's stale rows still linger and are still returned
+    src: "Backend/HRMS.Application/Services/PayrollCalculationEngine.cs; StatutoryPayrollService.cs"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "A Calculated run recalculated after an employee salary override changed a PF-basis component's amount"
+    data: "attempt #1 basis=20000 -> PF EmployeeAmount=2400; attempt #2 (after override) basis=25000 -> PF EmployeeAmount=3000"
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] with recalculate=true after the override => [200] recalculated; a NEW PayrollResultComponent set (attempt #2, CalculationAttemptId #2) drives a NEW PF result of 3000"
+      - "[GET /api/payroll/runs/{id}/results/{employeeId}/statutory] => [200] BOTH the stale 2400 row (attempt #1) and the current 3000 row (attempt #2) are returned together, with no attempt marker to tell a caller which one reflects the override"
+    db: "PayrollResultComponents are attempt-scoped (CalculationAttemptId); PayrollStatutoryResults are not"
+    auto: API
+    cr: [CR-219]

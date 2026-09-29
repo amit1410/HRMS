@@ -1,0 +1,354 @@
+# Module 11 QA-risk register. Numbering continues after Module 10's CR-182 (qa/10-payroll/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. Classification starts 'Open - awaiting decision'.
+# CR-184 and CR-194/CR-195 are exceptions: they document confirmed source-level defects (a status-machine
+# gap and two frontend implementation gaps), not merely design ambiguities, and are classified accordingly.
+
+clarifications:
+  - id: CR-183
+    title: "HEADLINE FINDING - no seeded role other than SuperAdmin/TenantAdmin natively holds ANY Payroll.Loans.* permission, a materially larger native gap than any single-role finding in qa/10-payroll"
+    observation: >
+      A full grep of Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs's RolePermissionMap for every
+      Payroll.Loans.* permission constant (LoansView, LoansRequest, LoansManage, LoansApprove, LoansDisburse,
+      LoansRecover, LoansClose, LoansCancel, LoansViewHistory, LoansManageProducts) returns matches ONLY inside
+      the PermissionIds numbering dictionary (ids 145-154) and the Permissions.All catalogue - zero matches
+      inside any individual role's grant array. SuperAdmin and TenantAdmin both receive the entire module by
+      virtue of DomainPermissions.All; every other seeded role (HRAdmin, HRManager, Manager, Employee, SuperHR,
+      and every custom/support role) is granted precisely zero Loans permissions of any kind. This is a
+      qualitatively different shape from qa/10-payroll's CR-165/168/179 (HRManager/Manager/Employee missing
+      SOME of a large permission family) - here HRAdmin, which in qa/10-payroll natively holds the entire
+      Salary/Structure/Period/Run/Controls/TaxDeclaration/YearEndTax/Separation grant list, and SuperHR, which
+      natively holds an equivalent Payroll footprint there, both hold NOTHING from this module at all, native
+      or otherwise. Employee also lacks Payroll.Loans.Request, so a freshly seeded Employee cannot submit a
+      loan/advance request for themselves through /api/me/loans out of the box.
+    risk: >
+      Without an explicit, deliberate tenant-level grant, Loans & Advances is functionally invisible to every
+      role except the two full-tenant-admin roles - no HR role can review or approve a loan request, and no
+      employee can request one, immediately after a tenant is provisioned. Confirm with product whether this
+      is intentional (Loans/Advances access is meant to require a bespoke role setup per tenant, distinct from
+      the rest of Payroll) or a seeding oversight, since the feature is otherwise fully implemented and wired
+      end-to-end (API, calculation-engine integration, Final Settlement integration, frontend pages).
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, full grep for every Loans* permission constant); Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll.Loans* block, lines 196-205)"
+    classification: Open - awaiting decision
+
+  - id: CR-184
+    title: "CONFIRMED SOURCE-LEVEL DEFECT - a loan fully recovered to zero outstanding balance purely through payroll deductions is never transitioned to Closed"
+    observation: >
+      PayrollCalculationEngine.PersistLoanRecoveriesAsync correctly decrements loan.OutstandingPrincipal/
+      OutstandingInterest/OutstandingTotal on every successful payroll-sourced recovery (line ~205), but at no
+      point checks whether the resulting OutstandingTotal has reached zero, and never sets loan.Status =
+      LoanStatus.Closed or stamps ClosedAtUtc/ClosedByUserId/ClosureReason. This is a structural asymmetry
+      with PayrollLoanService.RecordRepaymentAsync (the MANUAL repayment path), which explicitly checks `if
+      (loan.OutstandingTotal == 0) { loan.Status = LoanStatus.Closed; ... }` for the identical "balance reaches
+      zero" condition. A loan whose entire remaining balance is recovered across successive payroll cycles -
+      the loan product's own intended primary repayment mechanism - therefore remains Status=Active forever
+      once fully repaid, unless an administrator separately notices and closes it, or a subsequent manual
+      repayment/prepayment/closure call happens to run against it (which would then find OutstandingTotal
+      already at zero and reject the request as exceeding/mismatching the outstanding amount).
+    risk: >
+      Any report, dashboard, or business rule that filters "outstanding/open loans" by Status=Active rather
+      than by OutstandingTotal>0 will indefinitely over-count fully-repaid loans as still open. The Loan
+      Register itself displays Status verbatim, so a fully-repaid loan recovered entirely through payroll would
+      show as "Active" with a correctly-zeroed OutstandingTotal - an internally inconsistent row. This is a
+      genuine, reproducible code defect (the missing branch is a straightforward two-line omission relative to
+      the already-correct manual-repayment implementation), not a design ambiguity.
+    source: "Backend/HRMS.Application/Services/PayrollCalculationEngine.cs (PersistLoanRecoveriesAsync, line ~205); contrast with Backend/HRMS.Application/Services/PayrollLoanService.cs (RecordRepaymentAsync, line ~128)"
+    classification: Confirmed defect
+
+  - id: CR-185
+    title: "Payroll.Loans.Manage and Payroll.Loans.ViewHistory are dead permissions, and no /history endpoint exists for loans at all despite a fully populated append-only LoanHistory table"
+    observation: >
+      Permissions.Payroll.LoansManage (id 147) and Permissions.Payroll.LoansViewHistory (id 153) are both
+      declared in Permissions.cs and included in Permissions.All, but a full grep of every [HasPermission(...)]
+      attribute in PayrollLoansController.cs shows each of the ten declared Loans permissions used is instead
+      one of View/Request/Approve/Disburse/Recover/Close/Cancel/ManageProducts - Manage and ViewHistory are
+      referenced nowhere. Correspondingly, IPayrollLoanService declares no GetHistoryAsync method and no
+      controller route exposes LoanHistories at all, unlike every history-bearing entity surveyed in
+      qa/10-payroll (SalaryComponent, SalaryStructure, EmployeeSalaryAssignment, PayrollPeriod, PayrollRun,
+      PayrollAdjustment, PayrollInputBatch), all of which expose a working GET .../history route gated by their
+      own *ViewHistory permission.
+    risk: >
+      This is the same dead-permission class already documented four times in qa/10-payroll (CR-167/173/175)
+      and once in qa/09-separation (CR-134) - a role granted Loans.Manage or Loans.ViewHistory, reasonably
+      expecting either a coarse management capability or a loan audit-trail view, will find neither does
+      anything. Separately, the complete absence of any history endpoint means the rich LoanHistory audit
+      trail this module actually maintains (see CR-095-CR-098's functionality coverage) can only be inspected
+      directly in the database, never through the product's own UI or API.
+    source: "Backend/HRMS.API/Controllers/PayrollLoansController.cs (full [HasPermission] grep); Backend/HRMS.Application/Abstractions/IPayrollLoanService.cs (absence of GetHistoryAsync); Backend/HRMS.Domain/Authorization/Permissions.cs (LoansManage/LoansViewHistory declarations, lines 198, 204)"
+    classification: Open - awaiting decision
+
+  - id: CR-186
+    title: "LoanProduct.MaxConcurrentLoans is stored but never enforced - an employee may hold unlimited concurrent loans against a product declaring a cap"
+    observation: >
+      LoanProductRequest.MaxConcurrentLoans is accepted, persisted on LoanProduct.MaxConcurrentLoans, and
+      round-tripped through LoanProductDto, but a full grep of PayrollLoanService.cs for "MaxConcurrentLoans"
+      shows it is read and written only in CreateProductAsync/UpdateProductAsync's field assignments - it is
+      never queried or compared against an employee's existing active loan count anywhere inside
+      CreateLoanAsync (or any other method). An administrator configuring MaxConcurrentLoans=1 on a product
+      believing it limits an employee to one concurrent loan of that type is silently unprotected; the field
+      has no runtime effect.
+    risk: >
+      This is the same "declared-but-unenforced configuration field" defect shape as qa/10-payroll's CR-181
+      (Retro Evaluate) in spirit, though lower severity here since it is a missing validation rather than a
+      broken state machine - an employee can request and have approved an arbitrary number of simultaneous
+      loans/advances against any product regardless of its configured cap, defeating a control an
+      administrator would reasonably expect to be load-bearing.
+    source: "Backend/HRMS.Application/Services/PayrollLoanService.cs (full grep for MaxConcurrentLoans, CreateLoanAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-187
+    title: "PartialPrepayAsync does not auto-close a loan even when the prepayment reduces OutstandingTotal to exactly zero, unlike RecordRepaymentAsync's identical-shaped auto-close"
+    observation: >
+      RecordRepaymentAsync explicitly closes the loan when the repayment brings OutstandingTotal to zero
+      (see CR-184's contrast). PartialPrepayAsync applies its entire Amount to OutstandingPrincipal only,
+      recomputes OutstandingTotal, increments ConcurrencyVersion, and returns - with no equivalent zero-balance
+      check anywhere in the method. A partial prepayment that happens to exactly clear a loan's remaining
+      principal (with OutstandingInterest already at zero) leaves the loan Active with OutstandingTotal=0,
+      structurally identical to CR-184's payroll-recovery gap but reachable through the ordinary, explicitly
+      product-gated (AllowPartialPrepayment) partial-prepayment feature itself.
+    risk: >
+      A tenant that enables AllowPartialPrepayment as its primary early-payoff mechanism (rather than the
+      separate, explicitly-gated CloseAsync early-closure action) will accumulate Active loans with zero
+      outstanding balance whenever an employee's final prepayment happens to be sized to exactly clear the
+      remaining principal - the same downstream reporting/dashboard risk documented in CR-184.
+    source: "Backend/HRMS.Application/Services/PayrollLoanService.cs (PartialPrepayAsync, line ~144); contrast with RecordRepaymentAsync (line ~128)"
+    classification: Open - awaiting decision
+
+  - id: CR-188
+    title: "CancelAsync has no idempotency guard against an already-Cancelled (or already-Rejected) loan - a repeated cancel succeeds again and duplicates history"
+    observation: >
+      CancelCoreAsync's only state guard is `if (loan.Status is LoanStatus.Active or LoanStatus.Closed) return
+      Conflict(...)`. LoanStatus.Cancelled and LoanStatus.Rejected are both absent from this blocked-state
+      list, so calling POST .../cancel a second time on an already-Cancelled loan (or once on an already-
+      Rejected loan) passes the state guard, re-runs the PayrollApprovalGuard check, and - if that guard
+      passes - re-sets Status=Cancelled and appends a second Cancelled LoanHistory row with a new reason/actor/
+      timestamp, rather than returning a no-op or a Conflict explaining the loan is already in a terminal
+      non-recoverable state.
+    risk: >
+      This is a minor but genuine state-machine gap: an audit-log reviewer could misread two Cancelled
+      LoanHistory rows as evidence of two distinct cancellation events (or a resurrection-then-recancellation)
+      rather than a harmless double-click or a retried API call. Worth a product decision on whether Cancelled/
+      Rejected should join Active/Closed as blocked terminal states.
+    source: "Backend/HRMS.Application/Services/PayrollLoanService.cs (CancelCoreAsync, line ~170)"
+    classification: Open - awaiting decision
+
+  - id: CR-189
+    title: "RejectAsync does not invoke PayrollApprovalGuard at all, unlike Approve/Cancel - a maker-checker/self-approval policy has no effect on rejection, and RequireReasonForCancellation-style reason policies never apply to it either"
+    observation: >
+      ApproveAsync and CancelCoreAsync both call `(approvalGuard ?? new PayrollApprovalGuard(db, tenant)).
+      ValidateAsync(...)` before mutating state. RejectAsync's full method body contains no reference to
+      approvalGuard or PayrollApprovalGuard at all - its only validation is the hand-rolled `string.
+      IsNullOrWhiteSpace(reason)` check. Consequently a tenant with RequireMakerChecker+PreventSelfApproval
+      enabled, which blocks a requester from approving or cancelling their own loan, places no equivalent
+      restriction on that same requester rejecting their own submitted (or even still-Draft) loan.
+    risk: >
+      This is an asymmetry a security reviewer auditing only Approve/Cancel for self-approval protection would
+      miss - Reject is the third state-changing action on the same Submitted/Draft loan and is entirely outside
+      the maker-checker policy's reach. Confirm whether Reject is intentionally exempt (a self-requester
+      withdrawing their own unapproved request is arguably harmless) or should be brought under the same guard
+      for consistency, especially since Draft-status rejection means a loan that was never even submitted for
+      review can still be formally "rejected" by its own requester.
+    source: "Backend/HRMS.Application/Services/PayrollLoanService.cs (RejectAsync, line ~110; contrast with ApproveAsync line ~106 and CancelCoreAsync line ~170)"
+    classification: Open - awaiting decision
+
+  - id: CR-190
+    title: "No Loan mutation endpoint accepts a client-supplied expectedConcurrencyVersion - an ordinary stale-form conflict surfaces as a generic 500, not a clean 409, unlike SalaryComponent/SalaryStructure/EmployeeSalaryAssignment"
+    observation: >
+      EmployeeLoan.ConcurrencyVersion IS a genuine EF `.IsConcurrencyToken()` column (PayrollLoansConfiguration.
+      cs, EmployeeLoanConfiguration, line 33), so a true simultaneous SaveChanges race between two loaded
+      copies of the same loan does throw DbUpdateConcurrencyException. However, none of PayrollLoansController's
+      mutation routes (approve/reject/record-disbursement/repayments/prepay/close/cancel) accept an
+      expectedConcurrencyVersion parameter of any kind - contrast with SalaryComponentService/
+      SalaryStructureService/EmployeeSalaryAssignmentService's activate/deactivate and update endpoints, which
+      all take an explicit client-supplied version and pre-check it, returning a friendly Conflict("changed by
+      another user") BEFORE calling SaveChanges. Because Loans has no such pre-check anywhere, and
+      Backend/HRMS.API/Middleware/ExceptionHandlingMiddleware.cs has no special handling for
+      DbUpdateConcurrencyException (it falls into the generic catch-all that returns HTTP 500 with a generic
+      "An unexpected error occurred" message outside Development), an ORDINARY stale-form edit conflict on a
+      loan (not just a genuine race) has no path to a clean 409 response at all in this module - it is either
+      silently accepted (if EF happens to still see the token match) or surfaces as an unhandled 500.
+    risk: >
+      A frontend built against this module's API cannot distinguish "someone else changed this loan since you
+      loaded it" from any other unexpected server error, and cannot offer a "reload and retry" UX the way the
+      Salary Component/Structure/Assignment pages already do via their concurrencyVersion threading (see
+      qa/10-payroll's positive note on this for those three pages). This is a systemic pattern across the
+      broader codebase wherever ConcurrencyVersion is a real IsConcurrencyToken with no matching API-level
+      pre-check, but Loans is the sole in-scope module where NO mutation route exposes the version at all.
+    source: "Backend/HRMS.API/Controllers/PayrollLoansController.cs (full route-parameter grep); Backend/HRMS.Infrastructure/Persistence/Configurations/PayrollLoansConfiguration.cs (EmployeeLoanConfiguration, line 33); Backend/HRMS.API/Middleware/ExceptionHandlingMiddleware.cs (generic catch-all, no DbUpdateConcurrencyException branch)"
+    classification: Open - awaiting decision
+
+  - id: CR-191
+    title: "LoanRegisterQuery has no registered FluentValidation validator - Page/PageSize are never bounded server-side"
+    observation: >
+      A full grep of the codebase for "LoanRegisterQuery" finds no corresponding validator class subclassing
+      PagedQueryValidator&lt;T&gt; (the pattern used elsewhere for PagedQuery-derived DTOs, which enforces
+      Page>=1 and PageSize within [1, PagedQuery.MaxPageSize=100]). PayrollLoansController.Register binds
+      [FromQuery] LoanRegisterQuery directly to GetRegisterAsync with no validation pipeline in between.
+    risk: >
+      A caller can request an arbitrarily large PageSize (defeating the pagination the register endpoint is
+      structurally meant to provide, and pulling an unbounded row set from EmployeeLoans/LoanRepayments/
+      LoanInstallments per request) or a Page&lt;=0, which feeds directly into `.Skip((query.Page - 1) *
+      query.PageSize)` - a zero or negative Skip either throws or returns an unexpected result window depending
+      on the underlying provider. Worth confirming whether this was a deliberate omission (e.g. because only
+      trusted internal tooling calls this route) or an oversight relative to every other paged endpoint in the
+      product.
+    source: "Backend/HRMS.Application/DTOs/Payroll/PayrollLoanDtos.cs (LoanRegisterQuery); Backend/HRMS.API/Controllers/PayrollLoansController.cs (Register action); Backend/HRMS.Application/Validators/Common/PagedQueryValidator.cs (the pattern not applied here)"
+    classification: Open - awaiting decision
+
+  - id: CR-192
+    title: "GetLoansAsync (the admin listing and every ESS route) is not paginated - it hard-caps at the 500 most-recently-requested loans with no page/pageSize parameters"
+    observation: >
+      GetAsync/GetLoansAsync's query is `... OrderByDescending(x => x.RequestedAtUtc).Take(500)` with no Page/
+      PageSize input anywhere in its signature or the LoanRequest/employeeId query parameters accepted by GET
+      /api/payroll/loans and GET /api/me/loans. This is structurally different from GetRegisterAsync (a true
+      PagedResult-returning endpoint) covering the identical EmployeeLoans table.
+    risk: >
+      A tenant with more than 500 total loan records (across all employees, since the admin route without an
+      employeeId filter returns tenant-wide) silently loses visibility of everything past the 500th most-
+      recent request - there is no way to page further, and the response gives no signal that truncation
+      occurred (no total-count field, no "hasMore" flag). This is a materially different (and more silent)
+      failure mode than a validated page-size cap would be.
+    source: "Backend/HRMS.Application/Services/PayrollLoanService.cs (GetLoansAsync, line ~58)"
+    classification: Open - awaiting decision
+
+  - id: CR-193
+    title: "LoanProduct header Min/Max amount and tenure fields (the eligibility bounds CreateLoanAsync actually enforces) and each LoanProductVersion's own independently-set Min/Max fields are two separate, never-reconciled bound sets"
+    observation: >
+      CreateLoanAsync's eligibility check (`product.MinAmount.HasValue && request.RequestedAmount <
+      product.MinAmount || ...`) reads exclusively from the LoanProduct header row. CreateProductVersionAsync
+      accepts its own independent MinAmount/MaxAmount/MinTenureMonths/MaxTenureMonths on the version row, with
+      no cross-check against the product header's own values, and UpdateProductAsync (which DOES let an
+      administrator change the header's bounds) never touches any existing LoanProductVersion row. A product
+      can therefore end up with a header advertising one Min/Max and an active version carrying a materially
+      different Min/Max, with the header's numbers being the ones that silently govern eligibility while the
+      version's own numbers are decorative for that purpose (the version's Min/Max is never independently
+      enforced anywhere in the codebase).
+    risk: >
+      An administrator who updates a product's version-level limits (believing this is how "the" limits are
+      changed, since LoanProductVersionRequest exposes the identical-looking field names) would see no change
+      in what CreateLoanAsync actually accepts, because eligibility is governed by the header fields set at
+      UpdateProductAsync time instead. This is a genuinely confusing dual-source-of-truth worth a product
+      decision on which set should be authoritative, or whether they should be reconciled/validated together.
+    source: "Backend/HRMS.Application/Services/PayrollLoanService.cs (CreateLoanAsync eligibility check, line ~96; CreateProductVersionAsync, line ~42; UpdateProductAsync, line ~30)"
+    classification: Open - awaiting decision
+
+  - id: CR-194
+    title: "CONFIRMED FRONTEND DEFECT - the admin 'Manual repayment' and 'Partial prepayment' buttons hardcode amount:1 with no amount input field"
+    observation: >
+      PayrollLoansPage.tsx's LoanActions component renders, for an Active loan, `<button onClick={() =>
+      void action(() => recordLoanRepayment(loan.id, { amount: 1, reference: 'Admin repayment' }))}>Manual
+      repayment</button>` and an equivalent hardcoded `{ amount: 1, reference: 'Admin prepayment' }` for
+      Partial prepayment. There is no numeric input, form field, or prompt anywhere in the component through
+      which an operator can specify the actual amount to record - every click of either button submits exactly
+      1 currency unit against the backend's fully general RecordRepaymentAsync/PartialPrepayAsync endpoints
+      (which both accept and correctly apply an arbitrary decimal Amount).
+    risk: >
+      This makes both actions functionally unusable for their real purpose in the shipped admin UI - an
+      operator cannot record an actual repayment or prepayment of any meaningful size through this page today,
+      only ever a trivial 1-unit transaction. This is a confirmed implementation gap in the UI layer, not a
+      design ambiguity, since the backend capability it is meant to expose is already fully implemented and
+      correct.
+    source: "Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (LoanActions component, line 18)"
+    classification: Confirmed defect
+
+  - id: CR-195
+    title: "CONFIRMED FRONTEND DEFECT - the 'Edit first product' control always edits products.data[0], never the product the operator actually selects"
+    observation: >
+      PayrollLoansPage's product-editing state is a single boolean `editing`; when true, it renders
+      `<ProductForm initial={{ ...products.data[0], id: products.data[0].id }} ... />` - hardcoded to index 0
+      of the products array regardless of which row the operator clicked or intended to change. There is no
+      per-row "Edit" button in the Loan Products table and no product-selection mechanism feeding into
+      `editing`.
+    risk: >
+      With more than one loan product configured (the normal case for any real tenant, e.g. separate Personal
+      Loan / Salary Advance / Emergency Loan products), every product after the first is permanently
+      unreachable for editing through this page - only the alphabetically/insertion-order first product can
+      ever be updated via the UI, forcing a direct API call for every other product.
+    source: "Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (PayrollLoansPage component, lines 34-36)"
+    classification: Confirmed defect
+
+  - id: CR-196
+    title: "(frontend) The Loan Product form exposes no controls for AllowPartialPrepayment, AllowEarlyClosure or MaxConcurrentLoans - every UI-created product is silently fixed at AllowPartialPrepayment=false and AllowEarlyClosure=false"
+    observation: >
+      ProductForm's form-grid renders inputs for Code, Name, Type, Currency, Minimum/Maximum amount, Minimum/
+      Maximum tenure, Interest method, Interest rate, and Recovery policy only. AllowPartialPrepayment,
+      AllowEarlyClosure and MaxConcurrentLoans are all present on LoanProductRequest and are submitted with
+      whatever value `form` currently holds - but since no input ever changes them, every product CREATED
+      through this page keeps blankProduct's fixed defaults (AllowPartialPrepayment: false, AllowEarlyClosure:
+      false, maxConcurrentLoans: 1) permanently.
+    risk: >
+      Partial Prepayment and Early Closure (both fully implemented, correctly product-gated backend features -
+      see F-LOAN-058/F-LOAN-062) are unreachable for any product an operator creates through this UI, since the
+      product-level flags that unlock them can never be set to true here. An administrator would need to know
+      to call the API directly (or that no such toggle exists in the UI at all) to enable either feature -
+      a significant, non-obvious gap between what the backend supports and what the shipped admin UI can
+      configure.
+    source: "Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (ProductForm component and blankProduct constant, lines 9, 15)"
+    classification: Open - awaiting decision
+
+  - id: CR-197
+    title: "(frontend) PayrollLoansPage and MyLoansPage perform zero client-side permission checks, the same coarse-gating pattern already documented across qa/08-attendance/qa/09-separation/qa/10-payroll"
+    observation: >
+      A full grep of PayrollLoansPage.tsx for useAuth|usePermission|hasPermission|can( returns zero matches.
+      Every lifecycle action button (Approve/Reject/Record disbursement/Manual repayment/Partial prepayment/
+      Early closure/Cancel) and the entire Loan Product create/edit form render unconditionally, regardless of
+      whether the signed-in user actually holds Payroll.Loans.Approve/Disburse/Recover/Close/Cancel/
+      ManageProducts - the backend correctly rejects an unauthorized call with 403, but only after a failed
+      round-trip, matching qa/10-payroll's CR-170 finding for the majority of its own Payroll pages.
+    risk: >
+      A user holding only Payroll.Loans.View sees every mutating button rendered as if usable, and only
+      discovers each one is unavailable after clicking it and receiving a Forbidden response - a materially
+      worse experience than a page that hides or disables actions it already knows the user cannot perform.
+    source: "Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (full grep for permission-checking hooks/functions)"
+    classification: Open - awaiting decision
+
+  - id: CR-198
+    title: "(frontend) Neither PayrollLoansPage nor MyLoansPage has a navigation.ts entry - both are reachable only by typing the URL, the same discoverability gap as qa/09-separation's CR-163 and qa/10-payroll's CR-169"
+    observation: >
+      A full grep of Frontend/HRMS.Web/src/layout/navigation.ts for 'loan'/'Loan' (case-insensitive) returns no
+      matches, while both PayrollLoansPage and MyLoansPage are registered routes in App.tsx and are fully
+      functional pages with real backend integration.
+    risk: >
+      Manual QA, payroll administrators, and employees alike can only reach the Loans admin screen or the
+      employee self-service Loans/Advances screen by already knowing the exact URL - there is no sidebar,
+      menu, or discoverable in-app path to either page, on top of the CR-197 permission-gating gap above.
+    source: "Frontend/HRMS.Web/src/layout/navigation.ts (full grep for loan/Loan); Frontend/HRMS.Web/src/App.tsx (route registrations for PayrollLoansPage/MyLoansPage)"
+    classification: Open - awaiting decision
+
+  - id: CR-199
+    title: "CreateLoanAsync does not verify the requesting/target employee's own employment Status is Active - a resigned, terminated, or on-notice employee's row can still receive a new loan/advance request as long as the Employee row exists"
+    observation: >
+      CreateLoanAsync's employee lookup is `db.Employees.AsNoTracking().FirstOrDefaultAsync(x => x.TenantId ==
+      tid && x.Id == request.EmployeeId, ct)` with no `&& x.Status == EmployeeStatus.Active` predicate, unlike
+      qa/10-payroll's Payroll Run population eligibility (F-PAY-075 in that module), which explicitly requires
+      Employee.Status=Active. A separated employee whose record has not been purged, or an employee mid-notice-
+      period with Status still technically Active-but-exiting, is treated identically to any other active
+      employee for loan eligibility purposes.
+    risk: >
+      Combined with qa/09-separation's Final Settlement loan-recovery integration (which DOES correctly sweep
+      up any still-Active loan balance at settlement time - see F-LOAN-072 to F-LOAN-078), this is not
+      necessarily a financial-loss risk, but it is a surprising gap for a control most HR/finance teams would
+      expect: a new loan/advance being approvable for someone already known to be leaving. Confirm whether an
+      employment-status eligibility gate belongs in CreateLoanAsync itself, or is intentionally deferred to
+      whatever approval workflow/human review sits around the Approve action.
+    source: "Backend/HRMS.Application/Services/PayrollLoanService.cs (CreateLoanAsync, line ~95, employee lookup with no Status predicate)"
+    classification: Open - awaiting decision
+
+  - id: CR-200
+    title: "(defensive, not reachable) LoanProductVersionStatus.Retired is a declared lifecycle state that no service method in PayrollLoanService ever assigns"
+    observation: >
+      LoanProductVersionStatus declares Draft/Active/Retired. A full grep of PayrollLoanService.cs shows every
+      LoanProductVersion is created with Status=LoanProductVersionStatus.Active (both in CreateProductAsync's
+      auto-generated initial version and in CreateProductVersionAsync) and no method ever transitions a version
+      to Retired or Draft. In practice this means every version created through the API remains Active forever,
+      and the overlap check in CreateProductVersionAsync (which only considers `x.Status ==
+      LoanProductVersionStatus.Active` rows) can never be bypassed by first retiring an old version - an
+      administrator wanting to change a product's terms must create a new, non-overlapping version rather than
+      retiring the old one first.
+    risk: >
+      None functionally today, since there is no API path that would produce an inconsistent Retired-state
+      version - this is documented so QA does not spend effort hunting for a way to reach Retired through the
+      exposed API (there is none), and so a future feature that adds an explicit retire/deactivate action for a
+      version is aware this enum value has been dormant since the feature's initial implementation.
+    source: "Backend/HRMS.Domain/Enums/LoanEnums.cs (LoanProductVersionStatus); Backend/HRMS.Application/Services/PayrollLoanService.cs (full grep for LoanProductVersionStatus.Retired - zero matches)"
+    classification: Design confirmed (no change requested)

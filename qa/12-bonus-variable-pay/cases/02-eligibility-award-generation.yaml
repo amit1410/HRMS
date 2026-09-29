@@ -1,0 +1,353 @@
+sheet: VPay_Eligibility_Generation
+submodule: Eligibility, salary-basis resolution, proration and award calculation/generation
+defaults:
+  role: HRADMIN
+  perm: "Payroll.VariablePay.CreateAward"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.VariablePay.Calculate and CreateAward granted, and a Published FixedAmount plan version exists effective 2026-01-01, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: VPAY-GEN-001
+    func: [F-VPAY-019]
+    sc: A valid award period is required
+    t: AwardPeriodTo<AwardPeriodFrom, or either left at its default value, is rejected
+    src: ["VariablePayService.CalculateCoreAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] AwardPeriodFrom=2026-12-31, AwardPeriodTo=2026-01-01 => [400] A valid award period is required."
+      - "[POST /api/payroll/variable-pay-awards/generate] AwardPeriodFrom=0001-01-01 (default) => [400] A valid award period is required."
+    auto: API
+
+  - id: VPAY-GEN-002
+    func: [F-VPAY-020]
+    sc: Only a Published version effective on the eligibility date resolves
+    t: A Draft version, or a Published version outside the eligibility date window, is rejected as Invalid
+    src: ["VariablePayService.CalculateCoreAsync (version lookup)"]
+    type: Negative
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] Status=Draft, CalculationMethod=FixedAmount, FixedAmount=500, EffectiveFrom=2026-01-01 => [200/201] Draft version created"
+      - "[POST /api/payroll/variable-pay-awards/generate] PlanVersionId=that Draft version, EligibilityDate=2026-06-01 => [400] An active published plan version effective on the eligibility date is required."
+      - "[POST /api/payroll/variable-pay-awards/generate] PlanVersionId=Published version, EligibilityDate=2025-01-01 (before EffectiveFrom) => [400] An active published plan version effective on the eligibility date is required."
+    auto: API
+
+  - id: VPAY-GEN-003
+    func: [F-VPAY-021]
+    sc: The target employee must exist in the tenant
+    t: An unknown employeeId is NotFound
+    src: ["VariablePayService.CalculateCoreAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId={unknownId}, PlanVersionId=valid => [404] Employee not found."
+    auto: API
+
+  - id: VPAY-GEN-004
+    func: [F-VPAY-022]
+    sc: ActiveEmployment eligibility gates on Employee.Status
+    t: Generating for an Inactive/Resigned employee under an ActiveEmployment-eligibility version is rejected as Invalid
+    src: ["VariablePayService.CalculateCoreAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Manual/DB] Set the target employee's Status=Inactive => Employee.Status=Inactive"
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId=that employee, PlanVersionId=EligibilityMethod.ActiveEmployment version => [400] The employee is not active for this plan."
+    auto: DB-assisted
+
+  - id: VPAY-GEN-005
+    func: [F-VPAY-023]
+    sc: MinimumService eligibility gates on DateOfJoining+MinimumServiceMonths
+    t: An employee whose joining date plus the configured months exceeds the eligibility date is rejected
+    src: ["VariablePayService.CalculateCoreAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] EligibilityMethod=MinimumService, MinimumServiceMonths=12, CalculationMethod=FixedAmount, FixedAmount=1000, EffectiveFrom=2026-01-01 => [200/201] version created"
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId=(DateOfJoining=2026-01-01), PlanVersionId=that version, EligibilityDate=2026-06-01 => [400] The minimum configured service period is not met."
+    auto: API
+
+  - id: VPAY-GEN-006
+    func: [F-VPAY-023]
+    sc: ConfiguredApplicability and ManualReview are not independently implemented
+    t: A version set to EligibilityMethod.ConfiguredApplicability (no MinimumServiceMonths) behaves identically to no eligibility gate at all beyond ActiveEmployment
+    src: ["VariablePayService.CalculateCoreAsync (full method - only ActiveEmployment explicitly branched)"]
+    type: Boundary
+    pri: P2
+    tags: [Configuration]
+    cr: [CR-216]
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] EligibilityMethod=ConfiguredApplicability, ApplicabilityJson='{\"departmentIds\":[\"00000000-0000-0000-0000-000000000000\"]}', CalculationMethod=FixedAmount, FixedAmount=1000, EffectiveFrom=2026-01-01 => [200/201] version created"
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId=(any active employee, NOT in the configured department) => [200] award generated - ApplicabilityJson's department restriction was never enforced"
+    auto: API
+
+  - id: VPAY-GEN-007
+    func: [F-VPAY-024]
+    sc: ApplicabilityJson has no observable effect on eligibility
+    t: A restrictive ApplicabilityJson does not narrow which employees can receive an award
+    src: ["VariablePayService.cs (full grep for ApplicabilityJson - never read in CalculateCoreAsync)"]
+    type: Boundary
+    pri: P2
+    tags: [Configuration]
+    cr: [CR-209]
+    steps:
+      - "[Manual/Code] Grep VariablePayService.cs for 'ApplicabilityJson' => matched only in AddVersionAsync's assignment and the DTO mapping, never inside CalculateCoreAsync's eligibility checks"
+    auto: Manual only
+
+  - id: VPAY-GEN-008
+    func: [F-VPAY-025]
+    sc: FixedConfiguredAmount short-circuits salary-basis resolution; other bases require an active salary assignment
+    t: FixedConfiguredAmount succeeds with basis=0 even with no salary assignment; Gross/SelectedSalaryComponents fail Invalid without one
+    src: ["VariablePayService.ResolveSalaryBasisAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId=(no active salary assignment), PlanVersionId=SalaryBasisType.FixedConfiguredAmount version => [200] SalaryBasisAmount=0, award generated"
+      - "[POST /api/payroll/variable-pay-plans/{targetId}/versions] SalaryBasisType=Gross, CalculationMethod=PercentageOfSalary, Percentage=10, EffectiveFrom=2026-01-01 => [200/201] version created"
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId=(no active salary assignment), PlanVersionId=that Gross version => [400] No effective salary assignment is available."
+    auto: API
+
+  - id: VPAY-GEN-009
+    func: [F-VPAY-026]
+    sc: SalaryBasisType.Basic always fails with a misleading error message
+    t: A version configured SalaryBasisType.Basic can never resolve a salary basis, and reports an unrelated SelectedSalaryComponents error
+    src: ["VariablePayService.ResolveSalaryBasisAsync (full method - no Basic branch)"]
+    type: Negative
+    pri: P1
+    cr: [CR-211]
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{targetId}/versions] SalaryBasisType=Basic, CalculationMethod=PercentageOfSalary, Percentage=10, EffectiveFrom=2026-01-01 => [200/201] version created"
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId=(active salary assignment present), PlanVersionId=that Basic version => [400] This salary basis requires configured salary component IDs. (misleading - Basic has no implementation)"
+    auto: API
+
+  - id: VPAY-GEN-010
+    func: [F-VPAY-027]
+    sc: Gross basis resolves from MonthlyCtc, falling back to AnnualCtc/12
+    t: An assignment with MonthlyCtc set uses it directly; one with only AnnualCtc divides by 12
+    src: ["VariablePayService.ResolveSalaryBasisAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Active salary assignment with MonthlyCtc=60000, AnnualCtc=null => assignment persisted"
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] employeeId, PlanVersionId=Gross-basis version => [200] SalaryBasisAmount=60000"
+      - "[Manual/DB] Change the assignment to MonthlyCtc=null, AnnualCtc=720000 => assignment persisted"
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] employeeId, PlanVersionId=Gross-basis version => [200] SalaryBasisAmount=60000 (720000/12)"
+    auto: DB-assisted
+
+  - id: VPAY-GEN-011
+    func: [F-VPAY-028]
+    sc: SelectedSalaryComponents sums active matching components; an empty id list is rejected
+    t: Basis equals the sum of OverrideValue for active assignment components matching the configured ids; a component absent on the employee's own assignment contributes 0
+    src: ["VariablePayService.ResolveSalaryBasisAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{targetId}/versions] SalaryBasisType=SelectedSalaryComponents, SelectedSalaryComponentIdsJson='[]', CalculationMethod=PercentageOfSalary, Percentage=10, EffectiveFrom=2026-01-01 => [200/201] version created"
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] employeeId, PlanVersionId=that version (empty ids) => [400] Selected salary component IDs are required."
+      - "[Manual/DB] Set SelectedSalaryComponentIdsJson to the employee's own HRA component id (OverrideValue=15000) => version updated"
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] employeeId, PlanVersionId=that version => [200] SalaryBasisAmount=15000"
+    auto: DB-assisted
+
+  - id: VPAY-GEN-012
+    func: [F-VPAY-029]
+    sc: ProrationMethod.None always returns a factor of 1
+    t: A None-proration award is never reduced regardless of joining/leaving dates within the period
+    src: ["VariablePayService.ResolveProration"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId=(DateOfJoining mid-period), PlanVersionId=ProrationMethod.None version, AwardPeriodFrom=2026-01-01, AwardPeriodTo=2026-12-31 => [200] ProrationFactor=1"
+    auto: API
+
+  - id: VPAY-GEN-013
+    func: [F-VPAY-029]
+    sc: An inverted eligible range prorates to zero
+    t: An employee who left before the award period even starts prorates to a factor of 0, not a negative value
+    src: ["VariablePayService.ResolveProration"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Set the employee's DateOfLeaving=2025-12-01 (before the 2026 award period) => Employee.DateOfLeaving=2025-12-01"
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] employeeId=that employee, PlanVersionId=ProrationMethod.CalendarDays version, AwardPeriodFrom=2026-01-01, AwardPeriodTo=2026-12-31 => [200] ProrationFactor=0, CalculatedAmount=0"
+    auto: DB-assisted
+
+  - id: VPAY-GEN-014
+    func: [F-VPAY-030]
+    sc: CalendarDays, ServiceDays and EligibleDaysInPeriod produce identical proration
+    t: Three distinct ProrationMethod values yield numerically identical factors for the same joining/leaving/period inputs
+    src: ["VariablePayService.ResolveProration (full method - shared day-ratio branch)"]
+    type: Boundary
+    pri: P2
+    tags: [Configuration]
+    cr: [CR-210]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] employeeId=(DateOfJoining=2026-07-01), PlanVersionId=ProrationMethod.CalendarDays version, AwardPeriodFrom=2026-01-01, AwardPeriodTo=2026-12-31 => [200] ProrationFactor=X"
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] same employee, PlanVersionId=ProrationMethod.ServiceDays version (identical other terms) => [200] ProrationFactor=X (identical to CalendarDays)"
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] same employee, PlanVersionId=ProrationMethod.EligibleDaysInPeriod version (identical other terms) => [200] ProrationFactor=X (identical to both)"
+    auto: API
+
+  - id: VPAY-GEN-015
+    func: [F-VPAY-031]
+    sc: CompletedMonths uses a distinct month-count ratio
+    t: CompletedMonths produces a numerically different proration factor than the day-ratio methods for a mid-month joining date
+    src: ["VariablePayService.ResolveProration"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] employeeId=(DateOfJoining=2026-07-15), PlanVersionId=ProrationMethod.CompletedMonths version, AwardPeriodFrom=2026-01-01, AwardPeriodTo=2026-12-31 => [200] ProrationFactor reflects a completed-months ratio (6/12), distinct from the day-ratio value for the same joining date"
+    auto: API
+
+  - id: VPAY-GEN-016
+    func: [F-VPAY-032]
+    sc: A performance multiplier is required when PerformanceRatingRequired is set, else defaults to 1
+    t: Omitting PerformanceMultiplier on a PerformanceRatingRequired=true version is Invalid; omitting it on a false version defaults the multiplier to 1
+    src: ["VariablePayService.CalculateCoreAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId, PlanVersionId=PerformanceRatingRequired=true version, PerformanceMultiplier omitted => [400] A performance multiplier is required by this plan."
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId, PlanVersionId=PerformanceRatingRequired=false version, PerformanceMultiplier omitted => [200] PerformanceMultiplier=1"
+    auto: API
+
+  - id: VPAY-GEN-017
+    func: [F-VPAY-033]
+    sc: A supplied multiplier outside the configured range or negative is rejected
+    t: A multiplier below PerformanceMultiplierMinimum, above PerformanceMultiplierMaximum, or negative each fail Invalid
+    src: ["VariablePayService.CalculateCoreAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] PlanVersionId=(min=0.5, max=1.5) version, PerformanceMultiplier=0.4 => [400] The performance multiplier is outside the configured range."
+      - "[POST /api/payroll/variable-pay-awards/generate] PlanVersionId=(min=0.5, max=1.5) version, PerformanceMultiplier=1.6 => [400] The performance multiplier is outside the configured range."
+      - "[POST /api/payroll/variable-pay-awards/generate] PlanVersionId=(no bounds configured) version, PerformanceMultiplier=-0.1 => [400] The performance multiplier is outside the configured range."
+    auto: API
+
+  - id: VPAY-GEN-018
+    func: [F-VPAY-034]
+    sc: Calculation-method formula matrix
+    t: FixedAmount, PercentageOfSalary, TargetWithMultiplier and ManualAmount each compute the amount per their own formula; ManualAmount additionally requires a Reason
+    src: ["VariablePayService.CalculateCoreAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] PlanVersionId=FixedAmount(10000) version => [200] CalculatedAmount=10000 (before proration)"
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] PlanVersionId=PercentageOfSalary(10%) version, SalaryBasisAmount=50000 => [200] CalculatedAmount=5000"
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] PlanVersionId=TargetWithMultiplier(TargetPercentage=10, SalaryBasisAmount=50000), PerformanceMultiplier=1.2 => [200] CalculatedAmount=6000 (5000*1.2)"
+      - "[POST /api/payroll/variable-pay-awards/generate] PlanVersionId=ManualAmount version, ManualAmount=7500, Reason='' => [400] A reason is required for a manual award."
+      - "[POST /api/payroll/variable-pay-awards/generate] PlanVersionId=ManualAmount version, ManualAmount=7500, Reason='Discretionary spot award' => [200] CalculatedAmount=7500"
+    auto: API
+
+  - id: VPAY-GEN-019
+    func: [F-VPAY-035]
+    sc: The raw amount is prorated, clamped to Min/Max bounds, and rounded
+    t: A calculated amount below MinimumAmount is floored to it; above MaximumAmount is capped; the final result is rounded to 2 decimals
+    src: ["VariablePayService.CalculateCoreAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] PlanVersionId=(MinimumAmount=2000, MaximumAmount=8000, FixedAmount=1000) version => [200] CalculatedAmount=2000 (floored to Minimum)"
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] PlanVersionId=(MinimumAmount=2000, MaximumAmount=8000, FixedAmount=9000) version => [200] CalculatedAmount=8000 (capped to Maximum)"
+    auto: API
+
+  - id: VPAY-GEN-020
+    func: [F-VPAY-036]
+    sc: Preview never persists and always reports AwardNumber='PREVIEW'
+    t: Repeated Preview calls with identical parameters do not create an award row and always echo AwardNumber='PREVIEW'
+    src: ["VariablePayService.PreviewAsync -> CalculateCoreAsync(persist:false)"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate-preview] employeeId, PlanVersionId, AwardPeriodFrom=2026-03-01, AwardPeriodTo=2026-03-31 => [200] AwardNumber=PREVIEW"
+      - "[GET /api/payroll/variable-pay-awards?employeeId={employeeId}&periodFrom=2026-03-01&periodTo=2026-03-31] => [200] TotalCount=0 (Preview wrote nothing)"
+    auto: API
+
+  - id: VPAY-GEN-021
+    func: [F-VPAY-037]
+    sc: Generate is idempotent per (employee, plan version, award period)
+    t: A repeated identical Generate call returns the pre-existing award unchanged
+    src: ["VariablePayService.CalculateCoreAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId, PlanVersionId, AwardPeriodFrom=2026-04-01, AwardPeriodTo=2026-04-30 => [200] award created, AwardNumber=VPA/2026/000001"
+      - "[POST /api/payroll/variable-pay-awards/generate] identical parameters (second call) => [200] Existing idempotent award returned., same award Id as the first call"
+    auto: API
+
+  - id: VPAY-GEN-022
+    func: [F-VPAY-038]
+    sc: Award numbers are tenant/year-sequential
+    t: Successive awards generated within the same tenant/year increment the sequence; a new year restarts at 000001
+    src: ["VariablePayService.NextAwardNumberAsync"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId1, AwardPeriodFrom=2026-01-01, AwardPeriodTo=2026-01-31 => [200] AwardNumber=VPA/2026/000001"
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId2, AwardPeriodFrom=2026-02-01, AwardPeriodTo=2026-02-28 => [200] AwardNumber=VPA/2026/000002"
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId3, AwardPeriodFrom=2027-01-01, AwardPeriodTo=2027-01-31 => [200] AwardNumber=VPA/2027/000001"
+    auto: API
+
+  - id: VPAY-GEN-023
+    func: [F-VPAY-039]
+    sc: A new award starts at Calculated with two history rows
+    t: A freshly generated award is Status=Calculated (never Draft) and carries AwardGenerated + AwardCalculated history rows
+    src: ["VariablePayService.CalculateCoreAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId, PlanVersionId => [200] Status=Calculated"
+      - "[GET /api/payroll/variable-pay-awards/{id}/history] => [200] two rows: EventType=AwardGenerated and EventType=AwardCalculated"
+    auto: API
+
+  - id: VPAY-GEN-024
+    func: [F-VPAY-040]
+    sc: The award snapshots its calculation inputs at generation time
+    t: A later change to the plan version's terms does not retroactively change an already-generated award's SalaryBasisAmount/CalculatedAmount
+    src: ["VariablePayService.CalculateCoreAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] PlanVersionId=(FixedAmount=5000) version => [200] CalculatedAmount=5000"
+      - "[Manual/DB] Change the plan version's FixedAmount to 9000 directly => version updated"
+      - "[GET /api/payroll/variable-pay-awards/{id}] => [200] CalculatedAmount is still 5000, unaffected by the version change"
+    auto: DB-assisted
+
+  - id: VPAY-GEN-025
+    func: [F-VPAY-041]
+    sc: A provisional tax split is set at generation time
+    t: A freshly Calculated award already carries TaxableAmount/NonTaxableAmount derived from the version's TaxTreatment, based on CalculatedAmount (no ApprovedAmount yet)
+    src: ["VariablePayService.CalculateCoreAsync -> SetTaxSplit"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] PlanVersionId=(TaxTreatment=PartiallyTaxable, TaxablePercentage=40, FixedAmount=10000) version => [200] TaxableAmount=4000, NonTaxableAmount=6000"
+    auto: API
+
+  - id: VPAY-GEN-026
+    func: [F-VPAY-042]
+    sc: Bulk generation iterates every employee and reports generated/skipped counts
+    t: A bulk run against a FixedAmount plan succeeds for all Active-eligible employees and skips the rest with reasons captured
+    src: ["VariablePayService.GenerateBulkAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate-bulk] PlanVersionId=FixedAmount(1000) version, AwardPeriodFrom=2026-05-01, AwardPeriodTo=2026-05-31, EligibilityDate=2026-05-01 => [200] Eligible=<tenant employee count>, Generated=<active count>, Skipped=<inactive count>, Reasons lists each skipped employeeId with its failure message"
+    auto: API
+
+  - id: VPAY-GEN-027
+    func: [F-VPAY-042]
+    sc: Bulk generation is unusable against a ManualAmount or PerformanceRatingRequired plan
+    t: A bulk run against a ManualAmount plan version skips 100% of employees with 'A reason is required for a manual award.'
+    src: ["VariablePayService.GenerateBulkAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    cr: [CR-212]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate-bulk] PlanVersionId=ManualAmount version, AwardPeriodFrom=2026-06-01, AwardPeriodTo=2026-06-30, EligibilityDate=2026-06-01 => [200] Generated=0, Skipped=<all employees>, every Reasons entry ends 'A reason is required for a manual award.'"
+    auto: API

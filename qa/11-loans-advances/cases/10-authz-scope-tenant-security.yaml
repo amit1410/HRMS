@@ -1,0 +1,195 @@
+sheet: Loans_Scope_Security
+submodule: Authorization, Scope and Tenant Isolation - seeded-role permission matrix (headline finding), ESS ownership, cross-tenant isolation
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Loans.View"
+  tenant: A
+  pre: "Tenant A, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-SEC-001
+    func: [F-LOAN-084]
+    sc: HRAdmin holds zero Loans permissions out of the box
+    t: A freshly seeded HRAdmin user is Forbidden on every Loans route despite the role name implying HR/payroll administration authority
+    src: ["SeedData.cs (RolePermissionMap[HRAdmin], full absence of Payroll.Loans.*)"]
+    type: Authorization
+    pri: P0
+    sev: Critical
+    role: HRADMIN
+    perm: "n/a - testing the ABSENCE of a grant"
+    tags: [Authorization]
+    cr: [CR-183]
+    smoke: true
+    steps:
+      - "[GET /api/payroll/loan-products] as a freshly seeded HRAdmin with no additional grants => [403] Forbidden"
+      - "[GET /api/payroll/loans] as the same HRAdmin => [403] Forbidden"
+    auto: API
+
+  - id: LOAN-SEC-002
+    func: [F-LOAN-085]
+    sc: HRAdmin's Payroll footprint elsewhere does not extend to Loans
+    t: Contrast HRAdmin's full Salary/Structure/Period/Run access with its total absence of Loans access
+    src: ["SeedData.cs (RolePermissionMap[HRAdmin])"]
+    type: Authorization
+    pri: P1
+    tags: [Authorization]
+    cr: [CR-183]
+    steps:
+      - "[GET /api/payroll/salary-components] as HRAdmin => [200] succeeds (HRAdmin natively holds Payroll.SalaryComponent.View)"
+      - "[GET /api/payroll/loan-products] as the SAME HRAdmin, same request => [403] Forbidden (no equivalent native Loans grant exists)"
+    auto: API
+
+  - id: LOAN-SEC-003
+    func: [F-LOAN-086]
+    sc: SuperHR self-escalates to full Loans management via PageAccess.Manage
+    t: A SuperHR user with zero native Loans permissions can self-grant the entire Loans permission family in one PageAccess call
+    src: ["Backend/HRMS.Application/Services/PageAccessService.cs (UpdateAsync); SeedData.cs (RolePermissionMap[SuperHR])"]
+    type: Security
+    pri: P0
+    sev: Critical
+    role: SUPERHR
+    perm: "PageAccess.Manage"
+    tags: [Security]
+    cr: [CR-183]
+    steps:
+      - "[GET /api/payroll/loans/{id}/approve] as freshly seeded SuperHR => [403] Forbidden (zero native Loans permissions)"
+      - "[PUT /api/page-access/roles/{superHrRoleId}] add every Payroll.Loans.* permission to SuperHR's own role => [200] role updated"
+      - "[POST /api/payroll/loans/{id}/approve] as the SAME SuperHR user, same loan => [200] approval now succeeds - full self-escalation to Approve/Disburse/Recover/Close/Cancel/ManageProducts confirmed"
+    auto: API
+
+  - id: LOAN-SEC-004
+    func: [F-LOAN-087]
+    sc: Employee cannot request a loan out of the box
+    t: A freshly seeded Employee lacks Payroll.Loans.Request and is Forbidden from every /api/me/loans* route
+    src: ["SeedData.cs (RolePermissionMap[Employee])"]
+    type: Authorization
+    pri: P0
+    sev: Critical
+    role: EMPLOYEE
+    perm: "n/a - testing the ABSENCE of a grant"
+    tags: [Authorization]
+    cr: [CR-183]
+    smoke: true
+    steps:
+      - "[POST /api/me/loans] as a freshly seeded Employee with no additional grants => [403] Forbidden"
+      - "[GET /api/me/loans] as the same Employee => [403] Forbidden"
+    auto: API
+
+  - id: LOAN-SEC-005
+    func: [F-LOAN-088]
+    sc: Manager holds zero Loans permissions
+    t: A Manager, despite holding Leave.Approve and other sensitive employee-lifecycle permissions, is Forbidden on every Loans route
+    src: ["SeedData.cs (RolePermissionMap[Manager])"]
+    type: Authorization
+    pri: P1
+    role: MANAGER
+    perm: "n/a - testing the ABSENCE of a grant"
+    tags: [Authorization]
+    cr: [CR-183]
+    steps:
+      - "[GET /api/payroll/loans] as a freshly seeded Manager => [403] Forbidden"
+    auto: API
+
+  - id: LOAN-SEC-006
+    func: [F-LOAN-089]
+    sc: Payroll.Loans.Manage grants no capability by itself
+    t: A custom role holding only Payroll.Loans.Manage cannot reach any Loans route
+    src: ["Backend/HRMS.API/Controllers/PayrollLoansController.cs (full [HasPermission] grep)"]
+    type: Authorization
+    pri: P1
+    role: CUSTOM
+    perm: "Payroll.Loans.Manage (only)"
+    tags: [Authorization]
+    cr: [CR-185]
+    steps:
+      - "[Manual/DB] Create a custom role granted ONLY Payroll.Loans.Manage => role created with the single permission"
+      - "[GET /api/payroll/loans] as that role => [403] Forbidden (Manage is checked nowhere; View is the actual gate)"
+      - "[POST /api/payroll/loans/{id}/approve] as that role => [403] Forbidden (Manage is checked nowhere; Approve is the actual gate)"
+    auto: DB-assisted
+
+  - id: LOAN-SEC-007
+    func: [F-LOAN-089]
+    sc: Payroll.Loans.ViewHistory grants no capability - no history endpoint exists
+    t: A custom role holding only Payroll.Loans.ViewHistory has no route it can reach with that permission
+    src: ["Backend/HRMS.API/Controllers/PayrollLoansController.cs (full route grep, no /history route)"]
+    type: Contract
+    pri: P2
+    cr: [CR-185]
+    steps:
+      - "[Manual/Code] Grep PayrollLoansController.cs for a route gated by Payroll.Loans.ViewHistory => zero matches; grep IPayrollLoanService.cs for GetHistoryAsync => zero matches"
+    auto: Manual only
+
+  - id: LOAN-SEC-008
+    func: [F-LOAN-090]
+    sc: ESS routes share the plain Request permission with no dedicated self-view permission
+    t: Any role holding only Payroll.Loans.Request can list and read its own linked-employee loans
+    src: ["Backend/HRMS.API/Controllers/PayrollLoansController.cs (/api/me/loans* [HasPermission] grep)"]
+    type: Authorization
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Loans.Request"
+    tags: [Authorization]
+    steps:
+      - "[GET /api/me/loans] as an Employee granted only Payroll.Loans.Request => [200] returns the caller's own loans (no separate self-view permission is required or exists)"
+    auto: API
+
+  - id: LOAN-SEC-009
+    func: [F-LOAN-091]
+    sc: An unlinked user gets Unauthorized, not an empty list
+    t: A user with no AccountEmployeeLink calling any /api/me/loans* route is explicitly Unauthorized
+    src: ["PayrollLoansController.LinkedEmployeeAsync"]
+    type: Security
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Loans.Request"
+    tags: [Security]
+    steps:
+      - "[GET /api/me/loans] as a user with no linked employee identity => [401] No linked employee identity."
+    auto: API
+
+  - id: LOAN-SEC-010
+    func: [F-LOAN-092]
+    sc: MyLoan never leaks a different employee's loan by id
+    t: Requesting another employee's loan id through the ESS single-loan route returns NotFound, not the other employee's data
+    src: ["PayrollLoansController.MyLoan"]
+    type: Security
+    pri: P0
+    sev: Critical
+    role: EMPLOYEE
+    perm: "Payroll.Loans.Request"
+    tags: [Security]
+    smoke: true
+    steps:
+      - "[GET /api/me/loans/{anotherEmployeesLoanId}] as an Employee linked to a DIFFERENT employee, same tenant => [404] Not Found (no cross-employee data leak)"
+    auto: API
+
+  - id: LOAN-SEC-011
+    func: [F-LOAN-093]
+    sc: Cross-tenant product/loan/register/schedule ids are all NotFound
+    t: A full sweep across every read/mutation route confirms no cross-tenant id ever resolves
+    src: ["PayrollLoanService.cs (TenantId filter throughout)"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[GET /api/payroll/loan-products/{tenantAProductId}] signed in as Tenant B => [404] Not Found"
+      - "[GET /api/payroll/loans/{tenantALoanId}] signed in as Tenant B => [404] Not Found"
+      - "[GET /api/payroll/loans/{tenantALoanId}/schedule] signed in as Tenant B => [404] Not Found"
+    auto: API
+
+  - id: LOAN-SEC-012
+    func: [F-LOAN-094]
+    sc: The register never leaks a second tenant's rows
+    t: A Tenant B administrator's register call returns only Tenant B's own loans regardless of filters supplied
+    src: ["PayrollLoanService.GetRegisterAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[GET /api/payroll/loans/register] signed in as Tenant B (Tenant A has 50 loans, Tenant B has 3) => [200] totalCount=3, only Tenant B's own loans appear regardless of the status/productType/date filters supplied"
+    auto: API

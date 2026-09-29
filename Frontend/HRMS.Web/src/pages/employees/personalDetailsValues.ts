@@ -107,6 +107,21 @@ export function toPersonalDetailsValues(
   }
 }
 
+/**
+ * Required-field checks mirrored from `EmployeePersonalDetailsRequestValidator` on the backend, run
+ * before a request is ever sent. `dateOfJoining` binds to a non-nullable `DateOnly` server-side, which
+ * cannot deserialize an empty string at all — submitting one blank produces a generic model-binding
+ * failure instead of the normal "Date of joining is required." field error, so this must be caught here
+ * rather than left to the server response.
+ */
+export function validateRequiredPersonalDetails(values: PersonalDetailsValues): Record<string, string> {
+  const errors: Record<string, string> = {}
+  if (!values.firstName.trim()) errors.firstName = 'First name is required.'
+  if (!values.lastName.trim()) errors.lastName = 'Last name is required.'
+  if (!values.dateOfJoining.trim()) errors.dateOfJoining = 'Date of joining is required.'
+  return errors
+}
+
 /** The request the Personal Details endpoints accept, trimmed and nullable where optional. */
 export function toPersonalDetailsRequest(values: PersonalDetailsValues): EmployeePersonalDetailsRequest {
   return {

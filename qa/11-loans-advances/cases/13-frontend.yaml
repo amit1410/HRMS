@@ -1,0 +1,126 @@
+sheet: Loans_Frontend
+submodule: Frontend - PayrollLoansPage/MyLoansPage permission-gating, navigation discoverability, and confirmed UI implementation gaps
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Loans.ManageProducts"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin viewing PayrollLoansPage, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-FE-001
+    func: [F-LOAN-105]
+    sc: Every mutating action button renders regardless of the user's actual permissions
+    t: A user holding only Payroll.Loans.View sees Approve/Reject/Record disbursement/Manual repayment/Partial prepayment/Early closure/Cancel buttons rendered as usable
+    src: ["Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (LoanActions component)"]
+    type: Security
+    pri: P1
+    perm: "Payroll.Loans.View (only)"
+    tags: [Security]
+    cr: [CR-197]
+    steps:
+      - "[Manual/UI] Sign in as a user granted ONLY Payroll.Loans.View and open PayrollLoansPage => the Approve/Reject buttons on a Submitted loan, and the Record disbursement/Manual repayment/Partial prepayment/Early closure/Cancel buttons elsewhere, all render normally with no disabled/hidden state reflecting the missing permissions"
+      - "[Manual/UI] Click 'Approve' => the underlying API call fails with 403 Forbidden, surfaced only after the click, not before it"
+    auto: UI
+
+  - id: LOAN-FE-002
+    func: [F-LOAN-106]
+    sc: Manual repayment always submits a hardcoded 1-unit amount
+    t: Clicking 'Manual repayment' records Amount=1 regardless of the loan's real outstanding balance
+    src: ["Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (LoanActions component, line 18)"]
+    type: Negative
+    pri: P0
+    sev: Critical
+    cr: [CR-194]
+    smoke: true
+    steps:
+      - "[Manual/UI] Open PayrollLoansPage, select an Active loan with OutstandingTotal=10000, click 'Manual repayment' => the recordLoanRepayment call fires with { amount: 1, reference: 'Admin repayment' } - a trivial 1-unit repayment is recorded, not an operator-chosen amount, and no input field exists to change it"
+    auto: UI
+
+  - id: LOAN-FE-003
+    func: [F-LOAN-106]
+    sc: Partial prepayment always submits a hardcoded 1-unit amount
+    t: Clicking 'Partial prepayment' records Amount=1 regardless of intent
+    src: ["Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (LoanActions component, line 18)"]
+    type: Negative
+    pri: P0
+    sev: Critical
+    cr: [CR-194]
+    steps:
+      - "[Manual/UI] Open PayrollLoansPage, select an Active loan whose product allows partial prepayment, click 'Partial prepayment' => the prepayLoan call fires with { amount: 1, reference: 'Admin prepayment' } with no way to specify a real amount"
+    auto: UI
+
+  - id: LOAN-FE-004
+    func: [F-LOAN-107]
+    sc: Reject and Cancel always submit a fixed, non-editable reason string
+    t: Neither action offers a free-text reason input - every audit entry for these actions carries the same canned text
+    src: ["Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (LoanActions component, line 18)"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[Manual/UI] Click 'Reject' on a Submitted loan => rejectPayrollLoan fires with the fixed string 'Rejected by payroll administrator', with no reason input rendered"
+      - "[Manual/UI] Click 'Cancel' on a Draft loan => cancelPayrollLoan fires with the fixed string 'Cancelled by payroll administrator', with no reason input rendered"
+    auto: UI
+
+  - id: LOAN-FE-005
+    func: [F-LOAN-108]
+    sc: "'Edit first product' always edits index 0, never the operator's intended product"
+    t: With multiple products configured, clicking the edit control opens the FIRST product regardless of which row was of interest
+    src: ["Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (PayrollLoansPage component, lines 34-36)"]
+    type: Negative
+    pri: P1
+    cr: [CR-195]
+    steps:
+      - "[Manual/UI] Configure at least two loan products (e.g. 'Personal Loan' then 'Salary Advance'), click 'Edit first product' => the ProductForm always opens pre-filled with 'Personal Loan' (products.data[0]) - there is no way to select 'Salary Advance' for editing through this page"
+    auto: UI
+
+  - id: LOAN-FE-006
+    func: [F-LOAN-109]
+    sc: The product form has no controls for AllowPartialPrepayment, AllowEarlyClosure or MaxConcurrentLoans
+    t: A product created through the UI always gets AllowPartialPrepayment=false and AllowEarlyClosure=false with no way to change them from the form
+    src: ["Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (ProductForm component)"]
+    type: Negative
+    pri: P1
+    cr: [CR-196]
+    steps:
+      - "[Manual/UI] Fill in the Loan Product form and click 'Create product' => the form-grid contains no toggle for Allow partial prepayment, Allow early closure, or Max concurrent loans; the created product is submitted with allowPartialPrepayment=false, allowEarlyClosure=false, maxConcurrentLoans=1 regardless of the operator's intent"
+    auto: UI
+
+  - id: LOAN-FE-007
+    func: [F-LOAN-110]
+    sc: Neither Loans page has a navigation entry
+    t: A full grep of navigation.ts confirms PayrollLoansPage and MyLoansPage are unreachable from any menu
+    src: ["Frontend/HRMS.Web/src/layout/navigation.ts (full grep for loan/Loan)"]
+    type: Contract
+    pri: P2
+    cr: [CR-198]
+    steps:
+      - "[Manual/Code] Grep Frontend/HRMS.Web/src/layout/navigation.ts for 'loan' (case-insensitive) => zero matches; both pages are reachable only by navigating directly to their URLs"
+    auto: Manual only
+
+  - id: LOAN-FE-008
+    func: [F-LOAN-111]
+    sc: ESS employees see only their own loans and a working eligibility pre-check
+    t: MyLoansPage correctly blocks submission when the requested amount/tenure falls outside the selected product's limits
+    src: ["Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (MyLoansPage.submit)"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Loans.Request"
+    steps:
+      - "[Manual/UI] On MyLoansPage, select a product with MaxAmount=10000 and enter Amount=50000 => 'Submit request' is disabled/blocked with 'Requested amount or tenure is outside the eligible product limits.' shown before any API call is made"
+    auto: UI
+
+  - id: LOAN-FE-009
+    func: [F-LOAN-112]
+    sc: The register filter panel and pagination render correctly, and state-dependent actions are shown per loan status
+    t: Only the actions valid for a loan's current Status are rendered (e.g. no Manual repayment button on a non-Active loan)
+    src: ["Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (LoanActions, register filters)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/UI] Select a Submitted loan => only Approve/Reject render; select an Active loan => Manual repayment/Partial prepayment/Early closure render instead, and neither Approve nor Reject is shown"
+      - "[Manual/UI] Use the Employee/Product/Product type/Status/From/To register filters and page through results => the register table and Pagination control update to match the filtered, paged API response"
+    auto: UI

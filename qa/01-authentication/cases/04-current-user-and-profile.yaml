@@ -1,0 +1,202 @@
+sheet: Auth_MeProfile
+submodule: Current User / Me / Profile
+defaults:
+  role: A_EMP
+  perm: Authenticated
+  tenant: A
+  pre: "QA stack running; Tenant A active; a valid access token obtained via login."
+  data: "Access token from POST /api/auth/login."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: AUTH-ME-001
+    func: [F-AUTH-15]
+    sc: Correct profile returned
+    t: GET /api/auth/me returns exactly the signed-in user's own identity
+    src: ["AuthService.GetCurrentUserAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/auth/login] Sign in as A_EMP => [200] note user id"
+      - "[GET /api/auth/me] Call with the access token => [200] data.id equals the login user id; data.tenantId/tenantCode/tenantName match Tenant A"
+      - "Inspect data => email, firstName, lastName, fullName, lastLoginDateUtc present; no passwordHash"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Me_returns_the_signed_in_user_for_a_token_the_api_issued"]
+
+  - id: AUTH-ME-002
+    func: [F-AUTH-15]
+    sc: Roles and permissions on /me
+    t: /me reports the current roles and permissions, re-read from the database
+    src: ["AuthService.GetCurrentUserAsync (LoadAuthorizationAsync)"]
+    type: Positive
+    tags: [Authorization]
+    pri: P1
+    role: A_HR
+    steps:
+      - "[GET /api/auth/me] Call as A_HR => [200] roles=[HRManager] (or seeded set); permissions equals SeedData.RolePermissionMap[HRManager]"
+    auto: API
+
+  - id: AUTH-ME-003
+    func: [F-AUTH-15]
+    sc: Linked employee identity - linked
+    t: /me reports Linked identity with employee details for a user with an active current employment
+    src: ["AuthService.ResolveEmployeeIdentityAsync"]
+    type: Positive
+    pri: P1
+    role: A_EMP (linked to an active employee)
+    steps:
+      - "[GET /api/auth/me] Call as a linked, actively employed user => [200] employeeIdentity.status='Linked', employmentEligibility='ActiveEmployment', employee.id/displayName/employeeCode populated, businessDate = today"
+    db: "AccountEmployeeCurrentLinks row for the user."
+    auto: API
+
+  - id: AUTH-ME-004
+    func: [F-AUTH-15]
+    sc: Linked employee identity - not linked
+    t: /me reports NotLinked for a user with no employee link
+    src: ["AuthService.ResolveEmployeeIdentityAsync (link is null)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    role: A_ADMIN (or any user with no employee link)
+    steps:
+      - "[GET /api/auth/me] Call as an unlinked user => [200] employeeIdentity.status='Unlinked', employmentEligibility='NotLinked', employee=null"
+    auto: API
+
+  - id: AUTH-ME-005
+    func: [F-AUTH-15]
+    sc: Linked employee identity - future joining
+    t: /me reports FutureJoining eligibility for an employee whose joining date is in the future
+    src: ["AuthService.ResolveEmployeeIdentityAsync (DateOfJoining > today)"]
+    type: Boundary
+    pri: P2
+    sev: Medium
+    role: A_FUTURE (linked, DateOfJoining = today+30)
+    steps:
+      - "[GET /api/auth/me] Call as A_FUTURE => [200] employeeIdentity.status='Linked', employmentEligibility='FutureJoining'"
+    auto: API
+
+  - id: AUTH-ME-006
+    func: [F-AUTH-15]
+    sc: Linked employee identity - separated
+    t: /me reports Separated eligibility once the employee's status is Resigned or Terminated
+    src: ["AuthService.ResolveEmployeeIdentityAsync (employment.EmploymentStatus / employee.Status)"]
+    type: Boundary
+    pri: P2
+    sev: Medium
+    role: A_SEPARATED (linked, employee Status=Resigned)
+    steps:
+      - "[GET /api/auth/me] Call as A_SEPARATED => [200] employmentEligibility='Separated'"
+    auto: API
+
+  - id: AUTH-ME-007
+    func: [F-AUTH-15]
+    sc: Linked employee identity - no applicable employment history
+    t: /me reports NoApplicableEmployment when zero or more than one current-effective history row exists
+    src: ["AuthService.ResolveEmployeeIdentityAsync (history.Count != 1)"]
+    type: Boundary
+    tags: [Negative]
+    pri: P3
+    sev: Low
+    role: A_DATAISSUE (linked, no current EmployeeEmploymentHistory row)
+    pre: "DB-assisted: employee has zero rows in EmployeeEmploymentHistory effective today."
+    steps:
+      - "[GET /api/auth/me] Call as A_DATAISSUE => [200] employmentEligibility='NoApplicableEmployment'"
+    db: "EmployeeEmploymentHistory has no row satisfying EffectiveFrom<=today<=EffectiveTo for the employee."
+    auto: DB-assisted
+
+  - id: AUTH-ME-008
+    func: [F-AUTH-15]
+    sc: Unauthorized access to /me
+    t: /me without a valid token is refused
+    src: ["AuthController.Me [Authorize]"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    role: Anonymous
+    steps:
+      - "[GET /api/auth/me] Call with no Authorization header => [401]"
+      - "[GET /api/auth/me] Call with an expired token => [401]"
+    auto: API
+
+  - id: AUTH-ME-009
+    func: [F-TEN-04, F-AUTH-15]
+    sc: Cross-tenant /me
+    t: A token from Tenant B cannot retrieve a profile at the Tenant A host
+    src: ["TenantMatchesShardHandler"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A/B
+    steps:
+      - "[POST /api/auth/login] Sign in at Tenant B => [200] token TB"
+      - "[GET /api/auth/me] Call TB at the Tenant A host => [401] workspace-mismatch message; no Tenant A OR Tenant B data returned"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.A_token_naming_another_tenant_cannot_reach_this_tenants_data"]
+
+  - id: AUTH-ME-010
+    func: [F-AUTH-16]
+    sc: Stale permissions before a fresh refresh
+    t: /me and the token's permission claims can disagree until the next refresh (documented)
+    src: ["AuthService.GetCurrentUserAsync reads DB; RequireClaim(permission) reads the token"]
+    type: Security
+    tags: [Authorization]
+    pri: P1
+    role: A_EMP3
+    steps:
+      - "[POST /api/auth/login] Sign in as an Employee => [200] T1"
+      - "Admin grants an extra permission via role change => granted"
+      - "[GET /api/auth/me] Call with T1 => [200] permissions list reflects the NEW grant (DB-fresh)"
+      - "[GET /api/leave-approvals] (or another endpoint needing the new permission) Call with T1 => [403] (token claims are the OLD snapshot)"
+    cr: [CR-14]
+    auto: API
+    cm: "Demonstrates the two authorization sources (DB read on /me vs claims in the token) can disagree by design."
+
+  - id: AUTH-ME-011
+    func: [F-AUTH-15]
+    sc: Deleted/missing user after token issuance
+    t: /me returns 404 if the user row no longer exists in the tenant
+    src: ["AuthService.GetCurrentUserAsync (user is null)"]
+    type: Negative
+    pri: P2
+    sev: Medium
+    role: A_EMP5 (disposable)
+    pre: "DB-assisted: hard-delete the user's row after issuing a token (or use a tenant restore/rollback scenario)."
+    steps:
+      - "[POST /api/auth/login] Sign in as A_EMP5 => [200] T1"
+      - "Remove the user's row from the tenant DB => removed"
+      - "[GET /api/auth/me] Call with T1 => [404] 'The signed-in account no longer exists.'"
+    db: "Users row deleted for the QA user."
+    auto: DB-assisted
+
+  - id: AUTH-ME-012
+    func: [F-AUTH-15]
+    sc: My employee profile endpoint
+    t: GET /api/me/profile returns the linked employee's profile for the signed-in user
+    src: ["MeController.GetProfile", "MyEmployeeProfileService"]
+    type: Positive
+    pri: P1
+    role: A_EMP (linked)
+    steps:
+      - "[GET /api/me/profile] Call as a linked employee => [200] profile fields match the employee record"
+      - "[GET /api/me/profile] Call as an unlinked user (e.g. A_ADMIN) => [404]"
+      - "[GET /api/me/profile] Call with no token => [401]"
+    auto: API
+    ex: ["V:pages/MyProfilePage.test.tsx"]
+
+  - id: AUTH-ME-013
+    func: [F-AZ-05]
+    sc: Navigation reflects permissions
+    t: GET /api/auth/navigation returns only items the caller's permissions allow
+    src: ["NavigationController.Get", "PageAccessService.GetNavigationAsync"]
+    type: Positive
+    tags: [Authorization]
+    pri: P1
+    role: A_EMP and A_ADMIN
+    steps:
+      - "[GET /api/auth/navigation] Call as A_EMP (limited permissions) => [200] item list excludes admin-only sections (e.g. Role Management, Payroll configuration)"
+      - "[GET /api/auth/navigation] Call as A_ADMIN => [200] item list includes those sections"
+      - "[GET /api/auth/navigation] Call with no token => [401]"
+    auto: API

@@ -1,0 +1,384 @@
+sheet: Attendance_Integration
+submodule: Leave<->Attendance integration, Separation<->Attendance integration, Holiday/WeeklyOff interaction, CR-53/57/66/77 carry-forward
+defaults:
+  role: EMPLOYEE
+  perm: "Attendance.View"
+  tenant: A
+  pre: "Tenant A signed in, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-INTEG-001
+    func: [F-ATT-269]
+    sc: A separated employee is blocked from submitting new Regularization/On-Duty for any date, via Employee.Status
+    t: The gate fires unconditionally once Status != Active, not just for post-DateOfLeaving dates
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync/SubmitOnDutyAsync"]
+    type: Negative
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Employee E1 has Employee.Status set to Terminated (via the sanctioned Separation workflow), a PAST business date exists that would otherwise be eligible => precondition established"
+      - "[POST /api/attendance/me/regularizations] As E1, BusinessDate=<a date well before DateOfLeaving> => [403] Forbidden - 'Attendance regularization is unavailable for an inactive employee.'"
+      - "[POST /api/attendance/me/on-duty] As E1 => [403] Forbidden, identical Status-based gate"
+    auto: API
+    cr: [CR-53]
+
+  - id: ATT-INTEG-002
+    func: [F-ATT-269]
+    sc: This side-channel scenario IS caught by Attendance, unlike Leave's balance/calendar reads
+    t: Setting Employee.Status via a plain employee-update endpoint (without touching User.IsActive) still blocks new Attendance submissions
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Via PUT /api/employees/{id}, set Status=Terminated directly WITHOUT running the sanctioned Separation workflow (User.IsActive remains true) => precondition established"
+      - "[POST /api/attendance/me/regularizations] As that employee, still holding a valid session (User.IsActive true) => [403] Forbidden - Attendance's own Status check catches this side-channel, unlike Leave's read-side gaps which key off User.IsActive/EmploymentEligibility instead"
+    auto: DB-assisted
+
+  - id: ATT-INTEG-003
+    func: [F-ATT-270]
+    sc: The read/authorization-predicate gate checks User.IsActive independently of the write-path Employee.Status gate
+    t: A deactivated user account is denied at the authorization layer even for reads
+    src: ["AttendanceAuthorizationService.ResolveContextAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] User.IsActive=false for an account whose linked Employee.Status is still Active => precondition established"
+      - "[GET /api/attendance/manager/team] As that user => [401/403] denied via the User.IsActive check in AttendanceAuthorizationService, independent of the employee's own Status field"
+    auto: DB-assisted
+
+  - id: ATT-INTEG-004
+    func: [F-ATT-271]
+    sc: Day processing, monthly processing, and history reads are NOT gated by Employee.Status
+    t: A separated employee's historical attendance remains fully processed and readable
+    src: ["AttendanceDayProcessor.ProcessAsync / AttendanceMonthlyProcessor"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee E1 separated, but has historical punches/days from before separation => precondition established for the steps below"
+      - "[Manual/DB] Reprocess/re-run monthly processing for a period spanning E1's employment => [200] E1's summary is included, unaffected by Status"
+      - "[GET /api/attendance/me/regularizations] As E1 (if session still valid) => [200] E1's own historical requests remain listed"
+    auto: DB-assisted
+    cr: [CR-53]
+
+  - id: ATT-INTEG-005
+    func: [F-ATT-272]
+    sc: Attendance's own permission constants literally drive EmployeeAccessScopeService's directory-narrowing decision
+    t: Prove the CR-57 origin explicitly - MonthlyViewAll/MonthlyViewTeam are the exact keys used
+    src: ["EmployeeAccessScopeService.BuildPredicateAsync"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Manual] Grant a role Attendance.Monthly.ViewAll and call any Employee-module endpoint that internally uses EmployeeAccessScopeService.BuildPredicateAsync => the caller sees ALL employees (x=>true) - confirm this is keyed off the ATTENDANCE permission name, not an Employee-module-specific permission"
+      - "[Manual] Grant a role Attendance.Monthly.ViewTeam only, with a linked employee id => the caller sees self+direct-reports via EmployeeEmploymentHistory.ManagerId - again keyed off the Attendance permission"
+    auto: DB-assisted
+
+  - id: ATT-INTEG-006
+    func: [F-ATT-273]
+    sc: PageAccess.Manage self-escalation reaches every Attendance/Overtime/Device permission with no carve-out
+    t: An HRAdmin/SuperHR session grants itself the full correction/approval/overtime permission set, then exercises it end-to-end
+    src: ["PageAccessService.UpdateAsync"]
+    type: Security
+    pri: P0
+    role: HRADMIN
+    perm: "PageAccess.Manage"
+    steps:
+      - "[PUT /api/page-access/roles/{hrAdminRoleId}] Permissions include Attendance.Regularization.Approve, Attendance.OnDuty.Approve, Attendance.AdminCorrection.Manage, Attendance.Overtime.Approve, AttendanceDevice.Manage (none previously held) => [200] granted, fully audited"
+      - "[POST /api/auth/refresh] refresh the session's claims => [200] new token reflects the granted permissions"
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] Using the newly-escalated session => [200] succeeds end-to-end - defeats the module's own least-privilege seeded design with no additional check or carve-out"
+    auto: API
+    cr: [CR-66]
+
+  - id: ATT-INTEG-007
+    func: [F-ATT-274]
+    sc: AttendanceAuthorizationService is a distinct class from LeaveAuthorizationService, sharing only the role-scope dimension
+    t: Prove the manager-predicate logic is independently written, not delegated
+    src: ["AttendanceAuthorizationService vs LeaveAuthorizationService"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual] Inspect BuildCurrentManagerPredicate in AttendanceAuthorizationService.cs vs the identically-named-in-purpose method in LeaveAuthorizationService.cs => confirm they are separate, textually distinct method bodies in different files, both independently querying EmployeeEmploymentHistory.ManagerId, neither calling the other"
+      - "[Manual] Confirm both classes' role-scope arm calls the SAME EmployeeAccessScopeService.BuildRoleScopePredicateAsync method - the one point of genuine, literal code reuse between the two mechanisms => confirmed"
+    auto: DB-assisted
+    cr: [CR-77]
+
+  - id: ATT-INTEG-008
+    func: [F-ATT-275]
+    sc: The null-DI legacy fallback for Attendance Workflow has zero role-scope authorization
+    t: An HRBP with only role-scope access (no manager relationship) cannot approve via the legacy path
+    src: ["AttendanceWorkflowService (constructed without IAttendanceAuthorizationService)"]
+    type: Security
+    pri: P2
+    role: HRBP
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[Manual/DB] Construct AttendanceWorkflowService directly without IAttendanceAuthorizationService (test-only/misconfiguration scenario) and call GetManagerRegularizationsAsync for an HRBP with department-scope access but no manager relationship to the requester => the legacy IEmployeeManagerResolver-only check returns empty/denied - the role-scope arm is completely absent in this fallback path, unlike the DI-registered production path"
+    auto: DB-assisted
+    cr: [CR-124]
+
+  - id: ATT-INTEG-009
+    func: [F-ATT-276]
+    sc: Monthly/batch day processing is never authorization-gated by a caller identity
+    t: enforceAuthorization:false confirmed for the internal processing call path
+    src: ["AttendanceFoundationService.ResolveAsync / AttendanceDayProcessor.ProcessAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual] Trigger monthly processing for a period covering an employee the invoking system account has no personal scope over => [200] the employee is still correctly processed - batch processing bypasses per-caller authorization by design"
+    auto: DB-assisted
+
+  - id: ATT-INTEG-010
+    func: [F-ATT-277]
+    sc: Approved leave without punches produces OnLeave, read-only against the LeaveRequest itself
+    t: The Leave row is verified byte-for-byte unchanged after Attendance processing
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] Approved single-day Leave for E1/date D, zero punches => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=OnLeave, LeaveConflict=false, PunchCount=0"
+      - "[Manual/DB] Re-fetch the LeaveRequest/LeaveRequestDay => byte-for-byte unchanged from before processing"
+    auto: DB-assisted
+
+  - id: ATT-INTEG-011
+    func: [F-ATT-278]
+    sc: Leave approval actively pushes into Attendance, resolving an Absent day to OnLeave and removing it from active exceptions
+    t: The approval act itself, not a lazy read, reprocesses the day
+    src: ["LeaveRequestApprovalService.ApproveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] date D is currently Status=Absent for E1, appearing in operations/exceptions => precondition established for the steps below"
+      - "[POST /api/leave-requests/{requestId}/approve] a leave request covering D => [200] Approved"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=OnLeave now"
+      - "[GET /api/attendance/operations/exceptions] => [200] the Absent exception for D no longer appears - zero AttendanceExceptionResolutions rows were created; the day simply stops matching the exception query"
+    auto: API
+
+  - id: ATT-INTEG-012
+    func: [F-ATT-279]
+    sc: Approved leave with valid full-day punches yields Present, not OnLeave, with LeaveConflict flagged
+    t: Real attendance always wins over a leave day's default status
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Approved Leave for E1/date D; punches In 09:00, Out 18:00 on the same date => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Present, LeaveConflict=true, WorkedMinutes=540"
+    auto: API
+
+  - id: ATT-INTEG-013
+    func: [F-ATT-280]
+    sc: Approved leave with an incomplete punch pattern stays Incomplete, still flagged LeaveConflict
+    t: LeaveConflict is independent of the final Status
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Approved Leave for E1/date D; punches: In 09:00 only, shift AllowPresentOnSinglePunch=false => precondition established for the steps below"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Incomplete, LeaveConflict=true, HasMissingOutPunch=true"
+    auto: API
+
+  - id: ATT-INTEG-014
+    func: [F-ATT-281]
+    sc: Only Approved leave is consulted - Pending/Rejected/Cancelled behave identically to no leave
+    t: A PendingApproval leave on a zero-punch day still yields Absent
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] A PendingApproval Leave for E1/date D (not yet approved), zero punches, date fully in the past => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Absent, LeaveConflict=false - a pending leave has zero effect"
+    auto: API
+
+  - id: ATT-INTEG-015
+    func: [F-ATT-282]
+    sc: Leave application is strictly per-exact-date
+    t: An adjacent date's approved leave has zero bleed effect
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Approved Leave for E1/date D only; date D+1 has zero punches, fully past its finalization point => precondition established for the steps below"
+      - "[GET /api/attendance/me/days/{D+1}] => [200] Status=Absent - the adjacent day's leave has no effect"
+    auto: API
+
+  - id: ATT-INTEG-016
+    func: [F-ATT-283]
+    sc: The Leave lookup inside day processing is tenant-scoped
+    t: A same-employee-shaped leave in another tenant has zero cross-tenant effect
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[Setup] An approved leave seeded in Tenant B's own database for a Tenant B employee, on the same calendar date as a Tenant A employee's zero-punch, finalization-eligible day => precondition established for the steps below"
+      - "[GET /api/attendance/me/days/{date}] As the Tenant A employee => [200] Status=Absent, LeaveConflict=false - Tenant B's leave data has zero effect"
+    auto: DB-assisted
+
+  - id: ATT-INTEG-017
+    func: [F-ATT-284]
+    sc: Half-day leave's effect on worked minutes/expected hours - manual QA case filling the documented test-coverage gap
+    t: An approved half-day leave combined with a half-day of punches
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P2
+    tags: [Boundary]
+    steps:
+      - "[Setup] Approved half-day Leave for E1/date D (afternoon); punches In 09:00, Out 13:00 (morning worked) => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] document the ACTUAL resulting Status/WorkedMinutes/LeaveConflict combination observed - this exact scenario has no existing automated test coverage; confirm the behavior matches product intent (e.g. Present with reduced WorkedMinutes, or some other outcome) rather than assuming"
+    auto: API
+
+  - id: ATT-INTEG-018
+    func: [F-ATT-284]
+    sc: A leave request spanning a month boundary - manual QA case filling the documented test-coverage gap
+    t: An approved leave with StartDate in one month and EndDate in the next
+    src: ["AttendanceDayProcessor.ProcessAsync / AttendanceMonthlyProcessor"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Approved multi-day Leave, StartDate=2026-07-29, EndDate=2026-08-02 (spans the July/August boundary) => precondition established"
+      - "[GET /api/attendance/me/days/2026-07-30] => [200] Status=OnLeave"
+      - "[GET /api/attendance/me/days/2026-08-01] => [200] Status=OnLeave - confirm each month's own EmployeeAttendanceMonthlySummary correctly counts its own share of PaidLeaveDays split across the two periods, since no existing automated test exercises this split"
+    auto: DB-assisted
+
+  - id: ATT-INTEG-019
+    func: [F-ATT-285]
+    sc: Post-separation, historical attendance is preserved exactly and new submissions are blocked before any processing side effect
+    t: The full Separation exit walkthrough
+    src: ["SeparationExitService.ExecuteAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Employee E1 has a historical Present day (480 worked minutes) one day before FinalLwd => precondition established for the steps below"
+      - "[Manual] Run the sanctioned Separation exit workflow for E1 (sets Employee.Status=Terminated, EmploymentHistory.EmploymentStatus=Terminated, User.IsActive=false) => [200] exit completed"
+      - "[Manual/DB] Re-read the historical EmployeeAttendanceDay from a fresh context => Status/WorkedMinutes/FirstPunchAtUtc/LastPunchAtUtc all identical to before the exit"
+      - "[POST /api/attendance/me/regularizations] As E1 (if the token were still somehow valid), BusinessDate = FinalLwd+1 => [403] Forbidden - blocked before any AttendanceDayProcessor call"
+      - "[Manual/DB] Confirm EmployeeAttendanceDays.Count() is unchanged - no phantom row was created by the denied attempt => confirmed"
+    auto: DB-assisted
+    cr: [CR-53]
+
+  - id: ATT-INTEG-020
+    func: [F-ATT-286]
+    sc: A pre-existing pending Regularization/On-Duty request remains visible in the manager's queue after the requester separates
+    t: Manual QA case for an untested combination
+    src: ["AttendanceWorkflowService.GetManagerRegularizationsAsync"]
+    type: Boundary
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[Setup] Employee E1 submitted a Regularization request while still Active; E1 is subsequently separated via the sanctioned exit workflow; the request remains Pending => precondition established for the steps below"
+      - "[GET /api/attendance/manager/regularizations] As E1's former effective manager (still holding Regularization.Approve, and still the historically-effective manager for the request's own BusinessDate) => [200] the pending request for E1 STILL appears - no code excludes it based on E1's current separation status"
+    auto: API
+    cr: [CR-123]
+
+  - id: ATT-INTEG-021
+    func: [F-ATT-291]
+    sc: A manager can approve a pending request from an employee who has since separated
+    t: The approval path never re-checks the target's current Employee.Status
+    src: ["AttendanceWorkflowService.TransitionRegularization"]
+    type: Negative
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[Setup] Continuing from ATT-INTEG-020's precondition (E1 separated, request still Pending) => precondition established for the steps below"
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] As the historically-effective manager => [200] Approved succeeds - the target employee's current Status is never re-checked, only the approver's own authorization"
+    auto: API
+    cr: [CR-123]
+
+  - id: ATT-INTEG-022
+    func: [F-ATT-286]
+    sc: A separated employee's final period is still included in monthly processing
+    t: Manual QA case confirming no code excludes a terminated employee from their own separation-month summary
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee E1 separated mid-month (DateOfLeaving inside the current period's date range) => precondition established for the steps below"
+      - "[POST /api/attendance/periods/{id}/process] => [200]"
+      - "[GET /api/attendance/periods/{id}/summaries?employeeId=E1] => [200] E1's summary IS present, EmploymentDays reflects the actual days worked through DateOfLeaving - separation does not exclude the final period"
+    auto: API
+
+  - id: ATT-INTEG-023
+    func: [F-ATT-287]
+    sc: A Holiday falling on an employee's WeeklyOff day resolves purely as Holiday, never WeeklyOff or both
+    t: Precedence proof via the shared WorkingDayCalendarResolver
+    src: ["WorkingDayCalendarResolver.CalculateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] date D is both a declared tenant Holiday AND the employee's configured WeeklyOff day, with no explicit Shift/Pattern applicability rule for the employee on D => precondition established for the steps below"
+      - "[GET /api/attendance/employees/{employeeId}/roster/{D}] => [200] resolves as Holiday, message references Holiday only, never WeeklyOff"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Holiday (not WeeklyOff)"
+    auto: API
+
+  - id: ATT-INTEG-024
+    func: [F-ATT-288]
+    sc: A declared Holiday has zero automatic effect on an employee with a matching Shift/Pattern applicability rule for that date
+    t: The Holiday calendar is never consulted once an applicability rule matches
+    src: ["AttendanceFoundationService.ResolveAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] date D is declared a tenant Holiday; a Shift Applicability rule matches this employee for D (e.g. a Department-wide rule), resolving to Shift S1; no manual roster override exists for D => precondition established for the steps below"
+      - "[GET /api/attendance/employees/{employeeId}/roster/{D}] => [200] resolves to Shift S1 as a normal working day - the Holiday declaration for D has NO effect on this employee's resolution at all"
+      - "[Setup] Punches recorded on D: In 09:00, Out 18:00 => precondition established for the steps below"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Present, RosterDayType=Shift - not Holiday, even though D is a declared tenant Holiday"
+    auto: API
+    cr: [CR-121]
+
+  - id: ATT-INTEG-025
+    func: [F-ATT-288]
+    sc: An admin can restore Holiday-override behavior for such an employee by explicitly reassigning the roster
+    t: AssignRosterAsync's calendar-override computation is the only path that re-applies the Holiday signal once an applicability rule already matched
+    src: ["AttendanceFoundationService.AssignRosterAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[Setup] Continuing from ATT-INTEG-024, an HR admin manually re-assigns this employee's date D to DayType=WeeklyOff (or otherwise explicitly marks it non-working) via roster/assign => [200] IsCalendarOverride computed and persisted"
+      - "[GET /api/attendance/employees/{employeeId}/roster/{D}] => [200] now correctly reflects the explicit override, since the manual roster row takes precedence over the applicability rule per the resolution order"
+    auto: API
+
+  - id: ATT-INTEG-026
+    func: [F-ATT-289]
+    sc: An approved On Duty on a Holiday/WeeklyOff date overwrites Status to OnDuty, while RosterDayType still reflects the underlying calendar type
+    t: The Status/RosterDayType divergence, made explicit
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] date D is a declared Holiday, no applicability rule matches (falls through to calendar), so without OD it would resolve Status=Holiday => precondition established for the steps below"
+      - "[Setup] An approved On-Duty request covers D => precondition established for the steps below"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=OnDuty (overwritten), but confirm via a detailed/DB inspection that RosterDayType is still Holiday internally - the two fields diverge; verify which one each consumer (UI badge vs monthly-summary aggregation) actually reads"
+    auto: DB-assisted
+    cr: [CR-122]
+
+  - id: ATT-INTEG-027
+    func: [F-ATT-290]
+    sc: On a Holiday/WeeklyOff day, an approved Leave does NOT override Status, but LeaveConflict can still be set if punches exist
+    t: Leave never wins over a non-working calendar day's Status
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] date D is a declared Holiday (no applicability rule, falls through to calendar); an approved Leave also covers D; a stray punch (e.g. a mistaken biometric scan) exists for D => precondition established for the steps below"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Holiday (unchanged by the leave), but LeaveConflict=true because punches.Count > 0 alongside the approved leave, even though Status itself never became OnLeave"
+    auto: API
+
+  - id: ATT-INTEG-028
+    func: [F-ATT-292]
+    sc: EmployeeSupervisor fields are never the source of truth for Attendance's manager resolution
+    t: Confirm Attendance's primary authorization path never reads EmployeeSupervisors at all
+    src: ["AttendanceAuthorizationService.BuildCurrentManagerPredicate vs EmployeeManagerResolver"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Setup] Employee E1's EmployeeSupervisors.L1ManagerId names Manager X, but EmployeeEmploymentHistory.ManagerId (the authoritative field) names a DIFFERENT Manager Y for the current effective-dated row => precondition established for the steps below"
+      - "[GET /api/attendance/manager/team/{E1}/{today}] As Manager Y => [200] visible - Y is authoritative via EmployeeEmploymentHistory"
+      - "[GET /api/attendance/manager/team/{E1}/{today}] As Manager X (the stale L1ManagerId) => [403/404] denied via Attendance's PRIMARY authorization path, which never consults EmployeeSupervisors at all"
+    auto: DB-assisted

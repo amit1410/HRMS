@@ -1,0 +1,106 @@
+sheet: GLAcc_Audit_History
+submodule: Audit & History
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-HIST-001
+    func: [F-GLACC-094]
+    sc: History captures actor identity at every transition
+    t: Each of Generate/Validate/Approve/Post appends a history row with ActorUserId populated from the acting user
+    src: "PayrollAccountingService (History Add calls)"
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    sev: Medium
+    pre: "RUN9 (Approved) is fully mapped; user U3 performs the whole lifecycle"
+    role: U3 (custom role holding Accounting.Generate, Validate, Approve, Post)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN9}/accounting/generate] as U3 => [200] journal J23 created"
+      - "[POST /api/payroll/accounting/{J23}/validate] as U3 => [200]"
+      - "[POST /api/payroll/accounting/{J23}/approve] as U3 => [200]"
+      - "[POST /api/payroll/accounting/{J23}/post] as U3 => [200]"
+    auto: DB-assisted
+    db: "Assert all 4 PayrollJournalHistories rows for J23 have ActorUserId == U3's user id"
+
+  - id: GLACC-HIST-002
+    func: [F-GLACC-095]
+    sc: History rows are never updated or removed
+    t: A full grep of PayrollAccountingService.cs confirms only .Add is ever called against PayrollJournalHistories
+    src: "Backend/HRMS.Application/Services/PayrollAccountingService.cs"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] grep PayrollAccountingService.cs for db.PayrollJournalHistories => only .Add() call sites, no .Update()/.Remove()"
+    auto: Manual only
+
+  - id: GLACC-HIST-003
+    func: [F-GLACC-096]
+    sc: History is unreachable through any API endpoint
+    t: Neither GetAsync nor ListAsync ever returns a journal's history, regardless of which permission the caller holds
+    src: "PayrollAccountingService.GetAsync, ListAsync, ToDto"
+    type: Negative
+    tags: [Security]
+    pri: P1
+    sev: Medium
+    pre: "J24 has 4 history rows (Generated, Validated, Approved, Posted)"
+    role: HRAdmin (custom role holding Accounting.View, ViewHistory)
+    perm: Payroll.Accounting.ViewHistory
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/{J24}] as a user holding BOTH View and ViewHistory => [200] response has no History/history field of any kind in the payload"
+      - "[GET /api/payroll/accounting] (list) => [200] no journal row in the page carries any history field either"
+    auto: API
+    cr: [CR-278]
+
+  - id: GLACC-HIST-004
+    func: [F-GLACC-097]
+    sc: ViewHistory permission gates nothing observable
+    t: A user holding Accounting.View but NOT Accounting.ViewHistory receives an identical journal response to one who holds both
+    src: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (PayrollAccountingController)"
+    type: Authorization
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: "J24 exists; role R1 holds only Accounting.View, role R2 holds Accounting.View + ViewHistory"
+    role: R1 vs R2 (custom roles)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/{J24}] as R1 (View only) => [200] response body X"
+      - "[GET /api/payroll/accounting/{J24}] as R2 (View + ViewHistory) => [200] response body identical to X"
+    auto: API
+    cr: [CR-278]
+
+  - id: GLACC-HIST-005
+    func: [F-GLACC-098]
+    sc: History data is sound in the database despite being API-invisible
+    t: A direct database query confirms history rows have correct ChangeType/ChangedAtUtc ordering and content, even though no API exposes them
+    src: "PayrollAccountingService (History persistence)"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "J25 has completed the full Generated->Validated->Approved->Posted lifecycle"
+    role: n/a (direct DB assertion)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[DB] query PayrollJournalHistories for J25 ordered by ChangedAtUtc => 4 rows: Generated, Validated, Approved, Posted, strictly increasing timestamps, correct Message text each"
+    auto: DB-assisted
+    db: "Assert 4 history rows, correct ChangeType sequence and ChangedAtUtc ordering"
+    cr: [CR-278]

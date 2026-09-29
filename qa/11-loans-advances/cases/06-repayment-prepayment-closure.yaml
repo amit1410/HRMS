@@ -1,0 +1,176 @@
+sheet: Loans_Repayment_Closure
+submodule: Manual Repayment, Partial Prepayment, Early Closure and Outstanding Balance maintenance
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Loans.Recover"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, an Active disbursed loan (OutstandingPrincipal=9000, OutstandingInterest=1000, OutstandingTotal=10000) exists, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-REP-001
+    func: [F-LOAN-055]
+    sc: Manual repayment requires an Active loan and a valid amount
+    t: Repayment on a non-Active loan, a non-positive amount, and an amount exceeding outstanding are all rejected
+    src: ["PayrollLoanService.RecordRepaymentAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loans/{approvedLoanId}/repayments] Amount=100 => [409] Only active loans can receive repayments."
+      - "[POST /api/payroll/loans/{id}/repayments] Amount=0 => [400] Repayment amount must be positive."
+      - "[POST /api/payroll/loans/{id}/repayments] Amount=99999 (exceeds OutstandingTotal=10000) => [400] Repayment cannot exceed the outstanding balance."
+    auto: API
+
+  - id: LOAN-REP-002
+    func: [F-LOAN-056]
+    sc: A manual repayment applies to interest first, then principal
+    t: A repayment smaller than OutstandingInterest is applied entirely to interest; a larger one clears interest then reduces principal
+    src: ["PayrollLoanService.RecordRepaymentAsync"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/loans/{id}/repayments] Amount=500 (OutstandingInterest=1000) => [200] LoanRepayment InterestAmount=500, PrincipalAmount=0; loan OutstandingInterest=500, OutstandingPrincipal unchanged at 9000"
+      - "[POST /api/payroll/loans/{id}/repayments] Amount=2000 (remaining OutstandingInterest=500) => [200] LoanRepayment InterestAmount=500, PrincipalAmount=1500; loan OutstandingInterest=0, OutstandingPrincipal=7500"
+    auto: API
+
+  - id: LOAN-REP-003
+    func: [F-LOAN-057]
+    sc: A repayment that clears the full outstanding balance auto-closes the loan
+    t: A repayment exactly equal to OutstandingTotal transitions the loan to Closed
+    src: ["PayrollLoanService.RecordRepaymentAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loans/{id}/repayments] Amount=10000 (equals OutstandingTotal) => [200] Status=Closed, ClosedAtUtc set, ClosureReason='Fully repaid.'"
+    auto: API
+
+  - id: LOAN-REP-004
+    func: [F-LOAN-058]
+    sc: Partial prepayment requires the product to allow it
+    t: A product with AllowPartialPrepayment=false rejects a prepay call as Conflict
+    src: ["PayrollLoanService.PartialPrepayAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loans/{id}/prepay] Amount=1000 (product AllowPartialPrepayment=false) => [409] Partial prepayment is not enabled for this product."
+    auto: API
+
+  - id: LOAN-REP-005
+    func: [F-LOAN-059]
+    sc: Prepayment validation matrix
+    t: A prepayment must be Active, positive, and no greater than OutstandingPrincipal; it applies entirely to principal
+    src: ["PayrollLoanService.PartialPrepayAsync"]
+    type: Boundary
+    pri: P1
+    pre: "Tenant A signed in as HRAdmin, an Active loan whose product has AllowPartialPrepayment=true (OutstandingPrincipal=9000, OutstandingInterest=1000) exists."
+    steps:
+      - "[POST /api/payroll/loans/{id}/prepay] Amount=0 => [400] Prepayment must be positive and no greater than outstanding principal."
+      - "[POST /api/payroll/loans/{id}/prepay] Amount=15000 (exceeds OutstandingPrincipal=9000) => [400] Prepayment must be positive and no greater than outstanding principal."
+      - "[POST /api/payroll/loans/{id}/prepay] Amount=3000 => [200] OutstandingPrincipal=6000, OutstandingInterest unchanged at 1000"
+    auto: API
+
+  - id: LOAN-REP-006
+    func: [F-LOAN-060]
+    sc: A prepayment that zeroes the outstanding balance does NOT auto-close the loan
+    t: A prepayment sized to exactly clear OutstandingPrincipal (with OutstandingInterest already zero) leaves the loan Active
+    src: ["PayrollLoanService.PartialPrepayAsync"]
+    type: Boundary
+    pri: P0
+    sev: Critical
+    pre: "Tenant A signed in as HRAdmin, an Active loan whose product has AllowPartialPrepayment=true, OutstandingPrincipal=5000, OutstandingInterest=0 (interest already fully recovered) exists."
+    cr: [CR-187]
+    steps:
+      - "[POST /api/payroll/loans/{id}/prepay] Amount=5000 (equals OutstandingPrincipal, OutstandingInterest=0) => [200] OutstandingPrincipal=0, OutstandingTotal=0"
+      - "[Manual/DB] Read the loan's Status => still Active (NOT Closed), confirming CR-187's inconsistency with RecordRepaymentAsync's auto-close"
+    auto: DB-assisted
+
+  - id: LOAN-REP-007
+    func: [F-LOAN-061]
+    sc: A partial prepayment records history and a repayment row
+    t: PartialPrepayAsync appends a PartialPrepayment LoanHistory event and a matching LoanRepayment
+    src: ["PayrollLoanService.PartialPrepayAsync"]
+    type: Positive
+    pri: P1
+    pre: "Tenant A signed in as HRAdmin, an Active loan whose product has AllowPartialPrepayment=true exists."
+    steps:
+      - "[POST /api/payroll/loans/{id}/prepay] Amount=2000, Reference=Bonus payout => [200] prepayment recorded"
+      - "[Manual/DB] Query LoanRepayments => one row RepaymentType=PartialPrepayment, Amount=2000; LoanHistories has a PartialPrepayment row referencing the same reason"
+    auto: DB-assisted
+
+  - id: LOAN-REP-008
+    func: [F-LOAN-062]
+    sc: Early closure requires the product to allow it and the loan to be Active
+    t: A product with AllowEarlyClosure=false and a non-Active loan both reject CloseAsync as Conflict
+    src: ["PayrollLoanService.CloseAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loans/{id}/close] Amount=0 (product AllowEarlyClosure=false) => [409] Early closure is not enabled for this product."
+      - "[POST /api/payroll/loans/{approvedLoanId}/close] Amount=0 (product allows closure but loan is not yet Active) => [409] Only active loans can be closed."
+    auto: API
+
+  - id: LOAN-REP-009
+    func: [F-LOAN-063]
+    sc: Early closure amount must match the current outstanding total, or be omitted as zero
+    t: A supplied amount that mismatches OutstandingTotal is Invalid with the required amount echoed; Amount=0 uses the current outstanding total
+    src: ["PayrollLoanService.CloseAsync"]
+    type: Boundary
+    pri: P1
+    pre: "Tenant A signed in as HRAdmin, an Active loan whose product has AllowEarlyClosure=true, OutstandingTotal=10000 exists."
+    steps:
+      - "[POST /api/payroll/loans/{id}/close] Amount=9000 (does not equal OutstandingTotal=10000) => [400] Early closure requires the current outstanding amount of 10000.00."
+      - "[POST /api/payroll/loans/{id}/close] Amount=0 => [200] Status=Closed, full 10000 recovered"
+    auto: API
+
+  - id: LOAN-REP-010
+    func: [F-LOAN-064]
+    sc: Early closure zeroes outstanding, closes the loan and cancels remaining installments
+    t: A successful closure zeroes all outstanding fields, records an EarlyClosure repayment, and cancels every still-Scheduled installment
+    src: ["PayrollLoanService.CloseAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    pre: "Tenant A signed in as HRAdmin, an Active loan whose product has AllowEarlyClosure=true, OutstandingTotal=10000, 6 remaining Scheduled installments exist."
+    steps:
+      - "[POST /api/payroll/loans/{id}/close] Amount=10000 => [200] Status=Closed, OutstandingPrincipal=0, OutstandingInterest=0, OutstandingTotal=0"
+      - "[Manual/DB] Query LoanRepayments => one row RepaymentType=EarlyClosure, Amount=10000; query LoanInstallments => all 6 remaining Scheduled rows now Status=Cancelled"
+    auto: DB-assisted
+
+  - id: LOAN-REP-011
+    func: [F-LOAN-065]
+    sc: A genuine concurrent race between two repayment-family actions on the same loan is caught by EF's concurrency token
+    t: Two simultaneous full-balance repayment requests on the same loan resolve to exactly one success
+    src: ["PayrollLoanService.RecordRepaymentAsync (ConcurrencyVersion race)"]
+    type: Integration-Concurrency
+    pri: P0
+    sev: Critical
+    steps:
+      - "[Manual/DB] Fire two concurrent POST /api/payroll/loans/{id}/repayments each with Amount=OutstandingTotal via Task.WhenAll => exactly ONE succeeds [200]; the other fails with DbUpdateConcurrencyException; exactly one LoanRepayment row is created and OutstandingPrincipal/Interest are both >=0 afterward"
+    auto: DB-assisted
+
+  - id: LOAN-REP-012
+    func: [F-LOAN-066]
+    sc: No repayment/prepayment/close/approve/disburse endpoint accepts an expectedConcurrencyVersion parameter
+    t: A full route-parameter grep confirms the absence of a client-supplied concurrency-version check across every Loan mutation route
+    src: ["PayrollLoansController.cs (full route-parameter grep)"]
+    type: Contract
+    pri: P1
+    cr: [CR-190]
+    steps:
+      - "[Manual/Code] Grep every [Http*] action in PayrollLoansController.cs for a concurrencyVersion/expectedConcurrencyVersion parameter => zero matches on any Loans route, unlike SalaryComponentsController/SalaryStructuresController/EmployeeSalaryAssignmentsController's activate/deactivate/update actions"
+    auto: Manual only
+
+  - id: LOAN-REP-013
+    func: [F-LOAN-066]
+    sc: An ordinary stale-data conflict surfaces as a generic 500, not a clean 409
+    t: A genuine SaveChanges-level concurrency conflict on a loan mutation is mapped by the global exception handler to a 500, since no route pre-checks the version
+    src: ["Backend/HRMS.API/Middleware/ExceptionHandlingMiddleware.cs"]
+    type: Contract
+    pri: P1
+    cr: [CR-190]
+    steps:
+      - "[Manual/DB] Load the same loan twice into two separate DbContexts, mutate and SaveChanges the first successfully, then attempt to mutate and SaveChanges the second stale copy through PayrollLoanService => the resulting DbUpdateConcurrencyException, if allowed to propagate through the real HTTP pipeline, is caught only by ExceptionHandlingMiddleware's generic catch-all => [500] 'An unexpected error occurred. Please try again later.' rather than a 409 Conflict"
+    auto: DB-assisted

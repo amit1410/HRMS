@@ -1,0 +1,376 @@
+# Module 9 QA-risk register. Numbering continues after Module 8's CR-128 (qa/08-attendance/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. Classification starts 'Open - awaiting decision'.
+#
+# CR-53, CR-66, CR-77, and CR-110 are carried forward and RE-VERIFIED directly against Separation's own code
+# (not assumed to carry over unchanged - see README.md's carry-forward section for the full research). ALL
+# FOUR flip or sharpen framing for this module: CR-53 is CONFIRMED FIXED here (Separation's own
+# SeparationExitService.ExecuteAsync is the sanctioned close-the-loop mechanism the earlier modules could only
+# see the read side of); CR-66 reconfirms directly with a concrete, larger blast radius (SuperHR self-escalating
+# to the entire separation lifecycle); CR-77 recurs as a 6th-or-later independent mechanism that additionally
+# disagrees WITH ITSELF across two files in the same module; CR-110 does NOT extend to Comp-Off/Overtime but
+# exposed a structurally identical sibling gap on Leave balances (CR-158). Each carried-forward entry below is
+# a focused re-verification, not a restatement - see the originating module's own clarifications.yaml for the
+# original full text.
+
+clarifications:
+  - id: CR-53
+    title: "(carried forward, RE-VERIFIED AND CONFIRMED FIXED) Separation's own sanctioned exit workflow is the mechanism that closes the CR-53 loop - it deactivates the account, revokes sessions, and end-dates roles, all wired to real login/refresh checks"
+    observation: >
+      See qa/05-employee/clarifications.yaml#CR-53, qa/06-rbac-account-linking, qa/07-leave, and
+      qa/08-attendance's own CR-53 entries for the full carried-forward observation that every OTHER module's
+      write paths (plain Employee PUT, Employment change) never touch User.IsActive. Module 9 confirms directly
+      that SeparationExitService.ExecuteAsync is precisely the mechanism those modules' findings presupposed but
+      could not verify: it runs four sequential, individually-idempotent, individually-committed checkpoints -
+      ExecuteEmploymentAsync (Employee.Status=Terminated, DateOfLeaving=ApprovedLastWorkingDate, JobStatus=
+      'Separated', plus EmployeeEmploymentHistory rows end-dated/marked Terminated), ExecuteAccessAsync
+      (User.IsActive=false for the linked account), ExecuteSessionsAsync (every active RefreshToken revoked,
+      not deleted), and ExecuteRolesAsync (every current UserRole end-dated with an appended Revoked
+      UserRoleAssignmentEvent) - and these mutations are genuinely consumed by AuthService.SignInAsync (rejects
+      a deactivated user with a Forbidden message) and refresh-token redemption (rejects a revoked/deactivated
+      session). The employee's own linked account is explicitly forbidden from self-triggering this action.
+      Closed is set in exactly one place in the entire codebase (this execution's final-closure step), and every
+      other module's own 'SeparationAlreadyClosed' guard (Clearance, ExitInterview, Settlement) prevents further
+      mutation once it fires. HOWEVER: this is NOT one atomic transaction - each of the four checkpoints commits
+      independently with its own idempotency guard, so a crash between checkpoint 1 and checkpoint 2 leaves a
+      real (if narrow) window where Employee.Status=Terminated but User.IsActive is still true and sessions are
+      still live, until a Retry call resumes the sequence.
+    risk: >
+      This is the single most important reframe in this module: a reviewer who only read Modules 5-8's CR-53
+      writeups would reasonably conclude the whole product never closes this loop - Separation's own sanctioned
+      workflow does, correctly, end-to-end, PROVIDED it is the path actually used. The residual risk is
+      entirely about whether an organization's operational process always routes terminations through this
+      workflow (rather than a plain Employee.Status edit elsewhere, which still bypasses it per Modules 5-8's
+      findings) and about the narrow non-atomic crash window between checkpoints.
+    source: "Backend/HRMS.Application/Services/SeparationExitService.cs (ExecuteAsync, ExecuteEmploymentAsync, ExecuteAccessAsync, ExecuteSessionsAsync, ExecuteRolesAsync); Backend/HRMS.Application/Services/AuthService.cs (SignInAsync, RefreshTokenAsync); qa/05-employee, qa/06-rbac-account-linking, qa/07-leave, qa/08-attendance clarifications.yaml (CR-53)"
+    classification: Open - awaiting decision
+
+  - id: CR-66
+    title: "(carried forward, RE-VERIFIED) PageAccess.Manage self-escalation reaches every Separation.*, Separation.Clearance.*, and Payroll.SeparationBenefits.* permission with no carve-out - and SuperHR's zero-native-permission baseline makes the blast radius concrete"
+    observation: >
+      See qa/06-rbac-account-linking/clarifications.yaml#CR-66 for the full observation of
+      PageAccessService.UpdateAsync's unrestricted grant behavior (validates only against Permissions.All
+      membership, no actor-already-holds check, no target-role restriction). Module 9 confirms the concrete
+      impact: SuperHR holds PageAccess.Manage but ZERO Separation-family or Payroll.SeparationBenefits.*
+      permissions natively in the seeded matrix (mirroring Module 8's CR-113 pattern for a different
+      permission family). Via one PUT /api/page-access/roles/{roleId} call, SuperHR can self-grant
+      Separation.Manage, every Separation.Clearance.* permission, and all six Payroll.SeparationBenefits.*
+      permissions (including Override/Approve, which can override a not-yet-finalized gratuity calculation),
+      then immediately drive the entire separation lifecycle end-to-end - initiate, approve, clear, generate/
+      issue exit documents, calculate and override gratuity, and (via Separation.Manage) even execute the
+      final employment/account-deactivation step CR-53 describes above. HRAdmin, which already holds most
+      Separation permissions, can additionally self-grant the two DEAD permissions Separation.Approve/
+      NoticeManage via the same path - illustrating that not every self-escalation via this path is
+      functionally meaningful (see CR-134).
+    risk: >
+      Separation is the highest-consequence module found so far for this finding: unlike Leave or Attendance,
+      a PageAccess.Manage holder who self-escalates here gains not just approval authority but the ability to
+      trigger irreversible account deactivation/session revocation/role end-dating (CR-53's fix) on ANY
+      employee in the tenant, end-to-end, in a small number of authenticated calls.
+    source: "Backend/HRMS.Application/Services/PageAccessService.cs (UpdateAsync); Backend/HRMS.Domain/Authorization/Permissions.cs (Separation.*, Separation.Clearance.*, Payroll.SeparationBenefits.* as ordinary Permissions.All members); Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[SuperHR] holds zero Separation-family grants); qa/06-rbac-account-linking clarifications.yaml (CR-66)"
+    classification: Open - awaiting decision
+
+  - id: CR-77
+    title: "(carried forward, RE-VERIFIED) Separation is a 6th-or-later independent 'who can see/act on whose employees' mechanism - and it disagrees WITH ITSELF between two services in the same module"
+    observation: >
+      See qa/07-leave/clarifications.yaml#CR-77 and qa/08-attendance/clarifications.yaml#CR-77 for the prior
+      mechanisms (RoleScopeResolver, EmployeeAccessScopeService, LeaveAuthorizationService,
+      AttendanceAuthorizationService). Module 9 confirms Separation reuses NONE of them - grep across the
+      whole Separation service family for all four types returns zero hits. Instead, SeparationService.
+      GetTeamAsync/GetManagerInboxAsync resolve "my team" via IEmployeeManagerResolver in an O(n) per-request
+      loop over every tenant separation case, with NO role-scope (HRBP/SuperHR) fallback at all - while
+      ClearanceService.GetInboxAsync (used by the SAME module's manager/functional clearance inboxes) resolves
+      manager-owned tasks via a raw SQL join against the LEGACY Employee.ReportingManagerId column directly,
+      never EmployeeEmploymentHistory.ManagerId and never IEmployeeManagerResolver. These two mechanisms can
+      disagree for the identical manager/report pair: a manager recorded only via Employment History resolves
+      correctly in SeparationService.GetTeamAsync but produces an EMPTY Clearance manager inbox via
+      ClearanceService.GetInboxAsync, or vice versa depending on which side is stale. Separately, TaskActionAsync
+      (Clearance's task Clear/Block/Waive) resolves "is this the effective manager" via yet another,
+      ClearanceService-local check, distinct from both of the above.
+    risk: >
+      Counting mechanisms across the whole product surveyed so far: RoleScopeResolver, EmployeeAccessScopeService
+      (Employee/CR-57 origin), LeaveAuthorizationService (Leave), AttendanceAuthorizationService (Attendance),
+      and now Separation contributes not one but effectively THREE more internally-inconsistent variants
+      (SeparationService's, ClearanceService's, and TaskActionAsync's own). A manager reassignment recorded
+      through only one of the product's several manager-relationship tables can produce silently different
+      "who can act on this" answers depending on which Separation-family screen or endpoint is used.
+    source: "Backend/HRMS.Application/Services/SeparationService.cs (GetTeamAsync, GetManagerInboxAsync); Backend/HRMS.Application/Services/ClearanceService.cs (GetInboxAsync line ~153, TaskActionAsync manager-owner branch); qa/07-leave, qa/08-attendance clarifications.yaml (CR-77)"
+    classification: Open - awaiting decision
+
+  - id: CR-110
+    title: "(carried forward, RE-VERIFIED - does NOT extend to Comp-Off/Overtime, but exposed a structurally identical sibling gap on Leave balances) Separation never reads Comp-Off/Overtime at all; SeparationBenefitsService.CalculateLeaveAsync reads EmployeeLeaveBalances for encashment but never reserves/consumes the balance it reads"
+    observation: >
+      See qa/08-attendance/clarifications.yaml#CR-110 for the original Comp-Off/Overtime double-benefit race
+      (a pre-commit AnyAsync check with no DB constraint backing it). Module 9 confirms this specific pattern
+      does NOT recur in Separation: grepping SeparationBenefitsService.cs and
+      SeparationSettlementOrchestrationService.cs for CompOff/Overtime returns zero matches in either file -
+      Separation's settlement/benefits layer never joins those tables at all. However, a structurally identical
+      pattern was found on a DIFFERENT resource: SeparationBenefitsService.CalculateLeaveAsync reads
+      EmployeeLeaveBalances directly (GrantedQuantity - ReservedQuantity - ConsumedQuantity) to compute leave-
+      encashment for the final settlement, bypassing any Leave-module service/authorization layer - and NEVER
+      writes back a ReservedQuantity/ConsumedQuantity increment on that table, confirmed by grep across both
+      files. Because Employee.Status remains Active throughout the notice period (per CR-53's confirmed
+      framing above), nothing stops the SAME leave days the encashment calculation already priced in from being
+      separately consumed by an approved leave request submitted during that same notice period - the
+      encashment amount is fixed at calculation time and never revalidated against the balance actually
+      remaining when the settlement is later finalized.
+    risk: >
+      This is a narrower, non-concurrent sibling of CR-110's underlying pattern ("a benefit computed from a
+      resource balance with no corresponding hold/consumption on that balance") - involving Leave balances
+      during an ordinary sequential window (the notice period), not a true concurrent race like CR-110's
+      original finding. A finalized gratuity/leave-encashment settlement could overstate the true final leave
+      liability if the employee took additional leave after the encashment was calculated but before exit.
+    source: "Backend/HRMS.Application/Services/SeparationBenefitsService.cs (CalculateLeaveAsync); Backend/HRMS.Domain/Entities (EmployeeLeaveBalances - absence of any Reserved/Consumed write from Separation); qa/08-attendance clarifications.yaml (CR-110)"
+    classification: Open - awaiting decision
+
+  - id: CR-129
+    title: "Four EmployeeSeparationStatus values (Submitted, NoticePeriod, Exited, Cancelled) are declared but never assigned by any code path in the repository - dead/unreachable states"
+    observation: "EmployeeSeparationStatus's declared order is Draft, Submitted, ManagerReview, HrReview, Approved, Rejected, Withdrawn, NoticePeriod, ReadyForExit, Exited, Cancelled, Closed. A repo-wide grep of every `Status = EmployeeSeparationStatus.X` assignment shows only Draft (default), ManagerReview/HrReview (Submit), Rejected, Withdrawn, Approved, ReadyForExit (Clearance completion), and Closed (Exit execution) are ever actually written. Submit transitions Draft DIRECTLY to ManagerReview/HrReview - the intermediate Submitted status is never persisted despite an event of that name being logged. NoticePeriod, Exited, and Cancelled have no producer anywhere, including in test fixtures constructing a real transition."
+    risk: "A manual tester or a naive state-diagram audit could reasonably expect a case to pass through 'Submitted' as an observable status, or expect NoticePeriod/Exited/Cancelled to be reachable via some undiscovered endpoint - none exist. Any test plan referencing these four states by name should explicitly document them as unreachable rather than search for a hidden trigger."
+    source: "Backend/HRMS.Domain/Enums/SeparationEnums.cs (EmployeeSeparationStatus); Backend/HRMS.Application/Services/SeparationService.cs (repo-wide reachability grep)"
+    classification: Open - awaiting decision
+
+  - id: CR-130
+    title: "Closed is excluded from SeparationService.Terminal ({Rejected, Withdrawn, Cancelled, Exited} only) - a fully-closed employee's separation case may still count as their 'active' case, potentially blocking a new case for a rehired employee"
+    observation: "The one-active-case-per-employee guard in CreateCoreAsync checks `!Terminal.Contains(x.Status)`. Since Closed (the status a fully-executed exit reaches, per CR-53's confirmed framing) is NOT a member of Terminal, an employee whose prior separation reached Closed may still be treated as having an 'active' case by this check, depending on how a rehire scenario re-uses or re-creates the Employee row."
+    risk: "A rehire-then-resign-again scenario (a plausible real-world case for any organization with churn) could unexpectedly hit 'The employee already has an active separation case' when attempting to create a brand-new separation for a previously-closed-and-rehired employee, unless a fresh Employee row is used."
+    source: "Backend/HRMS.Application/Services/SeparationService.cs (Terminal hash set, CreateCoreAsync's active-case check)"
+    classification: Open - awaiting decision
+
+  - id: CR-131
+    title: "Withdrawal is only allowed from {Draft, Submitted(dead), ManagerReview} - an employee has no self-service way to retract a resignation once Manager Review has cleared and HR Review has begun"
+    observation: "WithdrawAsync's allowed-status array excludes HrReview entirely. Once a manager has approved and the case is in HrReview, the initiating employee's only remaining recourse is asking HR to HR-reject the case on their behalf - there is no employee-triggered withdrawal past that point, and no equivalent self-service path exists post-Approved either (only HR-only ApplyNoticeWaiverAsync/ReviseApprovedLwdAsync mutate an Approved case)."
+    risk: "An employee who has a genuine change of heart after manager approval has no direct API path to cancel their own resignation - this may be an intentional business control (once manager-approved, only HR can undo it) or an overlooked gap; worth an explicit product confirmation."
+    source: "Backend/HRMS.Application/Services/SeparationService.cs (WithdrawAsync's allowed-status array, line ~107)"
+    classification: Open - awaiting decision
+
+  - id: CR-132
+    title: "Manager-scope date asymmetry: GetTeamAsync/manager-inbox resolve 'my team' as of TODAY, while ManagerApprove/Reject resolve approval authority as of the separation's REQUEST DATE - the two can disagree after a manager reassignment"
+    observation: "SeparationService.GetTeamAsync (backing both /team and /inbox/manager) calls IEmployeeManagerResolver.ResolveAsync(employeeId, clock.GetUtcNow(), ct) for every employee with any separation case. ManagerApproveAsync/ManagerRejectAsync instead call the same resolver with row.RequestDate. If a manager reassignment happens between the case's RequestDate and 'today', a case can appear in a NEW manager's inbox/team list yet that manager receives Forbidden when actually attempting to approve/reject it (or the reverse: an OLD manager who no longer sees the case in their own /team could still pass the RequestDate-based authority check if they call the approve endpoint directly by id)."
+    risk: "A manager transition mid-flight of a pending separation approval produces a visibly broken UX (a case visible in the inbox that cannot actually be acted on, or vice versa) that a tester might mistake for a permissions bug rather than a designed date-resolution mismatch."
+    source: "Backend/HRMS.Application/Services/SeparationService.cs (GetTeamAsync vs ManagerApproveAsync/ManagerRejectAsync, both calling IEmployeeManagerResolver.ResolveAsync with different 'as-of' dates)"
+    classification: Open - awaiting decision
+
+  - id: CR-133
+    title: "Asymmetric LWD validation between the pre-approval ReviseLwdAsync path (no upper bound, no DateOfLeaving check) and the post-approval ReviseApprovedLwdAsync path (does check DateOfLeaving) - the two 'revise the last working date' operations enforce materially different strictness"
+    observation: "ReviseLwdAsync (HrReview-status-only, pre-approval) validates only NewLastWorkingDate >= RequestDate. ReviseApprovedLwdAsync (Approved-status-only, post-approval) additionally validates the new date against NoticeStartDate and any existing Employee.DateOfLeaving. A pre-approval revision that sets a new LWD earlier than an already-recorded Employee.DateOfLeaving (from an unrelated employment record) passes silently, since no such check exists in the pre-approval path."
+    risk: "The two 'revise LWD' code paths, which a tester would reasonably expect to enforce the same invariants, in fact diverge - a negative test proving the pre-approval path accepts a date the post-approval path would reject is a legitimate and easily reproducible finding."
+    source: "Backend/HRMS.Application/Services/SeparationService.cs (ReviseLwdAsync vs ReviseApprovedLwdAsync validation blocks)"
+    classification: Open - awaiting decision
+
+  - id: CR-134
+    title: "Separation.Approve, Separation.Review, and Separation.NoticeManage are declared, seeded to multiple roles, but checked by ZERO controller endpoints anywhere - dead permissions, the same pattern Module 7 flagged as CR-80"
+    observation: "A full grep of every [HasPermission(...)] attribute in SeparationController.cs shows the actual gates used for approve/reject/notice actions are ManagerReview, HrReview, and NoticeWaive - never Approve, Review, or NoticeManage, despite all three being defined permission constants seeded to SuperAdmin/TenantAdmin/HRAdmin/HRManager (and HRBP for NoticeManage)."
+    risk: "A role holding these three permissions appears more privileged than it functionally is - granting Separation.Approve alone (without ManagerReview/HrReview) authorizes nothing, which could mislead an access-review audit that inventories permissions by name rather than by verified endpoint reachability. This is the same finding shape as CR-66's self-escalation of dead permissions (see above)."
+    source: "Backend/HRMS.API/Controllers/SeparationController.cs (full [HasPermission] grep); Backend/HRMS.Domain/Authorization/Permissions.cs (Approve/Review/NoticeManage declarations); Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (grants to HRAdmin/HRManager/HRBP/Manager)"
+    classification: Open - awaiting decision
+
+  - id: CR-135
+    title: "HRManager lacks Separation.ViewAll, Separation.Manage, and Separation.ClearanceConfigure - cannot list-all/get-by-id cases, cannot operate the document lifecycle or exit-closure workflow, and cannot configure exit-interview templates, despite holding most of the review/approval permission set"
+    observation: "SeedData.cs's HRManager grant set includes ViewSelf/ViewTeam/Initiate/Submit/Review/ViewHistory/ManagerReview/HrReview/ReviseLastWorkingDate/Approve(dead)/Reject/NoticeManage(dead)/NoticeWaive/ReviseApprovedLastWorkingDate plus a Clearance subset (ViewAll/Start/ManageTask/Waive/Complete/Reopen) - but NOT Separation.ViewAll (blocking GET /api/separation and GET /api/separation/{id}), NOT Separation.Manage (blocking all document generate/approve/issue/supersede/cancel actions and all exit execute/retry actions), and NOT ClearanceConfigure (blocking exit-interview template configuration, since that feature reuses the Clearance-named permission per CR-147)."
+    risk: "In practice only SuperAdmin/TenantAdmin/HRAdmin can run the document-generation and final-exit-execution phases of the workflow end-to-end - HRManager, despite its central role in day-to-day review/approval, is functionally excluded from the last two phases. Confirm with product whether this tiering is intentional (documents/exit-closure reserved for a more senior HR role) or an oversight."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[HRManager])"
+    classification: Open - awaiting decision
+
+  - id: CR-136
+    title: "Employer-initiated separations always skip Manager Review by design (InitiatedBy is hardcoded to Hr) - EmployeeSeparationInitiator.Manager and .System enum values are never produced by any code path, and a manager cannot self-initiate a report's separation through this API at all"
+    observation: "CreateForEmployeeAsync always stamps InitiatedBy=EmployeeSeparationInitiator.Hr; no code path anywhere constructs a case with InitiatedBy=Manager or =System, despite both being valid, declared enum members. SubmitCoreAsync routes any case whose SeparationType is EmployerInitiated straight to HrReview, bypassing ManagerReview entirely on Submit."
+    risk: "A manager wishing to initiate an involuntary separation for a direct report has no dedicated API path distinguishable from a generic HR-initiated case, and any such case automatically skips manager-stage review of itself (which would be circular anyway, but worth confirming the business intends 'HR always reviews employer-initiated cases directly, with no manager sign-off step')."
+    source: "Backend/HRMS.Application/Services/SeparationService.cs (CreateForEmployeeAsync line ~49, SubmitCoreAsync line ~116); Backend/HRMS.Domain/Enums/SeparationEnums.cs (EmployeeSeparationInitiator)"
+    classification: Open - awaiting decision
+
+  - id: CR-137
+    title: "Several Conflict messages across Separation/Clearance/Settlement use a bare PascalCase-code style ('SeparationAlreadyClosed', 'SettlementAlreadyFinalized: approved LWD requires an existing Payroll correction workflow') inconsistent with the plain-English sentences used everywhere else in the same files"
+    observation: "ClearanceService.CompleteAsync/ReopenAsync, ExitInterviewService.ReopenAsync, SeparationSettlementOrchestrationService.InitiateAsync, and SeparationService.ReviseApprovedLwdAsync all return the literal string 'SeparationAlreadyClosed' or a 'Code: message' hybrid ('SettlementAlreadyFinalized: ...') for one specific guard each, while every other message in the same files is a complete natural-language sentence."
+    risk: "If the frontend or any automated assertion matches on message text, these particular messages need special-casing; a QA reviewer should confirm whether the frontend maps 'SeparationAlreadyClosed' to a readable string or displays it raw to a user, since every sibling message would render correctly as-is."
+    source: "Backend/HRMS.Application/Services/ClearanceService.cs (lines ~94, ~107); Backend/HRMS.Application/Services/ExitInterviewService.cs (ReopenAsync); Backend/HRMS.Application/Services/SeparationSettlementOrchestrationService.cs (line ~51); Backend/HRMS.Application/Services/SeparationService.cs (ReviseApprovedLwdAsync line ~297)"
+    classification: Open - awaiting decision
+
+  - id: CR-138
+    title: "No department/role/HR/IT/Accounts/Admin ownership enforcement exists on clearance task actions - TaskActionAsync only special-cases SpecificUser and Manager owner types; anyone holding the blanket ManageTask/Waive permission can clear/block/waive ANY task regardless of category or assignment"
+    observation: "ClearanceService.TaskActionAsync's ownership checks are exactly two branches: OwnerType==SpecificUser (must be the assigned user) and OwnerType==Manager (must be the resolved effective manager). For OwnerType in {Role, Department, Hr, Accounts, It, Admin}, there is no code path restricting who can act beyond the controller-level permission check - only the INBOX LISTING queries (GetInboxAsync) apply department/assignment filtering, which affects what is displayed, not what can be directly acted on via the task-id endpoints."
+    risk: "An HR user holding ClearanceManageTask can clear/block an IT-category task and vice versa, directly contradicting a naive assumption that 'IT can only touch IT tasks.' Confirm with product whether this coarse-grained gate is intentional (a small trusted-operator pool) or a genuinely missing per-department enforcement layer."
+    source: "Backend/HRMS.Application/Services/ClearanceService.cs (TaskActionAsync, lines ~63-86; GetInboxAsync, lines ~138-164)"
+    classification: Open - awaiting decision
+
+  - id: CR-139
+    title: "Seeded IT and Accounts roles hold zero Separation.Clearance.* permissions at all - ClearanceOwnerType.It/Accounts/Finance tasks can only ever be exercised, out of the box, by SuperAdmin/TenantAdmin/HRAdmin/HRManager"
+    observation: "SeedData.cs's IT role grants only User.View/User.Edit/AccountEmployeeLink.View; its Accounts role grants only Employee.View. Neither holds any Separation.Clearance.* permission, despite ClearanceOwnerType.It/Accounts and SeparationClearanceTaskCategory.It/Accounts/Finance being fully modeled enum values in the clearance system."
+    risk: "The clearance model anticipates IT/Accounts department-level ownership, but no seeded role can actually act as that owner without a custom role assignment - confirm whether department heads are meant to receive these permissions through a separate onboarding step or a future phase."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[IT], RolePermissionMap[Accounts])"
+    classification: Open - awaiting decision
+
+  - id: CR-140
+    title: "Separation.Clearance.ViewSelf is defined but referenced by zero controller actions - there is no way for an employee to view even their own clearance progress through this specific permission; ViewTeam only gates the manager inbox, not a per-employee detail view"
+    observation: "A grep of SeparationClearanceController.cs's [HasPermission] attributes shows only ClearanceViewAll (GET for/{separationId}, GET {id}), ClearanceViewTeam (GET inbox/manager), ClearanceConfigure/Start/ManageTask/Waive/Complete/Reopen/AssetManage gate every other action - ClearanceViewSelf gates nothing at all."
+    risk: "The clearance-progress card shown on MySeparationPage (employee self-service) must be reaching the clearance data through a different mechanism than this permission (likely the ViewAll-equivalent path resolved for the caller's own record) - if so, ClearanceViewSelf is entirely vestigial and should be confirmed as such, not assumed to gate the employee's own view."
+    source: "Backend/HRMS.API/Controllers/SeparationClearanceController.cs (full [HasPermission] grep); Backend/HRMS.Domain/Authorization/Permissions.cs (ClearanceViewSelf declaration)"
+    classification: Open - awaiting decision
+
+  - id: CR-141
+    title: "Multiple enum members across Clearance/Settlement/Payroll are declared but never assigned by any code path (dead states) - SeparationClearanceStatus.ReadyForCompletion/Cancelled, SeparationClearanceTaskStatus.InProgress/Rejected/NotApplicable(as a task status), SeparationSettlementOrchestrationStatus.Ready/InitiationPendingApproval/Processing/Cancelled, and FinalSettlementStatus.Reviewed"
+    observation: "ClearanceService.cs only ever writes clearance Status through NotStarted->InProgress->Completed/Reopened; task Status through Pending->Cleared/Blocked/Waived (never InProgress/Rejected/NotApplicable-as-a-task-status - NotApplicable appears only as an ASSET return status, not a task status). SeparationSettlementOrchestrationService.cs only ever writes Initiated/Failed/Completed (NotReady is a DTO-only default, never persisted). PayrollRetroSettlementService.cs's FinalSettlementStatus.Reviewed has no transition method that ever sets it."
+    risk: "A comprehensive state-machine test plan enumerating every declared enum value would expect a way to reach each of these nine values and would not find one for any of them - QA should document them explicitly as 'declared, currently unreachable' rather than search for a hidden trigger, and flag them as candidates for either future-phase implementation or dead-code removal."
+    source: "Backend/HRMS.Domain/Enums/SeparationClearanceEnums.cs; Backend/HRMS.Domain/Enums/SeparationSettlementEnums.cs; Backend/HRMS.Domain/Enums/PayrollEnums.cs (FinalSettlementStatus); Backend/HRMS.Application/Services/ClearanceService.cs, SeparationSettlementOrchestrationService.cs, PayrollRetroSettlementService.cs (reachability greps)"
+    classification: Open - awaiting decision
+
+  - id: CR-142
+    title: "SeparationAssetReturn.ActualReturnDate and .IssuedDate are never populated by ClearanceService, even when ReturnStatus transitions to Returned"
+    observation: "AddAssetReturnAsync/UpdateAssetReturnAsync never write to ActualReturnDate or IssuedDate anywhere in ClearanceService.cs, despite both fields existing on the entity specifically to record when an asset was issued/returned."
+    risk: "Any report or audit expecting an actual-return timestamp to distinguish 'marked Returned today' from 'marked Returned three weeks ago' will find both fields empty regardless of when the status change occurred - confirm whether this is intended (the field is meant for future manual entry) or a real gap in the auto-stamp logic."
+    source: "Backend/HRMS.Application/Services/ClearanceService.cs (AddAssetReturnAsync, UpdateAssetReturnAsync); Backend/HRMS.Domain/Entities/Separation/SeparationClearance.cs (SeparationAssetReturn.ActualReturnDate, IssuedDate)"
+    classification: Open - awaiting decision
+
+  - id: CR-143
+    title: "GratuityPolicyVersion.IncludeNoticePeriodInService and .NoticeWageBasisType are configurable via the API but never read by any calculation - dead configuration fields"
+    observation: "Both fields are settable when creating a policy version, but a full read of ServiceLength/CalculateNoticeAsync in SeparationBenefitsService.cs shows neither is ever referenced - CalculateNoticeAsync always uses the wage amount already resolved via the gratuity wage-basis logic, never re-resolving wage using NoticeWageBasisType, and service-length computation never includes or excludes the notice period based on IncludeNoticePeriodInService."
+    risk: "An administrator configuring these two fields, believing they change calculation behavior, would observe no effect at all - worth a dedicated test proving the configuration has zero impact, distinct from asserting it works, so this is documented rather than silently assumed functional."
+    source: "Backend/HRMS.Application/Services/SeparationBenefitsService.cs (ServiceLength, CalculateNoticeAsync); Backend/HRMS.Domain/Entities/SeparationBenefits.cs (GratuityPolicyVersion.IncludeNoticePeriodInService, NoticeWageBasisType)"
+    classification: Open - awaiting decision
+
+  - id: CR-144
+    title: "SeparationReason.ContractEnd and .Other can NEVER be gratuity-eligible - IsReasonEligible's switch has no case for either, defaulting to false regardless of policy configuration"
+    observation: "SeparationBenefitsService.IsReasonEligible is a switch statement covering Resignation/Retirement/Termination/Death/Disability/Redundancy against their respective policy-version eligibility flags; ContractEnd and Other fall through to the default branch, which returns false unconditionally - no policy-version flag exists to make them eligible even if an administrator wanted to."
+    risk: "Any employee separating with reason ContractEnd or Other will always receive 'no active gratuity policy applies' / a zero-benefit result from calculation, regardless of how generously the gratuity policy is configured - confirm this is deliberate business behavior (these two reason categories are meant to be gratuity-ineligible by law/policy) rather than a missing switch arm."
+    source: "Backend/HRMS.Application/Services/SeparationBenefitsService.cs (IsReasonEligible, line ~180)"
+    classification: Open - awaiting decision
+
+  - id: CR-145
+    title: "Multi-active-gratuity-policy ambiguity - if more than one GratuityPolicy.IsActive=true exists for a tenant, calculation silently picks the alphabetically-first Code with no explicit default flag or ambiguity error"
+    observation: "CalculateCoreAsync's policy lookup is `Where(IsActive).OrderBy(Code).FirstOrDefault()` - there is no 'IsDefault' flag on GratuityPolicy and no validation anywhere preventing a tenant from having two or more simultaneously-active policies."
+    risk: "An administrator who activates a second gratuity policy (perhaps intending to replace the first, or scope it to a different employee segment via a future filter) will silently have calculations continue to use whichever policy's Code sorts first alphabetically, with zero warning that ambiguity exists - a boundary test creating two active policies and confirming which one 'wins' is a high-value, easily-missed scenario."
+    source: "Backend/HRMS.Application/Services/SeparationBenefitsService.cs (CalculateCoreAsync, line ~122)"
+    classification: Open - awaiting decision
+
+  - id: CR-146
+    title: "No seeded role except SuperAdmin/TenantAdmin holds ANY Payroll.SeparationBenefits.* permission - HRAdmin is excluded, and the self-service /api/me/separation-benefits routes require the SAME admin-tier permission, making them unreachable by the seeded Employee role"
+    observation: "Grepping SeedData.cs for SeparationBenefits shows the permission-id map and the SuperAdmin/TenantAdmin DomainPermissions.All grants, but it is absent from HRAdmin's otherwise-extensive payroll permission list. The /api/me/separation-benefits and /history routes are gated on the SAME Payroll.SeparationBenefits.View/ViewHistory permissions as the admin-facing routes - there is no separate 'own record' permission - so a plain seeded Employee role can never view their own finalized gratuity/benefits through the self-service endpoint at all."
+    risk: "This looks like a likely oversight rather than intended design: HRAdmin cannot configure gratuity policies or view the separation-benefits register out of the box, and no employee can ever see their own gratuity/leave-encashment/notice-recovery outcome through the self-service page without a custom permission grant."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[HRAdmin], absence of SeparationBenefits*); Backend/HRMS.API/Controllers/SeparationBenefitsController.cs (/api/me/separation-benefits routes)"
+    classification: Open - awaiting decision
+
+  - id: CR-147
+    title: "No dedicated ExitInterview.*/Document.*/Settlement.*/ExitClosure.* permission family exists anywhere - exit-interview template configuration reuses the Clearance-named Separation.ClearanceConfigure permission, and document/settlement/exit-execution actions are ALL gated by the single general-purpose Separation.Manage, with no way to grant one capability without the others"
+    observation: "SeparationExitInterviewController.cs's Templates/CreateTemplate/CreateVersion/Publish actions are gated by Permissions.Separation.ClearanceConfigure, confirmed intentional by an existing passing test (Self_hr_and_configuration_routes_reuse_separation_permissions). Separately, SeparationDocumentController.cs's Generate/Approve/Issue/Supersede/Cancel, SeparationSettlementController.cs's Initiate/Retry, and SeparationExitController.cs's Execute/Retry are ALL gated by the single Separation.Manage permission - a role holding it can generate exit documents, initiate payroll settlement money-movement, AND execute final employment/account deactivation, with no finer-grained split available."
+    risk: "A role administrator granting document-generation capability necessarily also grants settlement-initiation and final-exit-execution capability, and a role administrator granting exit-interview template access is (perhaps unknowingly) also granting clearance-template configuration access, since it is literally the same permission constant. This is a coarse-grained-permission design risk worth flagging to the product/security owner, distinct from CR-66's self-escalation finding."
+    source: "Backend/HRMS.API/Controllers/SeparationExitInterviewController.cs (lines 14-17); Backend/HRMS.API/Controllers/SeparationDocumentController.cs, SeparationSettlementController.cs, SeparationExitController.cs (all [HasPermission(Separation.Manage)]); Backend/HRMS.Tests/SeparationExitInterviewAuthorizationTests.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-148
+    title: "An employee can silently 'un-submit' HR's in-progress exit-interview review - re-submitting while HR has moved to HrInProgress resets Status back to EmployeeSubmitted, discarding HR's in-progress state"
+    observation: "ExitInterviewService.SaveEmployeeAsync's idempotent-resubmission short-circuit only fires when status is EXACTLY EmployeeSubmitted. Once HR calls StartHrAsync (status becomes HrInProgress), the read-only guard for a plain SAVE would fire, but a further employee SUBMIT call (submit=true) bypasses that guard entirely, falls through to normal processing, re-validates required questions, and re-saves - which SETS Status back to EmployeeSubmitted, silently discarding whatever HR had begun reviewing."
+    risk: "An employee re-submitting mid-review (perhaps innocently, believing their answer needs one more edit) can reset HR's review progress with no warning to either party - worth an explicit test confirming this exact sequence and what, if anything, alerts HR that their in-progress review state was reverted."
+    source: "Backend/HRMS.Application/Services/ExitInterviewService.cs (SaveEmployeeAsync, lines 86-87)"
+    classification: Open - awaiting decision
+
+  - id: CR-149
+    title: "Exit-interview and document event types include several that are declared but never raised - downloads, views, and generation failures are invisible in their respective History endpoints"
+    observation: "SeparationDocumentEnums.cs declares DocumentGenerationFailed, DocumentViewed, and DocumentDownloaded as SeparationDocumentEventType members, but a full read of SeparationDocumentService.cs shows no AddEvent(...) call ever uses any of the three - only Approve/Issue/Generate/Supersede/Cancel/Template-lifecycle events are ever written."
+    risk: "The document History endpoint cannot answer 'who downloaded this document and when' or 'did a generation attempt fail before this one succeeded' - if audit requirements expect that visibility, this is a real gap, not merely an untested feature; confirm with product whether download/view auditing is planned for a future phase."
+    source: "Backend/HRMS.Domain/Enums/SeparationDocumentEnums.cs (SeparationDocumentEventType); Backend/HRMS.Application/Services/SeparationDocumentService.cs (absence of the three AddEvent calls)"
+    classification: Open - awaiting decision
+
+  - id: CR-150
+    title: "Post-separation document self-access has no dedicated alumni/magic-link path - access control on the document endpoints checks only ownership + document Status, never Employee.Status/User.IsActive directly, but since exit execution deactivates the account (CR-53) a terminated employee cannot reach the endpoint through the normal portal at all"
+    observation: "SeparationDocumentService.DownloadAsync/GetForSeparationAsync(selfOnly:true) never check the caller's Employee.Status or account IsActive - access is gated purely by EmployeeId ownership and the document's own Status (Issued/Superseded). In principle this means document access itself does not become newly restricted post-separation. In practice, because exit execution (Group G/CR-53) deactivates the linked account and revokes every session, a terminated employee cannot authenticate at all, so they can never reach this endpoint through the ordinary login flow. Phase 8H's own design doc explicitly defers any alumni/rehire access mechanism to a future, unbuilt phase."
+    risk: "If the business expects a separated employee to retrieve their own relieving letter/experience letter/service certificate after their account is deactivated (a common real-world HR requirement), no such path exists today - this is a legitimate product-clarification question, not a code defect, since the current design is internally consistent (deactivation blocks login; document authorization doesn't need to separately check status because login already gates it)."
+    source: "Backend/HRMS.Application/Services/SeparationDocumentService.cs (DownloadAsync, GetForSeparationAsync); docs/phase-8h-separation-production-closure.md (alumni/rehire processing explicitly deferred)"
+    classification: Open - awaiting decision
+
+  - id: CR-151
+    title: "The hand-rolled PDF renderer has no text-wrapping/pagination for long field values, and full PDF bytes are stored inline in the database with no external blob store or purge-on-supersede/cancel path"
+    observation: "SeparationDocumentService.RenderPdf produces a single-page, single-font, fixed-position text block with no line-wrapping or overflow handling. Long employee names, addresses, or organization strings risk truncation, overlap, or a garbled rendered PDF with no validation catching this before the document is issued. Separately, every generated document's full PDF bytes live inline in SeparationGeneratedDocument.ContentBase64 (a deliberate interim design per phase-8g's own documentation) - superseded and cancelled documents' bytes are never purged, so a tenant with many employees × multiple document types × repeated supersessions accumulates unbounded row size over time."
+    risk: "Both are real functional/operational risks rather than pure edge cases: a long employee name silently corrupting a legal document (relieving letter) is a material defect if it occurs, and unbounded inline-blob growth is a genuine scaling concern for a long-lived tenant with high separation volume."
+    source: "Backend/HRMS.Application/Services/SeparationDocumentService.cs (RenderPdf); Backend/HRMS.Domain/Entities/Separation/SeparationDocument.cs (SeparationGeneratedDocument.ContentBase64); docs/phase-8g-separation-documents.md (lines 57-61, inline-storage design note)"
+    classification: Open - awaiting decision
+
+  - id: CR-152
+    title: "Orphan permission Payroll.FinalSettlementCancel - declared, seeded, but no CancelSettlementAsync method or endpoint exists anywhere; FinalSettlementStatus.Cancelled can never be reached via any reachable API path, and no settlement reversal/reopen endpoint exists once Approved/Finalized"
+    observation: "Permissions.cs declares and SeedData.cs seeds Payroll.FinalSettlementCancel, but a full grep of IPayrollRetroSettlementService and PayrollRetroSettlementController shows no Cancel method or route at all. Separately, neither the Separation nor the Payroll controller exposes any reversal/reopen action once a settlement is Approved or Finalized - per the phase-8f design doc, post-finalization corrections are intended to go through the separate PayrollRetroCase/PayrollAdjustment mechanism instead, a design decision worth confirming rather than searching for a hidden 'unfinalize' button."
+    risk: "A role granted FinalSettlementCancel believing it can cancel an in-progress settlement will find no button or endpoint that does anything - another instance of the CR-134/CR-66-adjacent 'permission exists but nothing checks it' pattern, this time on the Payroll side of the Separation-Payroll boundary."
+    source: "Backend/HRMS.Domain/Authorization/Permissions.cs (FinalSettlementCancel); Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs; Backend/HRMS.Application/Abstractions/IPayrollRetroSettlementService.cs (absence of Cancel); docs/phase-8f-final-settlement-orchestration.md"
+    classification: Open - awaiting decision
+
+  - id: CR-153
+    title: "GET /api/separation/{id}/settlement, gated by the read-only-sounding Separation.ViewAll, has a write side-effect - it can silently self-heal the orchestration Status to Completed and insert an event row on first observation of Payroll finalization"
+    observation: "SeparationSettlementOrchestrationService.GetStatusAsync checks whether the linked FinalSettlementCase is Finalized while the orchestration's own Status isn't yet Completed, and if so, mutates and persists the Completed transition plus an event, INSIDE what is otherwise a GET request handler. This includes handling DbUpdateConcurrencyException/InvalidOperationException as real failure responses (409/503) from what looks like a pure read."
+    risk: "A user or automated client holding only view-level access can trigger a database write and potentially a concurrency conflict simply by reading the endpoint at the wrong moment - this violates the usual GET-is-safe assumption and should be called out explicitly to anyone building caching, retries, or read replicas around this endpoint."
+    source: "Backend/HRMS.Application/Services/SeparationSettlementOrchestrationService.cs (GetStatusAsync, lines ~30-42)"
+    classification: Open - awaiting decision
+
+  - id: CR-154
+    title: "Two independent, non-reconciled 'notice' data tracks feed different consumers: Separation's own readiness gate reads EmployeeSeparation's notice snapshot fields, while Payroll's actual notice-pay/notice-recovery MONEY calculation reads a completely different table, EmployeeEmployments"
+    observation: "SeparationService.GetNoticeAsync and the NoticeNotFinalized settlement-readiness blocker both read EmployeeSeparation.NoticePeriodDays/NoticeServedDays/NoticeShortfallDays/NoticeStartDate. SeparationBenefitsService.CalculateNoticeAsync, which computes the actual notice-pay/notice-recovery FinalSettlementLine amount, instead reads EmployeeEmployments.NoticePeriod/NoticeStartDate/NoticeEndDate - a different table entirely, never cross-validated against the separation record HR sees."
+    risk: "It is possible for Separation to consider notice 'finalized' (readiness passes, based on the EmployeeSeparation snapshot) while Payroll computes a notice-pay/recovery amount from a stale or divergent EmployeeEmployments record - or vice versa. A high-value QA scenario: deliberately diverge the two tables' notice fields and confirm which one the final settlement line actually reflects."
+    source: "Backend/HRMS.Application/Services/SeparationService.cs (GetNoticeAsync); Backend/HRMS.Application/Services/SeparationSettlementOrchestrationService.cs (EvaluateAsync, NoticeNotFinalized blocker); Backend/HRMS.Application/Services/SeparationBenefitsService.cs (CalculateNoticeAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-155
+    title: "Settlement InitiateAsync's IdempotencyKey is not actually validated for correctness - re-initiating with a DIFFERENT key string than the original still silently short-circuits as if it matched"
+    observation: "InitiateAsync stores request.IdempotencyKey?.Trim() only on first creation and never compares an incoming request's key against the stored one on a subsequent call - the idempotent short-circuit (once PayrollFinalSettlementId is set) triggers regardless of what key value, if any, the caller supplies on the replay."
+    risk: "A client relying on IdempotencyKey mismatch detection to catch an accidental double-submission with different intent (e.g., a genuinely new initiation attempt using a fresh key, expected to be rejected as inconsistent) will instead silently receive the original linked result - worth an explicit test initiating with key 'A' then again with key 'B' on the same separation and confirming the second call is NOT rejected."
+    source: "Backend/HRMS.Application/Services/SeparationSettlementOrchestrationService.cs (InitiateAsync, IdempotencyKey handling)"
+    classification: Open - awaiting decision
+
+  - id: CR-156
+    title: "No automated/monetary path exists from Clearance asset recovery into Final Settlement - SeparationAssetReturn has no amount field at all, so any actual money recovery for a lost/damaged asset must be added as a fully manual, unlinked Recovery-type settlement line"
+    observation: "SeparationAssetReturn's only recovery-adjacent fields are RecoveryRequired (bool) and RecoveryReference (free-text string) - confirmed by the phase-8d design doc's own statement that Clearance 'does not calculate or post a recovery amount.' A HR/Payroll user wanting to recover money for a damaged laptop must manually create a FinalSettlementLine with LineType=Recovery, SourceType defaulting to 'Manual' with no back-reference to the clearance asset id that motivated it."
+    risk: "There is no system-enforced traceability between 'this specific asset was marked RecoveryRequired' and 'this specific settlement line recovers money for it' - an auditor reconciling asset recoveries against settlement deductions has no automated cross-reference to rely on; confirm whether the frontend surfaces any manual linkage workflow for this or whether it is a genuine functional gap."
+    source: "Backend/HRMS.Domain/Entities/Separation/SeparationClearance.cs (SeparationAssetReturn - no amount field); Backend/HRMS.Application/Services/PayrollRetroSettlementService.cs (AddSettlementLineAsync, SourceType default); docs/phase-8d-clearance-no-dues-asset-return.md"
+    classification: Open - awaiting decision
+
+  - id: CR-157
+    title: "Settlement money-amount validation is inconsistent - manual FinalSettlementLineRequest.Amount has no sign validation at all, while GratuityOverrideRequest.OverrideAmount explicitly rejects negatives; a negative NetSettlement is only rejected at Finalize, not at the earlier Approve stage"
+    observation: "AddSettlementLineAsync accepts any Amount, positive or negative, with no validation. OverrideAsync (gratuity override) explicitly validates `if (request.OverrideAmount < 0 ...) return Invalid`. Separately, FinalizeSettlementAsync is the ONLY place that rejects a negative NetSettlement ('Negative final settlement cannot be finalized') - ApproveSettlementAsync (the earlier maker-checker sign-off stage) performs no such check, so a negative settlement can be fully Approved and only discovered to be un-finalizable afterward."
+    risk: "A manual negative-amount line could silently corrupt GrossPayable/TotalDeductions math (both are simple signed sums with no sanity check), and an approver can sign off on a settlement that structurally can never be finalized - confirm with product whether Approve should also carry the negative-total guard, and add explicit boundary tests for a manual line with a negative Amount."
+    source: "Backend/HRMS.Application/Services/PayrollRetroSettlementService.cs (AddSettlementLineAsync line ~60, ApproveSettlementAsync, FinalizeSettlementAsync line ~111); Backend/HRMS.Application/Services/SeparationBenefitsService.cs (OverrideAsync line ~96)"
+    classification: Open - awaiting decision
+
+  - id: CR-158
+    title: "(see CR-110's carry-forward text above for the full observation) SeparationBenefitsService.CalculateLeaveAsync reads EmployeeLeaveBalances for encashment but never marks the read quantity reserved/consumed"
+    observation: "This entry exists as a standalone, directly-citable id for test cases in Group I (Leave Integration) that specifically exercise the leave-balance-encashment-vs-concurrent-leave-request scenario; see CR-110 above for the full narrative reconciling it against Module 8's original Comp-Off/Overtime finding."
+    risk: "See CR-110."
+    source: "Backend/HRMS.Application/Services/SeparationBenefitsService.cs (CalculateLeaveAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-159
+    title: "No code path anywhere reassigns direct reports, EmployeeSupervisor rows, or manager-approval authority when a manager is separated - the only safeguard is a blocker that checks ONLY the legacy Employee.ReportingManagerId column, never EmployeeEmploymentHistory.ManagerId or any EmployeeSupervisor field"
+    observation: "SeparationExitService.EvaluateAsync's ManagerReassignmentRequired blocker queries `db.Employees.AnyAsync(x => x.ReportingManagerId == separation.EmployeeId && x.Status == Active)` - the legacy flat column only. A manager recorded as such SOLELY via EmployeeEmploymentHistory.ManagerId (not the legacy column) produces NO blocker at all, and exit execution can complete for that manager while active reports still resolve to them via Employment History. Separately, EmployeeSupervisor (L1ManagerId through ChroManagerId, TimeManagerId, EroId) is never referenced anywhere in the Separation service family - if the separating employee is someone else's L2 manager, Time manager, or ERO via this table, those references are left pointing at the now-terminated employee indefinitely, with no blocker, no warning, and no cleanup of any kind."
+    risk: "This is the highest-impact Manager-Impact gap found in this module: a terminated manager's former reports can be left with a dangling or stale effective-manager resolution across EVERY module that resolves 'who is my manager' (Leave, Attendance, RBAC scope), with zero system-level warning that this cleanup step was never performed."
+    source: "Backend/HRMS.Application/Services/SeparationExitService.cs (EvaluateAsync, ManagerReassignmentRequired blocker); Backend/HRMS.Domain/Entities/EmployeeSupervisor.cs (never referenced by Separation service family, confirmed by grep)"
+    classification: Open - awaiting decision
+
+  - id: CR-160
+    title: "(frontend) No component-level permission gating exists on 15 of 16 Separation-family pages plus both Payroll-hosted Separation-Benefits pages - only MySeparationPage checks permissions client-side; every mutating action elsewhere relies solely on the page-level route guard and the backend's own eventual 403"
+    observation: "A grep of `useAuth|Permissions\\.|can(` across src/pages/separation and src/pages/payroll/SeparationBenefitsPage.tsx shows only MySeparationPage.tsx imports/uses the permission-check hook. SeparationInboxPage, ClearanceOperationsPage, SettlementDashboardPage, SeparationExitClosurePage, SeparationDocumentsPage, SeparationDocumentTemplateConfigurationPage, ExitInterviewConfigurationPage, ExitInterviewHrInboxPage, ExitInterviewHrDetailPage, MyExitInterviewPage, and both payroll Separation-Benefits pages have zero in-component checks - every button/action on those pages is rendered unconditionally once the page-level route permission is satisfied."
+    risk: "A user whose role holds only the route's VIEW-tier permission (e.g. Separation.ViewAll on /separation/documents) can see and click Generate/Approve/Issue buttons that actually require Separation.Manage on the backend - the UI lets them attempt the action and only fails after a round-trip with a raw error message, never disabling or hiding the control up front. ClearanceOperationsPage's own on-screen subtitle explicitly (and incorrectly) claims 'Permission-gated operational clearance...' despite performing zero client-side checks - a direct documentation/implementation mismatch."
+    source: "Frontend/HRMS.Web/src/pages/separation/*.tsx (grep for useAuth/Permissions/can); Frontend/HRMS.Web/src/pages/separation/ClearanceOperationsPage.tsx (line ~29 subtitle text); Frontend/HRMS.Web/src/pages/payroll/SeparationBenefitsPage.tsx"
+    classification: Open - awaiting decision
+
+  - id: CR-161
+    title: "(frontend) SeparationDocumentsPage hardcodes expectedConcurrencyVersion=1 for both Approve and Issue actions, and its imported publish/preview handlers are wired to nothing (void publish; void preview) - matching a dead-handler pattern already found in Attendance's frontend"
+    observation: "SeparationDocumentsPage.tsx calls approveSeparationDocument(row.id, 1) and issueSeparationDocument(row.id, 1) with a literal 1 rather than the document's actual current ConcurrencyVersion (the api type for a generated document has no concurrencyVersion field to read from at all). Separately, the page imports publishSeparationDocumentTemplateVersion/previewSeparationDocumentTemplateVersion and explicitly voids them (`void publish; void preview`) purely to suppress unused-variable lint errors - neither is wired to any button on this page (they only work on the separate /separation/document-templates screen, itself an orphan route with no nav entry)."
+    risk: "If a document's real server-side ConcurrencyVersion has advanced past 1 for any reason (e.g. after a prior failed action or a template regeneration), Approve/Issue will fail an optimistic-concurrency check that the UI has no way to resolve or even display correctly - this looks like a genuine bug requiring a dedicated test (approve/issue a document whose real version is not 1, observe the failure mode surfaced to the user)."
+    source: "Frontend/HRMS.Web/src/pages/separation/SeparationDocumentsPage.tsx (hardcoded version literals; line ~13 void publish/preview); contrast with SeparationDocumentTemplateConfigurationPage.tsx, which correctly threads selected.concurrencyVersion on Publish"
+    classification: Open - awaiting decision
+
+  - id: CR-162
+    title: "(frontend) A substantial set of backend endpoints have no frontend entry point at all - blocker DETAIL (as opposed to a bare count) is never surfaced anywhere in the UI, and several mutating actions are API-only"
+    observation: "Confirmed dead/unused API-client exports (never called by any page): applyNoticeWaiver, reviseApprovedLwd, getSettlementReadiness, getSettlementStatus, getSeparationDocumentReadiness, getSeparationDocuments, supersedeSeparationDocument, getSeparationExitReadiness. There is also no client function AT ALL for POST /api/separation/documents/{id}/cancel, POST /api/separation/clearance/tasks/{id}/waive, or POST /api/separation/clearance/{id}/complete|reopen (whole-clearance, as opposed to per-task). Every Separation dashboard that reports a 'blocker count' (Settlement, Exit) never calls its own dedicated readiness endpoint to show the actual blocker MESSAGES, only the number."
+    risk: "Manual QA of notice waiver, post-approval LWD revision, clearance task waiver, whole-clearance complete/reopen, and document supersede/cancel must be scoped explicitly as 'API-only, not reachable through the current UI' rather than silently omitted or assumed broken; and any tester trying to diagnose 'why is this case not ready' from the Settlement/Exit dashboards alone will find only a number, never the reason."
+    source: "Frontend/HRMS.Web/src/api/separation.ts, separationDocuments.ts, separationExit.ts (grep for exported-but-never-imported functions); Frontend/HRMS.Web/src/pages/separation/SettlementDashboardPage.tsx, SeparationExitClosurePage.tsx (blockerCount-only rendering)"
+    classification: Open - awaiting decision
+
+  - id: CR-163
+    title: "(frontend) 13 of 17 Separation-family routes have no navigation entry - reachable only by typing the URL; SeparationInboxPage (the core manager/HR approval workflow) and SeparationDocumentsPage (document lifecycle, including the CR-161 concurrency bug) both have ZERO automated test coverage"
+    observation: "src/layout/navigation.ts registers exactly 4 Separation-module nav entries (My Separation, Manager Inbox, HR Inbox, Exit Closure); all other routes (exit-interview self/HR/config, all three clearance modes, settlement dashboard, both document pages, my-documents, both payroll separation-benefits pages) are registered in App.tsx but linked from nowhere in the app's own navigation. Separately, no .test.tsx file anywhere references SeparationInboxPage.tsx or SeparationDocumentsPage.tsx - confirmed by an exhaustive check of every Vitest file in the Separation surface."
+    risk: "Roughly 13 of 17 screens are invisible in the app's own navigation and can only be QA'd or used in production by someone who already knows the URL - a discoverability gap, not a security gap, since each route still enforces its own permission guard on direct navigation. Combined with the zero-test-coverage finding on the two most consequential pages (approval workflow and document lifecycle), manual QA is currently the ONLY safety net for both areas."
+    source: "Frontend/HRMS.Web/src/layout/navigation.ts; Frontend/HRMS.Web/src/App.tsx (route registrations); grep of Frontend/HRMS.Web/src/pages/separation/**/*.test.tsx for SeparationInboxPage/SeparationDocumentsPage (zero matches)"
+    classification: Open - awaiting decision
+
+  - id: CR-164
+    title: "(frontend) MySeparationPage's create-request form renders on ANY current.error truthiness (network failure, 500, auth hiccup) rather than a specific 'no active separation' condition, potentially misleading an employee into filing a duplicate resignation or never learning a real request failed"
+    observation: "MySeparationPage.tsx's conditional for showing the 'Start a request' card is `current.error ? <Card title=\"Start a request\">...` - any error from GET /api/separation/me/current (not specifically a 404/no-active-case response) triggers the SAME create-request UI as a genuine 'you have no active separation' state."
+    risk: "A transient network failure or backend 500 while loading the employee's current separation status would show the create-resignation form instead of an error message, which could lead an employee to believe they have no active case (when they may actually have one) and attempt to submit a new request - worth an explicit test forcing a 500/network error on this endpoint and confirming the resulting UI state."
+    source: "Frontend/HRMS.Web/src/pages/separation/MySeparationPage.tsx (line ~16, `current.error ? ...` conditional)"
+    classification: Open - awaiting decision

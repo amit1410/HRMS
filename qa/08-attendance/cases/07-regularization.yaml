@@ -1,0 +1,319 @@
+sheet: Attendance_Regularization
+submodule: Employee Regularization requests and Manager approval workflow
+defaults:
+  role: EMPLOYEE
+  perm: "Attendance.Regularization.Request"
+  tenant: A
+  pre: "Tenant A signed in as an active, linked Employee, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-REG-001
+    func: [F-ATT-139]
+    sc: Submit a valid Regularization request
+    t: A well-formed request with a proposed out-time and mandatory reason succeeds and lands Pending
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/me/regularizations] BusinessDate=yesterday, RequestType=MissingOutPunch, ProposedOutAtUtc=18:00, Reason='Forgot to punch out' => [200/201] Status=Pending"
+    auto: API
+
+  - id: ATT-REG-002
+    func: [F-ATT-139]
+    sc: Reason is mandatory; no attachment field exists
+    t: A blank Reason is rejected; there is no attachment upload field on the request at all
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/me/regularizations] Reason='' => [400] Reason required"
+      - "[POST /api/attendance/me/regularizations] attach a file field to the payload (guessed) => the API model has no attachment property; any such field is silently ignored, not stored"
+    auto: API
+
+  - id: ATT-REG-003
+    func: [F-ATT-139]
+    sc: At least one of ProposedInAtUtc/ProposedOutAtUtc is required
+    t: Neither field set is rejected
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/me/regularizations] ProposedInAtUtc=null, ProposedOutAtUtc=null => [400] 'At least one corrected punch is required'"
+    auto: API
+
+  - id: ATT-REG-004
+    func: [F-ATT-140]
+    sc: A separated employee cannot submit a new Regularization request
+    t: Inactive employment status, and a date after DateOfLeaving, both block submission
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] Employee E1 is separated (EmployeeStatus != Active) => precondition established"
+      - "[POST /api/attendance/me/regularizations] As E1, BusinessDate before separation => [403] Forbidden - unavailable after separation"
+      - "[Setup] Employee E2 still Active, DateOfLeaving=2026-07-15 => precondition established for the steps below"
+      - "[POST /api/attendance/me/regularizations] As E2, BusinessDate=2026-07-20 (after DateOfLeaving) => [403] Forbidden"
+    auto: API
+    cr: [CR-53]
+
+  - id: ATT-REG-005
+    func: [F-ATT-141]
+    sc: A future date cannot be regularized
+    t: BusinessDate after today is rejected
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/attendance/me/regularizations] BusinessDate=tomorrow => [400] 'A future attendance date cannot be regularized'"
+    auto: API
+
+  - id: ATT-REG-006
+    func: [F-ATT-142]
+    sc: A clean Present day cannot be regularized
+    t: A day with Status=Present and no punch anomalies is rejected
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] date D is already a clean Present day (in/out punches, no missing/invalid flags) => precondition established"
+      - "[POST /api/attendance/me/regularizations] BusinessDate=D => [409] 'A clean Present day is not eligible for regularization'"
+    auto: API
+
+  - id: ATT-REG-007
+    func: [F-ATT-142]
+    sc: A date with no EmployeeAttendanceDay record at all is allowed to be regularized
+    t: The clean-day guard is skipped entirely when no record exists yet
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] date D has zero EmployeeAttendanceDay row (e.g. a data gap before an integration went live) => precondition established"
+      - "[POST /api/attendance/me/regularizations] BusinessDate=D, valid times/reason => [200/201] Pending - submission is NOT blocked despite no underlying record"
+    auto: DB-assisted
+
+  - id: ATT-REG-008
+    func: [F-ATT-143]
+    sc: A duplicate Pending regularization for the same date is rejected
+    t: A second submission for a date already carrying a Pending request Conflicts
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/attendance/me/regularizations] BusinessDate=D (first) => [200/201] Pending"
+      - "[POST /api/attendance/me/regularizations] BusinessDate=D (second, same employee) => [409] 'A pending regularization already exists for this date'"
+    auto: API
+
+  - id: ATT-REG-009
+    func: [F-ATT-144]
+    sc: Regularization submission is blocked on a closed period
+    t: Submitting for a date inside a closed period fails
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Close the period covering date D => [200] Closed"
+      - "[POST /api/attendance/me/regularizations] BusinessDate=D => [409] period closed, must be reopened"
+    auto: API
+
+  - id: ATT-REG-010
+    func: [F-ATT-145]
+    sc: List and get own regularization requests
+    t: An employee sees their own submitted requests
+    src: ["AttendanceWorkflowService"]
+    type: Positive
+    pri: P1
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/me/regularizations] => [200] list includes the caller's own requests"
+      - "[GET /api/attendance/me/regularizations/{id}] => [200] full detail"
+    auto: API
+
+  - id: ATT-REG-011
+    func: [F-ATT-145]
+    sc: An employee cannot read another employee's regularization request
+    t: A same-tenant colleague's request is NotFound, not Forbidden
+    src: ["AttendanceWorkflowService"]
+    type: Security
+    pri: P1
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/me/regularizations/{colleaguesRequestId}] => [404] not Forbidden - hides existence"
+    auto: API
+
+  - id: ATT-REG-012
+    func: [F-ATT-146]
+    sc: Only the owning employee can cancel their own Pending request
+    t: A foreign cancel attempt is NotFound; the owner can cancel while Pending
+    src: ["AttendanceWorkflowService.CancelRegularizationAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/attendance/me/regularizations/{colleaguesRequestId}/cancel] As a different employee => [404]"
+      - "[POST /api/attendance/me/regularizations/{ownPendingRequestId}/cancel] As the owner => [200] Status=Cancelled"
+    auto: API
+
+  - id: ATT-REG-013
+    func: [F-ATT-146]
+    sc: Cancellation of an already-terminal (Approved/Rejected/Cancelled) request fails
+    t: A second cancel attempt, or cancelling an already-Approved request, Conflicts
+    src: ["AttendanceWorkflowService.CancelRegularizationAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Request already Approved => precondition established"
+      - "[POST /api/attendance/me/regularizations/{id}/cancel] => [409] Conflict - only Pending requests can be cancelled"
+    auto: API
+
+  - id: ATT-REG-014
+    func: [F-ATT-147]
+    sc: Self-approval is blocked even for the target employee and even for the original submitter acting under another identity
+    t: The employee owning the request cannot approve/reject it, even if they hold the Approve permission via another role
+    src: ["AttendanceWorkflowService.TransitionRegularization"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/manager/regularizations/{ownRequestId}/approve] As the request's own employee, holding Regularization.Approve => [403] Forbidden"
+    auto: API
+
+  - id: ATT-REG-015
+    func: [F-ATT-148]
+    sc: Approve creates an adjustment and reprocesses the day, preserving raw punches
+    t: The happy-path approval flow
+    src: ["AttendanceWorkflowService.TransitionRegularization"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] As the current effective manager => [200] Status=Approved, an AttendanceAdjustment row created"
+      - "[GET /api/attendance/me/days/{businessDate}] => [200] effective out-time reflects the adjustment; original raw punches are unchanged"
+    auto: API
+
+  - id: ATT-REG-016
+    func: [F-ATT-148]
+    sc: If reprocessing fails during approval, the entire transaction rolls back
+    t: A forced processor failure leaves the request Pending, no adjustment, unchanged day status
+    src: ["AttendanceWorkflowService.TransitionRegularization"]
+    type: Integration-Concurrency
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[Manual/DB] Force IAttendanceDayProcessor.ProcessAsync to fail for this employee/date => forced condition established"
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] => [409/503] fails; request stays Pending, no adjustment created, day status unchanged"
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] retry without the forced failure => [200] succeeds, exactly one adjustment + the expected 2 events total"
+    auto: DB-assisted
+
+  - id: ATT-REG-017
+    func: [F-ATT-149]
+    sc: Reject has zero side effects on attendance
+    t: A rejected request stores comments but never touches EmployeeAttendanceDay or punches
+    src: ["AttendanceWorkflowService.TransitionRegularization"]
+    type: Positive
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[POST /api/attendance/manager/regularizations/{id}/reject] Comment='Insufficient justification' => [200] Status=Rejected"
+      - "[GET /api/attendance/me/days/{businessDate}] => [200] status/punches unchanged from before the reject call"
+    auto: API
+
+  - id: ATT-REG-018
+    func: [F-ATT-150]
+    sc: A second approve/reject on an already-terminal request is rejected by optimistic concurrency
+    t: Repeated action after the first transition fails cleanly
+    src: ["AttendanceWorkflowService.TransitionRegularization"]
+    type: Negative
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] first call => [200] Approved"
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] second call, same request => [409] Conflict - 'processed by another action'"
+    auto: API
+
+  - id: ATT-REG-019
+    func: [F-ATT-150]
+    sc: A race between two mutating actions on the same regularization row is rejected at the DB concurrency-token level too
+    t: Two contexts racing to transition the same request never both succeed
+    src: ["AttendanceWorkflowService.TransitionRegularization"]
+    type: Integration-Concurrency
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[Manual/DB] Fire two concurrent transition attempts (e.g. approve and reject) against the same Pending request from independent contexts => exactly ONE succeeds [200]; the other fails with a DbUpdateConcurrencyException-derived [409]"
+    auto: DB-assisted
+
+  - id: ATT-REG-020
+    func: [F-ATT-151]
+    sc: Approval authority is resolved as of the request's BusinessDate, not today
+    t: A manager-change boundary date lets only the historically-correct manager approve
+    src: ["AttendanceWorkflowService.TransitionRegularization"]
+    type: Boundary
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[Setup] Employee E1 was managed by Manager X through 2026-06-30, then Manager Y from 2026-07-01; a regularization request is for BusinessDate=2026-06-15 (under X's tenure) => precondition established"
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] As Manager Y (current manager, but not manager as of the request's date) => [403] Forbidden"
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] As Manager X (was the effective manager on 2026-06-15) => [200] Approved"
+    auto: API
+
+  - id: ATT-REG-021
+    func: [F-ATT-152]
+    sc: The manager queue lists only in-scope Pending requests
+    t: An unrelated employee's request never appears in a manager's queue
+    src: ["AttendanceWorkflowService.GetManagerRegularizationsAsync"]
+    type: Positive
+    pri: P0
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[GET /api/attendance/manager/regularizations] As a manager with 2 direct reports (one with a Pending request, one unrelated employee also has a Pending request elsewhere) => [200] only the direct report's request is present"
+    auto: API
+
+  - id: ATT-REG-022
+    func: [F-ATT-153]
+    sc: Manager endpoints require the declared permission even when a genuine relationship exists
+    t: A caller who IS the effective manager but holds zero permissions is still denied
+    src: ["AttendanceWorkflowController"]
+    type: Authorization
+    pri: P0
+    role: MANAGER
+    perm: "n/a"
+    steps:
+      - "[GET /api/attendance/manager/regularizations] As the employee's genuine effective manager, holding NO Attendance permissions at all => [403] Forbidden - relationship alone never substitutes for permission"
+    auto: API
+
+  - id: ATT-REG-023
+    func: [F-ATT-154]
+    sc: An HR/Admin manual Attendance request funnels through the same Regularization entity and approval pipeline
+    t: POST operations/manual creates a Pending AttendanceRegularizationRequest, and the submitting maker cannot self-approve it
+    src: ["AttendanceWorkflowService"]
+    type: Boundary
+    pri: P1
+    role: HRADMIN
+    steps:
+      - "[POST /api/attendance/operations/manual] EmployeeId=E1, BusinessDate=D, proposed times/reason => [200/201] Status=Pending, same entity type as self-service Regularization"
+      - "[POST /api/attendance/manager/regularizations/{thatRequestId}/approve] As the same HR user who just submitted it => [403] Forbidden - maker cannot self-approve, even via the operator path"
+    auto: API
+
+  - id: ATT-REG-024
+    func: [F-ATT-155]
+    sc: Cross-tenant regularization mutation attempts have zero side effects
+    t: A Tenant B caller referencing a Tenant A request id gets NotFound with no data change
+    src: ["AttendanceWorkflowService"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/attendance/me/regularizations/{tenantARequestId}] As a Tenant B employee => [404]"
+      - "[POST /api/attendance/manager/regularizations/{tenantARequestId}/approve] As a Tenant B manager holding Regularization.Approve => [404] - no side effect on Tenant A's request"
+    auto: API

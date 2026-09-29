@@ -1,0 +1,772 @@
+# Tenant login. Conventions (see ../README.md): hosts, users and data are logical names resolved from
+# environment variables at run time; no credentials, tokens or connection strings appear in this file.
+sheet: Auth_Login
+submodule: Tenant Login
+defaults:
+  role: Anonymous
+  perm: "None (anonymous endpoint, auth rate-limit policy)"
+  tenant: A
+  pre: "QA stack running against disposable QA databases; Tenant A provisioned and Active; users per test-data-spec.md."
+  data: "Host QA_TENANT_A_HOST; identifier/password from env (QA_A_*); no secrets stored in this catalogue."
+  sev: High
+  reg: true
+
+cases:
+  - id: AUTH-LOGIN-001
+    func: [F-AUTH-01, F-AUTH-06, F-AUTH-08]
+    sc: Successful sign-in with email and password
+    t: Valid TenantAdmin email login returns a well-formed token pair and profile
+    src: ["AuthController.Login", "AuthService.LoginAsync", "LoginResponse"]
+    type: Positive
+    tags: [Contract]
+    pri: P0
+    sev: Critical
+    role: A_ADMIN (TenantAdmin)
+    smoke: true
+    steps:
+      - "[POST /api/auth/login] Send {identifier: A_ADMIN email, password: valid} to the Tenant A API host => [200] success=true, message 'Sign-in successful.'"
+      - "Inspect data => data.accessToken is a 3-part JWT; data.refreshToken is a 43-character base64url string; data.tokenType='Bearer'"
+      - "Inspect expiry fields => data.expiresInSeconds is within 5 s of 3600 (Jwt:AccessTokenMinutes=60); data.accessTokenExpiresAtUtc is UTC ISO-8601 about now+60 min"
+      - "Inspect data.user => id, tenantId (= Tenant A id), tenantCode, tenantName, email, fullName, roles contains TenantAdmin, permissions non-empty, lastLoginDateUtc set; no passwordHash property anywhere"
+    db: "RefreshTokens: exactly one new row for the user with TenantId=A, ExpiresAtUtc about now+7 days, RevokedAtUtc NULL, TokenHash <> raw refresh token. Users.LastLoginDate updated."
+    sec: "Raw refresh token appears nowhere in the DB; response has no password material."
+    auto: API
+    ex:
+      - "xU:AuthEndpointsTests.Login_returns_a_token_pair_and_the_users_profile"
+      - "xU:AuthEndpointsTests.Login_response_contains_no_password_material"
+      - "xU:AuthServiceLoginTests.Login_with_valid_credentials_returns_tokens_and_profile"
+      - "xU:AuthServiceLoginTests.Login_persists_only_a_hash_of_the_refresh_token"
+      - "xU:AuthServiceLoginTests.Login_records_the_last_login_time"
+    cm: "Existing tests are in-process only (SQLite); this case adds the live MySQL stack."
+
+  - id: AUTH-LOGIN-002
+    func: [F-AUTH-01, F-AUTH-06]
+    sc: Permissions in the response match the seeded role grants
+    t: Each seeded role user receives exactly its role's permissions on login
+    src: ["SeedData.RolePermissionMap", "AuthService.LoadAuthorizationAsync"]
+    type: Positive
+    tags: [Authorization, Contract]
+    pri: P0
+    role: "A_ADMIN, A_HR (HRManager), A_MGR (Manager), A_EMP (Employee), A_IT, A_ACCOUNTS (data-driven)"
+    data: "One iteration per seeded role user; expected permission set generated from SeedData.RolePermissionMap at run time."
+    steps:
+      - "[POST /api/auth/login] Sign in as the role user at the Tenant A host => [200] tokens issued"
+      - "Compare data.user.permissions with the seeded permission set for that role => sets are identical (no missing, no extra); array is de-duplicated and sorted ascending"
+      - "Decode the access token payload (no signature check) => repeated 'permission' claims equal data.user.permissions; repeated 'role' claims equal data.user.roles"
+    db: "Roles/RolePermissions/Permissions rows for the role match the seed map."
+    sec: "No role receives AccountEmployeeLink.* unless it is an AccountLink role (SuperAdmin/TenantAdmin excluded by design)."
+    auto: API
+    ex:
+      - "xU:AuthServiceLoginTests.Login_grants_exactly_the_permissions_of_the_assigned_role"
+      - "xU:AuthorizationMatrixTests.Canonical_role_matrix_has_explicit_business_boundaries"
+    cr: [CR-01]
+    cm: "Exposes CR-01: seeded Employee role lacks several permissions that Employee self-service UI routes require; record the observed set."
+
+  - id: AUTH-LOGIN-003
+    func: [F-AUTH-01]
+    sc: Email is matched case-insensitively
+    t: Login succeeds with the email in upper case
+    src: ["AuthService.LoginAsync (ToLowerInvariant + Email.ToLower())"]
+    type: Positive
+    tags: [Validation]
+    pri: P1
+    role: A_EMP
+    steps:
+      - "[POST /api/auth/login] Send identifier = A_EMP email converted to UPPER CASE with the valid password => [200] sign-in succeeds; data.user.email keeps the stored casing"
+      - "Send identifier in MiXeD case => [200] sign-in succeeds"
+    auto: API
+    ex: ["xU:AuthServiceLoginTests.Login_is_case_insensitive_on_the_email_and_trims_it"]
+
+  - id: AUTH-LOGIN-004
+    func: [F-AUTH-01]
+    sc: Leading and trailing whitespace in the identifier is trimmed
+    t: Login succeeds when the identifier is padded with spaces
+    src: ["AuthService.LoginAsync (identifier.Trim())"]
+    type: Positive
+    tags: [Validation]
+    pri: P2
+    role: A_EMP
+    steps:
+      - "[POST /api/auth/login] Send identifier = '   <A_EMP email>   ' with the valid password => [200] sign-in succeeds"
+      - "Send identifier with a tab and newline around it => [200] or [400]; record actual (trim behaviour for non-space whitespace)"
+    auto: API
+    ex: ["xU:AuthServiceLoginTests.Login_is_case_insensitive_on_the_email_and_trims_it"]
+    cm: "Step 2 characterises behaviour; expected value is whatever String.Trim does (all Unicode whitespace trimmed)."
+
+  - id: AUTH-LOGIN-005
+    func: [F-AUTH-01, F-AUTH-03]
+    sc: Legacy 'email' request field is still accepted
+    t: Login works when the body uses the legacy 'email' property instead of 'identifier'
+    src: ["LoginRequest.EffectiveIdentifier", "LoginRequestValidator"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Medium
+    role: A_EMP
+    steps:
+      - "[POST /api/auth/login] Send {email: A_EMP email, password: valid} (no identifier) => [200] sign-in succeeds"
+      - "Send {identifier: A_EMP email, email: other@example.test, password: valid} => [200] the identifier value wins over email (EffectiveIdentifier = Identifier ?? Email)"
+    auto: API
+    cm: "Legacy field is marked 'retained for existing API clients'; classify as deprecated contract."
+
+  - id: AUTH-LOGIN-006
+    func: [F-AUTH-01, F-AZ-03]
+    sc: Account with no roles
+    t: A user with no role assignments can sign in and receives empty roles/permissions
+    src: ["AuthService.LoadAuthorizationAsync (roleIds.Count == 0)"]
+    type: Positive
+    tags: [Authorization]
+    pri: P1
+    role: A_NOROLE (no roles)
+    pre: "User A_NOROLE exists, active, with zero UserRoles rows."
+    steps:
+      - "[POST /api/auth/login] Sign in as A_NOROLE => [200] roles=[] and permissions=[]"
+      - "[GET /api/auth/me] Call with the returned access token => [200] profile returned, roles=[] permissions=[]"
+      - "[GET /api/employees] Call with the same token => [403] 'You do not have permission to perform this action.'"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Me_returns_the_signed_in_user_for_a_token_the_api_issued"]
+
+  - id: AUTH-LOGIN-007
+    func: [F-AUTH-01, F-AZ-03]
+    sc: Multiple roles produce a de-duplicated permission union
+    t: A user holding two roles receives the union of both roles' permissions
+    src: ["AuthService.LoadAuthorizationAsync (Distinct)"]
+    type: Positive
+    tags: [Authorization]
+    pri: P0
+    role: A_MULTI (Employee + HRBP)
+    pre: "A_MULTI holds Employee and HRBP roles, both effective today."
+    steps:
+      - "[POST /api/auth/login] Sign in as A_MULTI => [200] roles lists both role names sorted; permissions is the distinct union of both role grants"
+      - "Confirm a permission granted by only HRBP (Leave.Approve) and one only by Employee (Leave.RequestCreate) are both present => both present, each exactly once"
+    db: "UserRoles has two active rows for the user."
+    auto: API
+    ex: ["xU:AuthServiceLoginTests.Login_grants_exactly_the_permissions_of_the_assigned_role"]
+    cm: "Existing test covers single-role grant; union behaviour needs the live check."
+
+  - id: AUTH-LOGIN-008
+    func: [F-AUTH-01, F-AZ-03, F-AUTH-13]
+    sc: Effective-dated role assignments
+    t: Expired and future-dated role assignments are excluded from the issued token
+    src: ["RoleResolutionService.GetEffectiveRoleIdsAsync", "UserRoles.EffectiveFrom/EffectiveTo"]
+    type: Boundary
+    tags: [Authorization]
+    pri: P1
+    role: A_TIMED (DB-assisted role dates)
+    pre: "A_TIMED has role X with EffectiveTo = yesterday, role Y with EffectiveFrom = tomorrow, role Z effective today."
+    steps:
+      - "[POST /api/auth/login] Sign in as A_TIMED => [200] roles contains only Z"
+      - "Set role X EffectiveTo = today (inclusive boundary) and sign in again => [200] X is now included"
+      - "Set role Y EffectiveFrom = today and sign in again => [200] Y is now included"
+    db: "UserRoles.EffectiveFrom/EffectiveTo edited directly in the QA tenant DB."
+    auto: DB-assisted
+    ex: ["xU:AuthServiceRefreshTests.Refresh_reflects_a_role_change_made_since_sign_in"]
+    cm: "Boundary inclusivity is (EffectiveFrom <= today <= EffectiveTo) in the AuthService fallback query; RoleResolutionService may differ - record actual."
+
+  - id: AUTH-LOGIN-009
+    func: [F-AUTH-01, F-AUTH-04]
+    sc: Wrong password
+    t: Wrong password returns a generic 401 and issues no session
+    src: ["AuthService.InvalidCredentialsMessage"]
+    type: Negative
+    pri: P0
+    sev: Critical
+    role: A_EMP
+    smoke: true
+    steps:
+      - "[POST /api/auth/login] Send A_EMP email with an incorrect password => [401] success=false, message 'Invalid login identifier or password.', no data"
+      - "Inspect response => no accessToken/refreshToken anywhere in the body or headers"
+    db: "No new RefreshTokens row; Users.LastLoginDate unchanged."
+    sec: "Message does not reveal whether the account exists."
+    auto: API
+    ex:
+      - "xU:AuthEndpointsTests.Login_with_bad_credentials_returns_401_in_the_standard_envelope"
+      - "xU:AuthServiceLoginTests.Login_with_wrong_password_is_rejected"
+
+  - id: AUTH-LOGIN-010
+    func: [F-AUTH-01, F-AUTH-04]
+    sc: Nonexistent user
+    t: Unknown identifier returns the same 401 as a wrong password
+    src: ["AuthService.LoginAsync (user is null branch)"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Send identifier 'no.such.user@qa.example' with any password => [401] message 'Invalid login identifier or password.'"
+      - "Send the same request again => [401] identical body"
+    db: "No RefreshTokens row created."
+    sec: "User enumeration resistance: same status, same message."
+    auto: API
+    smoke: true
+    ex: ["xU:AuthServiceLoginTests.Login_failures_are_indistinguishable_to_the_caller"]
+
+  - id: AUTH-LOGIN-011
+    func: [F-AUTH-04]
+    sc: Response equivalence between failure modes
+    t: Unknown-user and wrong-password responses are byte-for-byte equivalent apart from volatile headers
+    src: ["AuthService.LoginAsync", "ResultExtensions.ToErrorResult"]
+    type: Security
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Capture status, headers and body for (existing user, wrong password) => [401] captured as R1"
+      - "[POST /api/auth/login] Capture status, headers and body for (unknown user, wrong password) => [401] captured as R2"
+      - "Diff R1 and R2 ignoring Date and trace headers => identical status, Content-Type, Content-Length and body"
+    sec: "No header or body field differs (e.g. Retry-After, custom headers, error codes)."
+    auto: API
+    ex: ["xU:AuthServiceLoginTests.Login_failures_are_indistinguishable_to_the_caller"]
+
+  - id: AUTH-LOGIN-012
+    func: [F-AUTH-04]
+    sc: Timing side channel
+    t: Response latency for unknown users is comparable to wrong-password latency (informational)
+    src: ["AuthService.VerifyAgainstDummyHash"]
+    type: Security
+    pri: P2
+    sev: Medium
+    role: Anonymous
+    pre: "Idle stack; run within the auth rate-limit budget using a dedicated QA tenant, at most 15 attempts per window."
+    steps:
+      - "[POST /api/auth/login] Send 10 sequential wrong-password attempts for an existing user, record latencies => [401] all rejected"
+      - "[POST /api/auth/login] Send 10 sequential attempts for an unknown user, record latencies => [401] all rejected"
+      - "Compare medians => median difference is small relative to hashing cost (no order-of-magnitude gap); result recorded, non-gating"
+    sec: "Dummy-hash verification should equalise cost."
+    auto: API
+    reg: false
+    cm: "Statistical and environment-sensitive; informational only, must not gate a build."
+
+  - id: AUTH-LOGIN-013
+    func: [F-AUTH-01]
+    sc: Password is case sensitive
+    t: Correct password with altered case is rejected
+    src: ["IdentityPasswordHasher.Verify"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    role: A_EMP
+    steps:
+      - "[POST /api/auth/login] Send the correct password with the case of every letter inverted => [401] generic invalid-credentials message"
+    auto: API
+
+  - id: AUTH-LOGIN-014
+    func: [F-AUTH-01, F-AUTH-03]
+    sc: Password whitespace is significant
+    t: A trailing space appended to the correct password is rejected (password is not trimmed)
+    src: ["AuthService.LoginAsync (request.Password used untrimmed)"]
+    type: Negative
+    tags: [Validation]
+    pri: P2
+    role: A_EMP
+    steps:
+      - "[POST /api/auth/login] Send valid identifier and the correct password plus one trailing space => [401] generic invalid-credentials message"
+      - "Send the correct password with a leading space => [401] generic invalid-credentials message"
+    auto: API
+    ex: ["V:pages/LoginPage.test.tsx::sends trimmed values, and does not touch the password"]
+    cm: "Frontend also leaves the password untouched."
+
+  - id: AUTH-LOGIN-015
+    func: [F-AUTH-03]
+    sc: Empty body
+    t: An empty JSON object is rejected with field errors for identifier and password
+    src: ["LoginRequestValidator", "ValidationFilter"]
+    type: Negative
+    tags: [Validation, Contract]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Send body {} => [400] success=false, message 'One or more validation errors occurred.'"
+      - "Inspect errors[] => contains {field:'identifier', message:'Email or Employee Code is required.'} and {field:'password', message:'Password is required.'}; field names are camelCase"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Login_with_a_non_email_identifier_and_no_password_returns_400_with_field_errors"]
+
+  - id: AUTH-LOGIN-016
+    func: [F-AUTH-03]
+    sc: Mandatory identifier
+    t: Missing, null, empty and whitespace-only identifiers are rejected
+    src: ["LoginRequestValidator (NotEmpty)"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Omit identifier, supply a password => [400] errors contain field 'identifier'"
+      - "Send identifier null => [400] same field error"
+      - "Send identifier '' => [400] same field error"
+      - "Send identifier '   ' (spaces only) => [400] same field error"
+    auto: API
+    ex: ["V:pages/LoginPage.test.tsx::puts validation failures under the fields they belong to"]
+
+  - id: AUTH-LOGIN-017
+    func: [F-AUTH-03]
+    sc: Mandatory password
+    t: Missing, null and empty passwords are rejected
+    src: ["LoginRequestValidator (NotEmpty)"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Omit password => [400] errors contain field 'password' message 'Password is required.'"
+      - "Send password null => [400] same"
+      - "Send password '' => [400] same"
+    auto: API
+    ex: ["xU:AuthServiceLoginTests.Login_rejects_missing_credentials_without_throwing"]
+
+  - id: AUTH-LOGIN-017A
+    func: [F-AUTH-03]
+    sc: Password made only of whitespace
+    t: A whitespace-only password is rejected by validation
+    src: ["LoginRequestValidator (NotEmpty treats whitespace as empty)"]
+    type: Negative
+    tags: [Validation]
+    pri: P3
+    sev: Low
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Send password '     ' with a valid identifier => [400] field 'password' 'Password is required.'"
+    auto: API
+    cm: "Confirms FluentValidation NotEmpty semantics; a real account whose password is whitespace-only could never sign in."
+
+  - id: AUTH-LOGIN-018
+    func: [F-AUTH-03]
+    sc: Identifier upper length boundary
+    t: A 256-character identifier passes validation, a 257-character identifier is rejected
+    src: ["LoginRequestValidator (MaximumLength 256)"]
+    type: Boundary
+    tags: [Validation]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Send a 256-character identifier and any password => [401] passes validation and fails as unknown user"
+      - "[POST /api/auth/login] Send a 257-character identifier => [400] field 'identifier' 'Login identifier must not exceed 256 characters.'"
+      - "[POST /api/auth/login] Send a 1 MB identifier => [400] or [413]; no 500 and no timeout"
+    auto: API
+
+  - id: AUTH-LOGIN-019
+    func: [F-AUTH-03]
+    sc: Password upper length boundary
+    t: A 128-character password passes validation, a 129-character password is rejected
+    src: ["LoginRequestValidator (MaximumLength 128)"]
+    type: Boundary
+    tags: [Validation]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Send a valid identifier and a 128-character wrong password => [401] passes validation"
+      - "[POST /api/auth/login] Send a 129-character password => [400] field 'password' 'Password must not exceed 128 characters.'"
+    auto: API
+
+  - id: AUTH-LOGIN-020
+    func: [F-AUTH-03]
+    sc: Malformed JSON
+    t: Malformed or truncated JSON returns the standard 400 envelope without internals
+    src: ["Program.cs InvalidModelStateResponseFactory"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Send body '{\"identifier\": ' with Content-Type application/json => [400] message 'The request could not be read.'"
+      - "Send body 'not json' => [400] same envelope"
+      - "Inspect body => no stack trace, no exception type names, no file paths"
+    sec: "No information disclosure in model-binding errors."
+    auto: API
+
+  - id: AUTH-LOGIN-021
+    func: [F-AUTH-03]
+    sc: JSON type confusion
+    t: Non-string identifier or password values are rejected as unreadable
+    src: ["Model binding of LoginRequest"]
+    type: Negative
+    tags: [Validation]
+    pri: P2
+    sev: Medium
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Send {identifier: 12345, password: 'x'} => [400] 'The request could not be read.' with field 'identifier'"
+      - "Send {identifier: {a:1}, password: 'x'} => [400] same"
+      - "Send {identifier: ['a'], password: ['b']} => [400] same"
+    auto: API
+
+  - id: AUTH-LOGIN-022
+    func: [F-AUTH-03]
+    sc: Unsupported media type and method
+    t: Non-JSON content types and wrong HTTP verbs are refused
+    src: ["ASP.NET Core [ApiController] JSON-only input", "AuthController route"]
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    sev: Medium
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Send form-encoded or text/plain body => [415] Unsupported Media Type"
+      - "[GET /api/auth/login] Call with GET => [405] Method Not Allowed"
+      - "[PUT /api/auth/login] Call with PUT => [405] Method Not Allowed"
+    auto: API
+
+  - id: AUTH-LOGIN-023
+    func: [F-AUTH-04, F-AUTH-03]
+    sc: Injection and control characters
+    t: SQL-injection style and control-character identifiers never cause a 500 or a login
+    src: ["EF Core parameterization", "AuthService.FindByEmailAsync"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Send identifier \"' OR '1'='1\" and password 'x' => [401] generic invalid-credentials"
+      - "Send identifier 'admin@qa.example; DROP TABLE Users;--' => [401] generic"
+      - "Send identifier containing a NUL character and CRLF => [400] or [401]; never 500"
+      - "Verify the QA tenant still lists all users => no data change"
+    sec: "Parameterized queries; no unhandled exceptions."
+    auto: API
+
+  - id: AUTH-LOGIN-024
+    func: [F-AUTH-04, F-AUTH-01]
+    sc: Unicode identifiers
+    t: Unicode look-alike and case-folding identifiers do not match a different account
+    src: ["AuthService.LoginAsync (ToLowerInvariant, ToLower() in query)"]
+    type: Security
+    tags: [Negative, Validation]
+    pri: P2
+    sev: Medium
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login] Send the A_EMP email with the Latin 'a' replaced by Cyrillic 'а' => [401] generic invalid-credentials"
+      - "Send the email with a fullwidth '@' or dotless/dotted 'i' variant => [401] generic; no cross-match"
+      - "Send an email containing an emoji or right-to-left mark => [401] generic; never 500"
+    auto: API
+    cm: "MySQL collation may treat some characters as equal (accent-insensitive). Record any account match as a finding."
+
+  - id: AUTH-LOGIN-025
+    func: [F-AUTH-01, F-AUTH-06]
+    sc: Token and cache headers on credential responses
+    t: Login response headers are safe for a token-bearing response
+    src: ["AuthController.Login (no Cache-Control set)", "AuthController.SetPassword (sets no-store)"]
+    type: Security
+    tags: [Configuration]
+    pri: P2
+    sev: Medium
+    role: A_EMP
+    steps:
+      - "[POST /api/auth/login] Sign in successfully and read the response headers => [200] record Cache-Control, Pragma, Content-Type"
+      - "Compare with POST /api/auth/set-password and forgot-password responses => those set Cache-Control 'no-store'; record whether login/refresh do"
+    sec: "A response carrying tokens should not be cacheable by shared caches."
+    auto: API
+    cr: [CR-20]
+    cm: "Exposes CR-20: login/refresh do not appear to set Cache-Control: no-store."
+
+  - id: AUTH-LOGIN-026
+    func: [F-AUTH-05]
+    sc: Deactivated account with correct password
+    t: A deactivated user is refused with an actionable 403 only after the password is proven
+    src: ["AuthService.LoginAsync (!user.IsActive)"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: A_INACTIVE
+    pre: "A_INACTIVE exists with Users.IsActive = false and a known password."
+    steps:
+      - "[POST /api/auth/login] Send A_INACTIVE email with the correct password => [403] message 'This account has been deactivated. Please contact your administrator.'"
+      - "Send A_INACTIVE email with a wrong password => [401] generic invalid-credentials (deactivation is not disclosed)"
+    db: "No RefreshTokens row for the user; LastLoginDate unchanged."
+    sec: "Status only disclosed to someone who proved the password."
+    auto: API
+    ex: ["xU:AuthServiceLoginTests.Login_is_refused_for_a_deactivated_account"]
+
+  - id: AUTH-LOGIN-027
+    func: [F-AUTH-05]
+    sc: Organization inactive in the tenant database while active in the catalog
+    t: Login is refused with a 403 when the tenant database marks the organization not Active
+    src: ["AuthService.LoginAsync (tenant.Status != Active)"]
+    type: Negative
+    pri: P1
+    role: A_EMP
+    pre: "DB-assisted: set Tenants.Status = Inactive in the QA TENANT database only (catalog left Active)."
+    steps:
+      - "[POST /api/auth/login] Sign in with valid credentials => [403] message \"Your organization's account is inactive. Please contact support.\""
+      - "Restore Tenants.Status = Active and sign in again => [200]"
+    db: "Tenant DB Tenants.Status toggled; no RefreshTokens row while inactive."
+    auto: DB-assisted
+    ex: ["xU:AuthServiceLoginTests.Login_is_refused_when_the_organization_is_suspended"]
+    cm: "Two copies of tenant status exist (catalog and tenant DB); this case covers the tenant-DB copy."
+
+  - id: AUTH-LOGIN-028
+    func: [F-AUTH-05, F-TEN-03]
+    sc: Organization suspended in the catalog
+    t: Login at a suspended organization's host is refused at the edge with a neutral 404
+    src: ["TenantShardResolutionMiddleware.WriteWorkspaceUnavailableAsync"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    tenant: S
+    pre: "Tenant S (qa-suspended) has catalog Status = Suspended; wait past Sharding:CacheSeconds after the change."
+    steps:
+      - "[POST /api/auth/login] Send valid credentials for a user of tenant S at the S host => [404] message 'This workspace is not available.'"
+      - "Inspect body => names no organization and gives no reason (same body for Inactive)"
+    sec: "Same neutral response regardless of why the workspace is unavailable."
+    auto: API
+    ex: ["xU:TenantHostRoutingTests.A_suspended_organizations_host_is_refused_before_authentication_runs", "xU:TenantHostRoutingTests.The_refusal_names_no_organization_and_gives_no_reason"]
+
+  - id: AUTH-LOGIN-029
+    func: [F-AUTH-05, F-TEN-05]
+    sc: Unknown host
+    t: Login at a host that belongs to no organization returns the unknown-workspace 401
+    src: ["AuthService.UnknownWorkspaceMessage", "TenantShardResolutionMiddleware (shard null)"]
+    type: Negative
+    pri: P0
+    role: Anonymous
+    tenant: None
+    steps:
+      - "[POST /api/auth/login] Call http://qa-unknown.localhost:5080/api/auth/login with any credentials => [401] message 'There is no organization at this address. Check the address you used, or ask your administrator for it.'"
+      - "Repeat against the apex host (localhost) => [401] same message"
+    db: "No tenant database opened; no RefreshTokens written anywhere."
+    sec: "Distinct from wrong-password message by design; no tenant data reachable."
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Login_at_an_address_no_organization_uses_is_refused", "xU:AuthServiceLoginTests.Login_at_an_address_that_resolves_to_no_organization_is_refused"]
+
+  - id: AUTH-LOGIN-030
+    func: [F-TEN-10, F-AUTH-01]
+    sc: Credentials from another tenant
+    t: Tenant A credentials do not sign in at the Tenant B host
+    src: ["AuthService.FindByEmailAsync (TenantId predicate)"]
+    type: Tenant-Isolation
+    tags: [Negative, Security]
+    pri: P0
+    sev: Critical
+    role: A_EMP
+    tenant: A/B
+    steps:
+      - "[POST /api/auth/login] Send A_EMP email + correct A password to the Tenant B host => [401] generic invalid-credentials (user does not exist in B)"
+      - "[POST /api/auth/login] Send A_EMP credentials to the Tenant A host => [200] control succeeds"
+    db: "No RefreshTokens row created in B."
+    sec: "Host decides organization; credentials cannot be aimed at another tenant."
+    auto: API
+    smoke: true
+    ex: ["xU:AuthServiceLoginTests.Login_rejects_valid_credentials_presented_at_another_organizations_address"]
+
+  - id: AUTH-LOGIN-031
+    func: [F-TEN-10, F-AUTH-01]
+    sc: Same email in two tenants
+    t: An email that exists in both tenants authenticates against each tenant's own password and issues distinct tenant claims
+    src: ["Users unique per (TenantId, Email)", "AuthService.LoginAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    sev: Critical
+    role: SHARED_USER (same email in A and B, different passwords)
+    tenant: A/B
+    steps:
+      - "[POST /api/auth/login] Sign in at Tenant A host with the A password => [200] token tid = Tenant A id, tcode = A code"
+      - "[POST /api/auth/login] Sign in at Tenant B host with the B password => [200] token tid = Tenant B id, tcode = B code"
+      - "Sign in at Tenant A host with the B password => [401] generic invalid-credentials"
+      - "Sign in at Tenant B host with the A password => [401] generic invalid-credentials"
+    db: "RefreshTokens rows carry the respective TenantId and different UserIds."
+    auto: API
+    ex: ["xU:AuthServiceLoginTests.Login_resolves_the_user_belonging_to_the_addressed_organization", "xU:AuthEndpointsTests.Both_tenants_can_sign_in_concurrently_and_each_sees_only_itself"]
+
+  - id: AUTH-LOGIN-032
+    func: [F-AUTH-02]
+    sc: Default identifier mode
+    t: EmailOrEmployeeCode mode accepts both an email and an employee code
+    src: ["TenantLoginIdentifierMode.EmailOrEmployeeCode", "AuthService.FindByEmployeeCodeAsync"]
+    type: Positive
+    pri: P0
+    role: A_EMP (linked to employee QAA0001)
+    pre: "Tenant A login mode = EmailOrEmployeeCode; A_EMP is linked to an employee with EmployeeCode QAA0001."
+    steps:
+      - "[POST /api/auth/login] Sign in with identifier = A_EMP email => [200]"
+      - "[POST /api/auth/login] Sign in with identifier = 'QAA0001' => [200] same user id returned"
+      - "[POST /api/auth/login] Sign in with identifier = 'qaa0001' (lower case) => [200] employee code is matched case-insensitively"
+    auto: API
+    smoke: true
+    ex: ["xU:AuthServiceLoginTests.Login_identifier_mode_defaults_to_email_or_employee_code_and_accepts_employee_code"]
+
+  - id: AUTH-LOGIN-033
+    func: [F-AUTH-02]
+    sc: EmailOnly mode
+    t: EmailOnly mode rejects an employee code that would otherwise resolve
+    src: ["TenantLoginIdentifierMode.EmailOnly"]
+    type: Negative
+    pri: P1
+    role: A_EMP
+    pre: "Tenant A login mode set to EmailOnly (PUT /api/tenants/current/login-settings) - restore afterwards."
+    steps:
+      - "[POST /api/auth/login] Sign in with A_EMP email => [200]"
+      - "[POST /api/auth/login] Sign in with A_EMP employee code => [401] generic invalid-credentials"
+    auto: API
+    cm: "Mode is a tenant setting: run in a dedicated QA tenant or restore the mode in teardown."
+
+  - id: AUTH-LOGIN-034
+    func: [F-AUTH-02]
+    sc: EmployeeCodeOnly mode and administrator exemption
+    t: EmployeeCodeOnly rejects email login for non-admins but keeps admin email login
+    src: ["AuthService.LoginAsync (IsPrivilegedAdminAsync)"]
+    type: Positive
+    tags: [Negative, Authorization]
+    pri: P0
+    sev: Critical
+    role: A_EMP and A_ADMIN
+    pre: "Tenant A login mode = EmployeeCodeOnly."
+    steps:
+      - "[POST /api/auth/login] A_EMP signs in with employee code => [200]"
+      - "[POST /api/auth/login] A_EMP signs in with email => [401] generic invalid-credentials"
+      - "[POST /api/auth/login] A_ADMIN (TenantAdmin) signs in with email => [200] exempt from EmployeeCodeOnly"
+      - "[POST /api/auth/login] A_HR (HRManager, not TenantAdmin/SuperAdmin) signs in with email => [401]"
+    auto: API
+    ex:
+      - "xU:AuthServiceLoginTests.Employee_code_only_keeps_tenant_admin_email_login_available"
+      - "xU:AuthServiceLoginTests.Employee_code_only_rejects_email_for_non_admin_account_generically"
+
+  - id: AUTH-LOGIN-035
+    func: [F-AUTH-02]
+    sc: Employee code with no linked account
+    t: An employee code whose employee has no linked user cannot sign in
+    src: ["AuthService.FindByEmployeeCodeAsync (AccountEmployeeCurrentLinks join)"]
+    type: Negative
+    pri: P1
+    role: Anonymous
+    pre: "Employee QAA0099 exists in Tenant A with no linked account."
+    steps:
+      - "[POST /api/auth/login] Sign in with identifier 'QAA0099' and any password => [401] generic invalid-credentials"
+    db: "AccountEmployeeCurrentLinks has no row for the employee."
+    auto: API
+
+  - id: AUTH-LOGIN-036
+    func: [F-AUTH-02, F-AUTH-05]
+    sc: Employee-code login for a deactivated account
+    t: Employee-code login of a deactivated linked user returns 403 after the password check
+    src: ["AuthService.LoginAsync (IsActive check after password verify)"]
+    type: Negative
+    pri: P1
+    role: A_INACTIVE (linked to employee QAA0098)
+    steps:
+      - "[POST /api/auth/login] Sign in with 'QAA0098' and the correct password => [403] 'This account has been deactivated...'"
+      - "[POST /api/auth/login] Same code, wrong password => [401] generic"
+    auto: API
+
+  - id: AUTH-LOGIN-037
+    func: [F-AUTH-02, F-TEN-10]
+    sc: Employee code identical in two tenants
+    t: The same employee code in Tenant A and Tenant B resolves only inside the addressed tenant
+    src: ["AuthService.FindByEmployeeCodeAsync (link.TenantId == tenantId)"]
+    type: Tenant-Isolation
+    pri: P0
+    sev: Critical
+    role: A_EMP and B_EMP (both with code QAX0001)
+    tenant: A/B
+    pre: "Employee code QAX0001 exists in both tenants, linked to different users with different passwords."
+    steps:
+      - "[POST /api/auth/login] Sign in at A host with 'QAX0001' + A password => [200] user is A's"
+      - "[POST /api/auth/login] Sign in at B host with 'QAX0001' + B password => [200] user is B's"
+      - "[POST /api/auth/login] Sign in at A host with 'QAX0001' + B password => [401]"
+    auto: API
+
+  - id: AUTH-LOGIN-038
+    func: [F-AUTH-02, F-AUTH-24]
+    sc: Changing the login identifier mode
+    t: Only User.Edit holders can read or change the login mode, and the change takes effect for the next login
+    src: ["TenantsController login-settings", "TenantBrandingService.SetLoginIdentifierModeAsync"]
+    type: Authorization
+    tags: [Positive, Negative]
+    pri: P1
+    role: A_ADMIN, A_EMP
+    perm: User.Edit
+    steps:
+      - "[GET /api/tenants/current/login-settings] As A_EMP (no User.Edit) => [403]"
+      - "[PUT /api/tenants/current/login-settings] As A_EMP with a valid mode => [403] and mode unchanged"
+      - "[PUT /api/tenants/current/login-settings] As A_ADMIN set EmailOnly => [200] settings returned"
+      - "[GET /api/tenants/current/branding] Anonymous read => [200] loginIdentifierMode = EmailOnly (reflects change; note any cache delay)"
+      - "[PUT /api/tenants/current/login-settings] As A_ADMIN send an invalid enum value 'Bogus' => [400]; restore EmailOrEmployeeCode => [200]"
+    db: "TenantBranding.LoginIdentifierMode updated then restored."
+    auto: API
+    ex: ["xU:TenantBrandingServiceTests"]
+    cm: "Existing service tests do not cover the HTTP authorization of the settings endpoints."
+
+  - id: AUTH-LOGIN-039
+    func: [F-AUTH-01, F-AUTH-08]
+    sc: Concurrent sign-ins of the same account
+    t: Ten parallel logins all succeed and create ten distinct sessions
+    src: ["AuthService.IssueTokensAsync"]
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P2
+    sev: Medium
+    role: A_EMP
+    pre: "Use a dedicated QA tenant or stay under the auth rate limit (20 per window)."
+    steps:
+      - "[POST /api/auth/login] Fire 10 concurrent sign-ins for A_EMP => [200] all succeed"
+      - "Collect refresh tokens => 10 distinct values; 10 distinct access tokens (unique jti)"
+    db: "RefreshTokens: 10 new rows, all RevokedAtUtc NULL."
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Both_tenants_can_sign_in_concurrently_and_each_sees_only_itself"]
+
+  - id: AUTH-LOGIN-040
+    func: [F-AUTH-01, F-AUTH-08]
+    sc: Multiple active sessions
+    t: A second login does not revoke the first session's refresh token
+    src: ["AuthService.LoginAsync (no revocation of prior tokens)"]
+    type: Positive
+    tags: [Security]
+    pri: P1
+    role: A_EMP
+    steps:
+      - "[POST /api/auth/login] Sign in twice as A_EMP => [200] two token pairs S1 and S2"
+      - "[POST /api/auth/refresh] Refresh using S1's refresh token => [200] still valid"
+      - "[POST /api/auth/refresh] Refresh using S2's refresh token => [200] still valid"
+    auto: API
+    cm: "Documents that concurrent sessions are allowed (no single-session enforcement)."
+
+  - id: AUTH-LOGIN-041
+    func: [F-AUTH-01, F-AUTH-03]
+    sc: JSON contract conventions
+    t: Envelope, casing and date formats follow the API conventions
+    src: ["ApiResponse<T>", "Program.cs JsonOptions"]
+    type: Contract
+    pri: P2
+    sev: Medium
+    role: A_EMP
+    steps:
+      - "[POST /api/auth/login] Sign in => [200] top-level keys are exactly success, message, data (errors omitted when null)"
+      - "Inspect property names => camelCase; enums (if any) serialised as strings; null properties omitted"
+      - "Inspect accessTokenExpiresAtUtc and lastLoginDateUtc => ISO-8601 in UTC (suffix 'Z')"
+      - "Inspect Content-Type => application/json; charset=utf-8"
+    auto: API
+
+  - id: AUTH-LOGIN-042
+    func: [F-AUTH-01, F-AUTH-15]
+    sc: Login and me consistency
+    t: The user block in the login response agrees with GET /api/auth/me (except employee identity)
+    src: ["AuthService.ToDto", "AuthService.GetCurrentUserAsync"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Medium
+    role: A_EMP
+    steps:
+      - "[POST /api/auth/login] Sign in and keep data.user => [200]"
+      - "[GET /api/auth/me] Call with the access token => [200] id, tenantId, tenantCode, email, roles, permissions equal the login block"
+      - "Compare employeeIdentity => present on /me only (login response omits it); documented behaviour"
+    auto: API
+
+  - id: AUTH-LOGIN-043
+    func: [F-AUTH-01, F-SEC-10]
+    sc: Provider persistence check
+    t: Login persistence behaves identically on MySQL and SQL Server tenant databases
+    src: ["RefreshTokens persistence", "MySqlTenantRuntimeIntegrationTests"]
+    type: Integration-Concurrency
+    pri: P1
+    role: A_EMP
+    tenant: "A (MySQL) / SQL Server tenant"
+    pre: "MySQL QA tenant available. SQL Server tenant requires HRMS_SQLSERVER_TEST_CONNECTION*; if absent report 'NOT EXECUTED - environment unavailable'."
+    steps:
+      - "[POST /api/auth/login] Sign in against a MySQL-backed tenant => [200] token pair; RefreshTokens row stored with hash only"
+      - "[POST /api/auth/login] Repeat against a SQL Server-backed tenant => [200] identical contract (or NOT EXECUTED - environment unavailable)"
+    db: "RefreshTokens row shape identical across providers; ModifiedDate/CreatedDate populated."
+    auto: DB-assisted
+    ex: ["xU:MySqlTenantRuntimeIntegrationTests", "xU:SqlServerProviderParityTests"]
+    cm: "Never report the skipped provider-gated xUnit facts as PASS."

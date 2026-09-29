@@ -1,0 +1,123 @@
+sheet: Loans_FinalSettlement
+submodule: Final Settlement Integration - auto-generated loan-recovery lines, finalization recovery, outstanding-balance interaction
+defaults:
+  role: HRADMIN
+  perm: "Payroll.FinalSettlement.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, an Active disbursed loan with a positive OutstandingTotal exists for the separating employee, and a Draft Final Settlement case for that employee has been created, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-FST-001
+    func: [F-LOAN-072]
+    sc: Calculating a settlement auto-generates a loan-recovery line
+    t: CalculateSettlementAsync creates a Recovery FinalSettlementLine sized to the loan's OutstandingTotal
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] (loan OutstandingTotal=8000) => [200] a FinalSettlementLine exists with LineType=Recovery, ComponentCode=LOAN-{loanNumber}, Amount=8000, IsDeduction=true, SourceType=EmployeeLoan"
+    auto: API
+
+  - id: LOAN-FST-002
+    func: [F-LOAN-073]
+    sc: Recalculating the settlement does not duplicate an already-generated loan line
+    t: A second Calculate call while still Draft/Calculated leaves exactly one line per loan
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] => [200] one EmployeeLoan-sourced line generated"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] (called again, still Calculated) => [200] still exactly ONE EmployeeLoan-sourced line for the same loan"
+    auto: API
+
+  - id: LOAN-FST-003
+    func: [F-LOAN-073]
+    sc: An already-generated loan line's Amount is not refreshed by a later repayment
+    t: A manual repayment made after Calculate leaves the generated settlement line's stored Amount unchanged
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] (loan OutstandingTotal=8000) => [200] line Amount=8000"
+      - "[POST /api/payroll/loans/{loanId}/repayments] Amount=2000 => [200] loan OutstandingTotal now 6000"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] (called again) => [200] the EmployeeLoan-sourced line's stored Amount is STILL 8000, not refreshed to 6000"
+    auto: API
+
+  - id: LOAN-FST-004
+    func: [F-LOAN-074]
+    sc: Finalization recovers min(line.Amount, current OutstandingTotal), never over-recovering
+    t: A settlement finalized after a partial repayment recovers only the loan's now-lower outstanding total
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Manual/setup] Settlement line Amount=8000 (stale, per LOAN-FST-003), loan's current OutstandingTotal=6000 after a partial repayment => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/approve] => [200] Status=Approved"
+      - "[POST /api/payroll/final-settlements/{id}/finalize] => [200] the recorded FinalSettlement LoanRepayment Amount=6000 (the loan's real outstanding), not the stale line Amount=8000"
+    auto: API
+
+  - id: LOAN-FST-005
+    func: [F-LOAN-075]
+    sc: Finalization records a traceable, idempotent FinalSettlement repayment
+    t: The finalize-time LoanRepayment carries RepaymentType.FinalSettlement, SourceType=FinalSettlement and the settlement's own id as Reference, and is not duplicated on a second finalize attempt
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/finalize] => [200] LoanRepayment created RepaymentType=FinalSettlement, SourceType=FinalSettlement, Reference={settlementId}"
+      - "[Manual/DB] Directly re-invoke the finalize loan-recovery block for the same settlement id (idempotency check) => the existing LoanRepayments.AnyAsync guard skips re-adding a duplicate row for the same (loan, settlement) pair"
+    auto: DB-assisted
+
+  - id: LOAN-FST-006
+    func: [F-LOAN-076]
+    sc: A loan recovered to zero at finalization is closed
+    t: Finalization closes the loan and stamps a distinctive closure reason when the recovery brings OutstandingTotal to zero
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/finalize] (line Amount equals the loan's full OutstandingTotal) => [200] loan Status=Closed, ClosureReason='Recovered through final settlement.'"
+      - "[Manual/DB] Query LoanHistories for the loan => a FinalSettlementRecovery row referencing SourceType=FinalSettlement, SourceId={settlementId}"
+    auto: DB-assisted
+
+  - id: LOAN-FST-007
+    func: [F-LOAN-077]
+    sc: A loan whose outstanding grew since Calculate is only recovered up to the stale line amount
+    t: A residual outstanding balance beyond the generated line's Amount survives finalization unflagged
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    steps:
+      - "[Manual/setup] Line Amount=5000 generated at Calculate time; before Finalize, the loan's OutstandingTotal has since risen to 7000 (e.g. a top-up disbursement) => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/finalize] => [200] only 5000 is recovered against the loan; loan's post-finalize OutstandingTotal=2000 and Status remains Active, with no separate warning surfaced by the settlement"
+    auto: API
+
+  - id: LOAN-FST-008
+    func: [F-LOAN-078]
+    sc: A loan no longer Active at finalization time is silently skipped
+    t: A loan cancelled/closed between Calculate and Finalize produces no repayment and no error at finalization
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/setup] Settlement calculated with a loan-recovery line generated; before Finalize, that same loan is separately closed via CloseAsync => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/finalize] => [200] finalization succeeds with no error; no LoanRepayment is recorded for the already-closed loan's line"
+    auto: API
+
+  - id: LOAN-FST-009
+    func: [F-LOAN-072]
+    sc: A Closed or Cancelled loan is never picked up by CalculateSettlementAsync in the first place
+    t: Only Active loans with OutstandingTotal>0 generate a settlement line
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/setup] Employee has one Active loan (OutstandingTotal=3000) and one already-Closed loan => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] => [200] exactly ONE EmployeeLoan-sourced line is generated, for the Active loan only"
+    auto: API

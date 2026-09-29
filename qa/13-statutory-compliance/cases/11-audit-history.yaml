@@ -1,0 +1,104 @@
+sheet: Stat_Audit_History
+submodule: Audit and History
+defaults:
+  tenant: "T1 (DEMO01)"
+  role: "PayrollAdmin"
+  pre: "see scenario/steps for setup"
+  reg: true
+
+cases:
+  - id: STAT-AUD-001
+    func: [F-STAT-123]
+    sc: Configuration history is append-only and partially dead
+    t: StatutoryConfigurationHistory only ever records Created/VersionAdded; Activated/Deactivated are never written
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs History"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    perm: Payroll.Statutory.Manage
+    data: none
+    steps:
+      - "[DB] create a configuration and add two versions => StatutoryConfigurationHistories has exactly one Created row and two VersionAdded rows, in that order, none ever updated or deleted"
+      - "[Manual] full grep of StatutoryPayrollService.cs for StatutoryConfigurationChangeType.Activated/Deactivated => zero matches, confirming they are never assigned anywhere"
+    db: "StatutoryConfigurationHistories rows are append-only, ChangeType limited to Created/VersionAdded"
+    auto: DB-assisted
+
+  - id: STAT-AUD-002
+    func: [F-STAT-124]
+    sc: Employee profile history snapshot
+    t: EmployeeStatutoryProfileHistory captures the full save request as JSON, ChangeType always Created
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs SaveProfileAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    perm: Payroll.EmployeeStatutory.Manage
+    data: none
+    steps:
+      - "[DB] save two disjoint-dated profile rows for the same employee => EmployeeStatutoryProfileHistories has two rows, both ChangeType=Created, each SnapshotJson matching the exact request body submitted"
+    db: "EmployeeStatutoryProfileHistories.SnapshotJson round-trips the request"
+    auto: DB-assisted
+
+  - id: STAT-AUD-003
+    func: [F-STAT-125]
+    sc: Compliance return history covers the real lifecycle, Cancelled excepted
+    t: Generate/Validate/Approve/Export/MarkFiled each append one PayrollStatutoryComplianceHistory row with actor and message
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs AddHistory"
+    type: Positive
+    tags: [Integration-Concurrency]
+    pri: P1
+    sev: Medium
+    perm: Payroll.StatutoryCompliance.Generate, .Validate, .Approve, .Export, .MarkFiled
+    data: none
+    steps:
+      - "[Manual] drive a return batch through Generate->Validate->Approve->Export->MarkFiled => [200 each] PayrollStatutoryComplianceHistories accumulates exactly five rows (Generated, Validated, Approved, Exported, Filed), each with a non-null ActorUserId and a human-readable Message"
+      - "[DB] inspect the accumulated PayrollStatutoryComplianceHistories rows => ChangeType=Cancelled never appears, since no Cancel action exists (F-STAT-080)"
+    db: "PayrollStatutoryComplianceHistories has one row per real transition, none of type Cancelled"
+    auto: DB-assisted
+
+  - id: STAT-AUD-004
+    func: [F-STAT-126]
+    sc: Filing history is strictly richer than compliance-return history
+    t: StatutoryFilingHistory records both PreviousStatus and NewStatus for every event
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs AddHistory"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    perm: Payroll.StatutoryFiling.Generate, .Validate, .Submit
+    data: none
+    steps:
+      - "[Manual] drive a filing run through Generate->Validate->SubmitForApproval => [200 each] each StatutoryFilingHistory row carries a non-null PreviousStatus AND NewStatus pair, unlike PayrollStatutoryComplianceHistory which records only a free-text message with no structured before/after status columns"
+    db: "StatutoryFilingHistories.PreviousStatus/NewStatus populated on every transition"
+    auto: DB-assisted
+
+  - id: STAT-AUD-005
+    func: [F-STAT-127]
+    sc: History rows are never mutated
+    t: No history record in this module is ever deleted or updated after being written
+    src: "All three services (full grep for Remove/Update against any *History entity)"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Medium
+    perm: n/a
+    data: none
+    steps:
+      - "[Manual] full grep of StatutoryPayrollService.cs, PayrollStatutoryComplianceService.cs, and StatutoryFilingService.cs for a Remove/RemoveRange/Update call against StatutoryConfigurationHistory, EmployeeStatutoryProfileHistory, PayrollStatutoryComplianceHistory, or StatutoryFilingHistory => zero matches for any of the four; ValidateAsync's own RemoveRange calls target StatutoryFilingValidationIssues only, never a history table"
+    auto: Manual only
+
+  - id: STAT-AUD-006
+    func: [F-STAT-128]
+    sc: No history is ever exposed via a GET route
+    t: None of the four history tables is queryable through the API despite ViewHistory permissions being declared
+    src: "StatutoryPayrollController.cs, PayrollOutputsController.cs, StatutoryFilingsController.cs"
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    sev: High
+    perm: "Payroll.Statutory.ViewHistory, Payroll.StatutoryCompliance.ViewHistory, Payroll.StatutoryFiling.ViewHistory"
+    data: none
+    steps:
+      - "[Manual] full grep of all three controllers for a GET route returning any of the four history entity types => zero matches; the audit trail this module builds is queryable only via direct database access"
+    auto: Manual only

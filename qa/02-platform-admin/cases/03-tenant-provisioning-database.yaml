@@ -1,0 +1,247 @@
+sheet: Platform_Provisioning
+submodule: Tenant Database Provisioning (SQL Server / MySQL / Startup)
+defaults:
+  role: PLATFORM_ADMIN
+  perm: PlatformTenant.Create
+  tenant: None (platform identity domain)
+  pre: "QA platform.localhost stack; disposable MySQL and, where noted, SQL Server QA servers; never point provisioning at hrms_catalog, HRMS, HRMS_Catalog or any real tenant database."
+  data: "Fresh ShardKey values per case; direct DB access to the QA MySQL/SQL Server server for verification steps."
+  sev: High
+  reg: true
+
+cases:
+  - id: PLAT-PROV-001
+    func: [F-PLAT-08]
+    sc: SQL Server tenant schema is created from a clean database
+    t: Provisioning a fresh SQL Server-backed tenant creates and migrates its schema completely
+    src: ["TenantProvisioningService.ProvisionAsync", "SchemaPreparer.PrepareAsync"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    pre: "Requires HRMS_SQLSERVER_TEST_CONNECTION* or an equivalent disposable SQL Server QA target; otherwise NOT EXECUTED - environment unavailable."
+    steps:
+      - "[POST /api/platform/tenants] Onboard a tenant with DatabaseProvider='SqlServer' => [201]"
+      - "Inspect the resulting SQL Server database (QA access) => every tenant-chain migration is applied; reference data (Roles/Permissions/RolePermissions) is fully seeded"
+    db: "SQL Server tenant database schema matches Backend/HRMS.Infrastructure/Persistence/Migrations."
+    auto: DB-assisted
+    ex: ["xU:TenantProvisioningTests.Every_shard_carries_the_full_reference_data"]
+
+  - id: PLAT-PROV-002
+    func: [F-PLAT-08]
+    sc: Each tenant gets an isolated database
+    t: Two tenants provisioned on the same provider never share a database or leak rows to each other
+    src: ["TenantProvisioningTests.Each_organization_is_provisioned_into_its_own_database"]
+    type: Tenant-Isolation
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/platform/tenants] Onboard two tenants with distinct ShardKeys on the same provider => [201] both"
+      - "Confirm the two resulting databases are distinct schemas/instances (QA access) => confirmed"
+      - "As each tenant's admin, create an employee; confirm neither tenant's employee list shows the other's record => confirmed"
+    auto: API
+    ex: ["xU:TenantProvisioningTests.Each_organization_is_provisioned_into_its_own_database"]
+
+  - id: PLAT-PROV-003
+    func: [F-PLAT-09]
+    sc: MySQL database is created when absent
+    t: If the target MySQL database does not exist, it is created from the trusted server-side template
+    src: ["TenantProvisioningService.PrepareMySqlDatabaseAsync (CREATE DATABASE)"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    steps:
+      - "Confirm no database named per the target ShardKey convention exists on the QA MySQL server => confirmed absent"
+      - "[POST /api/platform/tenants] Onboard a tenant with that ShardKey and DatabaseProvider='MySql' => [201]"
+      - "Confirm the database now exists with the full migrated schema => confirmed"
+    auto: DB-assisted
+
+  - id: PLAT-PROV-004
+    func: [F-PLAT-09, F-PLAT-10]
+    sc: MySQL database name is a safe identifier
+    t: A shard key that would produce an unsafe database name is refused before touching the MySQL server
+    src: ["TenantProvisioningService.PrepareMySqlDatabaseAsync (identifier safety check)"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    sev: High
+    pre: "Requires crafting a connection-string template whose substituted database name contains unsafe characters; DB-assisted / configuration-level test, not reachable through the public API's ShardKey validator alone."
+    steps:
+      - "Configure a QA-only sharding template that would substitute an unsafe database name (e.g. containing a hyphen or a SQL special character) for a given shard key => configured"
+      - "[POST /api/platform/tenants] Attempt onboarding with that shard key => [409] 'TenantProvisioningFailed'/'MySqlDatabaseNameInvalid'; no SQL is sent to the server with the unsafe name"
+    sec: "Prevents SQL injection through a database name built from configuration/tenant input."
+    auto: DB-assisted
+
+  - id: PLAT-PROV-005
+    func: [F-PLAT-09, F-PLAT-10]
+    sc: Existing MySQL database with complete matching history is accepted (idempotent retry path)
+    t: Provisioning against an existing, fully-migrated MySQL database succeeds without altering data
+    src: ["TenantProvisioningService.ValidateMySqlMigrationHistory", "MySqlTenantProvisioningConfigurationTests.Current_history_is_idempotently_accepted"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants] Onboard a tenant, then trigger the exact same provisioning again via retry-provisioning (see PLAT-RETRY cases) after leaving the database untouched => [200] succeeds without re-running destructive schema operations"
+    auto: DB-assisted
+    ex: ["xU:MySqlTenantProvisioningConfigurationTests.Current_history_is_idempotently_accepted", "xU:TenantProvisioningTests.Provisioning_twice_changes_nothing"]
+
+  - id: PLAT-PROV-006
+    func: [F-PLAT-10]
+    sc: Existing MySQL database with a recognized-prefix but pending history is allowed to catch up
+    t: A database whose applied migrations are a valid prefix of the known set is allowed to receive the remaining pending migrations
+    src: ["MySqlTenantProvisioningConfigurationTests.Recognized_history_prefix_is_allowed_to_have_pending_migrations"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "Prepare a MySQL database whose __EFMigrationsHistory contains only the first N of the known tenant migrations, in order => prepared"
+      - "[POST /api/platform/tenants] Onboard/retry against that shard key => [201]/[200] the remaining migrations are applied; final history matches the full known set"
+    auto: DB-assisted
+    ex: ["xU:MySqlTenantProvisioningConfigurationTests.Recognized_history_prefix_is_allowed_to_have_pending_migrations"]
+
+  - id: PLAT-PROV-007
+    func: [F-PLAT-10]
+    sc: Existing MySQL database with an unrecognized or out-of-order history fails closed
+    t: A history that is not an exact ordered prefix of the known migrations stops provisioning for operator diagnosis
+    src: ["TenantProvisioningService.ValidateMySqlMigrationHistory"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    sev: High
+    steps:
+      - "Prepare a MySQL database whose __EFMigrationsHistory contains a migration id not in the known set, or the known ids out of order => prepared"
+      - "[POST /api/platform/tenants] Onboard/retry against that shard key => [409] 'MySqlDatabaseStateUnexpected'; no further schema changes are attempted"
+    sec: "Never silently reconciles or drops an unexpected schema."
+    auto: DB-assisted
+    ex: ["xU:MySqlTenantProvisioningConfigurationTests.Unknown_skipped_and_empty_history_fail_closed"]
+
+  - id: PLAT-PROV-008
+    func: [F-PLAT-09]
+    sc: Unreachable MySQL server
+    t: A provisioning attempt against an unreachable trusted MySQL server is refused with a classified error
+    src: ["TenantProvisioningService.PrepareMySqlDatabaseAsync (MySqlServerConnectionFailed)"]
+    type: Negative
+    pri: P1
+    sev: High
+    pre: "Isolated QA environment only; never disrupt a shared MySQL server."
+    steps:
+      - "[POST /api/platform/tenants] Onboard with DatabaseProvider='MySql' while the trusted MySQL server is unreachable => [409] tenant left Inactive; log records 'MySqlServerConnectionFailed'"
+    auto: DB-assisted
+
+  - id: PLAT-PROV-009
+    func: [F-PLAT-09]
+    sc: Missing MySQL sharding template configuration
+    t: Onboarding a MySQL tenant when Sharding:MySqlConnectionStringTemplate is unset fails with a clear, classified error
+    src: ["TenantProvisioningService.PrepareMySqlDatabaseAsync (MySqlServerConfigurationMissing)"]
+    type: Negative
+    tags: [Configuration]
+    pri: P1
+    sev: High
+    pre: "Requires a QA instance with Sharding:MySqlConnectionStringTemplate unset; otherwise NOT EXECUTED - environment unavailable."
+    steps:
+      - "[POST /api/platform/tenants] Attempt MySQL onboarding against that instance => [409]; the failure reason names the missing template, not a raw connection error"
+    auto: DB-assisted
+
+  - id: PLAT-PROV-010
+    func: [F-PLAT-12]
+    sc: Startup provisions every catalog tenant
+    t: On API startup, every organization already in the catalog is (re-)provisioned, regardless of status
+    src: ["DatabaseInitializer.InitializeAsync"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    pre: "Requires the ability to restart the QA API process; do this only against the disposable QA stack."
+    steps:
+      - "With Tenant A (Active) and a deliberately Inactive QA tenant both present in the catalog, restart the API => startup logs report provisioning attempted for both, including the Inactive one"
+      - "Confirm the Inactive tenant's shard schema is current after the restart, even though it cannot be signed into => confirmed"
+    auto: DB-assisted
+    ex: ["xU:TenantProvisioningTests.An_inactive_organization_is_still_provisioned"]
+
+  - id: PLAT-PROV-011
+    func: [F-PLAT-12]
+    sc: One tenant's provisioning failure at startup does not affect the others
+    t: If one tenant's database is unreachable at startup, every other tenant is still provisioned and the API still starts
+    src: ["DatabaseInitializer.InitializeAsync (per-tenant try/catch)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Isolated QA environment where one tenant's database can be deliberately made unreachable at restart time."
+    steps:
+      - "With Tenant A reachable and a second QA tenant's database deliberately unreachable, restart the API => the API starts successfully; Tenant A signs in normally; the unreachable tenant's own requests fail, but no other tenant is affected"
+      - "Inspect startup logs => an error is logged for the unreachable tenant naming its TenantCode/ShardKey, and 'Database initialization complete: N of (N+1) organization(s) provisioned.' is logged"
+    auto: DB-assisted
+    ex: ["xU:TenantProvisioningTests.An_unreachable_shard_is_skipped_and_the_others_are_provisioned"]
+
+  - id: PLAT-PROV-012
+    func: [F-PLAT-12]
+    sc: An unreachable catalog is fatal to startup
+    t: If the catalog database itself cannot be reached, the API fails to start rather than starting with no routing
+    src: ["DatabaseInitializer class remarks; InitializeCatalogAsync propagates failures"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    sev: High
+    pre: "Isolated QA environment where the catalog connection can be deliberately broken before a restart."
+    steps:
+      - "Make the catalog connection string invalid, then start the API => process exits non-zero; no port is opened for traffic"
+    auto: Manual only
+
+  - id: PLAT-PROV-013
+    func: [F-PLAT-08, F-PLAT-09]
+    sc: Provisioning is idempotent
+    t: Running provisioning twice against the same, already-current tenant changes nothing
+    src: ["TenantProvisioningTests.Provisioning_twice_changes_nothing"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/platform/tenants] Onboard a tenant => [201]"
+      - "Trigger the same provisioning routine again against the same shard (via retry-provisioning after no failure occurred, or a startup restart) => no duplicate reference-data rows, no schema errors"
+    db: "Reference data row counts (Roles, Permissions, RolePermissions) are unchanged by the second run."
+    auto: DB-assisted
+    ex: ["xU:TenantProvisioningTests.Provisioning_twice_changes_nothing"]
+
+  - id: PLAT-PROV-014
+    func: [F-PLAT-08, F-PLAT-09]
+    sc: Provisioning an organization missing from the catalog is refused
+    t: A provisioning call for a tenant id with no catalog row throws rather than seeding an orphaned database
+    src: ["TenantProvisioningService.LoadCatalogRowAsync"]
+    type: Negative
+    tags: [Security]
+    pri: P2
+    sev: Medium
+    steps:
+      - "Attempt to invoke provisioning (DB-assisted / internal) for a ShardDescriptor whose TenantId has no Catalog Tenants row => an InvalidOperationException is raised; no tenant database is created or seeded"
+    auto: Manual only
+    ex: ["xU:TenantProvisioningTests.Provisioning_an_organization_the_catalog_does_not_hold_throws"]
+
+  - id: PLAT-PROV-015
+    func: [F-PLAT-27]
+    sc: SQL Server and MySQL catalog schemas both isolate platform identity correctly
+    t: The catalog model exposes platform identity tables with no TenantId column, on both providers
+    src: ["PlatformIdentityCatalogModelTests"]
+    type: Contract
+    tags: [Security]
+    pri: P1
+    steps:
+      - "Inspect the SQL Server catalog schema (QA access) => PlatformUsers/PlatformRoles/PlatformPermissions/PlatformUserRoles/PlatformRolePermissions/PlatformRefreshTokens exist with no TenantId column"
+      - "Inspect the MySQL catalog schema (QA access) => same tables, same absence of TenantId"
+    db: "Catalog schema, both providers."
+    auto: DB-assisted
+    ex: ["xU:PlatformIdentityCatalogModelTests.SqlServer_catalog_model_contains_separate_platform_tables_without_tenant_id", "xU:PlatformIdentityCatalogModelTests.MySql_catalog_model_contains_separate_platform_tables_without_tenant_id"]
+
+  - id: PLAT-PROV-016
+    func: [F-PLAT-08, F-PLAT-09]
+    sc: Mixed-provider catalog
+    t: A MySQL-backed catalog can route to both a SQL Server tenant and a MySQL tenant without cross-contamination
+    src: ["ProviderCombinationRoutingTests"]
+    type: Positive
+    tags: [Tenant-Isolation]
+    pri: P1
+    pre: "Requires both SQL Server and MySQL QA targets available; otherwise NOT EXECUTED - environment unavailable for the SQL Server leg."
+    steps:
+      - "[POST /api/platform/tenants] Onboard one tenant with DatabaseProvider='SqlServer' and one with 'MySql', both routed through the same MySQL catalog => [201] both"
+      - "Sign in to each and confirm each reaches its own correctly-provisioned database => confirmed"
+    auto: DB-assisted
+    ex: ["xU:ProviderCombinationRoutingTests.MySql_catalog_routes_to_SqlServer_tenant", "xU:ProviderCombinationRoutingTests.MySql_catalog_routes_to_MySql_tenant"]

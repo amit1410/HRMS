@@ -1,0 +1,174 @@
+sheet: TaxDcl_Proofs_CutOffs
+submodule: "Proofs, Proof Review & Cut-Offs"
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-PROOF-001
+    func: [F-TAXDCL-032]
+    sc: AddProofOwnAsync is scoped to the caller's own line
+    t: A lineId belonging to another employee's declaration is NotFound
+    src: "TaxDeclarationService.cs AddProofOwnAsync (join Line->Declaration->EmployeeId)"
+    type: Negative
+    tags: [Tenant-Isolation]
+    pri: P0
+    sev: High
+    pre: "Line belongs to EMP2's declaration"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "lineId = EMP2's line"
+    steps:
+      - "[POST /api/me/tax-declarations/proofs] LineId=<EMP2's line id> as EMP1 => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: TAXDCL-PROOF-002
+    func: [F-TAXDCL-033]
+    sc: Proof can only be added while Draft or ResubmissionRequired
+    t: Adding a proof once the declaration is Submitted/UnderReview/Approved/Locked is rejected
+    src: "TaxDeclarationService.cs AddProofOwnAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Declaration is Status=UnderReview"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/me/tax-declarations/proofs] LineId=<own line>, declaration=UnderReview => [409] Conflict, 'Proof cannot be changed after submission.'"
+    auto: API
+
+  - id: TAXDCL-PROOF-003
+    func: [F-TAXDCL-034]
+    sc: "CONFIRMED - proof submission cut-off dates are never enforced"
+    t: A proof can be added even though ProofSubmissionCloseDate is far in the past, as long as the declaration's own Status still permits it
+    src: "TaxDeclarationService.cs AddProofOwnAsync, ReplaceProofOwnAsync (full method read, no date comparison)"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Cycle's ProofSubmissionCloseDate is 2025-01-01 (in the past); declaration is still Status=Draft"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "cycle.ProofSubmissionCloseDate = 2025-01-01, today > that date"
+    steps:
+      - "[POST /api/me/tax-declarations/proofs] LineId=<own line>, today well past ProofSubmissionCloseDate, declaration still Draft => [201] created - no cut-off enforcement occurs"
+    auto: API
+    cr: [CR-244]
+
+  - id: TAXDCL-PROOF-004
+    func: [F-TAXDCL-035]
+    sc: Proof stores metadata only, defaults to Submitted
+    t: A newly added proof persists FileName/ContentType/FileSize/StorageReference/Hash and starts Status=Submitted
+    src: "TaxDeclarationService.cs AddProofOwnAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Declaration is Draft"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "FileName=investment.pdf, ContentType=application/pdf, FileSize=2048"
+    steps:
+      - "[POST /api/me/tax-declarations/proofs] FileName=investment.pdf => [201] Status=Submitted, no file bytes field present on the response DTO"
+    auto: API
+
+  - id: TAXDCL-PROOF-005
+    func: [F-TAXDCL-036]
+    sc: ReplaceProofOwnAsync requires ResubmissionRequired and a Rejected proof
+    t: Replace is rejected during Draft, and rejected when the target proof is not itself Rejected
+    src: "TaxDeclarationService.cs ReplaceProofOwnAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Declaration is Status=Draft (not ResubmissionRequired); separately, a Submitted (not Rejected) proof exists during ResubmissionRequired"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/me/tax-declarations/{declarationId}/lines/{lineId}/proofs/{proofId}/replace] declaration=Draft => [409] Conflict, 'Proof replacement is only available during resubmission.'"
+      - "[POST /api/me/tax-declarations/{declarationId}/lines/{lineId}/proofs/{proofId}/replace] declaration=ResubmissionRequired, target proof Status=Submitted (not Rejected) => [409] Conflict, 'Only a rejected proof can be replaced.'"
+    auto: API
+
+  - id: TAXDCL-PROOF-006
+    func: [F-TAXDCL-037]
+    sc: Replacement preserves history, non-destructive
+    t: The old proof becomes Replaced (not deleted); the new one is added and the line moves to ResubmissionRequired
+    src: "TaxDeclarationService.cs ReplaceProofOwnAsync"
+    type: Positive
+    tags: [Integration-Concurrency]
+    pri: P1
+    sev: Medium
+    pre: "Declaration is ResubmissionRequired; the target proof is Status=Rejected"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: "new FileName=investment-v2.pdf"
+    steps:
+      - "[POST /api/me/tax-declarations/{declarationId}/lines/{lineId}/proofs/{proofId}/replace] FileName=investment-v2.pdf => [200] old proof Status=Replaced (still present), new proof Status=Submitted, line.Status=ResubmissionRequired"
+      - "[GET /api/payroll/tax-declarations/{declarationId}/audit] => Action=ProofReplaced recorded"
+    auto: API
+
+  - id: TAXDCL-PROOF-007
+    func: [F-TAXDCL-038]
+    sc: ReviewProofAsync decision is restricted to Accepted/Rejected
+    t: Submitted and Replaced are rejected as a review Decision value
+    src: "TaxDeclarationService.cs ReviewProofAsync"
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    sev: Medium
+    pre: "Proof is Status=Submitted, awaiting review"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.Review
+    tenant: "T1 (DEMO01)"
+    data: "Decision=Submitted"
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/lines/{lineId}/proofs/{proofId}/review] Decision=Submitted => [400] Invalid, field=decision"
+    auto: API
+
+  - id: TAXDCL-PROOF-008
+    func: [F-TAXDCL-039]
+    sc: Proof review is blocked after Locked/Approved; a Rejected decision demotes only the owning line
+    t: Reviewing a proof once the declaration is Locked/Approved fails; a Rejected decision sets the line (not the declaration) to ResubmissionRequired
+    src: "TaxDeclarationService.cs ReviewProofAsync"
+    type: Negative
+    tags: [Boundary, Positive]
+    pri: P0
+    sev: High
+    pre: "Scenario A: declaration Status=Locked. Scenario B: declaration Status=UnderReview with a proof pending review"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.Review
+    tenant: "T1 (DEMO01)"
+    data: "Decision=Accepted (scenario A); Decision=Rejected (scenario B)"
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/lines/{lineId}/proofs/{proofId}/review] declaration Status=Locked => [409] Conflict"
+      - "[POST /api/payroll/tax-declarations/{id}/lines/{lineId}/proofs/{proofId}/review] Decision=Rejected, declaration Status=UnderReview => [200] proof Status=Rejected, owning line Status=ResubmissionRequired, DECLARATION status unchanged (still UnderReview)"
+    auto: API
+
+  - id: TAXDCL-PROOF-009
+    func: [F-TAXDCL-040]
+    sc: "ProofRequired line status is never assigned"
+    t: A missing required proof is blocked at Submit, not tagged with EmployeeTaxDeclarationLineStatus.ProofRequired anywhere
+    src: "TaxDeclarationService.cs (full grep for EmployeeTaxDeclarationLineStatus.ProofRequired - zero assignment matches)"
+    type: Contract
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of TaxDeclarationService.cs for 'EmployeeTaxDeclarationLineStatus.ProofRequired' => zero assignment sites - this status value is declared but permanently unreachable through this service"
+    auto: Manual only
+    cr: [CR-259]

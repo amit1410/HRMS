@@ -1,0 +1,157 @@
+sheet: TaxDcl_TDS_PayrollIntegration
+submodule: TDS / Payroll Integration & Adjustment Handoff
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-TDS-001
+    func: [F-TAXDCL-101]
+    sc: "CONFIRMED - the monthly and annual tax engines never call each other"
+    t: A full source cross-grep confirms StatutoryPayrollService and YearEndTaxService never reference one another beyond YearEndTax reading PayrollStatutoryResults as data
+    src: "StatutoryPayrollService.cs, YearEndTaxService.cs, PayrollCalculationEngine.cs (full cross-grep)"
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of StatutoryPayrollService.cs for 'YearEndTax'/'TaxDeclaration' => zero matches"
+      - "[Manual] full grep of YearEndTaxService.cs for 'StatutoryPayrollService' (a direct call, not merely reading PayrollStatutoryResults data) => zero matches"
+    auto: Manual only
+
+  - id: TAXDCL-TDS-002
+    func: [F-TAXDCL-102]
+    sc: Year-end reconciliation never mutates finalized payroll
+    t: A full grep confirms YearEndTaxService.cs only ever reads PayrollResults, never writes
+    src: "YearEndTaxService.cs CalculateAsync (full grep for db.PayrollResults - AsNoTracking reads only)"
+    type: Contract
+    tags: [Positive]
+    pri: P0
+    sev: High
+    pre: "Run calculated over a finalized PayrollRun"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of YearEndTaxService.cs for 'db.PayrollResults' => every occurrence is inside an AsNoTracking read; zero .Update/.Add/.Remove on PayrollResults"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200]; re-fetch the source PayrollResult afterward => byte-identical, unchanged"
+    auto: API
+
+  - id: TAXDCL-TDS-003
+    func: [F-TAXDCL-103]
+    sc: HandoffAdjustmentAsync validation and run-state gating
+    t: A blank ComponentCode, a missing adjustment, and a non-Approved/Closed run are each rejected
+    src: "YearEndTaxService.cs HandoffAdjustmentAsync"
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P0
+    sev: High
+    pre: "Run is Status=Submitted (not yet Approved)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "ComponentCode=''; AdjustmentId=<random GUID>"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/adjustments/handoff] ComponentCode='' => [400] Invalid, field=componentCode"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/adjustments/handoff] AdjustmentId=<random GUID> => [404] NotFound"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/adjustments/handoff] valid AdjustmentId, run Status=Submitted => [409] Conflict, 'Only an approved or closed run may hand off an adjustment.'"
+    auto: API
+
+  - id: TAXDCL-TDS-004
+    func: [F-TAXDCL-104]
+    sc: "CONFIRMED - a handed-off adjustment starts Draft and cannot be picked up by payroll until separately approved"
+    t: The created PayrollAdjustment is Status=Draft; PayrollCalculationEngine only sources Approved/Scheduled adjustments
+    src: "YearEndTaxService.cs HandoffAdjustmentAsync (Status=Draft at creation); PayrollCalculationEngine.cs (adjustments query, Status filter)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Run is Status=Approved with one Recommended adjustment for Employee E1, Amount=7500"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "ComponentCode=TDS-ADJ"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/adjustments/handoff] ComponentCode=TDS-ADJ => [200] a new PayrollAdjustment created, Status=Draft, SourceType=YearEndTaxAdjustment"
+      - "[Manual] full grep of PayrollCalculationEngine.cs's own adjustments-sourcing query => Status==Approved||Scheduled only; the new Draft PayrollAdjustment will NOT be picked up by any payroll run's calculation until it is separately approved through the existing, out-of-scope PayrollAdjustment workflow"
+    auto: API
+
+  - id: TAXDCL-TDS-005
+    func: [F-TAXDCL-105]
+    sc: Handoff is idempotent on the second call
+    t: A second handoff on an already-linked adjustment returns Success with the existing link, not a new PayrollAdjustment
+    src: "YearEndTaxService.cs HandoffAdjustmentAsync (row.PayrollAdjustmentId is { } existing branch)"
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Adjustment already has PayrollAdjustmentId set from a prior successful handoff"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/adjustments/handoff] AdjustmentId=<already handed off> (repeat) => [200] Success, 'Adjustment handoff was already completed.', PayrollAdjustmentId unchanged, no new PayrollAdjustment row created"
+    auto: API
+
+  - id: TAXDCL-TDS-006
+    func: [F-TAXDCL-106]
+    sc: A concurrent duplicate handoff surfaces Conflict, not a 500
+    t: A DbUpdateException during handoff is caught and the adjustment's Status is left at Recommended
+    src: "YearEndTaxService.cs HandoffAdjustmentAsync (try/catch DbUpdateException)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Two concurrent HandoffAdjustmentAsync calls racing on the same adjustment"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/adjustments/handoff] request 1 commits first => [200] success"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/adjustments/handoff] request 2, racing simultaneously before either read the other's write => [409] Conflict, 'The year-end adjustment handoff conflicted with an existing source adjustment.'; adjustment.Status remains Recommended (not advanced to HandoffCreated) on this path"
+    auto: API
+
+  - id: TAXDCL-TDS-007
+    func: [F-TAXDCL-107]
+    sc: Adjustment Resolved/Cancelled statuses are never assigned
+    t: No method in YearEndTaxService writes YearEndTaxAdjustmentStatus.Resolved or .Cancelled
+    src: "YearEndTaxService.cs (full grep - zero matches)"
+    type: Contract
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of YearEndTaxService.cs for 'YearEndTaxAdjustmentStatus.Resolved' and '.Cancelled' => zero assignment sites; only Recommended (default) and HandoffCreated (F-TAXDCL-104) are ever set"
+    auto: Manual only
+    cr: [CR-260]
+
+  - id: TAXDCL-TDS-008
+    func: [F-TAXDCL-108]
+    sc: AdjustmentNumber is a per-employee-per-year identity, not a sequential counter
+    t: The generated AdjustmentNumber format and its 60-character truncation
+    src: "YearEndTaxService.cs HandoffAdjustmentAsync (AdjustmentNumber construction)"
+    type: Boundary
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: "Run TaxYear=2026, EmployeeId=<a specific GUID>"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/adjustments/handoff] => [200] the created PayrollAdjustment.AdjustmentNumber == 'YET/2026/{employeeId:N}' truncated to 60 characters"
+    auto: API

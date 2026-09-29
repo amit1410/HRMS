@@ -85,6 +85,8 @@ public static class DatabaseSeeder
         await SeedPositionChangeReasonsAsync(db, tenant.Id, ct);
         await SeedOrganisationHierarchyAsync(db, tenant.Id, ct);
         await SeedDevelopmentRoleManagementVerificationAsync(db, passwordHasher, tenant, configuration, isDevelopment, ct, logger ?? NullLogger.Instance);
+        await SeedQaAutomationUsersAsync(db, passwordHasher, tenant, configuration, isDevelopment, ct, logger ?? NullLogger.Instance);
+        await SeedQaAutomationBankAsync(db, tenant, configuration, isDevelopment, ct, logger ?? NullLogger.Instance);
 
         // Global reference data — not tenant-scoped, seeded once per database.
         await SeedCountriesAsync(db, ct);
@@ -313,6 +315,400 @@ public static class DatabaseSeeder
             Reason = assignment.AssignmentReason,
             PerformedByUserId = user.Id,
             OccurredAtUtc = assignment.CreatedAtUtc
+        });
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Provisions dedicated QA automation identities for tenant ANEVRA01 only, and only in Development —
+    /// never for a real/production tenant, never automatically without explicit opt-in.
+    /// <para>
+    /// Three accounts are created against <em>existing</em> roles only (TenantAdmin, Employee, Manager —
+    /// no new role, no elevated grant): a QA Admin (no linked Employee — mirrors how the demo tenants'
+    /// admin seed users work), a QA Employee and a QA Manager (each with a linked Employee record via the
+    /// same direct <see cref="AccountEmployeeCurrentLink"/> insert this file already uses for the
+    /// Role Management verification account above — not the permission-checked
+    /// <c>AccountEmployeeLinkService</c>, since seeding runs with no authenticated actor). The QA Manager is
+    /// recorded as the QA Employee's manager in <see cref="EmployeeEmploymentHistory"/> — the field the
+    /// authorization/scoping code actually reads (<c>ManagerRoleProvisioningService</c>,
+    /// <c>LeaveAuthorizationService</c>, <c>AttendanceAuthorizationService</c>) — not just the display-only
+    /// <see cref="Employee.ReportingManagerId"/>, which is set too for consistency.
+    /// </para>
+    /// <para>
+    /// Gated behind <c>DevelopmentSeed:EnableQaAutomationUsers</c> plus three required passwords
+    /// (<c>DevelopmentSeed:QaAdminPassword</c> / <c>QaEmployeePassword</c> / <c>QaManagerPassword</c>),
+    /// read from configuration — i.e. environment variables or user-secrets, never a literal in source —
+    /// so a checkout with none of these set seeds nothing here, on every startup, forever. Existing users,
+    /// employees and links are never overwritten except a password when
+    /// <c>DevelopmentSeed:ResetQaAutomationPasswords</c> is explicitly set.
+    /// </para>
+    /// </summary>
+    private static async Task SeedQaAutomationUsersAsync(
+        HrmsDbContext db,
+        IPasswordHasher passwordHasher,
+        Tenant tenant,
+        IConfiguration? configuration,
+        bool isDevelopment,
+        CancellationToken ct,
+        ILogger logger)
+    {
+        const string tenantCode = "ANEVRA01";
+        if (!isDevelopment || !tenant.TenantCode.Equals(tenantCode, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (configuration?.GetValue<bool>("DevelopmentSeed:EnableQaAutomationUsers") != true)
+            return;
+
+        var adminPassword = configuration["DevelopmentSeed:QaAdminPassword"];
+        var employeePassword = configuration["DevelopmentSeed:QaEmployeePassword"];
+        var managerPassword = configuration["DevelopmentSeed:QaManagerPassword"];
+        if (string.IsNullOrWhiteSpace(adminPassword) || string.IsNullOrWhiteSpace(employeePassword) || string.IsNullOrWhiteSpace(managerPassword))
+        {
+            logger.LogWarning(
+                "QA automation user seeding is enabled for tenant {TenantCode} but one or more of " +
+                "DevelopmentSeed:QaAdminPassword/QaEmployeePassword/QaManagerPassword is missing; skipping.",
+                tenant.TenantCode);
+            return;
+        }
+
+        var resetPasswords = configuration.GetValue<bool>("DevelopmentSeed:ResetQaAutomationPasswords");
+        var tenantAdminRoleId = SeedData.RoleId(RoleNames.TenantAdmin);
+        var employeeRoleId = SeedData.RoleId(RoleNames.Employee);
+        var managerRoleId = SeedData.RoleId(RoleNames.Manager);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        var adminUser = await EnsureQaUserAsync(
+            db, passwordHasher, tenant.Id,
+            userId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000001"),
+            email: "qaauto-admin@anevra01.qa-automation.invalid",
+            firstName: "QAAUTO", lastName: "Admin",
+            password: adminPassword, resetPassword: resetPasswords, ct);
+        await EnsureQaUserRoleAsync(
+            db, tenant.Id, adminUser.Id, tenantAdminRoleId, today,
+            assignmentId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000002"),
+            eventId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000003"),
+            reason: "QA automation: QA Admin role (existing TenantAdmin role, no new grant)", ct);
+
+        var employeeUser = await EnsureQaUserAsync(
+            db, passwordHasher, tenant.Id,
+            userId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000011"),
+            email: "qaauto-employee@anevra01.qa-automation.invalid",
+            firstName: "QAAUTO", lastName: "Employee",
+            password: employeePassword, resetPassword: resetPasswords, ct);
+        await EnsureQaUserRoleAsync(
+            db, tenant.Id, employeeUser.Id, employeeRoleId, today,
+            assignmentId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000012"),
+            eventId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000013"),
+            reason: "QA automation: QA Employee role (existing Employee role, no new grant)", ct);
+
+        var managerUser = await EnsureQaUserAsync(
+            db, passwordHasher, tenant.Id,
+            userId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000021"),
+            email: "qaauto-manager@anevra01.qa-automation.invalid",
+            firstName: "QAAUTO", lastName: "Manager",
+            password: managerPassword, resetPassword: resetPasswords, ct);
+        await EnsureQaUserRoleAsync(
+            db, tenant.Id, managerUser.Id, managerRoleId, today,
+            assignmentId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000022"),
+            eventId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000023"),
+            reason: "QA automation: QA Manager role (existing Manager role, no new grant)", ct);
+        await EnsureQaUserRoleAsync(
+            db, tenant.Id, managerUser.Id, employeeRoleId, today,
+            assignmentId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000026"),
+            eventId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000027"),
+            reason: "QA automation: QA Manager base Employee role (a manager is also a self-service employee)", ct);
+
+        var managerEmployee = await EnsureQaEmployeeAsync(
+            db, tenant.Id,
+            employeeId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000024"),
+            employeeCode: "QAAUTO-MGR",
+            firstName: "QAAUTO", lastName: "Manager",
+            email: "qaauto-manager-employee@anevra01.qa-automation.invalid",
+            reportingManagerId: null, ct);
+        await EnsureQaAccountLinkAsync(
+            db, tenant.Id, managerUser.Id, managerEmployee.Id,
+            linkId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000025"),
+            reason: "QA automation: link QA Manager account to its Employee identity", ct, logger);
+
+        var employeeEmployee = await EnsureQaEmployeeAsync(
+            db, tenant.Id,
+            employeeId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000014"),
+            employeeCode: "QAAUTO-EMP",
+            firstName: "QAAUTO", lastName: "Employee",
+            email: "qaauto-employee-employee@anevra01.qa-automation.invalid",
+            reportingManagerId: managerEmployee.Id, ct);
+        await EnsureQaAccountLinkAsync(
+            db, tenant.Id, employeeUser.Id, employeeEmployee.Id,
+            linkId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000015"),
+            reason: "QA automation: link QA Employee account to its Employee identity", ct, logger);
+
+        await EnsureQaReportingLineAsync(
+            db, tenant.Id,
+            historyId: new Guid("aaaaaaaa-0000-4a00-9a00-000000000016"),
+            employeeId: employeeEmployee.Id, managerId: managerEmployee.Id, effectiveFrom: today, ct, logger);
+
+        logger.LogInformation(
+            "QA automation seed is present for tenant {TenantCode}: QA Admin/Employee/Manager accounts, " +
+            "linked Employee identities, and the Employee→Manager reporting line.", tenant.TenantCode);
+    }
+
+    /// <summary>
+    /// Code of the single Bank master row that <see cref="SeedQaAutomationBankAsync"/> provisions.
+    /// </summary>
+    public const string QaAutomationBankCode = "QAAUTO-BANK";
+
+    /// <summary>
+    /// Provisions one clearly-fake Bank master row for tenant ANEVRA01 only, and only in Development, so the
+    /// QAAUTO payroll sandbox employee can hold a salary bank account and Bank Advice payments can validate.
+    /// <para>
+    /// There is no public API for creating banks: the generic master-management and master-import endpoints
+    /// don't support the bank kind, and <see cref="SeedBanksAsync"/> only seeds the demo tenants. The employee
+    /// bank account itself is still created through the public, validated employee bank-detail endpoint; this
+    /// seeder only supplies the master row that endpoint requires.
+    /// </para>
+    /// <para>
+    /// Gated behind <c>DevelopmentSeed:EnableQaAutomationBank</c> (env var or user-secrets), so a checkout
+    /// without it seeds nothing here. Matched on (TenantId, Code): an existing row, active or not, is never
+    /// modified, so retiring the bank by hand sticks across restarts.
+    /// </para>
+    /// </summary>
+    private static async Task SeedQaAutomationBankAsync(
+        HrmsDbContext db,
+        Tenant tenant,
+        IConfiguration? configuration,
+        bool isDevelopment,
+        CancellationToken ct,
+        ILogger logger)
+    {
+        const string tenantCode = "ANEVRA01";
+        if (!isDevelopment || !tenant.TenantCode.Equals(tenantCode, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (configuration?.GetValue<bool>("DevelopmentSeed:EnableQaAutomationBank") != true)
+            return;
+
+        var exists = await db.Banks.IgnoreQueryFilters()
+            .AnyAsync(x => x.TenantId == tenant.Id && x.Code == QaAutomationBankCode, ct);
+        if (exists)
+        {
+            logger.LogInformation(
+                "QA automation bank {BankCode} already exists for tenant {TenantCode}; it was not modified.",
+                QaAutomationBankCode, tenant.TenantCode);
+            return;
+        }
+
+        db.Banks.Add(new Bank
+        {
+            Id = new Guid("aaaaaaaa-0000-4a00-9a00-000000000031"),
+            TenantId = tenant.Id,
+            Code = QaAutomationBankCode,
+            Name = "QAAUTO Sandbox Bank (not a real bank)",
+            Description = "QA automation only: salary account master for the QAAUTO payroll sandbox employee. See docs/qa/payroll-sandbox-setup.md.",
+            IsActive = true
+        });
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation("QA automation bank {BankCode} was created for tenant {TenantCode}.", QaAutomationBankCode, tenant.TenantCode);
+    }
+
+    private static async Task<User> EnsureQaUserAsync(
+        HrmsDbContext db,
+        IPasswordHasher passwordHasher,
+        Guid tenantId,
+        Guid userId,
+        string email,
+        string firstName,
+        string lastName,
+        string password,
+        bool resetPassword,
+        CancellationToken ct)
+    {
+        var user = await db.Users.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Email == email, ct);
+        if (user is null)
+        {
+            user = new User
+            {
+                Id = userId,
+                TenantId = tenantId,
+                Email = email,
+                FirstName = firstName,
+                LastName = lastName,
+                IsActive = true,
+                PasswordHash = passwordHasher.Hash(password)
+            };
+            db.Users.Add(user);
+            await db.SaveChangesAsync(ct);
+        }
+        else if (resetPassword)
+        {
+            user.PasswordHash = passwordHasher.Hash(password);
+            await db.SaveChangesAsync(ct);
+        }
+
+        return user;
+    }
+
+    private static async Task EnsureQaUserRoleAsync(
+        HrmsDbContext db,
+        Guid tenantId,
+        Guid userId,
+        int roleId,
+        DateOnly effectiveFrom,
+        Guid assignmentId,
+        Guid eventId,
+        string reason,
+        CancellationToken ct)
+    {
+        if (await db.UserRoles.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenantId && x.UserId == userId && x.RoleId == roleId, ct))
+            return;
+
+        var assignment = new UserRole
+        {
+            Id = assignmentId,
+            TenantId = tenantId,
+            UserId = userId,
+            RoleId = roleId,
+            EffectiveFrom = effectiveFrom,
+            AssignmentSource = RoleAssignmentSource.System,
+            AssignedByUserId = userId,
+            AssignmentReason = reason,
+            CreatedAtUtc = DateTime.UtcNow
+        };
+        db.UserRoles.Add(assignment);
+        db.UserRoleAssignmentEvents.Add(new UserRoleAssignmentEvent
+        {
+            Id = eventId,
+            TenantId = tenantId,
+            AssignmentId = assignment.Id,
+            UserId = userId,
+            RoleId = roleId,
+            EventType = UserRoleAssignmentEventType.Assigned,
+            EffectiveFrom = assignment.EffectiveFrom,
+            AssignmentSource = assignment.AssignmentSource,
+            Reason = assignment.AssignmentReason,
+            PerformedByUserId = userId,
+            OccurredAtUtc = assignment.CreatedAtUtc
+        });
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static async Task<Employee> EnsureQaEmployeeAsync(
+        HrmsDbContext db,
+        Guid tenantId,
+        Guid employeeId,
+        string employeeCode,
+        string firstName,
+        string lastName,
+        string email,
+        Guid? reportingManagerId,
+        CancellationToken ct)
+    {
+        var employee = await db.Employees.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.EmployeeCode == employeeCode, ct);
+        if (employee is null)
+        {
+            employee = new Employee
+            {
+                Id = employeeId,
+                TenantId = tenantId,
+                EmployeeCode = employeeCode,
+                FirstName = firstName,
+                LastName = lastName,
+                Email = email,
+                DateOfJoining = DateOnly.FromDateTime(DateTime.UtcNow),
+                Status = EmployeeStatus.Active,
+                Gender = Gender.Unspecified,
+                ReportingManagerId = reportingManagerId,
+                Address = "QA automation identity — see qa/automation/README.md"
+            };
+            db.Employees.Add(employee);
+            await db.SaveChangesAsync(ct);
+        }
+
+        return employee;
+    }
+
+    private static async Task EnsureQaAccountLinkAsync(
+        HrmsDbContext db,
+        Guid tenantId,
+        Guid userId,
+        Guid employeeId,
+        Guid linkId,
+        string reason,
+        CancellationToken ct,
+        ILogger logger)
+    {
+        var userLink = await db.AccountEmployeeCurrentLinks.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.UserId == userId, ct);
+        if (userLink is not null)
+            return;
+
+        var employeeLink = await db.AccountEmployeeCurrentLinks.IgnoreQueryFilters().SingleOrDefaultAsync(x => x.TenantId == tenantId && x.EmployeeId == employeeId, ct);
+        if (employeeLink is not null)
+        {
+            logger.LogWarning("QA automation Employee {EmployeeId} is already linked to another account; no link was changed.", employeeId);
+            return;
+        }
+
+        var occurredAt = DateTime.UtcNow;
+        db.AccountEmployeeLinkEvents.Add(new AccountEmployeeLinkEvent
+        {
+            Id = linkId,
+            TenantId = tenantId,
+            SubjectUserId = userId,
+            ActorUserId = userId,
+            Sequence = 1,
+            Operation = "Link",
+            NewLinkId = linkId,
+            AfterEmployeeId = employeeId,
+            OccurredAtUtc = occurredAt,
+            Reason = reason,
+            CorrelationId = "qa-automation-seed"
+        });
+        db.AccountEmployeeCurrentLinks.Add(new AccountEmployeeCurrentLink
+        {
+            LinkId = linkId,
+            TenantId = tenantId,
+            UserId = userId,
+            EmployeeId = employeeId
+        });
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static async Task EnsureQaReportingLineAsync(
+        HrmsDbContext db,
+        Guid tenantId,
+        Guid historyId,
+        Guid employeeId,
+        Guid managerId,
+        DateOnly effectiveFrom,
+        CancellationToken ct,
+        ILogger logger)
+    {
+        var current = await db.EmployeeEmploymentHistory.IgnoreQueryFilters()
+            .SingleOrDefaultAsync(x => x.TenantId == tenantId && x.EmployeeId == employeeId && !x.IsSuperseded && x.EffectiveTo == null, ct);
+        if (current is not null)
+        {
+            if (current.ManagerId != managerId)
+                logger.LogWarning(
+                    "QA automation Employee {EmployeeId} already has an effective employment-history record with a different manager; it was left unchanged.",
+                    employeeId);
+            return;
+        }
+
+        db.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory
+        {
+            Id = historyId,
+            TenantId = tenantId,
+            EmployeeId = employeeId,
+            ManagerId = managerId,
+            EffectiveFrom = effectiveFrom,
+            EffectiveTo = null,
+            RevisionNumber = 1,
+            IsSuperseded = false,
+            ChangeReason = EmploymentChangeReason.NewJoining,
+            ChangeReasonDescription = "QA automation: initial reporting line to QA Manager",
+            EmploymentType = EmploymentType.FullTime,
+            EmploymentStatus = EmployeeStatus.Active,
+            CreatedBy = "qa-automation-seed"
         });
         await db.SaveChangesAsync(ct);
     }

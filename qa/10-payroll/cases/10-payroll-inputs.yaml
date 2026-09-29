@@ -1,0 +1,277 @@
+sheet: Payroll_Inputs
+submodule: Payroll Inputs - bulk CSV correction imports (templates, upload/validate/correct, submit/approve/post/cancel)
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Input.Create"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, with an active Employee and an active Salary Component, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-IN-001
+    func: [F-PAY-193]
+    sc: Create and list an import template
+    t: A template with at least one column mapping is created
+    src: ["PayrollInputService.CreateTemplateAsync"]
+    type: Positive
+    pri: P2
+    perm: "Payroll.Input.ConfigureTemplate"
+    steps:
+      - "[POST /api/payroll/input-templates] Code=BONUS-CSV, Columns=[{SourceColumnName='Emp',TargetField='EmployeeCode'}] => [200/201]"
+      - "[GET /api/payroll/input-templates] => [200] BONUS-CSV present"
+    auto: API
+
+  - id: PAY-IN-002
+    func: [F-PAY-194]
+    sc: Updating a template already used by a submitted batch creates a new version
+    t: Once a batch referencing the template leaves Draft, updating the template produces Version=2 rather than mutating Version=1
+    src: ["PayrollInputService.UpdateTemplateAsync"]
+    type: Boundary
+    pri: P2
+    perm: "Payroll.Input.ConfigureTemplate"
+    steps:
+      - "[Setup] A batch referencing template v1 is Status=Validated (not Draft) => precondition established"
+      - "[PUT /api/payroll/input-templates/{id}] Name='Renamed' => [200] a NEW row with Version=2 is created; Version=1 is untouched"
+    auto: API
+
+  - id: PAY-IN-003
+    func: [F-PAY-196, F-PAY-197]
+    sc: Create a valid batch with an auto-generated batch number
+    t: A batch is created with BatchNumber matching PIN/{timestamp}/{guid}, length<=34
+    src: ["PayrollInputService.CreateBatchAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/input-batches] Name='March bonus correction', Lines=[] => [200/201] BatchNumber matches PIN/\\d{14}/[0-9a-f]+, length<=34"
+    auto: API
+
+  - id: PAY-IN-004
+    func: [F-PAY-196]
+    sc: Create validation
+    t: A blank name, an unknown period, and an inactive template are each rejected
+    src: ["PayrollInputService.CreateBatchAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/input-batches] Name='' => [400] Batch name is required."
+      - "[POST /api/payroll/input-batches] PayrollPeriodId=<random guid> => [400] Payroll period was not found."
+      - "[POST /api/payroll/input-batches] TemplateId=<inactive template> => [400] An active import template is required."
+    auto: API
+
+  - id: PAY-IN-005
+    func: [F-PAY-198]
+    sc: Upload deduplicates by file hash
+    t: Re-uploading the identical CSV to the same batch is a no-op success; to a different batch it is Conflict
+    src: ["PayrollInputService.UploadAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/input-batches/{id}/upload] file=lines.csv (first upload) => [200] staged"
+      - "[POST /api/payroll/input-batches/{id}/upload] the SAME bytes again => [200] This file is already staged for the batch."
+      - "[POST /api/payroll/input-batches/{id2}/upload] the SAME bytes to a DIFFERENT batch => [409] This file has already been imported for this tenant."
+    auto: API
+
+  - id: PAY-IN-006
+    func: [F-PAY-198]
+    sc: Upload size bounds and Draft-only guard
+    t: An empty file, a file over 25MB, and an upload against a non-Draft batch are all rejected
+    src: ["PayrollInputService.UploadAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/input-batches/{id}/upload] file (0 bytes) => [400] The CSV must be non-empty and no larger than 25 MB."
+      - "[Setup] Batch Status=Validated => precondition established"
+      - "[POST /api/payroll/input-batches/{id2}/upload] => [409] Only draft batches can receive an upload."
+    auto: API
+
+  - id: PAY-IN-007
+    func: [F-PAY-199]
+    sc: CSV parsing requires the mandatory headers and rejects duplicates
+    t: A missing required header and a duplicate header column are both rejected
+    src: ["PayrollInputService.ParseCsvAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/input-batches/{id}/upload] CSV header omits Amount => [400] CSV is missing one or more required headers."
+      - "[POST /api/payroll/input-batches/{id2}/upload] CSV header lists EmployeeCode twice => [400] CSV contains duplicate headers."
+    auto: API
+
+  - id: PAY-IN-008
+    func: [F-PAY-200]
+    sc: Validate reports every declared issue code
+    t: An unknown employee code, an unknown component code, a mismatched component type, a non-positive amount, and a period-finalized row each produce their distinct issue code
+    src: ["PayrollInputService.ValidateAsync"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/input-batches/{id}/validate] one line has an unknown EmployeeCode => [200] that line's issue Code=EMPLOYEE_NOT_FOUND, Status=Invalid"
+      - "[GET /api/payroll/input-batches/{id}/issues] => [200] issue rows include COMPONENT_NOT_FOUND / INVALID_AMOUNT / DUPLICATE_ROW for the corresponding seeded bad rows"
+    auto: API
+
+  - id: PAY-IN-009
+    func: [F-PAY-200]
+    sc: An inactive employee is a warning, not an error
+    t: A row referencing an inactive employee is Status=Warning, not Invalid, and does not block Validated status by itself
+    src: ["PayrollInputService.ValidateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] One row's employee is inactive, every other field is otherwise valid => precondition established"
+      - "[POST /api/payroll/input-batches/{id}/validate] => [200] that line's Status=Warning (EMPLOYEE_INACTIVE), batch Status=Validated (not ValidationFailed) since no line is Invalid"
+    auto: API
+
+  - id: PAY-IN-010
+    func: [F-PAY-201]
+    sc: Batch status reflects the worst line outcome
+    t: Any Invalid line forces ValidationFailed; zero Invalid lines produces Validated
+    src: ["PayrollInputService.ValidateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/input-batches/{id}/validate] with one Invalid line => [200] Status=ValidationFailed"
+      - "[POST /api/payroll/input-batches/{id2}/validate] with zero Invalid lines => [200] Status=Validated"
+    auto: API
+
+  - id: PAY-IN-011
+    func: [F-PAY-202]
+    sc: Preview excludes invalid lines from its totals
+    t: An Invalid line's amount is not counted in the earning/deduction preview totals
+    src: ["PayrollInputService.GetPreviewAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/payroll/input-batches/{id}/preview] => [200] TotalEarning/TotalDeduction exclude every Invalid-status line's Amount"
+    auto: API
+
+  - id: PAY-IN-012
+    func: [F-PAY-203]
+    sc: Editing a line downgrades the whole batch back to Draft
+    t: Correcting one line after validation resets the entire batch's status and validation counts
+    src: ["PayrollInputService.UpdateLineAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Batch is Status=ValidationFailed => precondition established"
+      - "[PUT /api/payroll/input-batches/{id}/lines/{lineId}] Amount=<corrected value> => [200] batch Status=Draft, ValidRows/InvalidRows/WarningRows reset to 0"
+    auto: API
+
+  - id: PAY-IN-013
+    func: [F-PAY-204]
+    sc: Submit requires Validated and zero invalid rows
+    t: Submitting a ValidationFailed batch, or a Validated one that still shows InvalidRows>0, is Conflict
+    src: ["PayrollInputService.SubmitAsync"]
+    type: Negative
+    pri: P0
+    perm: "Payroll.Input.Submit"
+    steps:
+      - "[POST /api/payroll/input-batches/{id}/submit] on a Draft batch => [409] The batch transition is not allowed."
+      - "[Setup] Batch Status=Validated but InvalidRows>0 stale from before a subsequent re-add => precondition established"
+      - "[POST /api/payroll/input-batches/{id2}/submit] => [409] Invalid rows must be corrected before submission."
+    auto: API
+
+  - id: PAY-IN-014
+    func: [F-PAY-205]
+    sc: Approve blocks self-approval; Reject requires a reason
+    t: The submitter cannot approve their own batch; rejecting without a reason is Invalid
+    src: ["PayrollInputService.ApproveAsync / RejectAsync"]
+    type: Security
+    pri: P0
+    perm: "Payroll.Input.Approve"
+    steps:
+      - "[POST /api/payroll/input-batches/{id}/approve] as the same user who submitted it, self-approval prevention on => [400] SelfApprovalNotAllowed: the user who created this payroll action cannot approve it."
+      - "[POST /api/payroll/input-batches/{id2}/reject] reason='' => [400] A rejection reason is required."
+    auto: API
+
+  - id: PAY-IN-015
+    func: [F-PAY-206]
+    sc: Post converts each valid line into a Payroll Adjustment exactly once
+    t: Posting an Approved batch creates one PayrollAdjustment per non-InformationOnly line; a retried Post never duplicates them
+    src: ["PayrollInputService.PostAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Payroll.Input.Post"
+    steps:
+      - "[POST /api/payroll/input-batches/{id}/post] => [200] Status=Posted, one PayrollAdjustment per line with SourceType=PayrollInputBatch"
+      - "[POST /api/payroll/input-batches/{id}/post] second call (already Posted) => [200] Batch was already posted. - no duplicate adjustments created"
+    auto: API
+
+  - id: PAY-IN-016
+    func: [F-PAY-206]
+    sc: Post requires Approved and zero invalid rows
+    t: Posting an unapproved batch is Conflict
+    src: ["PayrollInputService.PostAsync"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.Input.Post"
+    steps:
+      - "[POST /api/payroll/input-batches/{id}/post] on a Validated (not yet Approved) batch => [409] Only an approved, atomically valid batch can be posted."
+    auto: API
+
+  - id: PAY-IN-017
+    func: [F-PAY-207]
+    sc: A Posted batch whose adjustments are already Applied cannot be cancelled
+    t: Cancel is blocked once payroll has actually consumed the generated adjustment; a not-yet-applied Posted batch cancels and un-schedules them
+    src: ["PayrollInputService.CancelAsync"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.Input.Cancel"
+    steps:
+      - "[Setup] One of the batch's generated adjustments already has a PayrollAdjustmentApplication row => precondition established"
+      - "[POST /api/payroll/input-batches/{id}/cancel] reason='Correction' => [409] Finalized Payroll may not be rewritten; submit this correction through Phase 7R."
+      - "[Setup] A second Posted batch's adjustments are still unapplied => precondition established"
+      - "[POST /api/payroll/input-batches/{id2}/cancel] reason='Duplicate import' => [200] Status=Cancelled, its unapplied adjustments are cancelled"
+    auto: API
+
+  - id: PAY-IN-018
+    func: [F-PAY-208]
+    sc: History is append-only across the full lifecycle
+    t: Created/Uploaded/Validated/Submitted/Approved/Posted each append a distinct row
+    src: ["PayrollInputService.AddHistory"]
+    type: Positive
+    pri: P2
+    perm: "Payroll.Input.ViewAudit"
+    steps:
+      - "[GET /api/payroll/input-batches/{id}/history] => [200] one row per lifecycle event, newest first"
+    auto: API
+
+  - id: PAY-IN-019
+    func: [F-PAY-209]
+    sc: Preview/Issues/Result each export a CSV
+    t: Every export endpoint returns text/csv with the expected columns
+    src: ["PayrollInputService.ExportPreviewAsync / ExportIssuesAsync / ExportResultAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/payroll/input-batches/{id}/preview/export] => [200] text/csv"
+      - "[GET /api/payroll/input-batches/{id}/issues/export] => [200] text/csv"
+      - "[GET /api/payroll/input-batches/{id}/result/export] on a Posted batch => [200] text/csv"
+    auto: API
+
+  - id: PAY-IN-020
+    func: [F-PAY-210]
+    sc: Cross-tenant batch/template id is not reachable
+    t: Tenant B's batch id is NotFound as Tenant A
+    src: ["PayrollInputService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[GET /api/payroll/input-batches/{tenantBBatchId}] As Tenant A => [404] Batch not found."
+    auto: API
+
+  - id: PAY-IN-021
+    func: [F-PAY-195]
+    sc: List/filter batches
+    t: GetBatches respects status/payrollPeriodId filters
+    src: ["PayrollInputService.GetBatchesAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Input.View"
+    steps:
+      - "[GET /api/payroll/input-batches?status=Posted] => [200] only Posted batches"
+    auto: API

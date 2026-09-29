@@ -1,0 +1,102 @@
+sheet: Loans_Cancellation
+submodule: Cancellation - state guard, maker-checker reason policy, idempotency gap
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Loans.Cancel"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-CAN-001
+    func: [F-LOAN-067]
+    sc: Cancel is accepted from Draft, Submitted, Approved and Rejected
+    t: Each non-Active, non-Closed state can be cancelled
+    src: ["PayrollLoanService.CancelCoreAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/loans/{draftLoanId}/cancel] => [200] Status=Cancelled"
+      - "[POST /api/payroll/loans/{approvedLoanId}/cancel] => [200] Status=Cancelled"
+      - "[POST /api/payroll/loans/{rejectedLoanId}/cancel] => [200] Status=Cancelled"
+    auto: API
+
+  - id: LOAN-CAN-002
+    func: [F-LOAN-067]
+    sc: Cancel is blocked for Active and Closed loans
+    t: An Active or Closed loan rejects Cancel as Conflict
+    src: ["PayrollLoanService.CancelCoreAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loans/{activeLoanId}/cancel] => [409] Active or closed loans cannot be cancelled."
+      - "[POST /api/payroll/loans/{closedLoanId}/cancel] => [409] Active or closed loans cannot be cancelled."
+    auto: API
+
+  - id: LOAN-CAN-003
+    func: [F-LOAN-068]
+    sc: Cancelling an already-Cancelled loan succeeds again instead of being a no-op
+    t: A second cancel call on an already-Cancelled loan is accepted, duplicating history
+    src: ["PayrollLoanService.CancelCoreAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Idempotency]
+    cr: [CR-188]
+    steps:
+      - "[POST /api/payroll/loans/{id}/cancel?reason=First cancel] => [200] Status=Cancelled"
+      - "[POST /api/payroll/loans/{id}/cancel?reason=Second cancel] (same loan, already Cancelled) => [200] Status=Cancelled AGAIN (no Conflict/no-op returned)"
+      - "[Manual/DB] Query LoanHistories for the loan => TWO Cancelled rows exist, confirming CR-188"
+    auto: DB-assisted
+
+  - id: LOAN-CAN-004
+    func: [F-LOAN-069]
+    sc: Cancel requires a reason when the tenant's policy mandates it
+    t: A blank reason is Invalid when RequireReasonForCancellation is enabled
+    src: ["PayrollLoanService.CancelCoreAsync -> PayrollApprovalGuard.ValidateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Manual/DB] Enable PayrollControlConfiguration.RequireReasonForCancellation=true for Tenant A => policy row updated"
+      - "[POST /api/payroll/loans/{id}/cancel] reason omitted => [400] A cancellation reason is required."
+    auto: DB-assisted
+
+  - id: LOAN-CAN-005
+    func: [F-LOAN-069]
+    sc: Cancel blocks self-cancellation under a maker-checker policy
+    t: The original requester cannot cancel their own loan when RequireMakerChecker+PreventSelfApproval are enabled
+    src: ["PayrollLoanService.CancelCoreAsync -> PayrollApprovalGuard.ValidateAsync"]
+    type: Security
+    pri: P1
+    tags: [Security]
+    steps:
+      - "[Manual/DB] Enable PayrollControlConfiguration.RequireMakerChecker=true, PreventSelfApproval=true for Tenant A => policy row updated, maker-checker now enforced"
+      - "[POST /api/payroll/loans/{id}/cancel?reason=Changed mind] as the SAME requester user => [400] SelfApprovalNotAllowed: the user who created this payroll action cannot approve it."
+    auto: DB-assisted
+
+  - id: LOAN-CAN-006
+    func: [F-LOAN-070]
+    sc: A successful cancellation is recorded in history with the reason
+    t: Cancel appends a Cancelled LoanHistory row carrying the previous status and the supplied reason
+    src: ["PayrollLoanService.CancelCoreAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{id}/cancel?reason=Employee withdrew request] => [200] Status=Cancelled"
+      - "[Manual/DB] Query LoanHistories for the loan => one row EventType=Cancelled, Reason='Employee withdrew request'"
+    auto: DB-assisted
+
+  - id: LOAN-CAN-007
+    func: [F-LOAN-071]
+    sc: Cross-tenant cancel is NotFound
+    t: Cancelling a loan belonging to a different tenant returns NotFound
+    src: ["PayrollLoanService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[POST /api/payroll/loans/{tenantALoanId}/cancel] signed in as Tenant B HRAdmin => [404] Loan not found."
+    auto: API

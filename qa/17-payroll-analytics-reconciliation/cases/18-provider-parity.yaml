@@ -1,0 +1,101 @@
+sheet: PYA_Provider_Parity
+submodule: SQL Server / MySQL Provider Parity
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-PROV-001
+    func: [F-PYA-133]
+    sc: One shared acceptance helper, no provider-specific business branch
+    t: PayrollAnalyticsProviderAcceptance.RunAsync is called identically by both SqlServerPayrollAnalyticsIntegrationTests and MySqlPayrollAnalyticsIntegrationTests; a full-file grep of PayrollAnalyticsService.cs for provider-conditional branches (e.g. Database.IsSqlServer()/IsMySql()) returns zero matches
+    src: "PayrollAnalyticsProviderAcceptance.cs; PayrollAnalyticsService.cs (full-file grep)"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a (static source review)
+    perm: "n/a"
+    tenant: "n/a"
+    data: none
+    steps:
+      - "[Manual] grep Backend/HRMS.Application/Services/PayrollAnalyticsService.cs for 'IsSqlServer'/'IsMySql'/'DatabaseProviderType' => zero matches; both provider test classes call the identical PayrollAnalyticsProviderAcceptance.RunAsync helper"
+    auto: Manual only
+
+  - id: PYA-PROV-002
+    func: [F-PYA-134]
+    sc: Shared acceptance exercises the full surface against a real disposable SQL Server database, twice for repeatability
+    t: Running the shared helper against a disposable SQL Server database covers control create, pre/post generation, version-2 regeneration, finding list/acknowledge/resolve, run summary, control totals, department/cost-center summary, and all 4 CSV exports, then repeats against the same database
+    src: "SqlServerPayrollAnalyticsIntegrationTests; PayrollAnalyticsProviderAcceptance.RunAsync"
+    type: Positive
+    tags: [Integration-Concurrency]
+    pri: P0
+    sev: High
+    pre: "A disposable SQL Server test database is available via HRMS_SQLSERVER_TEST_CONNECTION (+ _SERVER/_AUTH)"
+    role: n/a (test harness, not an authenticated API caller)
+    perm: "n/a"
+    tenant: "n/a (ephemeral test tenant created by the harness)"
+    data: none
+    steps:
+      - "[dotnet test --filter FullyQualifiedName~SqlServerPayrollAnalyticsIntegrationTests] => PASS on first run against a fresh disposable database"
+      - "[dotnet test --filter FullyQualifiedName~SqlServerPayrollAnalyticsIntegrationTests --no-build] (second run, same database) => PASS, confirming same-database repeatability"
+    auto: DB-assisted
+    db: "Real disposable SQL Server database via HRMS_SQLSERVER_TEST_CONNECTION; referenced narratively per the qa/10-16 Payroll-phase precedent, not individually classified via ex:"
+
+  - id: PYA-PROV-003
+    func: [F-PYA-134]
+    sc: Shared acceptance against a real disposable MySQL database, twice for repeatability
+    t: The identical shared-helper coverage runs against a disposable MySQL database
+    src: "MySqlPayrollAnalyticsIntegrationTests; PayrollAnalyticsProviderAcceptance.RunAsync"
+    type: Positive
+    tags: [Integration-Concurrency]
+    pri: P0
+    sev: High
+    pre: "A disposable MySQL test database is available via HRMS_MYSQL_TEST_CONNECTION"
+    role: n/a (test harness)
+    perm: "n/a"
+    tenant: "n/a"
+    data: none
+    steps:
+      - "[dotnet test --filter FullyQualifiedName~MySqlPayrollAnalyticsIntegrationTests] => PASS; the test itself exercises PayrollAnalyticsProviderAcceptance.RunAsync twice against the same disposable database inside one test method"
+    auto: DB-assisted
+    db: "Real disposable MySQL database via HRMS_MYSQL_TEST_CONNECTION; referenced narratively per the qa/10-16 Payroll-phase precedent, not individually classified via ex:"
+
+  - id: PYA-PROV-004
+    func: [F-PYA-135]
+    sc: Both migration chains produce equivalent schemas with no pending model changes
+    t: SQL Server (20260922050332 + 20260922081107) and MySQL (20260922050406 + 20260922081130) migration pairs are both present, and EF reports no pending model changes for either provider
+    src: "Backend/HRMS.Infrastructure/Persistence/Migrations; Backend/HRMS.Infrastructure.MySqlMigrations/Migrations"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Both migration projects are up to date in the repository"
+    role: n/a (build/tooling check)
+    perm: "n/a"
+    tenant: "n/a"
+    data: none
+    steps:
+      - "[dotnet ef migrations has-pending-model-changes --context HrmsDbContext --project Backend/HRMS.Infrastructure --startup-project Backend/HRMS.API] => reports no pending changes"
+      - "[dotnet ef migrations has-pending-model-changes --context HrmsDbContext --project Backend/HRMS.Infrastructure.MySqlMigrations --startup-project Backend/HRMS.API] => reports no pending changes"
+    auto: DB-assisted
+
+  - id: PYA-PROV-005
+    func: [F-PYA-136]
+    sc: The MySQL binary(16) concurrency-token convention does not apply to any entity in this module, on either provider
+    t: Confirming CR-290's gap is provider-independent - MySqlConcurrencyTokenInterceptor/MySqlConcurrencyTokenGenerator have no effect on PayrollVarianceControl/PayrollReconciliation/PayrollReconciliationFinding/PayrollAnomalyFlag/PayrollAnalyticsSnapshot because none of them declare an EF concurrency token to begin with
+    src: "Backend/HRMS.Infrastructure/Persistence/MySqlConcurrencyTokenInterceptor.cs, MySqlConcurrencyTokenGenerator.cs; PayrollAnalyticsConfiguration.cs"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a (static source review)
+    perm: "n/a"
+    tenant: "n/a"
+    data: none
+    steps:
+      - "[Manual] read MySqlConcurrencyTokenInterceptor.cs's model-scanning logic and PayrollAnalyticsConfiguration.cs's 4 configurations together => the interceptor only acts on properties EF already knows are concurrency tokens (via IsConcurrencyToken()); since PayrollAnalyticsConfiguration.cs configures none, the interceptor has zero effect on this module's 5 entities under MySQL, exactly as it has zero effect under SQL Server"
+    auto: Manual only
+    cr: [CR-290]

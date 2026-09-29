@@ -1,0 +1,214 @@
+sheet: Employee_Address
+submodule: Contact Details and Address (Current / Permanent)
+defaults:
+  role: HR_ADMIN
+  perm: Employee.Edit
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (Employee.View, Employee.Edit); employee EMP-CA-001 already exists."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: EMP-CA-001
+    func: [F-EMP-041]
+    sc: Read and upsert the Contact record (one row per employee)
+    t: PUT creates the Contact row on first call and updates the same row on subsequent calls
+    src: ["EmployeeContactService.GetAsync/UpsertAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/employees/{id}/contact] Before any Contact write => [200] fields fall back to legacy Employee.Email/Phone"
+      - "[PUT /api/employees/{id}/contact] officialEmail, personalEmail, officialPhone, personalPhone, emergencyNumber => [200] Contact row created"
+      - "[PUT /api/employees/{id}/contact] Change officialPhone only => [200] the same row is updated, not a second row created"
+    auto: API
+
+  - id: EMP-CA-002
+    func: [F-EMP-042]
+    sc: Official/personal/alternate email are validated as well-formed only when supplied
+    t: A malformed email in any of the three fields is rejected; all three are optional
+    src: ["EmployeeContactRequestValidator"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/contact] officialEmail='not-an-email' => [400] invalid email format"
+      - "[PUT /api/employees/{id}/contact] personalEmail and alternateEmail both omitted => [200] accepted"
+    auto: API
+
+  - id: EMP-CA-003
+    func: [F-EMP-043]
+    sc: Official email must be unique within the tenant, case-insensitively, and mirrors onto Employee.Email
+    t: Setting an official email already used by another employee is a 409; a successful save mirrors it onto the legacy column
+    src: ["EmployeeContactService.OfficialEmailIsInUseAsync"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    smoke: true
+    steps:
+      - "[PUT /api/employees/{id}/contact] officialEmail already used by ANOTHER employee, different case => [409] 'An employee with that official email already exists.'"
+      - "[PUT /api/employees/{id}/contact] officialEmail='new.unique@corp.test' => [200] accepted"
+      - "[GET /api/employees/{id}] Call => [200] email='new.unique@corp.test' (legacy column mirrored)"
+    auto: API
+    ex: ["xU:EmployeeContactSynchronizationTests.Contact_rejects_an_official_email_used_by_another_employee"]
+
+  - id: EMP-CA-004
+    func: [F-EMP-044]
+    sc: A placeholder email from Personal-Details create is never leaked to the client
+    t: Before any real Contact/email is set, GET falls back to the legacy Employee.Email, but a placeholder ('emp-{guid}@placeholder.local') is reported as null
+    src: ["EmployeeContactService.GetRealEmployeeEmail"]
+    type: Positive
+    tags: [Security]
+    pri: P1
+    pre: "Employee was created via POST /api/employees/personal-details (placeholder email assigned internally)."
+    steps:
+      - "[GET /api/employees/{id}/contact] Call => [200] officialEmail is null, not the internal placeholder string"
+    auto: API
+    ex: ["xU:EmployeeContactSynchronizationTests.Get_uses_legacy_employee_values_when_the_contact_row_does_not_exist"]
+
+  - id: EMP-CA-005
+    func: [F-EMP-045]
+    sc: Phone fields are free text up to 30 characters with no format check
+    t: Any string up to 30 characters is accepted for official/personal/emergency phone
+    src: ["EmployeeContactRequestValidator"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[PUT /api/employees/{id}/contact] officialPhone='+1 (555) ext.123' => [200] accepted"
+      - "[PUT /api/employees/{id}/contact] officialPhone 31 characters => [400] max length exceeded"
+    auto: API
+
+  - id: EMP-CA-006
+    func: [F-EMP-046]
+    sc: A legacy employee's phone is preserved as the initial official phone the first time a Contact row is created
+    t: Creating the Contact row for the first time, without supplying officialPhone, keeps the legacy Employee.Phone value
+    src: ["EmployeeContactService.UpsertAsync ('officialPhone ??= Normalize(employee.Phone)')"]
+    type: Positive
+    pri: P2
+    pre: "Employee was created via the legacy full path with Phone='9998887777'; no Contact row exists yet."
+    steps:
+      - "[PUT /api/employees/{id}/contact] officialPhone omitted, other fields supplied => [200] accepted"
+      - "[GET /api/employees/{id}/contact] Call => [200] officialPhone='9998887777' (carried over from the legacy column)"
+    auto: API
+    ex: ["xU:EmployeeContactSynchronizationTests.Legacy_employee_create_and_edit_keep_the_contact_record_synchronized"]
+
+  - id: EMP-CA-007
+    func: [F-EMP-047]
+    sc: Contact GET/PUT on a cross-tenant employee id is a 404
+    t: Tenant B's token against Tenant A's employee id is not found
+    src: ["EmployeeContactService (tenant-filtered)"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[GET /api/employees/{Tenant A id}/contact] As Tenant B => [404] Not Found"
+      - "[PUT /api/employees/{Tenant A id}/contact] As Tenant B => [404] Not Found"
+    auto: API
+    ex: ["xU:EmployeeContactSynchronizationTests.Contact_cannot_read_or_update_another_tenants_employee"]
+
+  - id: EMP-CA-008
+    func: [F-EMP-048]
+    sc: At most two addresses per employee - Current and Permanent - each upserted independently
+    t: Posting Current then Permanent creates two distinct rows; re-posting Current again replaces the same row rather than creating a third
+    src: ["EmployeeAddressService.UpsertAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employees/{id}/addresses] addressType=Current, addressLine1='12 Main St' => [200] Current row created"
+      - "[POST /api/employees/{id}/addresses] addressType=Permanent, addressLine1='9 Other Rd' => [200] Permanent row created"
+      - "[GET /api/employees/{id}/addresses] Call => [200] exactly 2 rows: one Current, one Permanent"
+      - "[POST /api/employees/{id}/addresses] addressType=Current, addressLine1='12 Main St, Apt 2' => [200] the SAME Current row is replaced in place, still 2 rows total"
+    auto: API
+
+  - id: EMP-CA-009
+    func: [F-EMP-049]
+    sc: Address fields are free text with only length caps, no cascading/master validation
+    t: Country/State/District/City accept any string up to 100 chars, ZipCode up to 20, address lines up to 500; there is no reference-table check
+    src: ["EmployeeAddressRequestValidator"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/addresses] addressType=Current, country='Narnia' (not a real country) => [200] accepted - no master-list validation"
+      - "[POST /api/employees/{id}/addresses] city 101 characters => [400] max length exceeded"
+      - "[POST /api/employees/{id}/addresses] zipCode 21 characters => [400] max length exceeded"
+    auto: API
+    cr: [CR-61]
+
+  - id: EMP-CA-010
+    func: [F-EMP-050]
+    sc: Address delete is a hard delete; re-adding the same type afterward creates a fresh row
+    t: DELETE removes the row entirely, and a subsequent POST of the same type is a fresh insert, not a resurrect
+    src: ["EmployeeAddressService.DeleteAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[DELETE /api/employees/{id}/addresses/{addressId}] Delete the Permanent address => [200] removed"
+      - "[GET /api/employees/{id}/addresses] Call => [200] only the Current row remains"
+      - "[POST /api/employees/{id}/addresses] addressType=Permanent again => [200] a brand-new Permanent row is created"
+    auto: API
+
+  - id: EMP-CA-011
+    func: [F-EMP-051]
+    sc: "'Same as Current' is a plain persisted flag with no server-side copy effect"
+    t: Setting SameAsCurrentAddress=true on Contact does not, by itself, alter the Permanent address row
+    src: ["EmployeeContactService.UpsertAsync (flag stored verbatim, never read by EmployeeAddressService)"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    pre: "Current and Permanent addresses already differ."
+    steps:
+      - "[PUT /api/employees/{id}/contact] sameAsCurrentAddress=true, no address fields in this call => [200] accepted"
+      - "[GET /api/employees/{id}/addresses] Call => [200] Permanent is STILL DIFFERENT from Current - the flag alone did not copy anything"
+    auto: API
+    cr: [CR-61]
+
+  - id: EMP-CA-012
+    func: [F-EMP-052]
+    sc: Address GET/POST/DELETE on a cross-tenant employee id is a 404
+    t: Tenant isolation applies to every address action
+    src: ["EmployeeAddressService (EmployeeExistsAsync tenant-filtered)"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[GET /api/employees/{Tenant A id}/addresses] As Tenant B => [404] Not Found"
+      - "[POST /api/employees/{Tenant A id}/addresses] As Tenant B => [404] Not Found"
+      - "[DELETE /api/employees/{Tenant A id}/addresses/{addressId}] As Tenant B => [404] Not Found"
+    auto: API
+
+  - id: EMP-CA-013
+    func: [F-EMP-053]
+    sc: Deleting a nonexistent or wrong-employee address id is a 404, not a silent success
+    t: An addressId that does not exist, or belongs to a different employee, is not found
+    src: ["EmployeeAddressService.DeleteAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[DELETE /api/employees/{id}/addresses/{random guid}] Call => [404] Not Found"
+      - "[DELETE /api/employees/{id}/addresses/{addressId belonging to a different employee}] Call => [404] Not Found"
+    auto: API
+
+  - id: EMP-CA-014
+    func: [F-EMP-054]
+    sc: An address delete race is a handled Conflict, not a raw DbUpdateException
+    t: If a delete collides with a concurrent referencing write, the API returns 409, never a 500
+    src: ["EmployeeAddressService.DeleteAsync (catch DbUpdateException)"]
+    type: Integration-Concurrency
+    pri: P3
+    steps:
+      - "[DELETE /api/employees/{id}/addresses/{addressId}] Simulated FK-referencing race => [409] 'This address record is still referenced and cannot be deleted.'"
+    auto: API
+
+  - id: EMP-CA-015
+    func: [F-EMP-048]
+    sc: A concurrent double-create for the same (employee, AddressType) is handled, not a raw 500
+    t: Two simultaneous first-ever POSTs for the same type either both succeed into one row (last-write-wins) or the loser gets a handled Conflict - never an unhandled exception
+    src: ["EmployeeAddressService.UpsertAsync", "EmployeeAddressConfiguration (TenantId, EmployeeId, AddressType) unique index"]
+    type: Integration-Concurrency
+    pri: P2
+    steps:
+      - "[POST /api/employees/{id}/addresses] Two concurrent Current-type inserts for the same brand-new employee => neither response is a 500; the result is either two successful upserts converging on one row, or one success plus one handled error"
+    auto: API
+    cr: [CR-65]

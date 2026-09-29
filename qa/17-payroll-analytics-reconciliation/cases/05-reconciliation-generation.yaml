@@ -1,0 +1,231 @@
+sheet: PYA_Reconciliation_Generation
+submodule: Reconciliation Generation (Pre/Post-Payroll Core)
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-RECGEN-001
+    func: [F-PYA-035, F-PYA-038]
+    sc: Pre-payroll generation happy path, first version
+    t: Generating a pre-payroll reconciliation for a run with no prior reconciliation of that type creates version 1
+    src: "PayrollReconciliationController.Pre; PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Positive
+    tags: []
+    pri: P0
+    sev: High
+    pre: "RUN1 (Calculated) has 3 persisted Calculated PayrollResults and no prior PrePayroll reconciliation"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/pre] => [200] response has Version=1, Type=PrePayroll, Status=Generated"
+    auto: API
+
+  - id: PYA-RECGEN-002
+    func: [F-PYA-036]
+    sc: Pre-payroll with zero persisted results
+    t: A run with zero persisted PayrollResults generates a reconciliation with exactly one Critical, BlockApproval-tagged NoPayrollResults finding
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: High
+    pre: "RUN2 (Draft) has zero persisted PayrollResults"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN2"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN2}/pre] => [200] response's Findings has exactly 1 entry: ControlCode=NoPayrollResults, Severity=Critical, Action=BlockApproval"
+    auto: API
+
+  - id: PYA-RECGEN-003
+    func: [F-PYA-037]
+    sc: Every generation call writes exactly one matching PayrollAnalyticsSnapshot
+    t: A single pre-payroll generation call inserts exactly 1 PayrollAnalyticsSnapshot row at DataVersion=1, capturing the run's persisted totals
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 from PYA-RECGEN-001"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/pre] => [200] "
+      - "[DB] query PayrollAnalyticsSnapshots for PayrollRunId=RUN1, SnapshotType=PrePayroll => exactly 1 row, DataVersion=1"
+    auto: DB-assisted
+    db: "Assert exactly 1 matching PayrollAnalyticsSnapshots row"
+
+  - id: PYA-RECGEN-004
+    func: [F-PYA-038]
+    sc: Generation requires the run to resolve for the caller's tenant, before any write
+    t: Generating a reconciliation for a run belonging to a different tenant returns NotFound and writes nothing
+    src: "PayrollAnalyticsService.LoadRunAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "RUN-T2 exists under Tenant T2 (DEMO02)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate, tenant T1)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-T2"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN-T2}/pre] (authenticated to T1) => [404] Payroll run not found"
+    auto: DB-assisted
+    db: "Assert zero PayrollReconciliations/PayrollAnalyticsSnapshots rows were written for RUN-T2 as a result of this call"
+
+  - id: PYA-RECGEN-005
+    func: [F-PYA-039]
+    sc: Post-payroll equation mismatch
+    t: A run whose persisted Gross - Deductions <> Net raises a Critical PayrollEquationMismatch finding
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "RUN3 has a persisted PayrollResult with GrossEarnings=1000, TotalDeductions=100, but NetPay incorrectly persisted as 950 (should be 900)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN3"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN3}/post] => [200] Findings contains ControlCode=PayrollEquationMismatch, Severity=Critical, Difference=-50"
+    auto: DB-assisted
+    db: "Seed the mismatched PayrollResult directly to bypass normal calculation validation"
+
+  - id: PYA-RECGEN-006
+    func: [F-PYA-040]
+    sc: Negative net pay raises a per-employee finding and creates an anomaly flag
+    t: An employee with persisted NetPay < 0 raises a Critical NegativeNetPay finding tagged to that employee and creates a matching Open PayrollAnomalyFlag
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "RUN4 has employee E20 with persisted NetPay=-200"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN4"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN4}/post] => [200] Findings contains ControlCode=NegativeNetPay, EmployeeId=E20, ActualValue=-200"
+      - "[DB] query PayrollAnomalyFlags for PayrollRunId=RUN4, EmployeeId=E20, AnomalyType=NegativeNetPay, Status=Open => exactly 1 row"
+    auto: DB-assisted
+    db: "Assert 1 Open NegativeNetPay anomaly flag row for E20"
+
+  - id: PYA-RECGEN-007
+    func: [F-PYA-040]
+    sc: Regenerating post-payroll on the same negative-net-pay condition does not duplicate the anomaly flag
+    t: A second post-payroll generation for the same still-negative-net-pay employee reuses the existing Open anomaly flag rather than inserting a second one
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN4 from PYA-RECGEN-006, one post-payroll reconciliation already generated"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN4"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN4}/post] (second call) => [200] Version=2"
+      - "[DB] query PayrollAnomalyFlags for the same run/employee/type => still exactly 1 Open row, not 2"
+    auto: DB-assisted
+    db: "Assert PayrollAnomalyFlags count unchanged after the second generation"
+
+  - id: PYA-RECGEN-008
+    func: [F-PYA-041]
+    sc: Zero net pay across the whole run raises one run-level warning and one anomaly flag
+    t: A run whose total persisted Net is exactly 0 (with at least one result) raises exactly one run-level Warning ZeroNetPay finding, not one per employee
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN5 has 2 employees whose NetPay values are +100 and -100 (run total Net=0)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN5"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN5}/post] => [200] Findings contains exactly 1 ZeroNetPay finding (Severity=Warning, EmployeeId=null) alongside the NegativeNetPay finding for the -100 employee"
+    auto: DB-assisted
+    db: "Assert exactly 1 Open ZeroNetPay anomaly flag row for the run (EmployeeId null)"
+
+  - id: PYA-RECGEN-009
+    func: [F-PYA-042]
+    sc: Out-of-window and inactive controls are silently skipped
+    t: A PayrollRun-scoped control whose EffectiveTo has already passed, and a separate control with IsActive=false, are both excluded from evaluation even though their thresholds would otherwise be breached
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "RUN6 (Gross=50000) has 2 PayrollRun-scoped GrossPay controls with AbsoluteThreshold=1: CTRL-EXPIRED (EffectiveTo=2020-01-01) and CTRL-INACTIVE (IsActive=false)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN6"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN6}/post] => [200] Findings does NOT contain a CTRL-EXPIRED or CTRL-INACTIVE finding, despite Gross=50000 vastly exceeding both thresholds"
+    auto: API
+
+  - id: PYA-RECGEN-010
+    func: [F-PYA-043]
+    sc: A matching, in-window control raises a finding tagged with its own metadata
+    t: A PayrollRun-scoped, active, in-window GrossPay control with a breached AbsoluteThreshold raises a finding carrying the control's own Code/Severity/Action/Metric
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Positive
+    tags: []
+    pri: P0
+    sev: High
+    pre: "RUN7 (Gross=50000) has an active, in-window GrossPay control CTRL-GROSS-LIMIT, AbsoluteThreshold=1, Severity=Critical, Action=RequireAcknowledgement"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN7"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN7}/post] => [200] Findings contains ControlCode=CTRL-GROSS-LIMIT, Severity=Critical, Action=RequireAcknowledgement, Metric=GrossPay, ActualValue=50000"
+    auto: API
+
+  - id: PYA-RECGEN-011
+    func: [F-PYA-042]
+    sc: A control restricted to a different RunType is skipped
+    t: A control with AppliesToRunType=OffCycle is not evaluated when generating a reconciliation for a Regular run, even if in-window/active/threshold-breached
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN8 (RunType=Regular, Gross=50000) has an active control CTRL-OFFCYCLE-ONLY with AppliesToRunType=OffCycle and AbsoluteThreshold=1"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN8"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN8}/post] => [200] Findings does NOT contain CTRL-OFFCYCLE-ONLY"
+    auto: API
+
+  - id: PYA-RECGEN-012
+    func: [F-PYA-039]
+    sc: Exact persisted equation reconciles cleanly
+    t: A run whose persisted Gross - Deductions = Net exactly for every employee raises zero PayrollEquationMismatch findings
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 from PYA-RECGEN-001 (well-formed persisted results)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] => [200] Findings does not contain PayrollEquationMismatch"
+    auto: API

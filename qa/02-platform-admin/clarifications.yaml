@@ -1,0 +1,90 @@
+# Clarification / QA-Risk register for Module 2. None of these are confirmed defects. Each is exposed by
+# one or more test cases (`cr: [CR-xx]`). `classification` starts "Open - awaiting decision".
+clarifications:
+  - id: CR-14
+    title: "(Cross-module pointer) Access tokens remain valid after logout, deactivation or permission revocation until they expire"
+    observation: >
+      Defined in full in qa/01-authentication/clarifications.yaml. Referenced here because
+      PLAT-STATUS-006 shows the same class of stale-access-token exposure occurs when a PLATFORM OPERATOR
+      deactivates an entire tenant, not only when a user changes their own password or a role is revoked.
+    risk: "See qa/01-authentication/clarifications.yaml CR-14. The tenant-deactivation angle adds: an operator who deactivates a tenant for cause (e.g. suspected compromise, non-payment) may reasonably expect that action alone to end active sessions immediately."
+    source: "Backend/HRMS.Infrastructure/Persistence/PlatformTenantService.cs (SetStatusAsync); qa/01-authentication/clarifications.yaml#CR-14"
+    classification: Open - awaiting decision
+
+  - id: CR-21
+    title: TenantCode's two validation layers disagree on allowed characters
+    observation: >
+      CreatePlatformTenantRequestValidator accepts TenantCode matching ^[A-Za-z0-9_-]{2,20}$ (letters,
+      digits, underscore, hyphen). PlatformTenantService.ValidateNormalizedValues then separately rejects
+      any TenantCode containing a character that is not a letter or digit - so '_' and '-', which the
+      validator calls shape-valid, are rejected at the service layer with a different error message.
+    risk: A client that follows the validator's documented/inferred shape (e.g. from the regex or a generated client) can still be rejected one layer deeper with a differently-worded error, which is confusing but not unsafe.
+    source: "Backend/HRMS.Application/Validators/PlatformTenants/CreatePlatformTenantRequestValidator.cs; Backend/HRMS.Infrastructure/Persistence/PlatformTenantService.cs (ValidateNormalizedValues)"
+    classification: Open - awaiting decision
+
+  - id: CR-22
+    title: Create does not reject the reserved platform host; Update does
+    observation: >
+      PlatformTenantService.UpdateInactiveAsync calls IsReservedPlatformHost(host) and refuses the
+      platform's own configured host (e.g. platform.localhost). PlatformTenantService.CreateAsync performs
+      no equivalent check, so a tenant can be created with that host.
+    risk: >
+      Not a security breach - PlatformRequestRoutingMiddleware still intercepts that host for platform
+      routing before any tenant resolution can reach the new row - but it silently wastes a tenant slot and
+      produces a tenant that can never be reached at its own host, which will look like a provisioning bug
+      to whoever creates it.
+    source: "Backend/HRMS.Infrastructure/Persistence/PlatformTenantService.cs (CreateAsync vs UpdateInactiveAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-23
+    title: Generated temporary passwords are not guaranteed to satisfy the tenant password policy's character-class rule
+    observation: >
+      PlatformTenantService.GenerateTemporaryPassword base64-encodes 24 random bytes (with '+'/'/' mapped to
+      'x'/'y'). Base64 output is not guaranteed to contain at least one upper-case letter, one lower-case
+      letter and one digit, which PasswordPolicy.IsValid (used by change-password and reset-password
+      elsewhere) requires. It is unclear whether anything downstream re-validates the temporary password
+      against that policy, or whether it matters because the user is expected to change it immediately.
+    risk: A generated temporary password could, in a small fraction of cases, be a shape a later password-policy check would itself reject if resubmitted unchanged, or could simply be weaker than the policy intends for a brand-new administrator account.
+    source: "Backend/HRMS.Infrastructure/Persistence/PlatformTenantService.cs (GenerateTemporaryPassword); Backend/HRMS.Application/Validators/Auth/SetPasswordRequestValidator.cs (PasswordPolicy)"
+    classification: Open - awaiting decision
+
+  - id: CR-24
+    title: Update tenant metadata has no tenant-status guard at all
+    observation: >
+      PlatformTenantService.UpdateInactiveAsync applies no check on tenant.Status before allowing an edit -
+      not even the Suspended guard that SetStatusAsync (Activate/Deactivate) explicitly enforces.
+    risk: A tenant's name/host/contact details can be edited while it is Suspended, which may be inconsistent with the intent of a suspension.
+    source: "Backend/HRMS.Infrastructure/Persistence/PlatformTenantService.cs (UpdateInactiveAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-25
+    title: TenantStatus.Suspended is defined and guarded against, but no code path ever sets it
+    observation: >
+      SetStatusAsync explicitly refuses to change status when tenant.Status == Suspended, citing "the
+      existing suspension workflow." A repository-wide search finds no endpoint, service, or scheduled job
+      that ever assigns TenantStatus.Suspended. The frontend even offers a "Suspended" filter option with no
+      way to produce a tenant in that state.
+    risk: Either a deferred feature whose guard was added in anticipation, or dead code/UI referencing a workflow that does not exist yet; either way, Suspended is currently unreachable and unrecoverable through this product.
+    source: "Backend/HRMS.Infrastructure/Persistence/PlatformTenantService.cs (SetStatusAsync); Backend/HRMS.Domain/Enums/TenantStatus.cs; Frontend/HRMS.Web/src/pages/platform/PlatformTenantsPage.tsx (status filter)"
+    classification: Open - awaiting decision
+
+  - id: CR-26
+    title: Retry-provisioning enforces the Development host format unconditionally
+    observation: >
+      PlatformTenantService.CreateAsync passes _environment.IsDevelopment() as the developmentHostRequired
+      flag to ValidateNormalizedValues. PlatformTenantService.RetryProvisioningAsync passes a hardcoded
+      `true` instead, regardless of the actual hosting environment.
+    risk: A legitimately non-Development-hosted tenant (a normal production-style domain) whose onboarding fails cannot be retried through this endpoint at all, because its real host will never match the <workspace>.localhost pattern that retry demands.
+    source: "Backend/HRMS.Infrastructure/Persistence/PlatformTenantService.cs (RetryProvisioningAsync vs CreateAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-27
+    title: Tenant administrator password reset does not revoke existing refresh tokens
+    observation: >
+      PlatformTenantService.ResetTenantAdminPasswordAsync changes only the target user's PasswordHash. It
+      does not touch RefreshTokens, unlike PasswordRecoveryService.ChangePasswordAsync and
+      .ResetPasswordAsync (Module 1), both of which explicitly revoke every active refresh token for the
+      affected user as part of a password change.
+    risk: If an attacker already holds a valid (not-yet-expired, not-yet-rotated) refresh token for the reset administrator account, a platform-operator-initiated password reset does not itself cut off that session; only the password is changed.
+    source: "Backend/HRMS.Infrastructure/Persistence/PlatformTenantService.cs (ResetTenantAdminPasswordAsync) vs Backend/HRMS.Application/Services/PasswordRecoveryService.cs"
+    classification: Open - awaiting decision

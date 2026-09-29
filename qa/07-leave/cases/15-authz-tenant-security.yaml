@@ -1,0 +1,346 @@
+sheet: Leave_Security
+submodule: Permission matrix, Self/Manager/Scoped/Tenant-wide access matrix, the CR-77 third scope mechanism, CR-53 separated-employee confirmation, CR-66 privilege-escalation cross-reference, and consolidated tenant isolation
+defaults:
+  role: TENANT_ADMIN
+  perm: "n/a"
+  tenant: A
+  pre: "Tenant A signed in; roles/permissions per case."
+  data: "n/a unless stated."
+  sev: Critical
+  reg: true
+
+cases:
+  - id: LEAVE-AUTHZ-001
+    func: [F-LEAVE-275]
+    sc: The full permission inventory is source-verified against Permissions.cs and SeedData
+    t: Every Leave.* and Attendance.CompOff.* permission maps to at least one controller action, except the one deliberate gap
+    src: ["Domain/Authorization/Permissions.cs"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Manual] Cross-check Permissions.Leave (17 entries) and Permissions.Attendance.CompOff (6 entries) against every [HasPermission] attribute across the 13 controllers => [Pass] every permission is referenced by at least one action EXCEPT CompOffController.Operations, which has none (CR-82); LeaveBalance.View/BalanceAdjust and Attendance.CompOff.ViewHistory are referenced by NO action anywhere (CR-80)"
+    auto: Manual only
+    cr: [CR-80, CR-82]
+
+  - id: LEAVE-AUTHZ-002
+    func: [F-LEAVE-276]
+    sc: No bearer token is rejected 401 on every Leave/CompOff surface
+    t: Unauthenticated calls fail before any permission check
+    src: ["HasPermissionAttribute"]
+    type: Authorization
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/leave-requests] No Authorization header => [401]"
+      - "[GET /api/attendance/comp-off/operations] No Authorization header => [401] - even this endpoint's own missing HasPermission attribute does not bypass the base [Authorize]"
+    auto: API
+
+  - id: LEAVE-AUTHZ-003
+    func: [F-LEAVE-277]
+    sc: Wrong permission is 403, never 404 (except the one deliberate GetById exception)
+    t: Existence of an endpoint is never hidden by a permission failure
+    src: ["HasPermissionAttribute"]
+    type: Authorization
+    pri: P0
+    role: EMPLOYEE
+    steps:
+      - "[POST /api/leave-types] As Employee (holds Leave.TypeViewAvailable, not TypeManage) => [403]"
+      - "[POST /api/leave-policies/{policyId}/versions/{versionId}/publish] As Employee => [403]"
+    auto: API
+
+  - id: LEAVE-AUTHZ-004
+    func: [F-LEAVE-278]
+    sc: Direct API invocation is enforced identically to what the UI would show
+    t: An HRAdmin session hand-crafting a POST directly (bypassing the read-only-rendered UI) still gets 403 for capabilities it lacks
+    src: ["HasPermissionAttribute"]
+    type: Security
+    pri: P1
+    role: HRADMIN
+    steps:
+      - "[POST /api/leave-policies] Direct API call as HRAdmin, who holds no Leave.PolicyManage => [403] identical to what a hidden/disabled Create button would have prevented in the UI - server-side enforcement does not depend on the UI's own state"
+    auto: API
+    cr: [CR-78, CR-88]
+
+  - id: LEAVE-AUTHZ-005
+    func: [F-LEAVE-279]
+    sc: Employee self-scope has no cross-employee route at all
+    t: Every self-service Leave action operates purely off the caller's own resolved identity, with no employeeId parameter to redirect
+    src: ["LeaveRequestReadService", "LeaveBalanceSummaryReader"]
+    type: Contract
+    pri: P1
+    role: EMPLOYEE
+    steps:
+      - "[GET /api/leave-requests] => [200] always the caller's OWN requests - route accepts no employeeId"
+      - "[GET /api/leave-balances/mine] => [200] always the caller's OWN balance"
+    auto: API
+
+  - id: LEAVE-AUTHZ-006
+    func: [F-LEAVE-280]
+    sc: Manager scope (CR-77) applies to Approvals and Calendar but never to Reports/Dashboard
+    t: includeManager is true for Approve/Calendar call sites and false for Reports/Dashboard
+    src: ["LeaveAuthorizationService.BuildEmployeePredicateAsync"]
+    type: Contract
+    pri: P0
+    role: MANAGER
+    steps:
+      - "[GET /api/leave-approvals] As a Manager with a direct report's Pending request => [200] the direct report's request IS included"
+      - "[GET /api/leave-reports/requests] Same Manager, holding Leave.ReportsView via a custom role but no matching role-scope => [200] the SAME direct report's request is NOT included - includeManager is false here"
+    auto: API
+    cr: [CR-77]
+
+  - id: LEAVE-AUTHZ-007
+    func: [F-LEAVE-281]
+    sc: HRBP role-scope is the one mechanism common to every Leave read surface
+    t: An HRBP scoped to Department=Engineering sees Engineering employees consistently across Approvals, Calendar, Dashboard, and Reports
+    src: ["LeaveAuthorizationService.BuildEmployeePredicateAsync (includeRoleScope: true everywhere)"]
+    type: Positive
+    pri: P1
+    role: HRBP
+    steps:
+      - "[GET /api/leave-approvals] As HRBP scoped to Engineering => [200] Engineering employees' pending requests appear"
+      - "[GET /api/leave-calendar?from=&to=] Same HRBP => [200] Engineering employees' events appear"
+      - "[GET /api/leave-dashboard/hr-summary] Same HRBP (if also holding DashboardViewAll) => [200] numbers reflect only Engineering"
+      - "[GET /api/leave-reports/requests] Same HRBP (if also holding ReportsView) => [200] rows reflect only Engineering"
+    auto: API
+
+  - id: LEAVE-AUTHZ-008
+    func: [F-LEAVE-282]
+    sc: ERO cannot reach any Leave surface at all in the seeded matrix
+    t: EmployeeRelationshipOfficer holds none of Leave.Approve/DashboardViewAll/ReportsView
+    src: ["SeedData.RolePermissionMap[EmployeeRelationshipOfficer]"]
+    type: Authorization
+    pri: P1
+    role: ERO
+    steps:
+      - "[GET /api/leave-approvals] As ERO, regardless of any RoleScopeResolver scope held => [403]"
+      - "[GET /api/leave-dashboard/hr-summary] As ERO => [403]"
+      - "[GET /api/leave-reports/requests] As ERO => [403]"
+    auto: API
+
+  - id: LEAVE-AUTHZ-009
+    func: [F-LEAVE-283]
+    sc: HRAdmin is tenant-wide but only for a partial slice of Leave capability
+    t: HRAdmin sees the full tenant on Dashboard/Reports but cannot approve, configure, or import
+    src: ["SeedData.RolePermissionMap[HRAdmin]"]
+    type: Authorization
+    pri: P1
+    role: HRADMIN
+    steps:
+      - "[GET /api/leave-dashboard/hr-summary] As HRAdmin => [200] full unscoped tenant"
+      - "[POST /api/leave-requests/{id}/approve] As HRAdmin => [403] no Leave.Approve"
+      - "[POST /api/leave-policies] As HRAdmin => [403] no Leave.PolicyManage"
+    auto: API
+    cr: [CR-78]
+
+  - id: LEAVE-AUTHZ-010
+    func: [F-LEAVE-284]
+    sc: SuperAdmin/TenantAdmin are the only two roles with zero Leave scope narrowing
+    t: Both roles reach every Leave endpoint with the full tenant in view, no HRBP/manager-style narrowing applies
+    src: ["SeedData.RolePermissionMap[SuperAdmin]/[TenantAdmin]"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/leave-approvals] As TenantAdmin => [200] every PendingApproval request in the tenant, not just direct reports"
+      - "[POST /api/leave-balances/import/{batchId}/commit] As TenantAdmin => [200]"
+    auto: API
+
+  - id: LEAVE-AUTHZ-011
+    func: [F-LEAVE-285]
+    sc: CR-77 mechanism proof - zero-scope manager approval works via employment history alone
+    t: A Leave.Approve assignment with NO UserRoleAssignmentScope rows still authorizes approval for the caller's current direct reports
+    src: ["LeaveAuthorizationService.CanAccessEmployeeAsync"]
+    type: Contract
+    pri: P0
+    role: MANAGER
+    steps:
+      - "[GET /api/role-assignments/users/{managerUserId}] => [200] scopes=[] for this Manager-role assignment - confirming zero UserRoleAssignmentScope rows"
+      - "[POST /api/leave-requests/{directReportsRequestId}/approve] => [200] Approved anyway - the manager path is resolved directly off EmployeeEmploymentHistory.ManagerId, entirely independent of RoleScopeResolver"
+    auto: API
+    cr: [CR-77, CR-57]
+
+  - id: LEAVE-AUTHZ-012
+    func: [F-LEAVE-286]
+    sc: CR-77 mechanism proof - the manager path never inspects which ROLE granted Leave.Approve
+    t: An HRBP who happens to be someone's current manager (per EmployeeEmploymentHistory) is authorized via the SAME manager-relationship check as an actual Manager-role holder
+    src: ["LeaveAuthorizationService.CanAccessEmployeeAsync"]
+    type: Contract
+    pri: P1
+    role: HRBP
+    steps:
+      - "[Setup] Grant HRBP (not Manager) to a user, and separately name that same user's EmployeeId as ManagerId on a direct report's employment history => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/{directReportsRequestId}/approve] As this HRBP-only account => [200] Approved via the manager-relationship path - LeaveAuthorizationService never checks for RoleNames.Manager specifically, only the Leave.Approve permission name plus the EmploymentHistory.ManagerId column"
+    auto: API
+    cr: [CR-77]
+
+  - id: LEAVE-AUTHZ-013
+    func: [F-LEAVE-287]
+    sc: A Manager+HRBP combination is authorized under the union of both mechanisms
+    t: The same account approves a direct report via the manager path AND an unrelated in-scope employee via the role-scope path, in one BuildEmployeePredicateAsync call
+    src: ["LeaveAuthorizationService.BuildEmployeePredicateAsync"]
+    type: Contract
+    pri: P1
+    role: MANAGER
+    steps:
+      - "[Setup] Account holds Manager (direct report: Employee X) PLUS HRBP scoped to Department=Finance (in-scope, unrelated: Employee Y in Finance) => test preconditions are established for the steps below"
+      - "[GET /api/leave-approvals] => [200] inbox includes BOTH Employee X's (manager path) and Employee Y's (role-scope path) pending requests, in one OR'd predicate"
+    auto: API
+    cr: [CR-77]
+
+  - id: LEAVE-AUTHZ-014
+    func: [F-LEAVE-288]
+    sc: The legacy (no-authorization-service) fallback has no role-scope fallback at all
+    t: Constructing the approval/inbox services without ILeaveAuthorizationService means only the exact current direct manager is authorized, never an HRBP/SuperHR
+    src: ["LeaveApprovalReadService.GetInboxAsync (legacy else-branch)"]
+    type: Contract
+    pri: P1
+    role: HRBP
+    steps:
+      - "[Manual/DB] Construct LeaveApprovalReadService/LeaveRequestApprovalService without ILeaveAuthorizationService (legacy path), as an HRBP scoped to the employee's own Department => [Pass] this HRBP has ZERO authorization to approve or see this employee's request under the legacy path - only the exact current manager can, confirming the legacy path's narrower behavior"
+    auto: DB-assisted
+    cr: [CR-77]
+
+  - id: LEAVE-AUTHZ-015
+    func: [F-LEAVE-289]
+    sc: CR-53 - a separated employee's account keeps Leave.RequestCreate and a Linked identity
+    t: GET /api/auth/me still reports EmployeeIdentity.Status=Linked with EmploymentEligibility=Separated after termination
+    src: ["AuthService.GetCurrentUserAsync"]
+    type: Contract
+    pri: P0
+    steps:
+      - "[Setup] Employee's Employment History records a Terminated/Resigned status change effective yesterday => test preconditions are established for the steps below"
+      - "[GET /api/auth/me] As this employee's still-active account => [200] employeeIdentity.status='Linked', employmentEligibility='Separated'; permissions still include Leave.RequestCreate/RequestViewOwn/BalanceViewOwn - RBAC has not revoked anything"
+    auto: API
+    cr: [CR-53]
+
+  - id: LEAVE-AUTHZ-016
+    func: [F-LEAVE-290]
+    sc: A NEW leave request dated after separation IS genuinely blocked - Leave's own business rule, not CR-53's concern
+    t: ValidateEmploymentContext rejects a request whose start date falls after DateOfLeaving
+    src: ["LeaveRequestValidationService.ValidateEmploymentContext"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/leave-requests/preview] As the separated employee, startDate one day after their own DateOfLeaving => [409] 'InactiveEmployment' - Forbidden by Leave's OWN eligibility gate, independent of CR-53"
+      - "[POST /api/leave-requests/preview] Same employee, startDate on the LAST DAY of employment (== DateOfLeaving) => [200] still eligible - the boundary is inclusive"
+    auto: API
+    cr: [CR-53]
+
+  - id: LEAVE-AUTHZ-017
+    func: [F-LEAVE-291]
+    sc: CR-53 - balance visibility has no eligibility gate at all
+    t: A separated employee's own balance remains fully readable indefinitely
+    src: ["LeaveBalanceSummaryReader.GetMineAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/leave-balances/mine] As the separated employee's still-active account => [200] full balance detail returned - GetMineAsync applies no EmploymentEligibility check anywhere"
+    auto: API
+    cr: [CR-53]
+
+  - id: LEAVE-AUTHZ-018
+    func: [F-LEAVE-292]
+    sc: CR-53 - pre-existing requests remain visible on Calendar and in the manager's inbox after separation
+    t: Nothing re-evaluates visibility against EmploymentEligibility once a request already exists
+    src: ["LeaveCalendarService.GetAsync", "LeaveApprovalReadService.GetInboxAsync"]
+    type: Boundary
+    pri: P1
+    role: MANAGER
+    steps:
+      - "[GET /api/leave-calendar?from=&to=] As the separated employee's former manager, a PendingApproval request from before separation is still in range => [200] the event is still visible, unchanged by the employee's subsequent separation"
+      - "[GET /api/leave-approvals] Same manager => [200] the request still appears in the inbox"
+    auto: API
+    cr: [CR-53]
+
+  - id: LEAVE-AUTHZ-019
+    func: [F-LEAVE-293]
+    sc: CR-53 - a manager can still approve a separated former-report's pending request
+    t: AuthorizeAsync checks only the approver, never the target employee's own status
+    src: ["LeaveRequestApprovalService.AuthorizeAsync"]
+    type: Boundary
+    pri: P0
+    role: MANAGER
+    steps:
+      - "[POST /api/leave-requests/{requestId}/approve] As the (former) direct manager of a now-separated employee, request still PendingApproval from before separation => [200] Approved - distinguishing authentication/RBAC retention (CR-53) from Leave's own submission-time-only eligibility gate (F-LEAVE-290)"
+    auto: API
+    cr: [CR-53]
+
+  - id: LEAVE-AUTHZ-020
+    func: [F-LEAVE-294]
+    sc: CR-66 cross-reference - HRAdmin/SuperHR can self-grant every withheld Leave.* permission in one call
+    t: PageAccess.Manage lets a role administer Leave configuration/approval it was deliberately denied
+    src: ["PageAccessService.UpdateAsync (Module 6)"]
+    type: Security
+    pri: P0
+    role: HRADMIN
+    perm: "PageAccess.Manage"
+    steps:
+      - "[PUT /api/page-access/roles/{hrAdminRoleId}] Add Leave.PolicyManage, Leave.PolicyPublish, Leave.TypeManage, Leave.PeriodManage, Leave.BalanceImport, Leave.Approve to HRAdmin's own permission set => [200]"
+      - "[POST /api/auth/refresh] Re-issue tokens to pick up the new grant => [200]"
+      - "[POST /api/leave-policies] As the SAME HRAdmin session, now self-escalated => [201] fully able to create/publish a policy, previously impossible - CR-66 defeats CR-78's least-privilege design end to end"
+    auto: API
+    cr: [CR-66, CR-78, CR-79]
+
+  - id: LEAVE-AUTHZ-021
+    func: [F-LEAVE-295]
+    sc: Configuration-table lookups by id are tenant-scoped only by the shard boundary, no redundant TenantId filter
+    t: A cross-tenant id probe against LeaveType/LeavePolicy/LeavePeriod GET-by-id endpoints
+    src: ["LeaveConfigurationService.GetLeaveTypeAsync/GetPolicyAsync/GetLeavePeriodAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[GET /api/leave-types/{tenantAsLeaveTypeId}] As Tenant B, referencing Tenant A's own LeaveType id => [404] - confirm this 404 comes from the shard boundary (the id simply does not exist in Tenant B's own database), not from an explicit TenantId re-check inside the query"
+    auto: API
+
+  - id: LEAVE-AUTHZ-022
+    func: [F-LEAVE-296]
+    sc: Requests/Balances/Comp-Off carry an explicit, filtered TenantId column
+    t: The belt-and-suspenders TenantId filter is present on the high-volume, high-sensitivity tables
+    src: ["LeaveRequestReadService", "LeaveBalanceSummaryReader", "CompOffService"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[GET /api/leave-requests] As Tenant B => [200] the underlying query includes an explicit TenantId filter, confirmed by cross-tenant id probing returning nothing rather than another tenant's row"
+    auto: API
+
+  - id: LEAVE-AUTHZ-023
+    func: [F-LEAVE-297]
+    sc: Background workers correctly switch tenant context between iterations
+    t: No residual DbContext/ShardContext state leaks from one tenant's processing into the next tenant's iteration
+    src: ["LeaveApprovalReminderWorker.ProcessTenantsAsync", "LeaveAccrualWorker.ProcessTenantsAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[Manual/DB] Run one worker sweep across Tenant A then Tenant B in the same process tick => [Pass] Tenant B's occurrence/delivery rows never reference Tenant A's employees/requests, and vice versa - each tenant's own ShardContext/ITenantExecutionContext is freshly scoped per iteration"
+    auto: DB-assisted
+
+  - id: LEAVE-AUTHZ-024
+    func: [F-LEAVE-298]
+    sc: Balance import cannot credit a same-coded employee in a different tenant
+    t: An identical EmployeeCode existing in both tenants never causes a cross-tenant credit
+    src: ["LeaveBalanceImportService.ValidateAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    perm: "Leave.BalanceImport"
+    steps:
+      - "[Setup] Tenant A and Tenant B both have an employee with EmployeeCode='EMP001' => test preconditions are established for the steps below"
+      - "[POST /api/leave-balances/import/validate] As Tenant B, uploading a batch crediting EMP001 => [200] the row resolves to TENANT B's OWN EMP001 - never Tenant A's, confirmed by checking which employee's balance the subsequent Commit actually updates"
+    auto: API
+    cr: [CR-85]
+
+  - id: LEAVE-AUTHZ-025
+    func: [F-LEAVE-299]
+    sc: Comp-Off Operations tenant isolation holds despite the missing permission attribute
+    t: Even with no declarative HasPermission gate, the service's own tenant-scoped query never returns another tenant's data
+    src: ["CompOffService.BuildOperationalScopeAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[GET /api/attendance/comp-off/operations] As a Tenant B session holding CompOffViewAll => [200] only Tenant B's own CompOff earnings/ledger rows are ever returned, regardless of the missing controller-level permission attribute (CR-82 is an authorization-BREADTH gap, not a tenant-isolation gap)"
+    auto: API
+    ex: ["xU:CompOffOperationalQueryTests.Cross_tenant_operational_query_returns_no_data"]

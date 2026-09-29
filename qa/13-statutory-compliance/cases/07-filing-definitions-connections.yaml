@@ -1,0 +1,123 @@
+sheet: Stat_Filing_Setup
+submodule: Statutory Filing - Definitions and Connections
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: STAT-FDEF-001
+    func: [F-STAT-084]
+    sc: Creating a filing definition
+    t: CreateDefinitionAsync validates required fields and enforces per-tenant Code uniqueness
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs CreateDefinitionAsync"
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    sev: Medium
+    pre: A definition with code GENERIC-STATUTORY already exists for T1
+    role: PayrollAdmin (with StatutoryFiling.Manage granted)
+    perm: Payroll.StatutoryFiling.Manage
+    tenant: "T1 (DEMO01)"
+    data: "code='', name='', filingType=''"
+    steps:
+      - "[POST /api/payroll/statutory-filings/definitions] with code/name/filingType all blank => [400] Invalid, 'Definition code, name and filing type are required.'"
+      - "[POST /api/payroll/statutory-filings/definitions] with code='generic-statutory' (case-insensitive duplicate of the existing one after trim+uppercase) => [409] Conflict, 'Filing definition already exists.'"
+    auto: API
+
+  - id: STAT-FDEF-002
+    func: [F-STAT-085]
+    sc: Creating a definition with a connection profile
+    t: An optional ConnectionProfileId must reference an existing, Active profile for the tenant
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs CreateDefinitionAsync"
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: PayrollAdmin (with StatutoryFiling.Manage granted)
+    perm: Payroll.StatutoryFiling.Manage
+    tenant: "T1 (DEMO01)"
+    data: "connectionProfileId=random guid"
+    steps:
+      - "[POST /api/payroll/statutory-filings/definitions] with a connectionProfileId that does not exist/is not Active for this tenant => [400] Invalid, 'connectionProfileId', 'The active connection profile was not found for this tenant.'"
+    auto: API
+
+  - id: STAT-FDEF-003
+    func: [F-STAT-086]
+    sc: A new definition is immediately usable
+    t: CreateDefinitionAsync always creates exactly one effective-today version in the same call
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs CreateDefinitionAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: PayrollAdmin (with StatutoryFiling.Manage granted)
+    perm: Payroll.StatutoryFiling.Manage
+    tenant: "T1 (DEMO01)"
+    data: "code=NEW-DEF-01"
+    steps:
+      - "[POST /api/payroll/statutory-filings/definitions] create NEW-DEF-01 => [201] created"
+      - "[DB] query StatutoryFilingDefinitionVersions for the new definition => one row exists, Version=1, EffectiveFrom=today - unlike qa/13's own F-STAT-007 finding for StatutoryConfiguration, a filing definition is immediately usable without a separate version-creation call"
+    db: "StatutoryFilingDefinitionVersions has exactly one row (Version=1) for the new definition"
+    auto: DB-assisted
+
+  - id: STAT-FDEF-004
+    func: [F-STAT-087, F-STAT-089]
+    sc: Connection profile validation is advisory, not blocking
+    t: A connector validation failure is recorded but does not block create/update/re-validate
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs CreateConnectionProfileAsync, UpdateConnectionProfileAsync, ValidateConnectionProfileAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: PayrollAdmin (with StatutoryFiling.ManageConnections granted)
+    perm: Payroll.StatutoryFiling.ManageConnections
+    tenant: "T1 (DEMO01)"
+    data: "connectorType=Test, endpoint omitted (Test connector requires a non-secret endpoint)"
+    steps:
+      - "[POST /api/payroll/statutory-filings/connections] create a Test-type profile with NO endpoint => [201] STILL created; LastValidationStatus='Invalid' is stored, but creation itself is not blocked"
+      - "[POST /api/payroll/statutory-filings/connections/{id}/validate] explicit re-validate on the same profile => [400] Invalid, 'The deterministic test connector requires a non-secret endpoint value.' (the on-demand validate endpoint DOES surface the failure as the call's own result, unlike create/update)"
+    auto: API
+
+  - id: STAT-FDEF-005
+    func: [F-STAT-088]
+    sc: Secrets are never echoed back
+    t: SecretReference is stored as an opaque reference only; no endpoint returns its literal value
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs ToProfileDto"
+    type: Security
+    tags: []
+    pri: P0
+    sev: High
+    pre: none
+    role: PayrollAdmin (with StatutoryFiling.ManageConnections granted)
+    perm: Payroll.StatutoryFiling.ManageConnections
+    tenant: "T1 (DEMO01)"
+    data: "secretReference='vault://epfo/tenant1/apikey'"
+    steps:
+      - "[POST /api/payroll/statutory-filings/connections] create a profile with secretReference set => [201] created"
+      - "[GET /api/payroll/statutory-filings/connections] => [200] the response includes hasSecretReference=true but NEVER the literal 'vault://epfo/tenant1/apikey' string anywhere in the payload"
+    sec: "SecretReference value never appears in any API response body"
+    auto: API
+
+  - id: STAT-FDEF-006
+    func: [F-STAT-090, F-STAT-091]
+    sc: Creating a filing run
+    t: CreateRunAsync requires an active, effective definition version and enforces one active run per (definition, period)
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs CreateRunAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Definition D1 exists and is Active with a currently-effective version; a Draft run already exists for D1/2026-09"
+    role: PayrollAdmin (with StatutoryFiling.Manage granted)
+    perm: Payroll.StatutoryFiling.Manage
+    tenant: "T1 (DEMO01)"
+    data: "definitionId=D1, filingPeriod=2026-09"
+    steps:
+      - "[POST /api/payroll/statutory-filings/runs] a second create for the SAME definition+period while the first run is still non-Cancelled => [409] Conflict, 'An active filing run already exists for this period.'"
+      - "[POST /api/payroll/statutory-filings/runs] with a definitionId that has no Active definition, or no version effective today => [404] Active filing definition/version not found."
+      - "[POST /api/payroll/statutory-filings/runs] a genuinely new (definition, period) combination => [201] created at Status=Draft with a RunCreated StatutoryFilingHistory entry"
+    db: "StatutoryFilingHistories gains one RunCreated row per new run"
+    auto: API

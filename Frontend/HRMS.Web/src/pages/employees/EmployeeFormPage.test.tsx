@@ -195,6 +195,21 @@ describe('EmployeeFormPage (Personal Details)', () => {
       expect(screen.getByRole('button', { name: 'SAVE' })).toBeEnabled()
     })
 
+    it('blocks submission on a blank Date of joining instead of sending an empty date', async () => {
+      // Date of joining binds to a non-nullable DateOnly server-side, which cannot deserialize an
+      // empty string at all — sending one used to fail model binding with a generic error the form
+      // could not map back to the field. The form must catch this itself, before any request is sent.
+      renderForm()
+
+      await userEvent.type(field('First name'), 'Ravi')
+      await userEvent.type(field('Last name'), 'Menon')
+
+      await userEvent.click(screen.getByRole('button', { name: 'SAVE' }))
+
+      expect(await screen.findByText('Date of joining is required.')).toBeInTheDocument()
+      expect(stub.callsTo('post', NEW_CREATE_URL)).toHaveLength(0)
+    })
+
     it('leaves without saving on Cancel', async () => {
       renderForm({ route: '/employees/new' })
       await userEvent.click(screen.getByRole('link', { name: 'Cancel' }))

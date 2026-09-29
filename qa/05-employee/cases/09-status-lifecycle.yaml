@@ -1,0 +1,121 @@
+sheet: Employee_Lifecycle
+submodule: Employee Status / Lifecycle
+defaults:
+  role: HR_ADMIN
+  perm: "Employee.Edit"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (Employee.Edit, EmploymentHistory.Change); employee EMP-LIFE-001 is Active with a linked, active portal account."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: EMP-LIFE-001
+    func: [F-EMP-105]
+    sc: EmployeeStatus has exactly three members - Active, Resigned, Terminated
+    t: An out-of-range status integer is rejected as not a recognized enum value; there is no Suspended/OnLeave/Probation status
+    src: ["Backend/HRMS.Domain/Enums/EmployeeStatus.cs"]
+    type: Boundary
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/employment-history] employmentStatus=99 (undefined) => [400] not a recognized status"
+      - "[POST /api/employees/{id}/employment-history] employmentStatus=Active/Resigned/Terminated, each in turn => [200] all three are accepted"
+    auto: API
+
+  - id: EMP-LIFE-002
+    func: [F-EMP-106]
+    sc: A status change to Resigned/Terminated stamps DateOfLeaving via an employment change
+    t: The documented "represent leaving via status, not deletion" behavior
+    src: ["EmployeeEmploymentService.CreateChangeAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/employment-history] employmentStatus=Resigned, effective today => [200] accepted"
+      - "[GET /api/employees/{id}] Call => [200] status='Resigned', dateOfLeaving is set to today"
+    auto: API
+
+  - id: EMP-LIFE-003
+    func: [F-EMP-106]
+    sc: HIGH-RISK FINDING - Terminating an employee via a plain employment change does NOT deactivate their linked portal login
+    t: Setting EmploymentStatus=Terminated through POST .../employment-history leaves User.IsActive untouched
+    src: ["EmployeeEmploymentService.CreateChangeAsync (no User.IsActive write anywhere in this method)"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/employees/{id}/employment-history] employmentStatus=Terminated, effective today => [200] accepted"
+      - "[GET /api/employees/{id}] Call => [200] status='Terminated'"
+      - "[POST /api/auth/login] The terminated employee's own linked portal account credentials => [200] login STILL SUCCEEDS - the account was never deactivated by this status change"
+    auto: API + UI
+    cr: [CR-53]
+
+  - id: EMP-LIFE-004
+    func: [F-EMP-106]
+    sc: HIGH-RISK FINDING - Terminating an employee via the legacy full PUT also does NOT deactivate their linked portal login
+    t: PUT /api/employees/{id} with Status=Terminated (+ valid DateOfLeaving) saves successfully without touching User.IsActive
+    src: ["EmployeeService.UpdateAsync"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[PUT /api/employees/{id}] status=Terminated, dateOfLeaving=today => [200] accepted"
+      - "[POST /api/auth/login] The same employee's linked portal account credentials => [200] login STILL SUCCEEDS"
+    auto: API
+    cr: [CR-53]
+
+  - id: EMP-LIFE-005
+    func: [F-EMP-106]
+    sc: Contrast case - the sanctioned Separation exit workflow DOES deactivate the linked portal login
+    t: Confirms the gap is specific to the plain Employee/Employment endpoints, not a universal absence
+    src: ["SeparationExitService.cs"]
+    type: Positive
+    pri: P1
+    role: HR_ADMIN
+    perm: "Separation permissions (per Separation module)"
+    steps:
+      - "[POST /api/separations/{id}/exit] Complete the sanctioned exit workflow for the employee => [200] accepted"
+      - "[POST /api/auth/login] The same employee's linked portal account credentials => [401] login now fails - the exit workflow revoked it"
+    auto: API
+
+  - id: EMP-LIFE-006
+    func: [F-EMP-106]
+    sc: There is no API to deactivate an already-active portal account outside the Separation workflow
+    t: RevokeAsync only accepts a still-PENDING invitation; it refuses to touch an already-active account
+    src: ["EmployeePortalAccountService.RevokeAsync"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/portal-account/revoke-invite] The employee's portal account is already Active (not pending) => [409] 'Only a pending invitation can be revoked.'"
+    auto: API
+    cr: [CR-53]
+
+  - id: EMP-LIFE-007
+    func: [F-EMP-105]
+    sc: No state-machine guard prevents an unusual transition sequence
+    t: Active -> Terminated -> Active (a "rehire" via a straight status flip) is not blocked by any transition guard on the plain Employee API
+    src: ["EmployeeRequestValidator (only checks DateOfLeaving/Status pairing, not transition legality)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    steps:
+      - "[PUT /api/employees/{id}] status=Terminated, dateOfLeaving=today => [200] accepted"
+      - "[PUT /api/employees/{id}] status=Active, dateOfLeaving=null => [200] accepted - the plain API does not require going through a Rehire workflow"
+    auto: API
+
+  - id: EMP-LIFE-008
+    func: [F-EMP-116]
+    sc: Without an authenticated tenant, every Employee operation is Unauthorized
+    t: A request with no resolvable tenant context is rejected uniformly across list/get/create/update/delete
+    src: ["EmployeeService (every method's tenant guard)"]
+    type: Authorization
+    pri: P1
+    steps:
+      - "[GET /api/employees] No resolvable tenant (e.g. apex host, no token) => [401] Unauthorized"
+      - "[POST /api/employees] Same condition => [401] Unauthorized"
+      - "[DELETE /api/employees/{id}] Same condition => [401] Unauthorized"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Without_a_tenant_every_operation_is_unauthorized"]

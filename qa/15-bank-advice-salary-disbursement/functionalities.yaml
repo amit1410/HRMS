@@ -1,0 +1,973 @@
+# Functionality registry for Module 15 - Bank Advice & Salary Disbursement (phase 7H "Bank Advice &
+# Payment Processing"): batch generation from an approved/finalized payroll run, employee salary
+# bank-account resolution, net-pay amount selection, per-payment validation, the
+# Draft->Prepared->Approved->Exported lifecycle (plus controlled cancellation and
+# cancel-then-regenerate), the single provider-neutral CSV export format, append-only history,
+# Authorization/Scope, Tenant Isolation, Concurrency/Idempotency, the payroll-result/reconciliation
+# integration boundary (and the confirmed absence of any final-settlement integration), SQL
+# Server/MySQL Provider Parity, Large Data/Paging, and Frontend.
+# Every test case references one or more of these ids; the builder fails the build if a
+# functionality has zero cases or a case references an unknown id. IDs are allocated in one global
+# sequence (F-BANKADV-001...) in the order the groups below were authored - group boundaries are
+# noted with a comment banner.
+#
+# SCOPE NOTE (read before extending this module): this module covers exactly
+# Backend/HRMS.Application/Services/BankAdviceService.cs and its controller
+# (BankAdviceController in Backend/HRMS.API/Controllers/PayrollOutputsController.cs), plus the
+# BankAdvice-specific reconciliation findings that Backend/HRMS.Application/Services/
+# PayrollAnalyticsService.cs independently re-derives about it (tested here only as an
+# integration-boundary check, not as full coverage of the analytics/reconciliation engine itself -
+# that engine, together with PayrollReconciliation/PayrollVarianceControls/PayrollAnomalyFlags, has
+# no dedicated qa module yet and is explicitly out of scope here). Also explicitly out of scope:
+# payroll-run creation/calculation/approval itself (qa/10-payroll's own surface - this module only
+# tests the Approved/Finalized status GATE that Generate reads), employee bank-account CRUD/master
+# data (owned by EmployeeSubResourcesController and employee master-data modules - this module only
+# tests the READ-SIDE resolution query BankAdviceService itself runs), payroll accounting/GL posting
+# (PayrollAccountingController/IPayrollAccountingService - a separate, already-distinct service with
+# no BankAdvice reference of any kind), and final settlement / separation payouts (a full grep of
+# SeparationService.cs for "BankAdvice" returns zero matches - there is no code-level integration to
+# test, and docs/phase-7h-bank-advice-payment-processing.md explicitly defers "final settlement"
+# alongside GL posting, statutory returns, and arrears/retro). No live bank API, payment submission,
+# NEFT/RTGS/IMPS, SFTP, or bank-specific signed/encrypted export format is implemented anywhere in
+# this codebase - the single CSV export tested here is the only real export format that exists.
+#
+# Discovered implementation (authoritative source, read directly - not assumed from any design doc;
+# docs/phase-7h-bank-advice-payment-processing.md was read for scope framing only; current code wins
+# wherever a doc and the code diverge, per CLAUDE.md - see CR-263/CR-266 for confirmed divergences
+# from the doc's own "acceptance complete" framing):
+#   Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController, api/payroll/bank-advice
+#     base route plus the runs/{runId}/bank-advice generate route - every action read)
+#   Backend/HRMS.Application/Abstractions/IBankAdviceService.cs (read in full)
+#   Backend/HRMS.Application/Services/BankAdviceService.cs (read in full, all 137 lines)
+#   Backend/HRMS.Application/DTOs/Payroll/BankAdviceDtos.cs (read in full)
+#   Backend/HRMS.Domain/Entities/BankAdvice.cs (BankAdviceBatch/BankAdvicePayment/BankAdviceHistory,
+#     read in full)
+#   Backend/HRMS.Domain/Enums/PayrollEnums.cs (BankAdviceStatus/BankAdvicePaymentStatus/
+#     BankAdviceValidationStatus/BankAdviceHistoryChangeType, PayrollControlScope.BankAdvice,
+#     PayrollControlMetric.BankAdviceTotal, PayrollRunStatus, PayrollResultStatus)
+#   Backend/HRMS.Domain/Entities/EmployeeBankDetail.cs, Bank.cs (read in full)
+#   Backend/HRMS.Domain/Enums/AccountPurpose.cs, BankAccountStatus.cs (read in full)
+#   Backend/HRMS.Infrastructure/Persistence/Configurations/BankAdviceConfiguration.cs (all 3
+#     configurations, every index and FK, read in full)
+#   Backend/HRMS.Application/Services/PayrollApprovalGuard.cs (read in full - the shared opt-in
+#     self-approval/reason-required guard used by Approve and Cancel)
+#   Migration pair AddBankAdvicePaymentProcessing confirmed present in both
+#     Backend/HRMS.Infrastructure/Persistence/Migrations (SQL Server, 20260919202210) and
+#     Backend/HRMS.Infrastructure.MySqlMigrations/Migrations (MySQL, 20260919202237)
+#   Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll.BankAdvice* block, 7 permissions,
+#     read in full)
+#   Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (full-file grep for all 7 BankAdvice
+#     permission constants and RolePermissionMap arrays for HRAdmin/HRManager/SuperHR/Accounts/IT/
+#     Manager/Employee, every role read)
+#   Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (AddSourceFindingsAsync's
+#     BankAdvice-specific block, lines ~180-191, read in full for the integration-boundary group)
+#   Backend/HRMS.Application/Services/SeparationService.cs (full grep for "BankAdvice" - zero matches)
+#   Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.tsx (+ its .test.tsx), src/api/payroll.ts
+#     (BankAdvice section), src/auth/permissions.ts (bankAdvice* mirror) - all read in full;
+#     App.tsx and layout/navigation.ts grepped for route/nav registration
+#   Existing xUnit inventory (BankAdviceTests, SqlServerBankAdviceIntegrationTests,
+#     MySqlBankAdviceIntegrationTests, BankAdviceProviderAcceptance - 4 files, referenced narratively
+#     per the qa/8-14 precedent, not individually classified)
+#
+# -- Headline findings that shape this whole module's cases (see clarifications.yaml for full detail) --
+# CR-263: CONFIRMED - a full grep of SeedData.cs's RolePermissionMap for all 7 Payroll.BankAdvice*
+# constants returns zero matches in any role array except the blanket Permissions.All grant to
+# SuperAdmin/TenantAdmin. HRAdmin, HRManager, SuperHR, and the role literally named "Accounts" all
+# hold zero of the 7, out of the box.
+# CR-264: CONFIRMED DEAD PERMISSION - Payroll.BankAdvice.ViewHistory is declared, seeded (id 116),
+# and mirrored on the frontend, but no controller route or service method anywhere checks it; history
+# is unconditionally returned wherever BankAdviceView already grants access.
+# CR-265: CONFIRMED - CancelAsync only updates BankAdviceBatch.Status; it never updates any child
+# BankAdvicePayment.PaymentStatus row, so payments keep their pre-cancellation Ready/Failed status
+# forever. BankAdvicePaymentStatus.Cancelled and .Processed are both declared-but-dead enum members.
+# CR-266: CONFIRMED - ValidateAsync and PrepareAsync share one implementation (SetPreparedAsync).
+# When every payment is already Valid, calling ValidateAsync has the identical Draft->Prepared
+# state-changing effect as PrepareAsync, even though the caller only asked to validate.
+functionalities:
+  # =========================== A. BANK ADVICE GENERATION & PAYROLL-RUN ELIGIBILITY ===========================
+  - id: F-BANKADV-001
+    name: GenerateAsync requires an authenticated tenant context, else Unauthorized
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    api: "POST /api/payroll/runs/{runId}/bank-advice"
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: "n/a"
+
+  - id: F-BANKADV-002
+    name: GenerateAsync requires the target PayrollRun (with its PayrollPeriod) to exist in the tenant, else NotFound
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: PayrollRuns, PayrollPeriods (TenantId filter)
+
+  - id: F-BANKADV-003
+    name: GenerateAsync requires PayrollRun.Status to be Approved or Finalized, else Conflict - Draft/Prepared/Processing/Calculated/Cancelled are all rejected
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: PayrollRuns.Status
+
+  - id: F-BANKADV-004
+    name: GenerateAsync blocks a second generation while an active (Status != Cancelled) batch already exists for the same PayrollRunId, else Conflict
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (AnyAsync guard)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdviceBatches (TenantId+PayrollRunId+Status)
+
+  - id: F-BANKADV-005
+    name: GenerateAsync sources rows strictly from PayrollResults where IsCurrent=true AND Status=Calculated for the run - Failed or superseded rows never contribute a payment
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: PayrollResults.IsCurrent, PayrollResults.Status
+
+  - id: F-BANKADV-006
+    name: GenerateAsync requires at least one eligible PayrollResult row, else Conflict ("No calculated payroll results are available for this run.")
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: PayrollResults
+
+  - id: F-BANKADV-007
+    name: GenerateAsync requires all eligible results to share exactly one CurrencyCode, else Conflict ("cannot contain mixed currencies")
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: PayrollResults.CurrencyCode
+
+  - id: F-BANKADV-008
+    name: "BatchNumber is deterministic: BA/{PayDate:yyyyMM}/{RunId:N}/{version}, where version = 1 + the max existing Version for the run across ALL statuses including Cancelled"
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdviceBatches.BatchNumber, Version
+
+  - id: F-BANKADV-009
+    name: A newly generated batch always starts at Status=Draft, with GeneratedAtUtc/GeneratedByUserId stamped and a Generated history event recorded
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync -> History(Generated)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdviceBatches.Status, GeneratedAtUtc, GeneratedByUserId, BankAdviceHistories
+
+  - id: F-BANKADV-010
+    name: Payments are ordered by Employee.EmployeeCode ascending at generation time; Sequence is assigned starting at 1 in that order
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (OrderBy EmployeeCode, sequence++)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.Sequence
+
+  - id: F-BANKADV-011
+    name: "PaymentReference is deterministic: {BatchNumber}/{Sequence:0000}"
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.PaymentReference
+
+  - id: F-BANKADV-012
+    name: Regeneration is possible once a prior batch for the same run reaches Status=Cancelled - the active-batch guard (F-BANKADV-004) excludes Cancelled - and this is the ONLY regeneration path; there is no separate regenerate/replace endpoint
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (AnyAsync guard scope)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdviceBatches.Status
+
+  - id: F-BANKADV-013
+    name: GenerateAsync is a source-only read against PayrollResults - it never writes to, recalculates, or otherwise mutates any PayrollResult row; payroll remains authoritative
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (AsNoTracking source query)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: PayrollResults (read-only)
+
+  - id: F-BANKADV-014
+    name: A cross-tenant PayrollRunId on Generate is NotFound, not Forbidden
+    group: Bank Advice Generation & Payroll-Run Eligibility
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (TenantId filter)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: PayrollRuns (TenantId filter)
+
+  # =========================== B. EMPLOYEE BANK-ACCOUNT RESOLUTION & NET-PAY AMOUNT SELECTION ===========================
+  - id: F-BANKADV-015
+    name: "Account resolution query: EmployeeBankDetails filtered by TenantId, EmployeeId in the result set, AccountPurpose=Salary, IsActive=true, Status=Active, and EffectiveFrom null OR <= batch.PayDate"
+    group: Employee Bank-Account Resolution & Net-Pay Amount Selection
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (accounts query)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: EmployeeBankDetails (TenantId, AccountPurpose, IsActive, Status, EffectiveFrom)
+
+  - id: F-BANKADV-016
+    name: Exactly one matching account row is used to populate AccountHolderName/BankName/MaskedAccountNumber/IfscCode/BranchName on the payment
+    group: Employee Bank-Account Resolution & Net-Pay Amount Selection
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (accountRows.Count == 1 branch)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: EmployeeBankDetails, BankAdvicePayments
+
+  - id: F-BANKADV-017
+    name: Zero matching account rows leaves account null - all account fields on the payment default to empty/null and the payment fails validation
+    group: Employee Bank-Account Resolution & Net-Pay Amount Selection
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync, ValidatePayment"
+    permission: "Payroll.BankAdvice.Generate"
+    db: EmployeeBankDetails, BankAdvicePayments
+
+  - id: F-BANKADV-018
+    name: "More than one matching account row (ambiguous, e.g. two Active Salary accounts both effective) is ALSO treated as null/unresolved, identical to the zero-account outcome - the specific rows are never picked by any tie-break rule"
+    group: Employee Bank-Account Resolution & Net-Pay Amount Selection
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (accountRows.Count == 1 ? ... : null)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: EmployeeBankDetails
+
+  - id: F-BANKADV-019
+    name: NetPay is taken verbatim from PayrollResult.NetPay - BankAdviceService never recalculates, adjusts, or rounds the amount
+    group: Employee Bank-Account Resolution & Net-Pay Amount Selection
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.NetPay, PayrollResults.NetPay
+
+  - id: F-BANKADV-020
+    name: CurrencyCode on each payment is copied from the PayrollResult, not from the bank account or the batch's own currency field independently
+    group: Employee Bank-Account Resolution & Net-Pay Amount Selection
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.CurrencyCode
+
+  - id: F-BANKADV-021
+    name: "AccountNumber is masked before being stored on the payment snapshot (all but the last 4 digits replaced with X) - the full AccountNumber is never persisted on BankAdvicePayment or exposed via the DTO/export"
+    group: Employee Bank-Account Resolution & Net-Pay Amount Selection
+    status: Implemented
+    service: "BankAdviceService.MaskAccount"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.MaskedAccountNumber
+
+  - id: F-BANKADV-022
+    name: An account number of length <=4 is returned UNMASKED in full by MaskAccount's own short-circuit branch
+    group: Employee Bank-Account Resolution & Net-Pay Amount Selection
+    status: Implemented
+    service: "BankAdviceService.MaskAccount (digits.Length <= 4 branch)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.MaskedAccountNumber
+
+  - id: F-BANKADV-023
+    name: EmployeeName on the payment snapshot is FirstName and LastName joined with a single space, with any blank part skipped
+    group: Employee Bank-Account Resolution & Net-Pay Amount Selection
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (string.Join)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.EmployeeName
+
+  - id: F-BANKADV-024
+    name: "OUT OF SCOPE (confirmed, not a gap) - employee bank-account CREATE/UPDATE/deactivate itself is owned by EmployeeSubResourcesController and employee master-data modules; this module tests only the READ-SIDE resolution query BankAdviceService.GenerateAsync itself runs"
+    group: Employee Bank-Account Resolution & Net-Pay Amount Selection
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/EmployeeSubResourcesController.cs (EmployeeBankDetail CRUD, out of this module's surface)"
+    permission: "n/a"
+    db: EmployeeBankDetails
+
+  # =========================== C. PAYMENT VALIDATION RULES ===========================
+  - id: F-BANKADV-025
+    name: 'NetPay<=0 -> Invalid, "Net pay must be greater than zero."'
+    group: Payment Validation Rules
+    status: Implemented
+    service: "BankAdviceService.ValidatePayment"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.ValidationStatus, ValidationMessage
+
+  - id: F-BANKADV-026
+    name: 'Zero matching bank accounts -> Invalid, "No active salary bank account is effective for the pay date."'
+    group: Payment Validation Rules
+    status: Implemented
+    service: "BankAdviceService.ValidatePayment"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.ValidationStatus, ValidationMessage
+
+  - id: F-BANKADV-027
+    name: 'More than one matching bank account -> Invalid, "Multiple active salary bank accounts are effective for the pay date."'
+    group: Payment Validation Rules
+    status: Implemented
+    service: "BankAdviceService.ValidatePayment"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.ValidationStatus, ValidationMessage
+
+  - id: F-BANKADV-028
+    name: 'Missing/blank IfscCode on an otherwise-resolved account -> Invalid, "Bank routing/IFSC code is required."'
+    group: Payment Validation Rules
+    status: Implemented
+    service: "BankAdviceService.ValidatePayment"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.ValidationStatus, ValidationMessage
+
+  - id: F-BANKADV-029
+    name: 'Missing/blank AccountNumber on an otherwise-resolved account -> Invalid, "Bank account number is required."'
+    group: Payment Validation Rules
+    status: Implemented
+    service: "BankAdviceService.ValidatePayment"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.ValidationStatus, ValidationMessage
+
+  - id: F-BANKADV-030
+    name: When all five checks pass, ValidationStatus=Valid and ValidationMessage is null
+    group: Payment Validation Rules
+    status: Implemented
+    service: "BankAdviceService.ValidatePayment"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.ValidationStatus, ValidationMessage
+
+  - id: F-BANKADV-031
+    name: ValidationStatus=Valid maps PaymentStatus=Ready at generation time; any Invalid outcome maps PaymentStatus=Failed
+    group: Payment Validation Rules
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.PaymentStatus
+
+  - id: F-BANKADV-032
+    name: "Validation order is fixed (NetPay, then account-count, then IFSC, then account number) - ValidatePayment returns on the FIRST failing rule, so only one ValidationMessage is ever recorded even when a row violates several rules at once"
+    group: Payment Validation Rules
+    status: Implemented
+    service: "BankAdviceService.ValidatePayment (sequential early-return checks)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdvicePayments.ValidationMessage
+
+  # =========================== D. BATCH LIFECYCLE - VALIDATE / PREPARE / APPROVE ===========================
+  - id: F-BANKADV-033
+    name: ValidateAsync and PrepareAsync share one implementation (SetPreparedAsync) and both require Status=Draft, else Conflict
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    api: "POST /api/payroll/bank-advice/{id}/validate, POST /api/payroll/bank-advice/{id}/prepare"
+    service: "BankAdviceService.SetPreparedAsync"
+    permission: "Payroll.BankAdvice.Validate"
+    db: BankAdviceBatches.Status
+
+  - id: F-BANKADV-034
+    name: Both Validate and Prepare re-run Recalculate (TotalEmployees/TotalAmount recomputed from only the currently-Valid payments) before deciding their outcome
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    service: "BankAdviceService.SetPreparedAsync -> Recalculate"
+    permission: "Payroll.BankAdvice.Validate"
+    db: BankAdviceBatches.TotalEmployees, TotalAmount
+
+  - id: F-BANKADV-035
+    name: PrepareAsync (requireValid=true) returns Conflict and leaves the batch at Draft if any payment is still Invalid
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    api: "POST /api/payroll/bank-advice/{id}/prepare"
+    service: "BankAdviceService.SetPreparedAsync(requireValid: true)"
+    permission: "Payroll.BankAdvice.Validate"
+    db: BankAdviceBatches.Status
+
+  - id: F-BANKADV-036
+    name: ValidateAsync (requireValid=false) returns Success with a "completed with errors" message and logs a ValidationFailed history event when any payment is Invalid - the batch stays Draft, NOT a Conflict
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    api: "POST /api/payroll/bank-advice/{id}/validate"
+    service: "BankAdviceService.SetPreparedAsync(requireValid: false) -> History(ValidationFailed)"
+    permission: "Payroll.BankAdvice.Validate"
+    db: BankAdviceBatches.Status, BankAdviceHistories
+
+  - id: F-BANKADV-037
+    name: "CONFIRMED - when every payment is already Valid, calling ValidateAsync has the SAME Draft->Prepared state-changing effect as PrepareAsync (a Prepared history event is recorded) even though the caller only asked to validate, not prepare"
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    service: "BankAdviceService.SetPreparedAsync (if (valid) branch runs regardless of requireValid)"
+    permission: "Payroll.BankAdvice.Validate"
+    db: BankAdviceBatches.Status, BankAdviceHistories
+
+  - id: F-BANKADV-038
+    name: The transition to Prepared is a compare-and-swap on ConcurrencyVersion; a lost race returns Conflict ("changed by another operation"), not a 500
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    service: "BankAdviceService.SetPreparedAsync (ExecuteUpdateAsync)"
+    permission: "Payroll.BankAdvice.Validate"
+    db: BankAdviceBatches.ConcurrencyVersion
+
+  - id: F-BANKADV-039
+    name: ApproveAsync requires Status=Prepared exactly, else Conflict
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    api: "POST /api/payroll/bank-advice/{id}/approve"
+    service: "BankAdviceService.ApproveAsync"
+    permission: "Payroll.BankAdvice.Approve"
+    db: BankAdviceBatches.Status
+
+  - id: F-BANKADV-040
+    name: "ApproveAsync runs PayrollApprovalGuard.ValidateAsync(batch.GeneratedByUserId, \"approve\") - an OPT-IN self-approval block only enforced when the tenant's PayrollControlConfiguration has BOTH RequireMakerChecker AND PreventSelfApproval set"
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    service: "BankAdviceService.ApproveAsync -> PayrollApprovalGuard.ValidateAsync"
+    permission: "Payroll.BankAdvice.Approve"
+    db: PayrollControlConfigurations
+
+  - id: F-BANKADV-041
+    name: ApproveAsync additionally requires every payment's ValidationStatus=Valid, else Conflict - a defense-in-depth check beyond the Prepared-status gate
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    service: "BankAdviceService.ApproveAsync"
+    permission: "Payroll.BankAdvice.Approve"
+    db: BankAdvicePayments.ValidationStatus
+
+  - id: F-BANKADV-042
+    name: ApproveAsync recalculates and defensively compares batch.TotalAmount to the full payments sum before approving, Conflict ("does not reconcile") if they disagree
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    service: "BankAdviceService.ApproveAsync -> Recalculate"
+    permission: "Payroll.BankAdvice.Approve"
+    db: BankAdviceBatches.TotalAmount
+
+  - id: F-BANKADV-043
+    name: Approval stamps ApprovedAtUtc/ApprovedByUserId and is guarded by the same ConcurrencyVersion compare-and-swap pattern as Prepare
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    service: "BankAdviceService.ApproveAsync (ExecuteUpdateAsync)"
+    permission: "Payroll.BankAdvice.Approve"
+    db: BankAdviceBatches.ApprovedAtUtc, ApprovedByUserId, ConcurrencyVersion
+
+  - id: F-BANKADV-044
+    name: An Approved history event is recorded on every successful approval
+    group: Batch Lifecycle - Validate, Prepare & Approve
+    status: Implemented
+    service: "BankAdviceService.ApproveAsync -> History(Approved)"
+    permission: "Payroll.BankAdvice.Approve"
+    db: BankAdviceHistories
+
+  # =========================== E. EXPORT & BANK/EXPORT FORMATS ===========================
+  - id: F-BANKADV-045
+    name: ExportAsync requires Status=Approved or Status=Exported, else Conflict - Draft/Prepared/Cancelled cannot be exported
+    group: Export & Bank/Export Formats
+    status: Implemented
+    api: "GET /api/payroll/bank-advice/{id}/export"
+    service: "BankAdviceService.ExportAsync"
+    permission: "Payroll.BankAdvice.Export"
+    db: BankAdviceBatches.Status
+
+  - id: F-BANKADV-046
+    name: 'The export format is one provider-neutral CSV with header row "Sequence,EmployeeCode,EmployeeName,AccountHolder,BankName,AccountNumber,IFSC,NetPay,Currency,PaymentReference", one data row per payment ordered by Sequence'
+    group: Export & Bank/Export Formats
+    status: Implemented
+    service: "BankAdviceService.ExportAsync"
+    permission: "Payroll.BankAdvice.Export"
+    db: "n/a (generated file)"
+
+  - id: F-BANKADV-047
+    name: The CSV "AccountNumber" column actually contains the MASKED account number - the full, unmasked account number is never present anywhere in the export
+    group: Export & Bank/Export Formats
+    status: Implemented
+    service: "BankAdviceService.ExportAsync (p.MaskedAccountNumber)"
+    permission: "Payroll.BankAdvice.Export"
+    db: "n/a (generated file)"
+
+  - id: F-BANKADV-048
+    name: "CSV values are escaped per RFC4180-style rules (quoted when containing comma/quote/CR/LF, embedded quotes doubled) by the private Csv() helper"
+    group: Export & Bank/Export Formats
+    status: Implemented
+    service: "BankAdviceService.Csv"
+    permission: "Payroll.BankAdvice.Export"
+    db: "n/a (generated file)"
+
+  - id: F-BANKADV-049
+    name: The FIRST export from Approved transitions the batch to Exported, stamps ExportedAtUtc/ExportedByUserId, marks every BankAdvicePayment.PaymentStatus=Exported, and records an Exported history event
+    group: Export & Bank/Export Formats
+    status: Implemented
+    service: "BankAdviceService.ExportAsync"
+    permission: "Payroll.BankAdvice.Export"
+    db: BankAdviceBatches.Status, ExportedAtUtc, ExportedByUserId, BankAdvicePayments.PaymentStatus, BankAdviceHistories
+
+  - id: F-BANKADV-050
+    name: Re-exporting an already-Exported batch returns the identical CSV content with NO further state transition, no re-stamping, and no additional history event - an idempotent re-download
+    group: Export & Bank/Export Formats
+    status: Implemented
+    service: "BankAdviceService.ExportAsync (Status==Exported skips the update block)"
+    permission: "Payroll.BankAdvice.Export"
+    db: BankAdviceBatches (unchanged on re-export)
+
+  - id: F-BANKADV-051
+    name: Export uses the same ConcurrencyVersion compare-and-swap guard as the other transitions on its first (state-changing) call
+    group: Export & Bank/Export Formats
+    status: Implemented
+    service: "BankAdviceService.ExportAsync (ExecuteUpdateAsync)"
+    permission: "Payroll.BankAdvice.Export"
+    db: BankAdviceBatches.ConcurrencyVersion
+
+  - id: F-BANKADV-052
+    name: "CONFIRMED (per docs/phase-7h, not a gap) - no live bank-submission format (NEFT/RTGS/IMPS/SFTP/bank-specific signed or encrypted file) is implemented anywhere in this codebase; the single escaped CSV is the only real export format that exists, deliberately deferred beyond that"
+    group: Export & Bank/Export Formats
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/BankAdviceService.cs (full grep for any second export branch/format - none)"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== F. CANCELLATION & REGENERATION ===========================
+  - id: F-BANKADV-053
+    name: CancelAsync is blocked once Status is Exported or Cancelled, else Conflict - Draft, Prepared, and Approved are all cancellable
+    group: Cancellation & Regeneration
+    status: Implemented
+    api: "POST /api/payroll/bank-advice/{id}/cancel"
+    service: "BankAdviceService.CancelAsync"
+    permission: "Payroll.BankAdvice.Cancel"
+    db: BankAdviceBatches.Status
+
+  - id: F-BANKADV-054
+    name: "CancelAsync runs PayrollApprovalGuard.ValidateAsync(..., \"cancel\", reason) - RequireReasonForCancellation is an OPT-IN tenant-level PayrollControlConfiguration setting, not mandatory by default"
+    group: Cancellation & Regeneration
+    status: Implemented
+    service: "BankAdviceService.CancelAsync -> PayrollApprovalGuard.ValidateAsync"
+    permission: "Payroll.BankAdvice.Cancel"
+    db: PayrollControlConfigurations.RequireReasonForCancellation
+
+  - id: F-BANKADV-055
+    name: "CONFIRMED - cancelling a batch only updates BankAdviceBatch.Status/CancelledAtUtc/CancelledByUserId; it never updates any child BankAdvicePayment.PaymentStatus row - payments keep whatever Ready/Failed status they had before cancellation, forever"
+    group: Cancellation & Regeneration
+    status: Implemented
+    service: "BankAdviceService.CancelAsync (ExecuteUpdateAsync scoped to BankAdviceBatches only)"
+    permission: "Payroll.BankAdvice.Cancel"
+    db: BankAdvicePayments.PaymentStatus (unchanged on cancel)
+
+  - id: F-BANKADV-056
+    name: "CONFIRMED DEAD ENUM MEMBERS - BankAdvicePaymentStatus.Cancelled and BankAdvicePaymentStatus.Processed are declared enum members that no method anywhere in BankAdviceService.cs ever assigns (full grep)"
+    group: Cancellation & Regeneration
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/BankAdviceService.cs (full grep for BankAdvicePaymentStatus.Cancelled/.Processed assignment - zero matches)"
+    permission: "n/a"
+    db: BankAdvicePayments.PaymentStatus
+
+  - id: F-BANKADV-057
+    name: Cancellation stamps CancelledAtUtc/CancelledByUserId and records a Cancelled history event, guarded by the same ConcurrencyVersion compare-and-swap pattern
+    group: Cancellation & Regeneration
+    status: Implemented
+    service: "BankAdviceService.CancelAsync -> History(Cancelled)"
+    permission: "Payroll.BankAdvice.Cancel"
+    db: BankAdviceBatches.CancelledAtUtc, CancelledByUserId, BankAdviceHistories
+
+  - id: F-BANKADV-058
+    name: After a batch is Cancelled, the active-batch guard (F-BANKADV-004) allows a brand-new batch to be generated for the same PayrollRunId - this is the only regeneration path in the whole module
+    group: Cancellation & Regeneration
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (AnyAsync excludes Cancelled)"
+    permission: "Payroll.BankAdvice.Generate, Payroll.BankAdvice.Cancel"
+    db: BankAdviceBatches.Status
+
+  - id: F-BANKADV-059
+    name: A regenerated batch after cancellation gets a strictly higher Version number (computed across ALL prior attempts including Cancelled ones) and therefore a distinct BatchNumber - version numbers are never reused
+    group: Cancellation & Regeneration
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (MaxAsync over Version)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdviceBatches.Version, BatchNumber
+
+  - id: F-BANKADV-060
+    name: "CONFIRMED GAP (same shape as prior modules' no-update-endpoint findings) - there is no endpoint or service method to edit/amend an individual BankAdvicePayment row directly (e.g. correct a wrong account or amount); the only remedy for a bad payment row is cancelling the whole batch and regenerating via F-BANKADV-058"
+    group: Cancellation & Regeneration
+    status: Implemented
+    service: "Backend/HRMS.Application/Abstractions/IBankAdviceService.cs (full interface - no per-payment edit method)"
+    permission: "n/a"
+    db: BankAdvicePayments
+
+  # =========================== G. CONCURRENCY & IDEMPOTENCY ===========================
+  - id: F-BANKADV-061
+    name: "Prepare/Approve/Cancel/Export all use the identical pattern: ExecuteUpdateAsync scoped by Id+TenantId+ConcurrencyVersion(+current status), incrementing ConcurrencyVersion by 1 - a lost race (changed != 1) always surfaces as Conflict, never a 500"
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "BankAdviceService.SetPreparedAsync, ApproveAsync, CancelAsync, ExportAsync"
+    permission: "Payroll.BankAdvice.Validate, Approve, Cancel, Export"
+    db: BankAdviceBatches.ConcurrencyVersion
+
+  - id: F-BANKADV-062
+    name: "CONFIRMED UNCAUGHT-RACE SHAPE - GenerateAsync's own active-batch AnyAsync pre-check has no surrounding try/catch around its SaveChangesAsync; two concurrent Generate calls for the same run that both pass the pre-check before either commits can compute the identical next Version (and therefore an identical deterministic BatchNumber), and the DB's unique (TenantId,BatchNumber) index makes the race loser's SaveChangesAsync throw an unhandled DbUpdateException instead of a graceful Conflict"
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (full method - no try/catch DbUpdateException around SaveChangesAsync)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: BankAdviceBatches (unique TenantId+BatchNumber index)
+
+  - id: F-BANKADV-063
+    name: The unique index (TenantId, BankAdviceBatchId, PayrollResultId) on BankAdvicePayments prevents a payroll result from ever being duplicated within one batch
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "BankAdvicePaymentConfiguration (unique index)"
+    permission: "n/a"
+    db: BankAdvicePayments (unique TenantId+BankAdviceBatchId+PayrollResultId)
+
+  - id: F-BANKADV-064
+    name: The unique index (TenantId, PaymentReference) on BankAdvicePayments prevents any two payments tenant-wide from ever sharing a reference
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "BankAdvicePaymentConfiguration (unique index)"
+    permission: "n/a"
+    db: BankAdvicePayments (unique TenantId+PaymentReference)
+
+  - id: F-BANKADV-065
+    name: The unique index (TenantId, BatchNumber) on BankAdviceBatches prevents duplicate batch numbers tenant-wide
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "BankAdviceBatchConfiguration (unique index)"
+    permission: "n/a"
+    db: BankAdviceBatches (unique TenantId+BatchNumber)
+
+  - id: F-BANKADV-066
+    name: Every mutating action re-loads via db.ClearChangeTracker() plus a fresh Load() before building its response DTO, so a caller never observes a stale in-memory snapshot after a lifecycle transition
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "BankAdviceService.ApproveAsync, CancelAsync, ExportAsync, SetPreparedAsync (db.ClearChangeTracker())"
+    permission: "Payroll.BankAdvice.Validate, Approve, Cancel, Export"
+    db: "n/a"
+
+  # =========================== H. PAYROLL-RESULT INTEGRATION, RECONCILIATION & FINAL-SETTLEMENT SCOPE ===========================
+  - id: F-BANKADV-067
+    name: PayrollAnalyticsService's post-payroll reconciliation independently raises a Warning "MissingBankAdvice" finding when a run has persisted PayrollResults but zero non-Cancelled BankAdviceBatch
+    group: Payroll-Result Integration, Reconciliation & Final-Settlement Scope
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.AnalyticsReconcile (out of this module's own permission surface)"
+    db: BankAdviceBatches, PayrollResults
+
+  - id: F-BANKADV-068
+    name: PayrollAnalyticsService raises a Critical "BankAdviceAmountMismatch" finding when the sum of active BankAdviceBatch.TotalAmount differs from the run's own persisted net-pay total
+    group: Payroll-Result Integration, Reconciliation & Final-Settlement Scope
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "n/a"
+    db: BankAdviceBatches.TotalAmount, PayrollResults.NetPay
+
+  - id: F-BANKADV-069
+    name: PayrollAnalyticsService raises a Warning "BankAdviceCountMismatch" finding when the count of active BankAdvicePayments differs from the run's PayrollResult count
+    group: Payroll-Result Integration, Reconciliation & Final-Settlement Scope
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "n/a"
+    db: BankAdvicePayments, PayrollResults
+
+  - id: F-BANKADV-070
+    name: PayrollAnalyticsService raises a Critical "DuplicateBankPaymentReference" finding when any active PaymentReference repeats across the run's active batches
+    group: Payroll-Result Integration, Reconciliation & Final-Settlement Scope
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "n/a"
+    db: BankAdvicePayments.PaymentReference
+
+  - id: F-BANKADV-071
+    name: "CONFIRMED - the BankAdviceCountMismatch/DuplicateBankPaymentReference filters both read PaymentStatus != Cancelled, a value that (per F-BANKADV-056) is never actually assigned by BankAdviceService - this specific exclusion clause is dead code, though the surrounding count/dedupe logic still functions correctly over the full payment set"
+    group: Payroll-Result Integration, Reconciliation & Final-Settlement Scope
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync (PaymentStatus != BankAdvicePaymentStatus.Cancelled)"
+    permission: "n/a"
+    db: BankAdvicePayments.PaymentStatus
+
+  - id: F-BANKADV-072
+    name: "OUT OF SCOPE (confirmed, not a gap) - this module does not own the general payroll-reconciliation/variance-control/analytics engine (PayrollReconciliation, PayrollVarianceControls, PayrollAnomalyFlags, PayrollAnalyticsSnapshot); only the 4 BankAdvice-specific findings (F-BANKADV-067..070) are exercised here, as an integration-boundary check"
+    group: Payroll-Result Integration, Reconciliation & Final-Settlement Scope
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (full file, out of this module's own surface beyond the BankAdvice block)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-BANKADV-073
+    name: "CONFIRMED - no code-level integration exists between bank advice and final settlement/separation payouts: a full grep of SeparationService.cs for \"BankAdvice\" returns zero matches; docs/phase-7h explicitly defers \"final settlement\" alongside GL posting, statutory returns, and arrears/retro"
+    group: Payroll-Result Integration, Reconciliation & Final-Settlement Scope
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/SeparationService.cs (full grep for BankAdvice - zero matches)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-BANKADV-074
+    name: "OUT OF SCOPE (confirmed, not a gap) - Payroll GL/accounting posting (PayrollAccountingController/IPayrollAccountingService) is a separate, already-distinct service with its own GenerateAsync; it reads PayrollRun/PayrollResults independently and has no BankAdvice reference of any kind"
+    group: Payroll-Result Integration, Reconciliation & Final-Settlement Scope
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PayrollOperationsService.cs / PayrollAccountingController (out of this module's surface)"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== I. AUDIT & HISTORY ===========================
+  - id: F-BANKADV-075
+    name: "Every lifecycle transition (Generated/ValidationFailed/Prepared/Approved/Exported/Cancelled) appends exactly one BankAdviceHistory row with ChangeType/ChangedAtUtc/Message/a JSON SnapshotJson of {BatchNumber,Status,TotalEmployees,TotalAmount}"
+    group: Audit & History
+    status: Implemented
+    service: "BankAdviceService.History (private helper)"
+    permission: "Payroll.BankAdvice.View"
+    db: BankAdviceHistories
+
+  - id: F-BANKADV-076
+    name: History is append-only - a full grep of BankAdviceService.cs shows no Update/Remove call against BankAdviceHistories, only .Add
+    group: Audit & History
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/BankAdviceService.cs (full grep for db.BankAdviceHistories - Add-only)"
+    permission: "n/a"
+    db: BankAdviceHistories
+
+  - id: F-BANKADV-077
+    name: History rows are returned inline on BankAdviceBatchDto by both GetAsync and GetByIdAsync, ordered newest-first (ChangedAtUtc descending)
+    group: Audit & History
+    status: Implemented
+    api: "GET /api/payroll/bank-advice, GET /api/payroll/bank-advice/{id}"
+    service: "BankAdviceService.ToDto"
+    permission: "Payroll.BankAdvice.View"
+    db: BankAdviceHistories
+
+  - id: F-BANKADV-078
+    name: "CONFIRMED DEAD PERMISSION - Payroll.BankAdvice.ViewHistory is a declared, seeded (id 116) permission with a frontend mirror, but no controller route or service method anywhere gates anything on it; history is unconditionally included wherever Payroll.BankAdvice.View already grants access"
+    group: Audit & History
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController, full route grep - no [HasPermission(Permissions.Payroll.BankAdviceViewHistory)] anywhere)"
+    permission: "Payroll.BankAdvice.ViewHistory (declared, unused)"
+    db: "n/a"
+
+  - id: F-BANKADV-079
+    name: BankAdviceHistory.ActorUserId is a declared entity field that the private History() helper never sets (always left null), even though the actor's identity (tenant.UserId) is available at every call site
+    group: Audit & History
+    status: Implemented
+    service: "BankAdviceService.History (no ActorUserId assignment)"
+    permission: "n/a"
+    db: BankAdviceHistories.ActorUserId
+
+  # =========================== J. AUTHORIZATION & SCOPE ===========================
+  - id: F-BANKADV-080
+    name: "7 distinct permissions gate the module: BankAdvice.View, .Generate, .Validate (shared by both Validate and Prepare routes), .Approve, .Export, .Cancel, .ViewHistory (dead, F-BANKADV-078)"
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll.BankAdvice* block)"
+    permission: "Payroll.BankAdvice.*"
+    db: "n/a"
+
+  - id: F-BANKADV-081
+    name: "CONFIRMED (headline) - a full grep of SeedData.cs's RolePermissionMap for all 7 BankAdvice permission constants returns zero matches in any seeded role array; only SuperAdmin/TenantAdmin hold any of them, via the blanket Permissions.All grant. HRAdmin, HRManager, SuperHR, and the role literally named \"Accounts\" (which holds only Employee.View) all hold zero, out of the box"
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, full-file grep)"
+    permission: "Payroll.BankAdvice.*"
+    db: "n/a"
+
+  - id: F-BANKADV-082
+    name: There is no /api/me/... self-service surface for bank advice at all - every route requires an explicit BankAdvice permission and no seeded role other than SuperAdmin/TenantAdmin has one
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController - single controller, no /api/me variant)"
+    permission: "Payroll.BankAdvice.*"
+    db: "n/a"
+
+  - id: F-BANKADV-083
+    name: Validate and Prepare share ONE permission (Payroll.BankAdvice.Validate) despite being two distinct routes/actions - there is no way to grant "can validate, cannot prepare" or vice versa
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController.Validate, .Prepare - identical [HasPermission] attribute)"
+    permission: "Payroll.BankAdvice.Validate"
+    db: "n/a"
+
+  - id: F-BANKADV-084
+    name: Approve is its own dedicated permission, separate from Validate/Prepare - matching the "separate action = separate permission" pattern used elsewhere in Payroll
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController.Approve)"
+    permission: "Payroll.BankAdvice.Approve"
+    db: "n/a"
+
+  - id: F-BANKADV-085
+    name: A cross-tenant batch id on any id-scoped route is NotFound (via the TenantId-filtered Load helper), not Forbidden
+    group: Authorization & Scope
+    status: Implemented
+    service: "BankAdviceService.Load (TenantId filter)"
+    permission: "Payroll.BankAdvice.View, Validate, Approve, Export, Cancel"
+    db: BankAdviceBatches (TenantId filter)
+
+  - id: F-BANKADV-086
+    name: No route on BankAdviceController carries [AllowAnonymous] - every action requires authentication
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController, full grep for [AllowAnonymous] - zero matches)"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== K. TENANT ISOLATION ===========================
+  - id: F-BANKADV-087
+    name: GenerateAsync's PayrollRun lookup is TenantId-filtered - a cross-tenant runId is NotFound
+    group: Tenant Isolation
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync"
+    permission: "Payroll.BankAdvice.Generate"
+    db: PayrollRuns (TenantId filter)
+
+  - id: F-BANKADV-088
+    name: Load() (used by every id-scoped action) is TenantId-filtered - a batch id from another tenant is NotFound for Get/Validate/Prepare/Approve/Cancel/Export alike
+    group: Tenant Isolation
+    status: Implemented
+    service: "BankAdviceService.Load"
+    permission: "Payroll.BankAdvice.View, Validate, Approve, Export, Cancel"
+    db: BankAdviceBatches (TenantId filter)
+
+  - id: F-BANKADV-089
+    name: GetAsync (list) is TenantId-filtered at the source query - batches from other tenants never appear regardless of the Status filter supplied
+    group: Tenant Isolation
+    status: Implemented
+    api: "GET /api/payroll/bank-advice"
+    service: "BankAdviceService.GetAsync"
+    permission: "Payroll.BankAdvice.View"
+    db: BankAdviceBatches (TenantId filter)
+
+  - id: F-BANKADV-090
+    name: EmployeeBankDetails resolution is TenantId-filtered, so an employee bank account belonging to another tenant is never matched during generation
+    group: Tenant Isolation
+    status: Implemented
+    service: "BankAdviceService.GenerateAsync (accounts query)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: EmployeeBankDetails (TenantId filter)
+
+  - id: F-BANKADV-091
+    name: "The composite FK pattern (TenantId+PayrollRunId / TenantId+PayrollResultId / TenantId+EmployeeId / TenantId+BankAdviceBatchId) is used on every relationship in BankAdviceConfiguration.cs - no relationship is keyed by a bare cross-tenant-unsafe Guid"
+    group: Tenant Isolation
+    status: Implemented
+    service: "BankAdviceBatchConfiguration, BankAdvicePaymentConfiguration, BankAdviceHistoryConfiguration"
+    permission: "n/a"
+    db: BankAdviceBatches, BankAdvicePayments, BankAdviceHistories (composite FKs)
+
+  - id: F-BANKADV-092
+    name: The tenant's own PayrollControlConfiguration (self-approval/reason-required opt-ins) is itself TenantId-scoped - one tenant's maker-checker policy never affects another tenant's Approve/Cancel calls
+    group: Tenant Isolation
+    status: Implemented
+    service: "PayrollApprovalGuard.ValidateAsync (SingleOrDefaultAsync TenantId filter)"
+    permission: "Payroll.BankAdvice.Approve, Cancel"
+    db: PayrollControlConfigurations (TenantId filter)
+
+  # =========================== L. REPORTS, LISTING & LARGE DATA / PAGING ===========================
+  - id: F-BANKADV-093
+    name: "GetAsync's BankAdviceQuery supports exactly one filter, Status - there is no PayrollRunId, PayrollPeriodId, date-range, or BatchNumber filter on the list endpoint"
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    api: "GET /api/payroll/bank-advice"
+    service: "BankAdviceService.GetAsync, BankAdviceQuery"
+    permission: "Payroll.BankAdvice.View"
+    db: BankAdviceBatches.Status
+
+  - id: F-BANKADV-094
+    name: Paging follows the shared PagedQuery contract - page size is clamped to PagedQuery.MaxPageSize=100 even if a larger value is requested
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    service: "BankAdviceService.GetAsync"
+    permission: "Payroll.BankAdvice.View"
+    db: "n/a"
+
+  - id: F-BANKADV-095
+    name: The list is ordered by CreatedDate descending (most recently generated batch first), with no alternate sort option
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    service: "BankAdviceService.GetAsync (OrderByDescending CreatedDate)"
+    permission: "Payroll.BankAdvice.View"
+    db: BankAdviceBatches.CreatedDate
+
+  - id: F-BANKADV-096
+    name: "GetAsync eagerly Includes both Payments and History on EVERY page row - a page of N batches pulls all of their payment and history child rows in one query, not just summary counts"
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    service: "BankAdviceService.GetAsync (Include Payments, Include History)"
+    permission: "Payroll.BankAdvice.View"
+    db: BankAdviceBatches, BankAdvicePayments, BankAdviceHistories
+
+  - id: F-BANKADV-097
+    name: There is no server-side paging within a single batch's own Payments collection - GetByIdAsync/GetAsync always return EVERY payment row for a batch in one response regardless of how many thousand employees it covers
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    service: "BankAdviceService.Load, ToDto (unbounded Payments list)"
+    permission: "Payroll.BankAdvice.View"
+    db: BankAdvicePayments
+
+  - id: F-BANKADV-098
+    name: The CSV export similarly materializes every payment row into one in-memory StringBuilder/byte array with no streaming or chunking
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    service: "BankAdviceService.ExportAsync (StringBuilder over batch.Payments)"
+    permission: "Payroll.BankAdvice.Export"
+    db: BankAdvicePayments
+
+  # =========================== M. SQL SERVER/MYSQL PROVIDER PARITY ===========================
+  - id: F-BANKADV-099
+    name: Migration pair AddBankAdvicePaymentProcessing is present in both the SQL Server chain (20260919202210) and the MySQL tenant chain (20260919202237)
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "Backend/HRMS.Infrastructure/Persistence/Migrations, Backend/HRMS.Infrastructure.MySqlMigrations/Migrations"
+    permission: "n/a"
+    db: BankAdviceBatches, BankAdvicePayments, BankAdviceHistories (schema)
+
+  - id: F-BANKADV-100
+    name: "SqlServerBankAdviceIntegrationTests / MySqlBankAdviceIntegrationTests / BankAdviceProviderAcceptance exist as a dedicated 3-file provider-parity inventory (a SqlServer*/MySql*-pair plus a shared acceptance helper, mirroring the TaxDeclarations pattern from qa/14 rather than the single-shared-class YearEndTax pattern) - both providers are exercised, and both are opt-in/skip silently per the repository-wide convention when their env vars are absent"
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "Backend/HRMS.Tests/SqlServerBankAdviceIntegrationTests.cs, MySqlBankAdviceIntegrationTests.cs, BankAdviceProviderAcceptance.cs"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== N. FRONTEND ===========================
+  - id: F-BANKADV-101
+    name: BankAdvicePage.tsx renders the batch list, the selected batch's detail header, and a payments table with masked-account and validation-status columns
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.tsx"
+    permission: "Payroll.BankAdvice.View"
+    db: "n/a"
+
+  - id: F-BANKADV-102
+    name: "CONFIRMED FRONTEND GAP - generateBankAdvice exists as a working client function (src/api/payroll.ts) calling the real POST /api/payroll/runs/{runId}/bank-advice route, but it is never called from BankAdvicePage.tsx or any other page (full grep of Frontend/HRMS.Web/src/pages) - there is no UI path to generate a new batch from a payroll run"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/api/payroll.ts (generateBankAdvice, unused)"
+    permission: "Payroll.BankAdvice.Generate"
+    db: "n/a"
+
+  - id: F-BANKADV-103
+    name: "CONFIRMED FRONTEND GAP - cancelBankAdvice likewise exists as a working client function calling the real cancel route, but is never called from any page - there is no Cancel button/action anywhere in the UI"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/api/payroll.ts (cancelBankAdvice, unused)"
+    permission: "Payroll.BankAdvice.Cancel"
+    db: "n/a"
+
+  - id: F-BANKADV-104
+    name: Validate/Prepare/Approve/Export ARE all correctly wired and reachable from BankAdvicePage.tsx, each conditioned on the selected batch's current Status
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.tsx (action buttons)"
+    permission: "Payroll.BankAdvice.Validate, Approve, Export"
+    db: "n/a"
+
+  - id: F-BANKADV-105
+    name: "CONFIRMED (low severity, same shape as prior modules' CR-237/CR-257) - BankAdvicePage.tsx has no useAuth()/can() permission gating on any button; all four lifecycle buttons render unconditionally for any user who can reach the page at all - the backend [HasPermission] gate is authoritative per CLAUDE.md"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.tsx (full component - no useAuth/can() usage)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-BANKADV-106
+    name: "Bank Advice IS discoverable through normal navigation - it has a navigation.ts entry (/payroll/bank-advice, group 'administration') and an App.tsx route gated on Permissions.payroll.bankAdviceView, unlike some prior modules' pages"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/layout/navigation.ts, App.tsx"
+    permission: "Payroll.BankAdvice.View"
+    db: "n/a"
+
+  - id: F-BANKADV-107
+    name: "The frontend permissions.ts mirror lists all 7 BankAdvice permission constants including the dead bankAdviceViewHistory, matching the backend's own declared (but unused) constant 1:1"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/auth/permissions.ts"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-BANKADV-108
+    name: "BankAdvicePage.test.tsx only covers the list-render and empty-state paths - it stubs GET routes only and never exercises Validate/Prepare/Approve/Export/Cancel/Generate against a mocked POST"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.test.tsx (full file - 2 tests, both GET-only)"
+    permission: "n/a"
+    db: "n/a"

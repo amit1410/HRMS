@@ -1,0 +1,139 @@
+sheet: EmployeeCode_Security
+submodule: Authorization Matrix, Tenant Isolation, Data-Model Isolation
+defaults:
+  role: TENANT_ADMIN
+  perm: EmployeeCodeConfiguration.Manage
+  tenant: A
+  pre: "See individual case role/perm; tenant A unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: CODE-AUTHZ-001
+    func: [F-CODE-43]
+    sc: Consolidated role x permission matrix for every Employee Code endpoint
+    t: SuperAdmin/TenantAdmin (via Permissions.All) can reach every route; every other seeded role is refused
+    src: ["SeedData.RolePermissionMap; [HasPermission] on EmployeeCodeConfigurationController"]
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[GET /api/employee-code-configuration] As SUPER_ADMIN => [200 or 404 if unconfigured, never 403]"
+      - "[GET /api/employee-code-configuration] As TENANT_ADMIN => [200 or 404, never 403]"
+      - "[GET /api/employee-code-configuration] As HR_ADMIN => [403]"
+      - "[GET /api/employee-code-configuration] As HR_MANAGER => [403]"
+      - "[GET /api/employee-code-configuration] As MANAGER => [403]"
+      - "[GET /api/employee-code-configuration] As EMPLOYEE => [403]"
+    auto: API
+    cr: [CR-44]
+
+  - id: CODE-AUTHZ-002
+    func: [F-CODE-43]
+    sc: PUT/POST/DELETE rule and configuration endpoints require Manage; GET/preview endpoints require only View
+    t: A hypothetical custom role holding only View can read but not write anywhere under this feature
+    src: ["[HasPermission(Permissions.EmployeeCodeConfiguration.View)] on GET/preview vs .Manage on PUT/POST/DELETE"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: "Custom role with EmployeeCodeConfiguration.View only"
+    steps:
+      - "[GET /api/employee-code-configuration] => [200/404]"
+      - "[GET /api/employee-code-configuration/rules] => [200]"
+      - "[POST /api/employee-code-configuration/preview] => [200/400, never 403 for permission reasons]"
+      - "[PUT /api/employee-code-configuration] => [403]"
+      - "[POST /api/employee-code-configuration/rules] => [403]"
+      - "[DELETE /api/employee-code-configuration/rules/{id}] => [403]"
+    auto: API
+
+  - id: CODE-AUTHZ-003
+    func: [F-CODE-43]
+    sc: Every endpoint requires authentication
+    t: An anonymous caller (no bearer token) is refused before any permission check runs
+    src: ["[Authorize] + fallback-deny policy"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    steps:
+      - "[GET /api/employee-code-configuration] No token => [401]"
+      - "[PUT /api/employee-code-configuration] No token => [401]"
+      - "[GET /api/employee-code-configuration/rules] No token => [401]"
+      - "[POST /api/employee-code-configuration/preview] No token => [401]"
+      - "[DELETE /api/employee-code-configuration/rules/{id}] No token => [401]"
+    auto: API
+
+  - id: CODE-AUTHZ-004
+    func: [F-CODE-44]
+    sc: Removing EmployeeCodeConfiguration.Manage from a custom role that previously held it immediately blocks further saves, mid-session
+    t: A permission revocation takes effect on the next request, not merely at next login (consistent with the fallback-deny/per-request policy evaluation used throughout the product)
+    src: ["ASP.NET Core policy evaluation is per-request, not cached in the token beyond its own claims"]
+    type: Authorization
+    tags: [Negative]
+    pri: P1
+    role: "Custom role, Manage revoked mid-session"
+    steps:
+      - "[PUT /api/employee-code-configuration] Before revocation => [200]"
+      - "[Admin action] Revoke EmployeeCodeConfiguration.Manage from the role => role's permission set no longer includes Manage"
+      - "[PUT /api/employee-code-configuration] Same user, same still-valid access token, immediately after revocation => [403]"
+    auto: API
+
+  - id: CODE-AUTHZ-005
+    func: [F-CODE-45]
+    sc: Tenant B cannot read, write, delete, or preview against any of Tenant A's Employee Code data by id
+    t: Consolidated cross-tenant probing sweep across configuration, versions, rules, and preview
+    src: ["ITenantContext-scoped queries throughout EmployeeCodeConfigurationService"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A data, B caller
+    steps:
+      - "[GET /api/employee-code-configuration/rules/{Tenant A rule id}] As Tenant B => [404]"
+      - "[PUT /api/employee-code-configuration/rules/{Tenant A rule id}] As Tenant B => [404]"
+      - "[DELETE /api/employee-code-configuration/rules/{Tenant A rule id}] As Tenant B => [404]"
+      - "[PUT /api/employee-code-configuration] As Tenant B, body {versionId: <Tenant A's versionId>, ...} => [404] 'The selected Employee Code configuration version was not found.'"
+      - "[POST /api/employee-code-configuration/preview] As Tenant B, any Tenant A master id in any field => [400] treated as invalid, never resolved to Tenant A's real code"
+    auto: API
+
+  - id: CODE-AUTHZ-006
+    func: [F-CODE-42]
+    sc: A Tenant B EmployeeCodeRule row can never be constructed to point at a Tenant A EmployeeCodeConfigVersion, even through a direct data-layer attempt
+    t: The composite (TenantId, VersionId) FK/principal-key pairing on EmployeeCodeRule rejects a foreign-tenant parent at the database level, not merely at the service layer
+    src: ["EmployeeCodeRuleConfiguration.cs / EmployeeCodeConfigVersionConfiguration.cs (HasForeignKey(TenantId, EmployeeCodeConfigVersionId).HasPrincipalKey(TenantId, Id))"]
+    type: Tenant-Isolation
+    tags: [Security, Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[DB-assisted] Attempt to insert an EmployeeCodeRule row with TenantId=B but EmployeeCodeConfigVersionId pointing at a version whose actual TenantId is A => the composite FK constraint rejects the insert at the database level (a referential-integrity violation, not merely something the application layer happens to filter out)"
+    auto: DB-assisted
+
+  - id: CODE-AUTHZ-007
+    func: [F-CODE-45]
+    sc: Tenant isolation holds even when Tenant A and Tenant B use IDENTICAL prefixes, starting numbers, rule names and priorities
+    t: Colliding configuration values across tenants never leak or cross-contaminate
+    src: ["Every query scoped by TenantId; EmployeeCodeSequences unique index includes TenantId"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A and B, identical setup
+    steps:
+      - "[PUT /api/employee-code-configuration] Tenant A and Tenant B both save Prefix='EMP', NextNumber=1, Padding=5 => both succeed independently"
+      - "[POST /api/employees/{tenantA}/employment-history] and [POST /api/employees/{tenantB}/employment-history] Both hire under identical rules => both receive 'EMP-00001' - same string, fully isolated tenants, no shared counter or shared uniqueness check across them"
+    auto: API
+
+  - id: CODE-AUTHZ-008
+    func: [F-CODE-42]
+    sc: Deleting a Tenant (cascade behavior) does not orphan EmployeeCodeConfig rows in a way that leaks into another tenant's queries
+    t: Confirms the OnDelete(DeleteBehavior.Restrict) on the Tenant FK for EmployeeCodeConfigs/Versions/Rules/Segments/Conditions/Sequences
+    src: ["Every EmployeeCode*Configuration.cs ('HasOne(e => e.Tenant)...OnDelete(DeleteBehavior.Restrict)')"]
+    type: Boundary
+    tags: [Contract]
+    pri: P3
+    sev: Low
+    steps:
+      - "[DB-assisted] Attempt to hard-delete a Tenant row that still has EmployeeCodeConfigs/Rules/Sequences => the Restrict behavior blocks the delete at the database level rather than cascading and silently removing Employee Code data"
+    auto: DB-assisted

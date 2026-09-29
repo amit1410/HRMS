@@ -1,0 +1,58 @@
+sheet: Stat_Large_Data
+submodule: Large Data and Paging
+defaults:
+  tenant: "T1 (DEMO01)"
+  pre: "see scenario/data for setup"
+  reg: true
+
+cases:
+  - id: STAT-LRG-001
+    func: [F-STAT-140]
+    sc: Configuration listing paging is clamped and stable
+    t: GetConfigurationsAsync clamps PageSize/Page consistently with every other paginated listing
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs GetConfigurationsAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    role: TenantAdmin
+    perm: Payroll.Statutory.View
+    data: "50 configurations seeded"
+    steps:
+      - "[GET /api/payroll/statutory-configurations?page=0&pageSize=0] => [200] Page clamped to 1, PageSize clamped to at least 1"
+      - "[GET /api/payroll/statutory-configurations?pageSize=100000] => [200] PageSize clamped to PagedQuery.MaxPageSize, not honored verbatim"
+      - "[GET /api/payroll/statutory-configurations] repeated identical calls => [200] identical ordering (Code ascending) across repeated calls, confirming stable paging"
+    auto: API
+
+  - id: STAT-LRG-002
+    func: [F-STAT-141]
+    sc: Filing has a dedicated scale fixture; Compliance Returns does not
+    t: StatutoryFilingLargeDataTests.cs exists; no equivalent exists for the unpaginated compliance-return register
+    src: "Backend/HRMS.Tests/StatutoryFilingLargeDataTests.cs; PayrollStatutoryComplianceService.cs GetAsync"
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    role: n/a
+    perm: n/a
+    data: none
+    steps:
+      - "[Manual] glob Backend/HRMS.Tests for StatutoryFilingLargeDataTests.cs and read it in full => exists; record what scale it actually proves (e.g. run item count, package size) rather than assuming full coverage"
+      - "[Manual] glob Backend/HRMS.Tests for a PayrollStatutoryCompliance-equivalent *LargeDataTests.cs => none exists, consistent with F-STAT-141's finding that GetAsync's own employee collection has no paging at all"
+    auto: Manual only
+
+  - id: STAT-LRG-003
+    func: [F-STAT-142]
+    sc: Deterministic ordering on filing runs and configuration lists
+    t: GetRunsAsync and GetConfigurationsAsync both order deterministically for stable pagination
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs GetRunsAsync; StatutoryPayrollService.cs GetConfigurationsAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    role: PayrollAdmin (with StatutoryFiling.View granted)
+    perm: Payroll.StatutoryFiling.View
+    data: "10 filing runs created in a known sequence"
+    steps:
+      - "[GET /api/payroll/statutory-filings/runs] called twice in succession with no intervening writes => [200] identical ordering both times (CreatedDate descending)"
+    auto: API

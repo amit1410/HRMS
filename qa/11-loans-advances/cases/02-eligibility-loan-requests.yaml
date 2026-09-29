@@ -1,0 +1,196 @@
+sheet: Loans_Eligibility_Requests
+submodule: Eligibility and Employee Loan Requests - CreateLoanAsync validation, product/version resolution, ESS scoping
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Loans.Request"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.Loans.Request granted, an Active Personal Loan product (min 1000/max 50000, min 3/max 24 months, RequiresApproval=true) exists, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-REQ-001
+    func: [F-LOAN-012]
+    sc: Create a valid loan request
+    t: A well-formed loan request within product limits succeeds
+    src: ["PayrollLoanService.CreateLoanAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/loans] LoanProductId=PL, RequestedAmount=10000, RequestedTenureMonths=12 => [200/201] Status=Draft, OutstandingPrincipal=10000"
+    auto: API
+
+  - id: LOAN-REQ-002
+    func: [F-LOAN-012]
+    sc: Non-positive amount or tenure is rejected
+    t: RequestedAmount<=0 and RequestedTenureMonths<=0 are each Invalid
+    src: ["PayrollLoanService.CreateLoanAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loans] RequestedAmount=0 => [400] Amount and tenure must be positive."
+      - "[POST /api/payroll/loans] RequestedTenureMonths=0 => [400] Amount and tenure must be positive."
+    auto: API
+
+  - id: LOAN-REQ-003
+    func: [F-LOAN-013]
+    sc: An unknown or inactive loan product is rejected
+    t: A missing product id and a deactivated product both return NotFound
+    src: ["PayrollLoanService.CreateLoanAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loans] LoanProductId={unknownId} => [404] Active loan product not found."
+      - "[POST /api/payroll/loans] LoanProductId={deactivatedProductId} => [404] Active loan product not found."
+    auto: API
+
+  - id: LOAN-REQ-004
+    func: [F-LOAN-014]
+    sc: An unknown employee id is rejected
+    t: A non-existent EmployeeId returns NotFound
+    src: ["PayrollLoanService.CreateLoanAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loans] EmployeeId={unknownId} => [404] Employee not found."
+    auto: API
+
+  - id: LOAN-REQ-005
+    func: [F-LOAN-014]
+    sc: A separated (inactive) employee can still be the target of a new loan request
+    t: CreateLoanAsync succeeds for an Employee row whose Status is Resigned/Terminated, evidencing no employment-status eligibility gate
+    src: ["PayrollLoanService.CreateLoanAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Validation]
+    cr: [CR-199]
+    steps:
+      - "[Manual/DB] Set the target Employee's Status to Resigned directly => Employee row updated, Status=Resigned"
+      - "[POST /api/payroll/loans] EmployeeId={resignedEmployeeId}, RequestedAmount=5000, RequestedTenureMonths=6 => [200/201] loan created Status=Draft (no employment-status check blocks it)"
+    auto: DB-assisted
+
+  - id: LOAN-REQ-006
+    func: [F-LOAN-015]
+    sc: RequestedAmount outside the product's header Min/Max is rejected
+    t: An amount below MinAmount and one above MaxAmount are both Invalid
+    src: ["PayrollLoanService.CreateLoanAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans] RequestedAmount=500 (below MinAmount=1000) => [400] Requested amount is outside product limits."
+      - "[POST /api/payroll/loans] RequestedAmount=60000 (above MaxAmount=50000) => [400] Requested amount is outside product limits."
+    auto: API
+
+  - id: LOAN-REQ-007
+    func: [F-LOAN-016]
+    sc: RequestedTenureMonths outside the product's header Min/Max is rejected
+    t: A tenure below MinTenureMonths and one above MaxTenureMonths are both Invalid
+    src: ["PayrollLoanService.CreateLoanAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans] RequestedTenureMonths=1 (below MinTenureMonths=3) => [400] Requested tenure is outside product limits."
+      - "[POST /api/payroll/loans] RequestedTenureMonths=36 (above MaxTenureMonths=24) => [400] Requested tenure is outside product limits."
+    auto: API
+
+  - id: LOAN-REQ-008
+    func: [F-LOAN-017]
+    sc: MaxConcurrentLoans is not enforced
+    t: An employee can hold a second concurrent Active loan against a product whose MaxConcurrentLoans=1
+    src: ["PayrollLoanService.CreateLoanAsync (full grep for MaxConcurrentLoans usage)"]
+    type: Boundary
+    pri: P1
+    tags: [Validation]
+    cr: [CR-186]
+    steps:
+      - "[Manual/DB] Set the Personal Loan product's MaxConcurrentLoans=1, and disburse one Active loan for the employee already => precondition established: employee already holds one Active loan against the capped product"
+      - "[POST /api/payroll/loans] Same EmployeeId, LoanProductId=PL, RequestedAmount=5000, RequestedTenureMonths=6 => [200/201] a SECOND loan request is accepted despite MaxConcurrentLoans=1"
+    auto: DB-assisted
+
+  - id: LOAN-REQ-009
+    func: [F-LOAN-018]
+    sc: Interest terms are resolved from the currently-effective product version
+    t: A loan created today picks up the version's InterestMethod/InterestRate/RecoveryPolicy, not necessarily the product header's
+    src: ["PayrollLoanService.CreateLoanAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/DB] Set the product header's InterestMethod=None but the active version's InterestMethod=Flat, InterestRate=12 => header and version now deliberately diverge on InterestMethod"
+      - "[POST /api/payroll/loans] RequestedAmount=10000, RequestedTenureMonths=12 => [200/201] created loan's InterestMethod=Flat, InterestRate=12 (from the version, not the header)"
+    auto: DB-assisted
+
+  - id: LOAN-REQ-010
+    func: [F-LOAN-019]
+    sc: LoanNumber format
+    t: The generated LoanNumber starts with LN/ or ADV/ per ProductType and is at most 22 characters
+    src: ["PayrollLoanService.CreateLoanAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[POST /api/payroll/loans] LoanProductId=PL (ProductType=Loan) => [200/201] LoanNumber matches ^LN/ and is <=22 characters, upper-cased"
+    auto: API
+
+  - id: LOAN-REQ-011
+    func: [F-LOAN-020]
+    sc: RequiresApproval=false auto-approves the request
+    t: A product with RequiresApproval=false creates the loan directly in Approved status with ApprovedAmount pre-filled
+    src: ["PayrollLoanService.CreateLoanAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/DB] Set the Personal Loan product's RequiresApproval=false => product row updated, RequiresApproval=false"
+      - "[POST /api/payroll/loans] RequestedAmount=8000, RequestedTenureMonths=12 => [200/201] Status=Approved, ApprovedAmount=8000, ApprovedTenureMonths=12"
+    auto: DB-assisted
+
+  - id: LOAN-REQ-012
+    func: [F-LOAN-021]
+    sc: Outstanding fields are pre-populated at request time
+    t: A freshly created Draft loan already has OutstandingPrincipal=OutstandingTotal=RequestedAmount before any approval
+    src: ["PayrollLoanService.CreateLoanAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/payroll/loans] RequestedAmount=15000, RequestedTenureMonths=12 => [200/201] Status=Draft, OutstandingPrincipal=15000, OutstandingTotal=15000"
+    auto: API
+
+  - id: LOAN-REQ-013
+    func: [F-LOAN-022]
+    sc: Creating a loan appends a Created LoanHistory row
+    t: A successful CreateLoanAsync call is immediately reflected in LoanHistories
+    src: ["PayrollLoanService.CreateLoanAsync -> AddHistory"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans] RequestedAmount=10000, RequestedTenureMonths=12 => [200/201] loan created"
+      - "[Manual/DB] Query LoanHistories for the new loan id => one row with EventType=Created, NewStatus=Draft"
+    auto: DB-assisted
+
+  - id: LOAN-REQ-014
+    func: [F-LOAN-022]
+    sc: ESS self-service create ignores a spoofed EmployeeId
+    t: POST /api/me/loans always uses the caller's own linked-employee id, discarding any EmployeeId in the request body
+    src: ["PayrollLoansController.MyCreate"]
+    type: Security
+    pri: P0
+    role: EMPLOYEE
+    perm: "Payroll.Loans.Request"
+    tags: [Security]
+    smoke: true
+    steps:
+      - "[POST /api/me/loans] EmployeeId={anotherEmployeesId}, LoanProductId=PL, RequestedAmount=5000, RequestedTenureMonths=6 => [200/201] created loan's EmployeeId equals the CALLER's own linked employee id, not the spoofed one"
+    auto: API
+
+  - id: LOAN-REQ-015
+    func: [F-LOAN-012]
+    sc: ESS request validated against the same eligibility rules
+    t: An ESS request outside product limits is rejected identically to the admin route
+    src: ["PayrollLoansController.MyCreate -> PayrollLoanService.CreateLoanAsync"]
+    type: Negative
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Loans.Request"
+    steps:
+      - "[POST /api/me/loans] LoanProductId=PL, RequestedAmount=100000, RequestedTenureMonths=12 => [400] Requested amount is outside product limits."
+    auto: API

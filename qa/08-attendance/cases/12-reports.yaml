@@ -1,0 +1,191 @@
+sheet: Attendance_Reports
+submodule: Attendance Reports - Daily, Monthly, Exceptions, exports, CSV safety, permission matrix
+defaults:
+  role: HRADMIN
+  perm: "Attendance.Report.View"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin holding Attendance.Report.View/Report.Export, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-RPT-001
+    func: [F-ATT-224]
+    sc: Daily report returns rows for the requested date range with filters
+    t: Filter by employee/department/worklocation/status all narrow the result correctly
+    src: ["AttendanceReportService.GetDailyAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/attendance/reports/daily?fromDate=2026-07-01&toDate=2026-07-31] => [200] paged rows, SQL Skip/Take"
+      - "[GET /api/attendance/reports/daily?fromDate=2026-07-01&toDate=2026-07-31&status=Absent] => [200] only Absent-status rows"
+    auto: API
+
+  - id: ATT-RPT-002
+    func: [F-ATT-224]
+    sc: Daily report interactive range is capped at 366 days
+    t: A request beyond the interactive cap is rejected
+    src: ["AttendanceReportService.GetDailyAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/attendance/reports/daily?fromDate=2025-01-01&toDate=2026-12-31] (730 days) => [400] exceeds the 366-day interactive cap"
+    auto: API
+
+  - id: ATT-RPT-003
+    func: [F-ATT-225]
+    sc: Monthly report reads the persisted summary, not a live recomputation
+    t: The report reflects EmployeeAttendanceMonthlySummaries exactly, even if underlying daily data has since drifted without reprocessing
+    src: ["AttendanceReportService.GetMonthlyAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/attendance/reports/monthly?periodId={id}] => [200] figures match the persisted summary row values exactly"
+    auto: API
+
+  - id: ATT-RPT-004
+    func: [F-ATT-226]
+    sc: Exceptions report authorization is correctly SQL-scoped even though derivation/pagination is in-memory
+    t: A scoped manager's exceptions report never includes an out-of-scope employee, confirming the safety half of the finding
+    src: ["AttendanceReportService.GetExceptionsAsync"]
+    type: Security
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Report.View"
+    steps:
+      - "[GET /api/attendance/reports/exceptions?periodId={id}] As a manager scoped to 5 direct reports => [200] only those 5 employees' exceptions ever appear, regardless of the in-memory derivation step"
+    auto: API
+
+  - id: ATT-RPT-005
+    func: [F-ATT-226]
+    sc: The Exceptions report is measurably slower than Daily/Monthly at comparable scale due to in-memory derivation
+    t: A large-period exceptions report reflects the full-period-history-load cost documented in the research
+    src: ["AttendanceMonthlyProcessor.DeriveExceptions"]
+    type: Boundary
+    pri: P2
+    tags: [Boundary]
+    steps:
+      - "[Setup] A period with 2,000+ in-scope employees and a full month of daily history => precondition established for the steps below"
+      - "[GET /api/attendance/reports/exceptions?periodId={id}&page=1&pageSize=25] => [200] succeeds but with measurably higher latency than an equivalent Daily/Monthly report page - the entire scoped employee set's history/days/pending-requests is loaded into memory before this one page is derived and sliced"
+    auto: DB-assisted
+    cr: [CR-115]
+
+  - id: ATT-RPT-006
+    func: [F-ATT-227]
+    sc: Exporting the Exceptions report re-derives the full set once per export page
+    t: A multi-page export of the exceptions report repeats the full derivation cost on every page, not once
+    src: ["AttendanceReportService.ExportExceptionsAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/attendance/reports/exceptions/export?periodId={id}] A period whose scoped exception set spans multiple internal export pages before hitting MaxExportRows => [200] CSV returned correctly and fully, but confirm via logging/timing that GetExceptionsAsync (and therefore DeriveExceptions) is invoked once per internal page rather than once overall"
+    auto: DB-assisted
+    cr: [CR-115]
+
+  - id: ATT-RPT-007
+    func: [F-ATT-228]
+    sc: Report View alone never suffices for an export route
+    t: Every export endpoint independently requires Report.Export
+    src: ["AttendanceReportController"]
+    type: Authorization
+    pri: P0
+    role: HRMANAGER
+    perm: "Attendance.Report.View"
+    steps:
+      - "[GET /api/attendance/reports/daily/export] As a caller with Report.View but NOT Report.Export => [403] Forbidden"
+      - "[GET /api/attendance/reports/monthly/export] Same caller => [403] Forbidden"
+      - "[GET /api/attendance/reports/exceptions/export] Same caller => [403] Forbidden - Export cannot bypass View, and View cannot substitute for Export"
+    auto: API
+
+  - id: ATT-RPT-008
+    func: [F-ATT-229]
+    sc: Export enforces a hard MaxExportRows=50,000 cap, checked before materializing rows
+    t: A request whose TotalCount exceeds the cap fails cleanly rather than silently truncating
+    src: ["AttendanceReportService"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] A filtered daily-report query whose TotalCount is exactly 50,000 => precondition established"
+      - "[GET /api/attendance/reports/daily/export?...] => [200] full 50,000-row CSV export succeeds"
+      - "[Setup] The same query now returns 50,001 rows (one more employee/day added) => precondition established for the steps below"
+      - "[GET /api/attendance/reports/daily/export?...] => [400] 'export' validation error - rejected outright, not silently truncated to 50,000"
+    auto: DB-assisted
+
+  - id: ATT-RPT-009
+    func: [F-ATT-230]
+    sc: CSV export is formula-injection-hardened and correctly encoded
+    t: A field beginning with =, +, -, or @ is neutralized; unicode/null/date/time values format deterministically
+    src: ["AttendanceReportService"]
+    type: Security
+    pri: P1
+    steps:
+      - "[Setup] An employee/department/reason field containing a formula-triggering leading character (e.g. '=SUM(A1:A9)') exists in the exportable data => precondition established for the steps below"
+      - "[GET /api/attendance/reports/daily/export?...] => [200] the CSV escapes/neutralizes that field so it cannot execute as a formula when opened in a spreadsheet application, while remaining recognizable as the original text; the file is valid UTF-8"
+    auto: API
+    secc: true
+
+  - id: ATT-RPT-010
+    func: [F-ATT-231]
+    sc: Daily report labels rows using the employment effective as of each historical date
+    t: A department change mid-range shows the historically-correct department per row, not the current one
+    src: ["AttendanceReportService.GetDailyAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee E1 was in Department D1 through 2026-06-30, moved to D2 from 2026-07-01 => precondition established for the steps below"
+      - "[GET /api/attendance/reports/daily?fromDate=2026-06-01&toDate=2026-07-31&employeeId=E1] => [200] June rows show Department=D1, July rows show Department=D2 - each row reflects the historically-effective department, not E1's current department applied retroactively"
+    auto: API
+
+  - id: ATT-RPT-011
+    func: [F-ATT-232]
+    sc: The employee filter cannot cross tenant boundaries
+    t: A Tenant A employeeId filter used by a Tenant B caller yields no results, not a cross-tenant leak
+    src: ["AttendanceReportService"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/attendance/reports/daily?employeeId={tenantAEmployeeId}] As a Tenant B caller => [200] empty result set - the filter cannot reach across tenants"
+    auto: API
+
+  - id: ATT-RPT-012
+    func: [F-ATT-233]
+    sc: The seeded Manager role cannot reach any report/export route at all
+    t: A blanket denial confirms Manager lacks Report.View entirely, unlike its reach into the Operations exception queue
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    role: MANAGER
+    perm: "n/a (seeded matrix, no override)"
+    steps:
+      - "[GET /api/attendance/reports/daily] As a seeded Manager => [403] Forbidden - no Attendance.Report.View held"
+      - "[GET /api/attendance/operations/exceptions] Same Manager, same session => [200] succeeds via ExceptionView - the two 'see attendance data' surfaces diverge sharply on which permission a Manager needs"
+    auto: API
+
+  - id: ATT-RPT-013
+    func: [F-ATT-224, F-ATT-225]
+    sc: An employee without report permission is denied both report types
+    t: Baseline negative check for the Employee role
+    src: ["AttendanceReportController"]
+    type: Authorization
+    pri: P1
+    role: EMPLOYEE
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/reports/daily] As an Employee holding Attendance.View but not Report.View => [403] Forbidden"
+      - "[GET /api/attendance/reports/monthly] Same caller => [403] Forbidden"
+    auto: API
+
+  - id: ATT-RPT-014
+    func: [F-ATT-226]
+    sc: The Exceptions report permission matrix requires View, Export, AND Exception.View together for its export route
+    t: The three-way AND is enforced, holding two of three is insufficient
+    src: ["AttendanceReportController"]
+    type: Authorization
+    pri: P1
+    steps:
+      - "[GET /api/attendance/reports/exceptions/export] As a caller holding Report.View+Report.Export but NOT Exception.View => [403] Forbidden"
+      - "[GET /api/attendance/reports/exceptions/export] As a caller holding all three => [200] succeeds"
+    auto: API

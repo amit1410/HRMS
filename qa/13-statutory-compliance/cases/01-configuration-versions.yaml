@@ -1,0 +1,297 @@
+sheet: Stat_Configuration
+submodule: Statutory Configuration and Versions
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: STAT-CFG-001
+    func: [F-STAT-001, F-STAT-140]
+    sc: Listing statutory configurations
+    t: List is paginated and supports search/jurisdiction/type/active filters
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs GetConfigurationsAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Tenant has 3+ StatutoryConfiguration rows spanning ProvidentFund, Esi and ProfessionalTax, at least one IsActive=false"
+    role: TenantAdmin
+    perm: Payroll.Statutory.View
+    tenant: "T1 (DEMO01)"
+    data: "search=PF, statutoryType=ProvidentFund, isActive=true, pageSize=1"
+    steps:
+      - "[GET /api/payroll/statutory-configurations] request with search/statutoryType/isActive filters and pageSize=1 => [200] only the matching, active ProvidentFund configuration is returned with correct totalCount and page metadata"
+      - "[GET /api/payroll/statutory-configurations] request with pageSize=500 => [200] pageSize is clamped to PagedQuery.MaxPageSize, not honored verbatim"
+    auto: API
+
+  - id: STAT-CFG-002
+    func: [F-STAT-002]
+    sc: Getting a single configuration
+    t: Get by id succeeds for an owned configuration and 404s for a missing/cross-tenant id
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs GetConfigurationAsync"
+    type: Negative
+    tags: [Tenant-Isolation]
+    pri: P1
+    sev: Medium
+    pre: "Configuration CFG-PF-01 exists for T1; a different configuration exists only for T2"
+    role: TenantAdmin
+    perm: Payroll.Statutory.View
+    tenant: "T1 (DEMO01)"
+    data: "id=CFG-PF-01 (own), id=T2's configuration id (cross-tenant)"
+    steps:
+      - "[GET /api/payroll/statutory-configurations/{id}] with T1's own configuration id => [200] full configuration with its Versions collection ordered newest EffectiveFrom first"
+      - "[GET /api/payroll/statutory-configurations/{id}] with T2's configuration id while authenticated as T1 => [404] Statutory configuration not found (NotFound, not Forbidden)"
+    auto: API
+    tags: [Tenant-Isolation]
+
+  - id: STAT-CFG-003
+    func: [F-STAT-003]
+    sc: Creating a configuration - required fields
+    t: Create rejects blank Code/Name/Jurisdiction
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CreateConfigurationAsync"
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "code='', name='', jurisdictionCode=''"
+    steps:
+      - "[POST /api/payroll/statutory-configurations] with code, name and jurisdictionCode all blank => [400] Invalid, 'Configuration code, name and jurisdiction are required.'"
+    auto: API
+
+  - id: STAT-CFG-004
+    func: [F-STAT-004]
+    sc: Creating a configuration - code uniqueness
+    t: Code is trimmed, upper-cased, and unique per tenant
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CreateConfigurationAsync"
+    type: Boundary
+    tags: [Validation]
+    pri: P1
+    sev: Medium
+    pre: A configuration with code PF-DEFAULT already exists for T1
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "code=' pf-default '"
+    steps:
+      - "[POST /api/payroll/statutory-configurations] with code=' pf-default ' (mixed case, padded) => [409] Conflict, 'A statutory configuration with this code already exists.' (trim+uppercase collision)"
+      - "[POST /api/payroll/statutory-configurations] with code='PF-STATE-KA' (genuinely new) => [201] created; stored Code is trimmed and upper-cased"
+    auto: API
+
+  - id: STAT-CFG-005
+    func: [F-STAT-005]
+    sc: Creating a configuration - jurisdiction/state normalisation and wildcard state
+    t: JurisdictionCode/StateCode are normalised, and a null StateCode configuration matches every state at calculation time
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CreateConfigurationAsync, CalculateAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: none
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "jurisdictionCode=' in ', stateCode=null"
+    steps:
+      - "[POST /api/payroll/statutory-configurations] with jurisdictionCode=' in ' and stateCode omitted => [201] stored JurisdictionCode='IN', StateCode=null"
+      - "[GET /api/payroll/statutory-configurations/{id}] => [200] the returned configuration's StateCode is null, documenting it as a nationwide (any-state) rule usable later by CalculateAsync's own StateCode==null-matches-all predicate"
+    auto: API
+
+  - id: STAT-CFG-006
+    func: [F-STAT-006]
+    sc: Creating a configuration - audit history
+    t: CreateConfigurationAsync atomically records a StatutoryConfigurationHistory row of type Created
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CreateConfigurationAsync -> History"
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: none
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "new configuration PF-AUDIT-01"
+    steps:
+      - "[POST /api/payroll/statutory-configurations] create PF-AUDIT-01 => [201] created"
+      - "[DB] query StatutoryConfigurationHistories for the new configuration id => exactly one row, ChangeType=Created, SnapshotJson carrying Code/Name/JurisdictionCode/StateCode/StatutoryType/IsActive"
+    db: "StatutoryConfigurationHistories has exactly one Created row for the new configuration"
+    auto: DB-assisted
+    cr: []
+
+  - id: STAT-CFG-007
+    func: [F-STAT-007]
+    sc: Configuration is immutable after creation
+    t: No update or deactivate endpoint exists for an existing statutory configuration
+    src: "Backend/HRMS.Application/Abstractions/IStatutoryPayrollService.cs; Backend/HRMS.API/Controllers/StatutoryPayrollController.cs"
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    sev: Medium
+    pre: Configuration PF-DEFAULT exists for T1
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "id=PF-DEFAULT"
+    steps:
+      - "[PUT /api/payroll/statutory-configurations/{id}] any payload against an existing configuration => [404] the route does not exist (no PUT route is mapped for this resource; ASP.NET routing itself returns 404, not a service-level result)"
+      - "[Manual] full read of StatutoryPayrollController.cs and IStatutoryPayrollService.cs => confirms no update/deactivate member exists anywhere for StatutoryConfiguration"
+    auto: Manual only
+    cr: [CR-227]
+
+  - id: STAT-CFG-008
+    func: [F-STAT-008]
+    sc: Adding a version - date range validation
+    t: AddVersion rejects EffectiveTo earlier than EffectiveFrom
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs AddVersionAsync"
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P1
+    sev: Medium
+    pre: Configuration PF-DEFAULT exists for T1
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "effectiveFrom=2026-04-01, effectiveTo=2026-03-31"
+    steps:
+      - "[POST /api/payroll/statutory-configurations/{id}/versions] with EffectiveTo before EffectiveFrom => [400] Invalid, 'Effective To cannot be earlier than Effective From.'"
+      - "[POST /api/payroll/statutory-configurations/{id}/versions] with EffectiveTo equal to EffectiveFrom (single-day version) => [201] accepted (boundary equal is valid)"
+    auto: API
+
+  - id: STAT-CFG-009
+    func: [F-STAT-009, F-STAT-016]
+    sc: Adding a version - owning configuration must exist in tenant
+    t: AddVersion 404s for a missing or cross-tenant configuration id
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs AddVersionAsync"
+    type: Negative
+    tags: [Tenant-Isolation]
+    pri: P1
+    sev: Medium
+    pre: A configuration exists only for T2, not T1
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "id=random guid, id=T2's configuration id"
+    steps:
+      - "[POST /api/payroll/statutory-configurations/{randomId}/versions] with a random, non-existent id => [404] Statutory configuration not found."
+      - "[POST /api/payroll/statutory-configurations/{t2ConfigId}/versions] with T2's real configuration id while authenticated as T1 => [404] Statutory configuration not found. (NotFound, not Forbidden - cross-tenant id is indistinguishable from a non-existent one)"
+    auto: API
+
+  - id: STAT-CFG-010
+    func: [F-STAT-010]
+    sc: Adding a version - overlap is checked against every status
+    t: A new version's date range is rejected against ANY existing version - Draft, Active, or Retired alike - not only Active ones
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs AddVersionAsync (overlap query has no Status filter)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: Configuration PF-DEFAULT has one Draft version covering 2026-01-01..2026-06-30
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "existing Draft version 2026-01-01..2026-06-30; new version request 2026-04-01..2026-12-31 (overlaps)"
+    steps:
+      - "[POST /api/payroll/statutory-configurations/{id}/versions] a new version overlapping the existing DRAFT version's range => [409] Conflict, 'Statutory configuration versions cannot overlap.' (proves overlap is not limited to Active versions, unlike qa/12-bonus-variable-pay's Published-only rule)"
+      - "[POST /api/payroll/statutory-configurations/{id}/versions] retire the existing version is not possible (F-STAT-014) so the only way to add a non-overlapping version is a genuinely disjoint date range - verify 2026-07-01..2026-12-31 (adjacent, non-overlapping) succeeds => [201] created"
+    auto: API
+    cr: []
+
+  - id: STAT-CFG-012
+    func: [F-STAT-012, F-STAT-018]
+    sc: Adding a version - persisted fields and unvalidated rule ranges
+    t: A version persists Rules/Basis/Slabs verbatim with no range or sign validation on the rules
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs AddVersionAsync"
+    type: Boundary
+    tags: [Validation]
+    pri: P1
+    sev: Medium
+    pre: Configuration PF-DEFAULT exists for T1; one active SalaryComponent id is available
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "rules={employeeRate:-5, employerRate:150, wageCeiling:-1000}, basis=[{salaryComponentId, include:true, weight:100}], slabs=[]"
+    steps:
+      - "[POST /api/payroll/statutory-configurations/{id}/versions] with a NEGATIVE EmployeeRate, an EmployerRate above 100, and a NEGATIVE WageCeiling, plus one Basis row => [201] created - no field is rejected for being out of a sane range"
+      - "[GET /api/payroll/statutory-configurations/{id}] => [200] the returned version's ConfigurationJson round-trips the negative/out-of-range rule values unchanged, and its Basis collection carries the submitted SalaryComponent id/weight"
+    auto: API
+    cr: [CR-227]
+
+  - id: STAT-CFG-013
+    func: [F-STAT-013]
+    sc: Adding a version - Status has no default
+    t: StatutoryConfigurationVersionRequest.Status is a required field with no implicit default
+    src: "Backend/HRMS.Application/DTOs/Payroll/StatutoryDtos.cs StatutoryConfigurationVersionRequest"
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    sev: Low
+    pre: Configuration PF-DEFAULT exists for T1
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "request body omitting the status field entirely"
+    steps:
+      - "[POST /api/payroll/statutory-configurations/{id}/versions] with the JSON status property omitted entirely => [400] model-binding failure (Status is a non-nullable enum with no default, unlike qa/12-bonus-variable-pay's own Status-defaults-to-Published version request shape)"
+    auto: API
+
+  - id: STAT-CFG-014
+    func: [F-STAT-014]
+    sc: Versions never transition after creation
+    t: No API path exists to retire, activate, or otherwise change a version's Status once created
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs (full grep for a version Status-transition method - none)"
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    sev: Medium
+    pre: Configuration PF-DEFAULT has one Active version
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "existing Active version"
+    steps:
+      - "[Manual] full grep of StatutoryPayrollController.cs and StatutoryPayrollService.cs for any route/method that sets an existing StatutoryConfigurationVersion's Status => no match found; the only way Status is ever set is at creation time via AddVersionAsync's own request.Status"
+      - "[DB] confirm the Active version created at setup time still has Status=Active with no code path capable of changing it => Status is permanently frozen post-creation"
+    auto: Manual only
+
+  - id: STAT-CFG-015
+    func: [F-STAT-015]
+    sc: Adding a version - actor stamping
+    t: AddVersionAsync stamps CreatedByUserId from the current authenticated user
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs AddVersionAsync"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Low
+    pre: Configuration PF-DEFAULT exists for T1
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "new version"
+    steps:
+      - "[POST /api/payroll/statutory-configurations/{id}/versions] create a new version as TenantAdmin user U1 => [201] created"
+      - "[DB] inspect the new version row => StatutoryConfigurationVersion.CreatedByUserId equals U1's user id"
+    db: "StatutoryConfigurationVersions.CreatedByUserId = acting user"
+    auto: DB-assisted
+
+  - id: STAT-CFG-017
+    func: [F-STAT-017]
+    sc: Adding a version - audit history
+    t: AddVersionAsync records a StatutoryConfigurationHistory row of type VersionAdded
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs AddVersionAsync -> History"
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: Configuration PF-DEFAULT exists for T1
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    tenant: "T1 (DEMO01)"
+    data: "new version"
+    steps:
+      - "[POST /api/payroll/statutory-configurations/{id}/versions] create a version => [201] created"
+      - "[DB] query StatutoryConfigurationHistories for this configuration => a VersionAdded row now exists in addition to the earlier Created row (F-STAT-006), both append-only"
+    db: "StatutoryConfigurationHistories accumulates a second row of type VersionAdded"
+    auto: DB-assisted

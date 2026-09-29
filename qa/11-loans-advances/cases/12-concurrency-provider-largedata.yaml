@@ -1,0 +1,129 @@
+sheet: Loans_Provider_Scale
+submodule: Concurrency, Provider Parity and Large Data - race outcomes, SQL Server/MySQL parity, register scale
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Loans.Recover"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated. Provider-gated cases require HRMS_MYSQL_TEST_CONNECTION / HRMS_SQLSERVER_TEST_CONNECTION and report 'NOT EXECUTED - environment unavailable' when the env var is absent, per CLAUDE.md's documented convention."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-PRV-001
+    func: [F-LOAN-099]
+    sc: Two concurrent full repayments resolve to exactly one authoritative effect
+    t: Firing two simultaneous full-balance repayment requests never double-closes or double-records
+    src: ["PayrollLoansConcurrencyTests.Payroll_recovery_vs_payroll_recovery_has_one_authoritative_financial_effect"]
+    type: Integration-Concurrency
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "[Manual/DB] Fire two concurrent POST /api/payroll/loans/{id}/repayments with Amount=OutstandingTotal via Task.WhenAll => exactly ONE succeeds [200]; exactly one LoanRepayment row exists afterward; loan OutstandingPrincipal/Interest/Total are all >=0"
+    auto: DB-assisted
+
+  - id: LOAN-PRV-002
+    func: [F-LOAN-100]
+    sc: Partial prepayment vs. payroll recovery never over-recovers
+    t: A concurrent prepayment and payroll-recovery race against the same loan never together exceed the original outstanding balance
+    src: ["PayrollLoansConcurrencyTests.Prepayment_vs_payroll_recovery_never_over_recovers_the_authoritative_balance"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[Manual/DB] Fire a concurrent PartialPrepayAsync and RecordRepaymentAsync (each Amount=60 against a 100 balance) via Task.WhenAll => at most ONE succeeds; total recovered amount is within [0,100]; OutstandingPrincipal/Interest/Total all remain >=0"
+    auto: DB-assisted
+
+  - id: LOAN-PRV-003
+    func: [F-LOAN-101]
+    sc: Early closure vs. manual repayment resolves to one valid lifecycle outcome
+    t: A concurrent CloseAsync and RecordRepaymentAsync race leaves the loan in exactly one of Active or Closed, never a corrupted mixed state
+    src: ["PayrollLoansConcurrencyTests.Early_closure_vs_manual_repayment_has_one_valid_lifecycle_outcome"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[Manual/DB] Fire a concurrent CloseAsync and RecordRepaymentAsync (each targeting the full 100 outstanding) via Task.WhenAll => at most ONE succeeds; final Status is Active or Closed (never an intermediate/invalid value); at most one LoanRepayment row is created; OutstandingTotal>=0"
+    auto: DB-assisted
+
+  - id: LOAN-PRV-004
+    func: [F-LOAN-102]
+    sc: Two concurrent Approve calls resolve to one authoritative Approved state and history row
+    t: A concurrent double-approve race produces exactly one Approved LoanHistory row, not two
+    src: ["PayrollLoansConcurrencyTests.Approval_vs_approval_has_one_authoritative_state_and_history"]
+    type: Integration-Concurrency
+    pri: P0
+    perm: "Payroll.Loans.Approve"
+    steps:
+      - "[Manual/DB] Load the same Submitted loan into two separate contexts, approve both, save the first, then save the second => the second SaveChanges throws DbUpdateConcurrencyException; the authoritative row has Status=Approved, ConcurrencyVersion=2; exactly one Approved LoanHistory row exists"
+    auto: DB-assisted
+
+  - id: LOAN-PRV-005
+    func: [F-LOAN-036]
+    sc: Concurrent schedule-generation attempts never produce a duplicate installment set
+    t: Two concurrent attempts to append the same next installment number resolve to exactly one success
+    src: ["PayrollLoansConcurrencyTests.Schedule_generation_vs_schedule_generation_has_one_unique_installment_set"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire two concurrent inserts of installment #2 for the same loan via Task.WhenAll => exactly ONE succeeds (the unique (TenantId, EmployeeLoanId, InstallmentNumber) index rejects the loser); exactly 2 installments exist afterward, numbered 1 and 2"
+    auto: DB-assisted
+
+  - id: LOAN-PRV-006
+    func: [F-LOAN-103]
+    sc: MySQL provider acceptance passes the full persisted loan lifecycle
+    t: The shared PayrollLoansProviderAcceptance.RunAsync path passes end-to-end against a real MySQL database
+    src: ["MySqlPayrollLoansIntegrationTests"]
+    type: Integration-Concurrency
+    pri: P0
+    tags: [Environment]
+    steps:
+      - "[Manual/CI] Set HRMS_MYSQL_TEST_CONNECTION to a disposable non-production database, run MySqlPayrollLoansIntegrationTests => [PASS] product creation/update, version overlap validation, request/approve/disburse+schedule, payroll recovery, manual repayment, partial prepayment, early closure, Final Settlement recovery, register, tenant isolation, cross-tenant denial all pass; if the env var is absent, report NOT EXECUTED - environment unavailable rather than a false PASS"
+    auto: DB-assisted
+
+  - id: LOAN-PRV-007
+    func: [F-LOAN-103]
+    sc: SQL Server provider acceptance passes the identical persisted loan lifecycle
+    t: The shared PayrollLoansProviderAcceptance.RunAsync path passes end-to-end against a real SQL Server database
+    src: ["SqlServerPayrollLoansIntegrationTests"]
+    type: Integration-Concurrency
+    pri: P0
+    tags: [Environment]
+    steps:
+      - "[Manual/CI] Set HRMS_SQLSERVER_TEST_CONNECTION(+_SERVER/_AUTH) to a disposable non-production database, run SqlServerPayrollLoansIntegrationTests => [PASS] the same lifecycle coverage as LOAN-PRV-006 passes on SQL Server; if the env var is absent, report NOT EXECUTED - environment unavailable rather than a false PASS"
+    auto: DB-assisted
+
+  - id: LOAN-PRV-008
+    func: [F-LOAN-103]
+    sc: SQL Server rowversion vs. MySQL app-managed token both correctly gate a stale write
+    t: The provider-specific concurrency-token mechanics (native rowversion on SQL Server, app-managed binary(16)/int on MySQL, per CLAUDE.md's documented divergence) both still reject a stale EmployeeLoan update
+    src: ["PayrollLoansProviderAcceptance.RunAsync (concurrency section)"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Environment]
+    steps:
+      - "[Manual/CI] Under each provider, load the same loan twice, mutate and save both copies sequentially => the second save fails as a concurrency conflict under BOTH providers, evidencing provider parity for EmployeeLoan.ConcurrencyVersion despite the underlying token-mechanics difference"
+    auto: DB-assisted
+
+  - id: LOAN-PRV-009
+    func: [F-LOAN-104]
+    sc: The register pages and reconciles at scale with no cross-tenant leakage
+    t: 100+ loans across two tenants page correctly and never cross tenant boundaries
+    src: ["PayrollLoanService.GetRegisterAsync (SQLite large-data acceptance)"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Seed 100 loans for Tenant A and 10 for Tenant B => 110 rows exist across both tenants"
+      - "[GET /api/payroll/loans/register?page=1&pageSize=50] as Tenant A => [200] page 1 of 2 returned, totalCount=100, no Tenant B rows present"
+      - "[GET /api/payroll/loans/register?page=2&pageSize=50] as Tenant A => [200] the remaining 50 rows returned, no duplicates against page 1"
+    auto: DB-assisted
+
+  - id: LOAN-PRV-010
+    func: [F-LOAN-104]
+    sc: No dedicated *LargeDataTests.cs class exists for Loans
+    t: A grep of the test project confirms Loans has no equivalent of PayrollAnalyticsLargeDataTests/PayrollReportsLargeDataTests
+    src: ["Backend/HRMS.Tests (full glob for *LoansLargeData*.cs)"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Glob Backend/HRMS.Tests for '*Loans*LargeData*.cs' => zero matches; the manual-scale proof in LOAN-PRV-009 is this module's interim substitute, consistent with qa/10-payroll's own precedent for areas lacking a dedicated large-data suite"
+    auto: Manual only

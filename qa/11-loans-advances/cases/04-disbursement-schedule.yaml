@@ -1,0 +1,166 @@
+sheet: Loans_Disbursement_Schedule
+submodule: Disbursement and EMI Schedule - manual disbursement recording and schedule generation (None/Flat/ReducingBalance)
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Loans.Disburse"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, an Approved loan (ApprovedAmount=12000, ApprovedTenureMonths=12) exists, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-DIS-001
+    func: [F-LOAN-033]
+    sc: Disbursement requires Approved status
+    t: Recording disbursement on a Draft/Submitted/Active loan is Conflict
+    src: ["PayrollLoanService.RecordDisbursementAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loans/{draftLoanId}/record-disbursement] => [409] Only approved loans can be recorded as disbursed."
+    auto: API
+
+  - id: LOAN-DIS-002
+    func: [F-LOAN-034]
+    sc: Disbursed amount defaults to the approved amount
+    t: Calling record-disbursement with no amount disburses the full ApprovedAmount
+    src: ["PayrollLoanService.RecordDisbursementAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/loans/{id}/record-disbursement] => [200] Status=Active, DisbursedAmount=12000"
+    auto: API
+
+  - id: LOAN-DIS-003
+    func: [F-LOAN-034]
+    sc: Disbursed amount validation matrix
+    t: A zero/negative amount and one exceeding ApprovedAmount are both Invalid; an amount below ApprovedAmount is accepted
+    src: ["PayrollLoanService.RecordDisbursementAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{id}/record-disbursement?amount=0] => [400] Disbursed amount is invalid."
+      - "[POST /api/payroll/loans/{id}/record-disbursement?amount=13000] (exceeds ApprovedAmount=12000) => [400] Disbursed amount is invalid."
+      - "[POST /api/payroll/loans/{id}/record-disbursement?amount=10000] (partial disbursement below ApprovedAmount) => [200] Status=Active, DisbursedAmount=10000"
+    auto: API
+
+  - id: LOAN-DIS-004
+    func: [F-LOAN-035]
+    sc: Disbursement stamps timestamps and dual history events
+    t: DisbursedAtUtc is set and both Disbursed and Activated LoanHistory rows are appended
+    src: ["PayrollLoanService.RecordDisbursementAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{id}/record-disbursement] => [200] DisbursedAtUtc is set, Status=Active"
+      - "[Manual/DB] Query LoanHistories for the loan id => Disbursed and Activated rows both present, each with PreviousStatus=Approved, NewStatus=Active"
+    auto: DB-assisted
+
+  - id: LOAN-DIS-005
+    func: [F-LOAN-036]
+    sc: Schedule generation is idempotent per loan
+    t: A loan already carrying installments (e.g. from a data-repair scenario) does not get a second schedule appended if disbursement logic runs again
+    src: ["PayrollLoanService.BuildSchedule (hadSchedule guard, internal early-return)"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{id}/record-disbursement] => [200] schedule generated, 12 installments created"
+      - "[Manual/DB] Confirm exactly 12 LoanInstallment rows exist for the loan => exactly 12 rows found, confirming BuildSchedule's internal Installments.Count>0 guard prevents a duplicate set on any later internal invocation"
+    auto: DB-assisted
+
+  - id: LOAN-DIS-006
+    func: [F-LOAN-037]
+    sc: InterestMethod.None produces an even zero-interest schedule
+    t: A zero-interest loan splits principal evenly with the remainder absorbed by the final installment
+    src: ["PayrollLoanService.BuildSchedule"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Create/approve/disburse a loan with InterestMethod=None, DisbursedAmount=10000, ApprovedTenureMonths=3 => [200] 3 installments each with InterestAmount=0; principal amounts sum exactly to 10000 with any rounding remainder on installment 3"
+    auto: DB-assisted
+
+  - id: LOAN-DIS-007
+    func: [F-LOAN-038]
+    sc: InterestMethod.Flat computes total interest and splits it evenly
+    t: A Flat-interest loan's total interest equals Principal*Rate%*(Tenure/12), divided evenly per installment
+    src: ["PayrollLoanService.BuildSchedule"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Disburse a loan with InterestMethod=Flat, InterestRate=12, DisbursedAmount=12000, ApprovedTenureMonths=12 => [200] total InterestAmount across all 12 installments = 12000*0.12*(12/12) = 1440.00, split evenly per installment"
+    auto: DB-assisted
+
+  - id: LOAN-DIS-008
+    func: [F-LOAN-039]
+    sc: InterestMethod.ReducingBalance amortizes correctly
+    t: A ReducingBalance loan's EMI is constant and each installment's interest component shrinks as ClosingPrincipal decreases
+    src: ["PayrollLoanService.BuildSchedule"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Disburse a loan with InterestMethod=ReducingBalance, InterestRate=12, DisbursedAmount=12000, ApprovedTenureMonths=12 => [200] InstallmentAmount is constant across all 12 rows; InterestAmount strictly decreases and PrincipalAmount strictly increases installment-over-installment; final ClosingPrincipal=0"
+    auto: DB-assisted
+
+  - id: LOAN-DIS-009
+    func: [F-LOAN-040]
+    sc: Installment due dates advance monthly from the disbursement date
+    t: Installment N's DueDate equals the disbursement date advanced by N months
+    src: ["PayrollLoanService.BuildSchedule"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/payroll/loans/{id}/record-disbursement] on 2026-10-01 => [200] installment 1 DueDate=2026-11-01, installment 12 DueDate=2027-10-01"
+    auto: API
+
+  - id: LOAN-DIS-010
+    func: [F-LOAN-041]
+    sc: Outstanding interest/total are recomputed post-disbursement
+    t: OutstandingInterest equals the sum of generated installments' InterestAmount, and OutstandingTotal equals principal+interest
+    src: ["PayrollLoanService.RecordDisbursementAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{id}/record-disbursement] (Flat interest, total interest 1440.00) => [200] OutstandingPrincipal=12000, OutstandingInterest=1440.00, OutstandingTotal=13440.00"
+    auto: API
+
+  - id: LOAN-DIS-011
+    func: [F-LOAN-042]
+    sc: GetScheduleAsync returns the ordered installment list
+    t: The schedule endpoint returns installments ordered by InstallmentNumber
+    src: ["PayrollLoanService.GetScheduleAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Loans.View"
+    steps:
+      - "[GET /api/payroll/loans/{id}/schedule] => [200] installments returned in ascending InstallmentNumber order"
+    auto: API
+
+  - id: LOAN-DIS-012
+    func: [F-LOAN-042]
+    sc: GetScheduleAsync is NotFound for an unknown/cross-tenant loan
+    t: An unknown loan id and a cross-tenant loan id both return NotFound
+    src: ["PayrollLoanService.GetScheduleAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[GET /api/payroll/loans/{unknownId}/schedule] => [404] Loan not found."
+      - "[GET /api/payroll/loans/{tenantALoanId}/schedule] signed in as Tenant B => [404] Loan not found."
+    auto: API
+
+  - id: LOAN-DIS-013
+    func: [F-LOAN-043]
+    sc: The ESS loan detail response embeds the full schedule inline
+    t: GET /api/me/loans/{id} returns Installments without a separate self-service schedule call
+    src: ["PayrollLoansController.MyLoan -> PayrollLoanService.ToDto"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Loans.Request"
+    steps:
+      - "[GET /api/me/loans/{id}] (own Active disbursed loan) => [200] response.installments contains the full ordered schedule"
+    auto: API

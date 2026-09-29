@@ -1,0 +1,82 @@
+sheet: TaxDcl_Large_Data_Paging
+submodule: Large Data & Paging
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-LARGE-001
+    func: [F-TAXDCL-143]
+    sc: Cycles, declaration audit, and year-end history are all unpaginated
+    t: Confirm GetCyclesAsync/GetAuditAsync/GetHistoryAsync all return their full result set with no page/pageSize parameter
+    src: "TaxDeclarationService.cs GetCyclesAsync, GetAuditAsync; YearEndTaxService.cs GetHistoryAsync (full grep, no paging)"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "150 cycles exist; a declaration has 300 audit events; a run has 250 history events"
+    role: HRAdmin
+    perm: Payroll.TaxDeclaration.Review, ViewAudit; Payroll.YearEndTax.ViewHistory
+    tenant: "T1 (DEMO01)"
+    data: 150 cycles, 300 audit events, 250 history events
+    steps:
+      - "[GET /api/payroll/tax-declarations/cycles] => [200] all 150 cycles returned in one response, no page parameter accepted"
+      - "[GET /api/payroll/tax-declarations/{id}/audit] => [200] all 300 events returned"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/history] => [200] all 250 events returned"
+    auto: API
+
+  - id: TAXDCL-LARGE-002
+    func: [F-TAXDCL-144]
+    sc: GetEmployeesAsync filters compose correctly with stable pagination
+    t: EmployeeId/Status/HasTaxDue/HasBlockingIssue filters combine, ordered by EmployeeCode then Id
+    src: "YearEndTaxService.cs GetEmployeesAsync"
+    type: Boundary
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "A calculated run with 200 employees: 50 BlockingIssue, 80 AdjustmentRecommended (HasTaxDue), 70 Reconciled"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.View
+    tenant: "T1 (DEMO01)"
+    data: 200 YearEndTaxEmployee rows
+    steps:
+      - "[GET /api/payroll/year-end-tax/runs/{id}/employees?hasBlockingIssue=true&page=1&pageSize=25] => [200] 25 of the 50 BlockingIssue rows, total=50"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/employees?hasTaxDue=true&status=AdjustmentRecommended&page=2&pageSize=25] => [200] page 2 of the 80 matching rows, stable ordering by EmployeeCode across repeated calls"
+    auto: API
+
+  - id: TAXDCL-LARGE-003
+    func: [F-TAXDCL-145]
+    sc: Existing scale fixtures already cover 1,000 and 10,000-employee scenarios
+    t: TaxDeclarationLargeDataTests and PayrollYearEndLargeDataTests exist as dedicated scale fixtures
+    src: "Backend/HRMS.Tests/TaxDeclarationLargeDataTests.cs, PayrollYearEndLargeDataTests.cs"
+    type: Contract
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] read TaxDeclarationLargeDataTests.cs => 1,000-employee mixed-status/proof/reviewer-paging/tenant-isolation scenario confirmed"
+      - "[Manual] read PayrollYearEndLargeDataTests.cs => 10,000-employee reconciliation-scale scenario confirmed"
+    auto: Manual only
+
+  - id: TAXDCL-LARGE-004
+    func: [F-TAXDCL-146]
+    sc: CSV export is not chunked, scales linearly with EmployeeCount
+    t: ExportAsync materializes every employee row into memory before writing the CSV
+    src: "YearEndTaxService.cs ExportAsync (ToListAsync of the full employee set)"
+    type: Boundary
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: "A run with 5,000 YearEndTaxEmployee rows"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Export
+    tenant: "T1 (DEMO01)"
+    data: 5,000 rows
+    steps:
+      - "[GET /api/payroll/year-end-tax/runs/{id}/export/employees] => [200] a single CSV response containing all 5,000 rows in one payload, no server-side pagination/chunking parameter accepted"
+    auto: API

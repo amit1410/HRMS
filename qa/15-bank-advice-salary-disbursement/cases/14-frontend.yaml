@@ -1,0 +1,161 @@
+sheet: BankAdv_Frontend
+submodule: Frontend
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-FE-001
+    func: [F-BANKADV-101]
+    sc: Batch list and detail render correctly
+    t: BankAdvicePage renders the batch list, and selecting a batch shows its detail header and payments table
+    src: "Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.tsx"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "T1 has at least one bank advice batch with payments"
+    role: HRAdmin (holds Payroll.BankAdvice.View)
+    perm: Payroll.BankAdvice.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[UI] navigate to /payroll/bank-advice => the batch list renders with BatchNumber/Status/TotalAmount per row"
+      - "[UI] click a batch row => the detail panel shows PayDate/employee count/total, and a payments table with EmployeeCode/EmployeeName, masked account, NetPay, and validation status columns"
+    auto: UI
+
+  - id: BANKADV-FE-002
+    func: [F-BANKADV-102]
+    sc: "CONFIRMED - no UI path to generate a batch"
+    t: There is no Generate button or form anywhere in the frontend, despite the client function existing
+    src: "Frontend/HRMS.Web/src/api/payroll.ts (generateBankAdvice, unused); Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.tsx"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (holds Payroll.BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[UI] navigate to /payroll/bank-advice as a user holding BankAdvice.Generate => no Generate button, form, or link exists anywhere on the page"
+      - "[Manual] full grep of Frontend/HRMS.Web/src/pages for \"generateBankAdvice\" => zero call sites"
+    auto: UI
+    cr: [CR-267]
+    secc: true
+
+  - id: BANKADV-FE-003
+    func: [F-BANKADV-103]
+    sc: "CONFIRMED - no UI path to cancel a batch"
+    t: There is no Cancel button/action anywhere in the frontend, despite the client function existing
+    src: "Frontend/HRMS.Web/src/api/payroll.ts (cancelBankAdvice, unused); Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.tsx"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "A batch is selected in the UI (any status)"
+    role: HRAdmin (holds Payroll.BankAdvice.Cancel)
+    perm: Payroll.BankAdvice.Cancel
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[UI] select any batch as a user holding BankAdvice.Cancel => no Cancel button exists in the button row for any batch status"
+      - "[Manual] full grep of Frontend/HRMS.Web/src/pages for \"cancelBankAdvice\" => zero call sites"
+    auto: UI
+    cr: [CR-267]
+
+  - id: BANKADV-FE-004
+    func: [F-BANKADV-104]
+    sc: Validate/Prepare/Approve/Export are correctly wired
+    t: Each of the 4 lifecycle buttons appears only for its eligible status and successfully drives the transition
+    src: "Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.tsx (action buttons)"
+    type: Positive
+    tags: []
+    pri: P0
+    sev: High
+    pre: "One batch each at Draft, Prepared, Approved"
+    role: HRAdmin (holds all BankAdvice permissions)
+    perm: Payroll.BankAdvice.Validate, Approve, Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[UI] select the Draft batch => Validate and Prepare buttons are visible; click Prepare => batch advances to Prepared in the UI"
+      - "[UI] select the Prepared batch => only the Approve button is visible; click it => batch advances to Approved"
+      - "[UI] select the Approved batch => only the Export CSV button is visible; click it => a CSV file download is triggered"
+    auto: UI
+
+  - id: BANKADV-FE-005
+    func: [F-BANKADV-105]
+    sc: No client-side permission gating on buttons
+    t: All four lifecycle buttons render for any user who can reach the page, regardless of which specific BankAdvice permissions they individually hold
+    src: "Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.tsx (full component - no useAuth/can() usage)"
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: "User holds only Payroll.BankAdvice.View (no Validate/Approve/Export/Cancel)"
+    role: Custom role R1 (View only)
+    perm: Payroll.BankAdvice.View
+    tenant: "T1 (DEMO01)"
+    data: "A Draft batch is selected"
+    steps:
+      - "[UI] select the Draft batch as R1 => the Validate and Prepare buttons still RENDER (not hidden/disabled) even though R1 lacks Payroll.BankAdvice.Validate"
+      - "[UI] click Prepare as R1 => the backend correctly returns 403, surfaced as an on-page error message rather than being prevented by the UI up front"
+    auto: UI
+    cr: [CR-268]
+
+  - id: BANKADV-FE-006
+    func: [F-BANKADV-106]
+    sc: Bank Advice is discoverable via navigation
+    t: The page has a navigation.ts sidebar entry and a permission-gated App.tsx route
+    src: "Frontend/HRMS.Web/src/layout/navigation.ts, App.tsx"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "User holds Payroll.BankAdvice.View"
+    role: HRAdmin (holds Payroll.BankAdvice.View)
+    perm: Payroll.BankAdvice.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[UI] check the sidebar as a user holding BankAdvice.View => shows a \"Bank Advice\" entry under the administration group, linking to /payroll/bank-advice"
+      - "[UI] check the sidebar as a user WITHOUT BankAdvice.View => the \"Bank Advice\" entry does not appear"
+    auto: UI
+
+  - id: BANKADV-FE-007
+    func: [F-BANKADV-107]
+    sc: Frontend permission mirror matches the backend 1:1, including the dead permission
+    t: permissions.ts declares all 7 BankAdvice permission string constants, matching the backend's Permissions.cs exactly
+    src: "Frontend/HRMS.Web/src/auth/permissions.ts"
+    type: Contract
+    tags: []
+    pri: P3
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] run the repository's own frontend/backend permission-parity test (which reads Permissions.cs and fails if the lists diverge, per CLAUDE.md) => passes for all 7 Payroll.BankAdvice* constants, including bankAdviceViewHistory"
+    auto: Manual only
+
+  - id: BANKADV-FE-008
+    func: [F-BANKADV-108]
+    sc: Existing frontend unit test only covers GET paths
+    t: BankAdvicePage.test.tsx exercises list-render and empty-state only, never a mutating action
+    src: "Frontend/HRMS.Web/src/pages/payroll/BankAdvicePage.test.tsx"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full read of BankAdvicePage.test.tsx => exactly 2 tests, both stub GET routes only (list, get-by-id); no stub.on('post', ...) appears anywhere in the file"
+    auto: Manual only

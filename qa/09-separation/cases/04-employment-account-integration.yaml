@@ -1,0 +1,306 @@
+sheet: Separation_Employment
+submodule: Exit readiness evaluation, the 4-checkpoint exit execution, and CR-53 login/account/role behavior
+defaults:
+  role: HRADMIN
+  perm: "Separation.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin holding Separation.Manage, unless stated."
+  data: "n/a unless stated."
+  sev: Critical
+  reg: true
+
+cases:
+  - id: SEP-EMPL-001
+    func: [F-SEP-082]
+    sc: Employee remains fully Active throughout Draft/ManagerReview/HrReview/Approved/notice period
+    t: Employee.Status is never mutated by Separation's own lifecycle service before exit execution
+    src: ["SeparationService.cs"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Case progresses Draft->ManagerReview->HrReview->Approved => precondition established"
+      - "[GET /api/employees/{id}] at each stage => [200] Employee.Status=Active throughout"
+    auto: API
+
+  - id: SEP-EMPL-002
+    func: [F-SEP-083]
+    sc: Exit readiness evaluates all 10 blockers in the documented order
+    t: A freshly-approved case with nothing else done shows every applicable blocker
+    src: ["SeparationExitService.EvaluateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Case is Approved, ApprovedLastWorkingDate=today+10, nothing else started => precondition established"
+      - "[GET /api/separation/exit/{id}/readiness] => [200] blockers include LwdNotReached, NoticeNotFinalized(if applicable), ClearanceIncomplete, ExitInterviewIncomplete, FinalSettlementIncomplete; IsReady=false"
+    auto: API
+
+  - id: SEP-EMPL-003
+    func: [F-SEP-084]
+    sc: An already-Closed case's readiness short-circuits to fully ready
+    t: Re-checking readiness after Closed returns IsReady=true with zero blockers
+    src: ["SeparationExitService.EvaluateAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Case already Closed => precondition established"
+      - "[GET /api/separation/exit/{id}/readiness] => [200] IsReady=true, Blockers=[]"
+    auto: API
+
+  - id: SEP-EMPL-004
+    func: [F-SEP-085]
+    sc: Exit execution cannot run before the Approved LWD is reached
+    t: A future LWD blocks execution with LwdNotReached; execution succeeds once the business date reaches the LWD
+    src: ["SeparationExitService.EvaluateAsync", "ExecuteAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Setup] ApprovedLastWorkingDate=today+2, all other blockers cleared => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] => [409] Exit execution is blocked. - includes LwdNotReached in the validation errors"
+      - "[Manual/DB] Advance the repository business date to the LWD (or wait) => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+    auto: DB-assisted
+
+  - id: SEP-EMPL-005
+    func: [F-SEP-086, F-SEP-087]
+    sc: ExecuteEmploymentAsync terminal-transitions the employee and end-dates employment history
+    t: A fully-ready execution sets Employee.Status=Terminated, DateOfLeaving=FinalLastWorkingDate, JobStatus='Separated', and end-dates EmployeeEmploymentHistory
+    src: ["SeparationExitService.ExecuteEmploymentAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Case is fully ready (clearance/interview/settlement all complete, LWD reached) => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[GET /api/employees/{id}] => [200] Status=Terminated, DateOfLeaving=ApprovedLastWorkingDate, JobStatus='Separated'"
+      - "[Manual/DB] Query EmployeeEmploymentHistory current row => EffectiveTo=FinalLastWorkingDate, EmploymentStatus=Terminated"
+    auto: DB-assisted
+
+  - id: SEP-EMPL-006
+    func: [F-SEP-088, F-SEP-089]
+    sc: Each of the 4 checkpoints is independently idempotency-guarded and independently committed
+    t: A forced failure between checkpoints leaves earlier checkpoints committed and the execution retryable
+    src: ["SeparationExitService.ExecuteAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[Manual/DB] Inject a failure BEFORE ExecuteAccessAsync commits (after ExecuteEmploymentAsync has already committed) => [503] Exit execution failed and is retryable.; Employee.Status is ALREADY Terminated but User.IsActive is STILL true"
+      - "[POST /api/separation/exit/{id}/retry] without the forced failure => [200] Succeeded; execution resumes from ExecuteAccessAsync, not from the beginning; Employee.Status is not re-processed (no duplicate event)"
+    auto: DB-assisted
+    cr: [CR-53]
+
+  - id: SEP-EMPL-007
+    func: [F-SEP-090]
+    sc: Repeated Execute after Completed is idempotent with no re-mutation
+    t: Calling Execute again on an already-Closed case succeeds with no new events
+    src: ["SeparationExitService.ExecuteAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/separation/exit/{id}/execute] first call => [200] Succeeded, Status=Closed"
+      - "[POST /api/separation/exit/{id}/execute] second call => [200] 'Separation exit was already completed.' - SeparationClosed event count remains 1"
+    auto: API
+
+  - id: SEP-EMPL-008
+    func: [F-SEP-091]
+    sc: Payroll/gratuity/loans/reimbursements/GL/documents are never mutated by exit execution
+    t: Pre-existing PayrollResults and generated documents are byte-for-byte unchanged after exit execution
+    src: ["SeparationExitService.ExecuteAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] A document was already generated/issued before exit execution runs => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[GET /api/separation/documents/{docId}/history] => [200] the document's number/hash/snapshot are unchanged by the exit execution"
+      - "[Manual/DB] Query PayrollResults for this employee => row count unchanged by the exit execution call"
+    auto: DB-assisted
+
+  - id: SEP-EMPL-009
+    func: [F-SEP-092]
+    sc: EmployeeSeparationStatus.Closed is set nowhere else in the codebase
+    t: (cross-reference to SEP-SM-011 for the full grep-based proof)
+    src: ["SeparationExitService.ExecuteAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Cross-reference SEP-SM-011's repo-wide grep => confirms Closed is set nowhere else in the codebase"
+    auto: Manual only
+
+  - id: SEP-EMPL-010
+    func: [F-SEP-093]
+    sc: AccountEmployeeCurrentLink is never deleted by exit execution
+    t: The link row still exists (with User.IsActive=false) after exit execution, preserving link history
+    src: ["SeparationExitService.ExecuteAccessAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[Manual/DB] Query AccountEmployeeCurrentLinks for this employee => row still exists, unmodified except via the User.IsActive flag on the linked User row"
+    auto: DB-assisted
+
+  - id: SEP-EMPL-011
+    func: [F-SEP-094]
+    sc: Exit dashboard, execute, and retry as HR
+    t: The dashboard lists ready and not-ready cases correctly, paged, with execute/retry available per row
+    src: ["SeparationExitService.GetDashboardAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ViewAll"
+    steps:
+      - "[GET /api/separation/exit/dashboard] => [200] IsReady/BlockerCount/ClosedAtUtc columns populated correctly per row"
+    auto: API
+
+  - id: SEP-EMPL-012
+    func: [F-SEP-095]
+    sc: ExecuteAccessAsync deactivates the linked account
+    t: User.IsActive becomes false only when an AccountEmployeeCurrentLink exists
+    src: ["SeparationExitService.ExecuteAccessAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[Manual/DB] Query Users for the linked account => IsActive=false"
+    auto: DB-assisted
+    cr: [CR-53]
+
+  - id: SEP-EMPL-013
+    func: [F-SEP-096]
+    sc: ExecuteSessionsAsync revokes every active refresh token
+    t: A refresh token issued before exit is stamped RevokedAtUtc, not deleted
+    src: ["SeparationExitService.ExecuteSessionsAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Employee has an active refresh token from a pre-exit login session => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[Manual/DB] Query RefreshTokens for the user => the pre-exit token has RevokedAtUtc set (not deleted)"
+    auto: DB-assisted
+    cr: [CR-53]
+
+  - id: SEP-EMPL-014
+    func: [F-SEP-097]
+    sc: ExecuteRolesAsync end-dates every current role assignment with an audit event
+    t: Every UserRole gets EffectiveTo=finalLwd and a Revoked UserRoleAssignmentEvent, roles are not deleted
+    src: ["SeparationExitService.ExecuteRolesAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[Manual/DB] Query UserRoles for the user => every previously-current role now has EffectiveTo=FinalLastWorkingDate"
+      - "[Manual/DB] Query UserRoleAssignmentEvents => one Revoked event per role, reason='Separation exit execution'"
+    auto: DB-assisted
+    cr: [CR-53]
+
+  - id: SEP-EMPL-015
+    func: [F-SEP-098]
+    sc: Login is rejected after exit execution
+    t: A sign-in attempt with the deactivated account's correct credentials fails Forbidden
+    src: ["AuthService.SignInAsync"]
+    type: Security
+    pri: P0
+    smoke: true
+    perm: "AllowAnonymous"
+    steps:
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[POST /api/auth/login] With the now-deactivated user's correct email/password => [403] This account has been deactivated. Please contact your administrator."
+    auto: API
+    cr: [CR-53]
+
+  - id: SEP-EMPL-016
+    func: [F-SEP-099]
+    sc: A pre-exit refresh token cannot be redeemed after exit
+    t: A session held before exit execution cannot refresh, since the token was revoked
+    src: ["AuthService.RefreshTokenAsync"]
+    type: Security
+    pri: P0
+    perm: "AllowAnonymous"
+    steps:
+      - "[Setup] Capture a valid refresh token BEFORE exit execution => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[POST /api/auth/refresh] With the captured pre-exit refresh token => [401] rejected - the token was already server-revoked"
+    auto: API
+    cr: [CR-53]
+
+  - id: SEP-EMPL-017
+    func: [F-SEP-100]
+    sc: An employee cannot execute their own separation exit
+    t: The linked account owner is explicitly Forbidden from self-triggering ExecuteAsync
+    src: ["SeparationExitService.ExecuteAsync"]
+    type: Security
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/separation/exit/{ownCaseId}/execute] As the case's own linked account, holding Separation.Manage (test-only elevated grant) => [403] An employee cannot execute their own separation exit."
+    auto: API
+    cr: [CR-53]
+
+  - id: SEP-EMPL-018
+    func: [F-SEP-101]
+    sc: Closed is terminal and one-directional across every dependent module
+    t: Clearance reopen, exit-interview reopen, and settlement initiation are all separately blocked once Closed
+    src: ["ClearanceService.ReopenAsync", "ExitInterviewService.ReopenAsync", "SeparationSettlementOrchestrationService.InitiateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Case is Closed => precondition established"
+      - "[POST /api/separation/clearance/{id}/reopen] Comments='x' => [409] SeparationAlreadyClosed"
+      - "[POST /api/separation/exit-interview/for/{id}/reopen] Reason='x' => [409] SeparationAlreadyClosed"
+      - "[POST /api/separation/{id}/settlement/initiate] => [409] SeparationAlreadyClosed"
+    auto: API
+    cr: [CR-137]
+
+  - id: SEP-EMPL-019
+    func: [F-SEP-101]
+    sc: Ordinary retry cannot reactivate a Terminated employee
+    t: Calling Retry after a successful Execute never resets Employee.Status back to Active
+    src: ["SeparationExitService.RetryAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded, Status=Terminated"
+      - "[POST /api/separation/exit/{id}/retry] => [200] no-op success, Employee.Status remains Terminated"
+    auto: API
+
+  - id: SEP-EMPL-020
+    func: [F-SEP-102]
+    sc: /api/auth/me reflects the post-exit account state
+    t: Once deactivated and unable to log in, the account cannot even reach /api/auth/me through the normal auth flow
+    src: ["AuthController"]
+    type: Security
+    pri: P1
+    perm: "authenticated"
+    steps:
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[POST /api/auth/login] With the deactivated account => [403] deactivated"
+      - "[GET /api/auth/me] Attempted with any stale bearer token from before exit => [401] token invalid/expired or user inactive"
+    auto: API
+
+  - id: SEP-EMPL-021
+    func: [F-SEP-103]
+    sc: A never-linked employee completes exit execution's access/session/role checkpoints as safe no-ops
+    t: An employee with no AccountEmployeeCurrentLink at all still completes exit execution successfully
+    src: ["SeparationExitService.ExecuteAccessAsync", "ExecuteSessionsAsync", "ExecuteRolesAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee has never had a portal account linked => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded - Employee.Status=Terminated; no crash from the absent Account/User/Role rows"
+    auto: DB-assisted
+
+  - id: SEP-EMPL-022
+    func: [F-SEP-104]
+    sc: A crash window exists between the employment and access checkpoints
+    t: (cross-reference to SEP-EMPL-006 for the full forced-failure sequence proving Employee.Status can be Terminated while User.IsActive is still true)
+    src: ["SeparationExitService.ExecuteAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Cross-reference SEP-EMPL-006's forced-failure sequence => confirms Employee.Status can be Terminated while User.IsActive is still true"
+    auto: Manual only
+    cr: [CR-53]

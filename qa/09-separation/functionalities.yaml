@@ -1,0 +1,3205 @@
+# Functionality registry for Module 9 - Separation / Exit Management (Initiation, State Machine, Notice
+# Period, Last Working Date, Approval Workflow, Employment/Account Integration, Manager/Leave/Attendance
+# Impact, Clearance, Benefits/Recoveries, Exit Interview, Documents, Exit/Offboarding Completion, Final
+# Settlement Handoff, Settlement State Machine, Authorization/Scope, Tenant Isolation/Audit/Reports,
+# Concurrency/Provider Parity, Frontend).
+# Every test case references one or more of these ids; the builder fails if a functionality has zero
+# cases or a case references an unknown id. IDs are allocated in one global sequence (F-SEP-001...) in
+# the order the case files below were authored - group boundaries are noted with a comment banner.
+#
+# Discovered implementation (authoritative source, read directly across 6 parallel research passes against
+# current code; docs/phase-8a...8h.md were read where they exist and current code wins wherever they
+# diverge, per CLAUDE.md):
+#   Backend/HRMS.API/Controllers/SeparationController.cs, SeparationClearanceController.cs,
+#     SeparationBenefitsController.cs, SeparationExitInterviewController.cs, SeparationDocumentController.cs,
+#     SeparationExitController.cs, SeparationSettlementController.cs
+#   Backend/HRMS.Application/Services/SeparationService.cs, ClearanceService.cs, SeparationBenefitsService.cs,
+#     ExitInterviewService.cs, SeparationDocumentService.cs, SeparationExitService.cs,
+#     SeparationSettlementOrchestrationService.cs, PayrollRetroSettlementService.cs (Payroll-side settlement)
+#   Backend/HRMS.Domain/Entities/EmployeeSeparation.cs, Separation/SeparationClearance.cs, SeparationBenefits.cs,
+#     Separation/SeparationExitInterview.cs, Separation/SeparationDocument.cs, Separation/SeparationExitExecution.cs,
+#     Separation/SeparationSettlementOrchestration.cs
+#   Backend/HRMS.Domain/Enums/SeparationEnums.cs, SeparationClearanceEnums.cs, SeparationBenefitEnums.cs,
+#     SeparationExitInterviewEnums.cs, SeparationDocumentEnums.cs, SeparationSettlementEnums.cs
+#   Backend/HRMS.Domain/Authorization/Permissions.cs (Separation.*, Payroll.SeparationBenefits.*)
+#   Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap Separation-family slice)
+#   Frontend/HRMS.Web/src/pages/separation/*.tsx (16 pages), src/pages/payroll/SeparationBenefitsPage.tsx,
+#     src/api/separation.ts, separationBenefits.ts, separationDocuments.ts, separationExit.ts
+#   Existing xUnit (~45 classes touching this surface, none previously classified in
+#     qa/tools/existing_test_layers.yaml before this module) and Vitest - see README.md's mapping.
+#
+# ── Headline findings that shape this whole module's cases (see clarifications.yaml for full detail) ──
+# CR-53 is CONFIRMED FIXED here, not merely re-exposed: SeparationExitService.ExecuteAsync is the one and
+# only place in the codebase that ever sets EmployeeSeparationStatus.Closed, and it atomically-in-sequence
+# (four separately-committed, individually-idempotent checkpoints) sets Employee.Status=Terminated,
+# User.IsActive=false, revokes every active RefreshToken, and end-dates every current UserRole - all wired to
+# real AuthService.SignIn/RefreshToken checks. CR-66 reconfirms directly: PageAccess.Manage can self-grant
+# every Separation-family and Payroll.SeparationBenefits.* permission with no carve-out. CR-77 recurs as (at
+# least) a 6th independent, and INTERNALLY DISAGREEING, scope mechanism: SeparationService.GetTeamAsync uses
+# IEmployeeManagerResolver while ClearanceService.GetInboxAsync uses the raw legacy Employee.ReportingManagerId
+# column in the same module. CR-110 does NOT extend to Comp-Off/Overtime (Separation never reads them) but a
+# sibling gap was found: SeparationBenefitsService.CalculateLeaveAsync reads EmployeeLeaveBalances for
+# encashment and never marks any quantity reserved/consumed (CR-158). Four EmployeeSeparationStatus values
+# (Submitted, NoticePeriod, Exited, Cancelled) are declared but never reachable by any code path (CR-129).
+
+functionalities:
+  # ═══════════════════════════════ A. INITIATION ═══════════════════════════════
+  - id: F-SEP-001
+    name: Employee self-initiates a resignation (create Draft case)
+    group: Initiation - Self
+    status: Implemented
+    ui: "MySeparationPage 'Start a request' form"
+    api: "POST /api/separation/me"
+    service: "SeparationService.CreateSelfAsync -> CreateCoreAsync"
+    permission: "Separation.CreateSelf"
+    db: "EmployeeSeparations, EmployeeSeparationEvents"
+
+  - id: F-SEP-002
+    name: Self-service resolves the acting employee only via the authoritative account-employee link, never a client-supplied id
+    group: Initiation - Self
+    status: Implemented
+    ui: "MySeparationPage"
+    api: "POST /api/separation/me"
+    service: "IEmployeeIdentityResolver.ResolveCurrentAsync"
+    permission: "Separation.CreateSelf"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-SEP-003
+    name: HR/Admin employer-initiated separation for a specific employee
+    group: Initiation - HR
+    status: Implemented
+    ui: "n/a (no dedicated HR-initiate frontend screen was found)"
+    api: "POST /api/separation/employees/{employeeId}"
+    service: "SeparationService.CreateForEmployeeAsync -> CreateCoreAsync"
+    permission: "Separation.Initiate"
+    db: "EmployeeSeparations, EmployeeSeparationEvents"
+
+  - id: F-SEP-004
+    name: Employer-initiated creation always stamps InitiatedBy=Hr; Manager/System initiator enum values are never produced by any code path
+    group: Initiation - HR
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/separation/employees/{employeeId}"
+    service: "SeparationService.CreateForEmployeeAsync"
+    permission: "Separation.Initiate"
+    db: "EmployeeSeparations.InitiatedBy"
+
+  - id: F-SEP-005
+    name: Reason must exist in tenant, else Invalid
+    group: Initiation - Validation
+    status: Implemented
+    api: "POST /api/separation/me, /employees/{id}"
+    service: "SeparationService.CreateCoreAsync"
+    permission: "Separation.CreateSelf / Initiate"
+    db: "SeparationReasons"
+
+  - id: F-SEP-006
+    name: Reason must be active and within its EffectiveFrom/EffectiveTo window, else Invalid
+    group: Initiation - Validation
+    status: Implemented
+    api: "POST /api/separation/me, /employees/{id}"
+    service: "SeparationService.CreateCoreAsync"
+    permission: "Separation.CreateSelf / Initiate"
+    db: "SeparationReasons"
+
+  - id: F-SEP-007
+    name: Reason must be allowed for the initiator type (EmployeeInitiatedAllowed/EmployerInitiatedAllowed)
+    group: Initiation - Validation
+    status: Implemented
+    api: "POST /api/separation/me, /employees/{id}"
+    service: "SeparationService.CreateCoreAsync"
+    permission: "Separation.CreateSelf / Initiate"
+    db: "SeparationReasons"
+
+  - id: F-SEP-008
+    name: ProposedLastWorkingDate must be >= RequestDate, else Invalid
+    group: Initiation - Validation
+    status: Implemented
+    api: "POST /api/separation/me, /employees/{id}"
+    service: "SeparationService.CreateCoreAsync"
+    permission: "Separation.CreateSelf / Initiate"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-009
+    name: An employee may not have more than one active (non-terminal) separation case at a time
+    group: Initiation - Validation
+    status: Implemented
+    api: "POST /api/separation/me, /employees/{id}"
+    service: "SeparationService.CreateCoreAsync"
+    permission: "Separation.CreateSelf / Initiate"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-010
+    name: Concurrent duplicate-active-case race is caught at the DB layer as a fallback to the pre-check
+    group: Initiation - Concurrency
+    status: Implemented
+    api: "POST /api/separation/me"
+    service: "SeparationService.CreateCoreAsync (DbUpdateException fallback)"
+    permission: "Separation.CreateSelf"
+    db: "EmployeeSeparations (ActiveEmployeeKey unique constraint)"
+
+  - id: F-SEP-011
+    name: Employee row must exist in the tenant for HR-initiated creation, else NotFound
+    group: Initiation - Validation
+    status: Implemented
+    api: "POST /api/separation/employees/{employeeId}"
+    service: "SeparationService.CreateForEmployeeAsync"
+    permission: "Separation.Initiate"
+    db: "Employees"
+
+  - id: F-SEP-012
+    name: Cross-tenant employeeId on HR-initiated creation is denied (NotFound, not Forbidden)
+    group: Initiation - Tenant Isolation
+    status: Implemented
+    api: "POST /api/separation/employees/{employeeId}"
+    service: "SeparationService.CreateForEmployeeAsync"
+    permission: "Separation.Initiate"
+    db: "Employees (TenantId filter)"
+
+  - id: F-SEP-013
+    name: An inactive/already-separated employee is still permitted to create a NEW case as long as no active case exists (only the active-case check gates creation, not Employee.Status)
+    group: Initiation - Validation
+    status: Implemented
+    api: "POST /api/separation/me, /employees/{id}"
+    service: "SeparationService.CreateCoreAsync"
+    permission: "Separation.CreateSelf / Initiate"
+    db: "EmployeeSeparations, Employees"
+
+  - id: F-SEP-014
+    name: A same-day separation (RequestDate == ProposedLastWorkingDate) is accepted; no minimum-notice check exists at creation time
+    group: Initiation - Boundary
+    status: Implemented
+    api: "POST /api/separation/me"
+    service: "SeparationService.CreateCoreAsync"
+    permission: "Separation.CreateSelf"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-015
+    name: A backdated RequestDate (in the past) is accepted; creation never compares dates to "today", only to each other
+    group: Initiation - Boundary
+    status: Implemented
+    api: "POST /api/separation/me"
+    service: "SeparationService.CreateCoreAsync"
+    permission: "Separation.CreateSelf"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-016
+    name: SeparationNumber is generated as SEP-{yyyy}-{16-char guid} and NoticePeriodDays is pre-seeded (display-only) from EmployeeEmployment.NoticePeriod
+    group: Initiation - Data
+    status: Implemented
+    api: "POST /api/separation/me, /employees/{id}"
+    service: "SeparationService.CreateCoreAsync"
+    permission: "Separation.CreateSelf / Initiate"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-017
+    name: A Created event is appended on successful creation
+    group: Initiation - Audit
+    status: Implemented
+    api: "POST /api/separation/me, /employees/{id}"
+    service: "SeparationService.CreateCoreAsync"
+    permission: "Separation.CreateSelf / Initiate"
+    db: "EmployeeSeparationEvents"
+
+  - id: F-SEP-018
+    name: Separation reason master data - list, create, update (Manage permission)
+    group: Initiation - Reason Master
+    status: Implemented
+    ui: "n/a (no dedicated reason-master frontend screen was found)"
+    api: "GET/POST/PUT /api/separation/reasons"
+    service: "SeparationService.GetReasonsAsync / CreateReasonAsync / UpdateReasonAsync"
+    permission: "Separation.ViewSelf (GET) / Separation.Manage (POST/PUT)"
+    db: "SeparationReasons"
+
+  - id: F-SEP-019
+    name: Reason master requires Code and Name, and EffectiveTo cannot precede EffectiveFrom
+    group: Initiation - Reason Master
+    status: Implemented
+    api: "POST/PUT /api/separation/reasons"
+    service: "SeparationService.CreateReasonAsync / UpdateReasonAsync"
+    permission: "Separation.Manage"
+    db: "SeparationReasons"
+
+  - id: F-SEP-020
+    name: Reason Code must be unique per tenant, else Conflict
+    group: Initiation - Reason Master
+    status: Implemented
+    api: "POST /api/separation/reasons"
+    service: "SeparationService.CreateReasonAsync"
+    permission: "Separation.Manage"
+    db: "SeparationReasons"
+
+  # ═══════════════════════════════ B. STATE MACHINE ═══════════════════════════════
+  - id: F-SEP-021
+    name: "EmployeeSeparationStatus declared order: Draft, Submitted, ManagerReview, HrReview, Approved, Rejected, Withdrawn, NoticePeriod, ReadyForExit, Exited, Cancelled, Closed"
+    group: State Machine
+    status: Implemented
+    api: "n/a (enum)"
+    service: "Backend/HRMS.Domain/Enums/SeparationEnums.cs"
+    permission: "n/a"
+    db: "EmployeeSeparations.Status"
+
+  - id: F-SEP-022
+    name: "Submitted, NoticePeriod, Exited, and Cancelled are never assigned by any code path in the repository - dead/unreachable states"
+    group: State Machine
+    status: Implemented
+    api: "n/a"
+    service: "Backend/HRMS.Application/Services/SeparationService.cs (repo-wide reachability)"
+    permission: "n/a"
+    db: "EmployeeSeparations.Status"
+
+  - id: F-SEP-023
+    name: "Draft -> ManagerReview (employee-initiated Submit) or Draft -> HrReview (employer-initiated Submit)"
+    group: State Machine
+    status: Implemented
+    api: "POST /api/separation/{id}/submit"
+    service: "SeparationService.SubmitAsync -> SubmitCoreAsync"
+    permission: "Separation.Submit"
+    db: "EmployeeSeparations, EmployeeSeparationEvents"
+
+  - id: F-SEP-024
+    name: Submit is rejected with Conflict unless the case is exactly Draft
+    group: State Machine
+    status: Implemented
+    api: "POST /api/separation/{id}/submit"
+    service: "SeparationService.SubmitCoreAsync"
+    permission: "Separation.Submit"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-025
+    name: "ManagerReview -> HrReview (ManagerApprove)"
+    group: State Machine
+    status: Implemented
+    api: "POST /api/separation/{id}/manager-approve"
+    service: "SeparationService.ManagerApproveAsync"
+    permission: "Separation.ManagerReview"
+    db: "EmployeeSeparations, EmployeeSeparationEvents"
+
+  - id: F-SEP-026
+    name: "ManagerReview -> Rejected (ManagerReject)"
+    group: State Machine
+    status: Implemented
+    api: "POST /api/separation/{id}/manager-reject"
+    service: "SeparationService.ManagerRejectAsync"
+    permission: "Separation.ManagerReview"
+    db: "EmployeeSeparations, EmployeeSeparationEvents"
+
+  - id: F-SEP-027
+    name: "HrReview -> Approved (HrApprove) - computes/stamps the full notice snapshot and mutates EmployeeEmployment"
+    group: State Machine
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations, EmployeeEmployments, EmployeeSeparationEvents"
+
+  - id: F-SEP-028
+    name: "HrReview -> Rejected (HrReject)"
+    group: State Machine
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-reject"
+    service: "SeparationService.HrRejectAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations, EmployeeSeparationEvents"
+
+  - id: F-SEP-029
+    name: "{Draft, Submitted(dead), ManagerReview} -> Withdrawn (Withdraw), initiator only"
+    group: State Machine
+    status: Implemented
+    api: "POST /api/separation/{id}/withdraw"
+    service: "SeparationService.WithdrawAsync -> TransitionAsync"
+    permission: "Separation.Withdraw"
+    db: "EmployeeSeparations, EmployeeSeparationEvents"
+
+  - id: F-SEP-030
+    name: Rejected and Withdrawn are terminal - no transition out of either exists anywhere in the service
+    group: State Machine
+    status: Implemented
+    api: "n/a"
+    service: "SeparationService.cs (Terminal set)"
+    permission: "n/a"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-031
+    name: "Approved -> ReadyForExit only via ClearanceService.CompleteAsync's cross-module side effect (phase 8D), never inside SeparationService itself"
+    group: State Machine
+    status: Implemented
+    api: "POST /api/separation/clearance/{id}/complete"
+    service: "ClearanceService.CompleteAsync"
+    permission: "Separation.Clearance.Complete"
+    db: "EmployeeSeparations, SeparationClearances"
+
+  - id: F-SEP-032
+    name: "-> Closed is set in exactly one place in the entire codebase: SeparationExitService.ExecuteAsync's final-closure step (phase 8H)"
+    group: State Machine
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute (see Group Q)"
+    service: "SeparationExitService.ExecuteAsync"
+    permission: "Separation.Manage"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-033
+    name: "Closed is excluded from SeparationService.Terminal ({Rejected, Withdrawn, Cancelled, Exited} only) - a Closed case may still count as this employee's 'active' case for the one-active-case-per-employee check"
+    group: State Machine
+    status: Implemented
+    api: "POST /api/separation/me (rehire-then-resign scenario)"
+    service: "SeparationService.CreateCoreAsync (Terminal.Contains check)"
+    permission: "Separation.CreateSelf"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-034
+    name: A repeated action against a case not in its exactly-required status returns Conflict, never idempotent success (contrast with ReviseApprovedLwdAsync's deliberate no-op)
+    group: State Machine
+    status: Implemented
+    api: "POST /api/separation/{id}/manager-approve, /hr-approve, etc."
+    service: "SeparationService.LoadForActionAsync"
+    permission: "varies per action"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-035
+    name: EmployeeSeparationEventType full audit trail is append-only and readable via history
+    group: State Machine
+    status: Implemented
+    ui: "MySeparationPage timeline"
+    api: "GET /api/separation/{id}/history"
+    service: "SeparationService.GetHistoryAsync"
+    permission: "Separation.ViewHistory"
+    db: "EmployeeSeparationEvents"
+
+  - id: F-SEP-036
+    name: Get a single case by id (tenant-scoped)
+    group: State Machine
+    status: Implemented
+    api: "GET /api/separation/{id}"
+    service: "SeparationService.GetAsync"
+    permission: "Separation.ViewAll"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-037
+    name: List all cases tenant-wide, capped at 500, desc by CreatedDate
+    group: State Machine
+    status: Implemented
+    api: "GET /api/separation"
+    service: "SeparationService.GetAllAsync"
+    permission: "Separation.ViewAll"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-038
+    name: Get caller's own current (latest non-terminal) case and full self history
+    group: State Machine
+    status: Implemented
+    ui: "MySeparationPage"
+    api: "GET /api/separation/me/current, /me/history"
+    service: "SeparationService.GetCurrentSelfAsync / GetMineAsync"
+    permission: "Separation.ViewSelf"
+    db: "EmployeeSeparations"
+
+  # ═══════════════════════════════ C. NOTICE PERIOD ═══════════════════════════════
+  - id: F-SEP-039
+    name: Required notice days are snapshotted only at HR-approval time from EmployeeEmployment.NoticePeriod/NoticePeriodUnit, not at creation
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations, EmployeeEmployments"
+
+  - id: F-SEP-040
+    name: HR approval requires a positive, day-based (NoticePeriodUnit=='Days') employment notice period, else Conflict
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeEmployments"
+
+  - id: F-SEP-041
+    name: "Notice start = NoticeStartDate ?? RequestDate; expected end = start + required - 1"
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-042
+    name: "Served days = max(0, ApprovedLastWorkingDate - NoticeStartDate + 1)"
+    group: Notice Period
+    status: Implemented
+    api: "GET /api/separation/{id}/notice"
+    service: "SeparationService.GetNoticeAsync"
+    permission: "Separation.ViewHistory"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-043
+    name: "Shortfall = max(0, required - served - waived); Extension = max(0, served - required)"
+    group: Notice Period
+    status: Implemented
+    api: "GET /api/separation/{id}/notice"
+    service: "SeparationService.GetNoticeAsync"
+    permission: "Separation.ViewHistory"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-044
+    name: Zero-day / shortened notice (approved LWD close to notice start) is fully supported by the same served/shortfall formulas - no special-case code exists
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-045
+    name: Extended notice (LWD served beyond required days) is supported via ReviseApprovedLwdAsync, producing NoticeExtensionDays > 0
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/revise-approved-lwd"
+    service: "SeparationService.ReviseApprovedLwdAsync"
+    permission: "Separation.ReviseApprovedLastWorkingDate"
+    db: "EmployeeSeparations, EmployeeEmployments"
+
+  - id: F-SEP-046
+    name: Notice waiver is additive-only (WaivedNoticeDays += WaiverDays), capped at the CURRENT remaining shortfall recomputed each call (supports multiple partial waivers)
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/notice/waive"
+    service: "SeparationService.ApplyNoticeWaiverAsync"
+    permission: "Separation.NoticeWaive"
+    db: "EmployeeSeparations, EmployeeSeparationEvents"
+
+  - id: F-SEP-047
+    name: WaiverDays must be > 0, else Invalid; waiver exceeding remaining shortfall is Invalid
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/notice/waive"
+    service: "SeparationService.ApplyNoticeWaiverAsync"
+    permission: "Separation.NoticeWaive"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-048
+    name: Notice waiver is Approved-status-only and requires the notice snapshot to already exist
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/notice/waive"
+    service: "SeparationService.ApplyNoticeWaiverAsync"
+    permission: "Separation.NoticeWaive"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-049
+    name: "Full shortfall waived sets NoticeDisposition=CompanyWaived; partial sets Waived; unwaived shortfall>0 sets Recoverable; no shortfall sets None"
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/notice/waive"
+    service: "SeparationService.ApplyNoticeWaiverAsync"
+    permission: "Separation.NoticeWaive"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-050
+    name: No monetary computation happens inside Separation's own notice waiver/snapshot logic - confirmed zero PayrollResult/FinalSettlement rows created
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/notice/waive"
+    service: "SeparationService.ApplyNoticeWaiverAsync"
+    permission: "Separation.NoticeWaive"
+    db: "PayrollResults, FinalSettlementCases (unaffected)"
+
+  - id: F-SEP-051
+    name: "Notice recovery amount (money) is computed only downstream, in Payroll's SeparationBenefitsService.CalculateNoticeAsync, from EmployeeEmployments fields - NOT from EmployeeSeparation's own notice snapshot"
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "SeparationBenefitsService.CalculateNoticeAsync"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "EmployeeEmployments, FinalSettlementLines"
+
+  - id: F-SEP-052
+    name: Get notice detail and notice history (history is identical to the case's general event history, not notice-filtered)
+    group: Notice Period
+    status: Implemented
+    ui: "MySeparationPage notice card"
+    api: "GET /api/separation/{id}/notice, /notice/history"
+    service: "SeparationService.GetNoticeAsync / GetNoticeHistoryAsync"
+    permission: "Separation.ViewHistory"
+    db: "EmployeeSeparations, EmployeeSeparationEvents"
+
+  - id: F-SEP-053
+    name: Invalid date range at HR approval - approved LWD before request date, before DateOfJoining, before notice start, or after Employee.DateOfLeaving is rejected
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations, EmployeeEmployments, Employees"
+
+  - id: F-SEP-054
+    name: Pre-approval LWD change (ReviseLwdAsync) is HrReview-status-only and only validates NewLastWorkingDate >= RequestDate - no upper bound / no DateOfLeaving check
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/revise-lwd"
+    service: "SeparationService.ReviseLwdAsync"
+    permission: "Separation.ReviseLastWorkingDate"
+    db: "EmployeeSeparations, EmployeeSeparationEvents"
+
+  - id: F-SEP-055
+    name: Backdated pre-approval LWD revision (earlier than an already-set Employee.DateOfLeaving) is silently accepted - no such check exists in ReviseLwdAsync
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/{id}/revise-lwd"
+    service: "SeparationService.ReviseLwdAsync"
+    permission: "Separation.ReviseLastWorkingDate"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-056
+    name: Future-dated LWD (well beyond notice requirement) is accepted at both creation and any revision point - no maximum-notice validation exists
+    group: Notice Period
+    status: Implemented
+    api: "POST /api/separation/me, /revise-lwd, /revise-approved-lwd"
+    service: "SeparationService.cs"
+    permission: "varies"
+    db: "EmployeeSeparations"
+
+  # ═══════════════════════════════ E. LAST WORKING DATE ═══════════════════════════════
+  - id: F-SEP-057
+    name: Requested LWD (ProposedLastWorkingDate) is captured at creation and mutable pre-approval via ReviseLwdAsync
+    group: Last Working Date
+    status: Implemented
+    api: "POST /api/separation/me, /revise-lwd"
+    service: "SeparationService.CreateCoreAsync / ReviseLwdAsync"
+    permission: "Separation.CreateSelf / ReviseLastWorkingDate"
+    db: "EmployeeSeparations.ProposedLastWorkingDate"
+
+  - id: F-SEP-058
+    name: "Approved LWD (ApprovedLastWorkingDate) is stamped only at HrApproveAsync from ProposedLastWorkingDate and becomes the authoritative date for every downstream module"
+    group: Last Working Date
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations.ApprovedLastWorkingDate"
+
+  - id: F-SEP-059
+    name: "Post-approval LWD change (ReviseApprovedLwdAsync) is Approved-status-only, requires reason, and IS idempotent no-op when the new date equals the current one"
+    group: Last Working Date
+    status: Implemented
+    api: "POST /api/separation/{id}/revise-approved-lwd"
+    service: "SeparationService.ReviseApprovedLwdAsync"
+    permission: "Separation.ReviseApprovedLastWorkingDate"
+    db: "EmployeeSeparations, EmployeeEmployments, EmployeeSeparationEvents"
+
+  - id: F-SEP-060
+    name: Post-approval LWD revision is blocked entirely if a FinalSettlementCase for this employee/date is already Finalized
+    group: Last Working Date
+    status: Implemented
+    api: "POST /api/separation/{id}/revise-approved-lwd"
+    service: "SeparationService.ReviseApprovedLwdAsync"
+    permission: "Separation.ReviseApprovedLastWorkingDate"
+    db: "FinalSettlementCases"
+
+  - id: F-SEP-061
+    name: Post-approval LWD revision requires new date >= NoticeStartDate and <= Employee.DateOfLeaving (if set), and produces ApprovedLwdExtended/ApprovedLwdReduced events
+    group: Last Working Date
+    status: Implemented
+    api: "POST /api/separation/{id}/revise-approved-lwd"
+    service: "SeparationService.ReviseApprovedLwdAsync"
+    permission: "Separation.ReviseApprovedLastWorkingDate"
+    db: "EmployeeSeparations, EmployeeSeparationEvents"
+
+  - id: F-SEP-062
+    name: LWD before DOJ is rejected at HR approval (Invalid, field approvedLastWorkingDate)
+    group: Last Working Date
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeEmployments"
+
+  - id: F-SEP-063
+    name: LWD before notice start is rejected both at HR approval and at post-approval revision
+    group: Last Working Date
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve, /revise-approved-lwd"
+    service: "SeparationService.HrApproveAsync / ReviseApprovedLwdAsync"
+    permission: "Separation.HrReview / ReviseApprovedLastWorkingDate"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-064
+    name: LWD after notice end is accepted (produces a notice extension) rather than rejected - there is no upper-bound-against-notice-end check
+    group: Last Working Date
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve, /revise-approved-lwd"
+    service: "SeparationService.cs"
+    permission: "varies"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-065
+    name: HR approval syncs EmployeeEmployment.NoticeStatus=Active/NoticeStartDate/NoticeEndDate atomically with the separation row inside one DB transaction
+    group: Last Working Date
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations, EmployeeEmployments"
+
+  - id: F-SEP-066
+    name: Holiday/weekly-off interaction with LWD/notice dates is not validated anywhere in SeparationService - all date math is calendar-day arithmetic, not working-day-aware
+    group: Last Working Date
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-067
+    name: A future-dated exit (LWD set well ahead) does not itself change Employee.Status - the employee remains fully Active with full login until SeparationExitService.ExecuteAsync runs at/after the LWD
+    group: Last Working Date
+    status: Implemented
+    api: "GET /api/separation/{id}"
+    service: "SeparationService.cs / SeparationExitService.EvaluateAsync (LwdNotReached blocker)"
+    permission: "Separation.ViewAll"
+    db: "Employees, EmployeeSeparations"
+
+  # ═══════════════════════════════ D. APPROVAL WORKFLOW ═══════════════════════════════
+  - id: F-SEP-068
+    name: Manager approval requires the actor to be the effective manager resolved as of the separation's RequestDate (not today)
+    group: Approval Workflow
+    status: Implemented
+    api: "POST /api/separation/{id}/manager-approve"
+    service: "SeparationService.ManagerApproveAsync -> IEmployeeManagerResolver.ResolveAsync"
+    permission: "Separation.ManagerReview"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-SEP-069
+    name: An employee cannot manager-approve/reject their own separation (self-review block)
+    group: Approval Workflow
+    status: Implemented
+    api: "POST /api/separation/{id}/manager-approve, /manager-reject"
+    service: "SeparationService.ManagerApproveAsync / ManagerRejectAsync"
+    permission: "Separation.ManagerReview"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-070
+    name: Manager reject requires a non-blank reason
+    group: Approval Workflow
+    status: Implemented
+    api: "POST /api/separation/{id}/manager-reject"
+    service: "SeparationService.ManagerRejectAsync"
+    permission: "Separation.ManagerReview"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-071
+    name: "HR approval maker-checker: the case's InitiatedByUserId cannot HR-approve or HR-reject their own case"
+    group: Approval Workflow
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve, /hr-reject"
+    service: "SeparationService.HrApproveAsync / HrRejectAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-072
+    name: HR approval requires an existing EmployeeEmployment record, else Conflict
+    group: Approval Workflow
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeEmployments"
+
+  - id: F-SEP-073
+    name: HR reject requires a non-blank reason
+    group: Approval Workflow
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-reject"
+    service: "SeparationService.HrRejectAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-074
+    name: Employer-initiated cases skip Manager Review entirely on Submit and route straight to HrReview
+    group: Approval Workflow
+    status: Implemented
+    api: "POST /api/separation/{id}/submit"
+    service: "SeparationService.SubmitCoreAsync"
+    permission: "Separation.Submit"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-075
+    name: There is no multi-stage (beyond Manager->HR) approval and no return/rework transition anywhere - Rejected is terminal
+    group: Approval Workflow
+    status: Implemented
+    api: "n/a"
+    service: "SeparationService.cs"
+    permission: "n/a"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-076
+    name: Maker-checker on manager approval only blocks self-review (employee==subject) and wrong-manager identity - there is no separate InitiatedByUserId maker-checker on the manager stage the way HR stage has one
+    group: Approval Workflow
+    status: Implemented
+    api: "POST /api/separation/{id}/manager-approve"
+    service: "SeparationService.ManagerApproveAsync"
+    permission: "Separation.ManagerReview"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-077
+    name: "HR approval is wrapped in an explicit DB transaction covering both the separation row and EmployeeEmployment - a mid-transaction failure rolls back both atomically"
+    group: Approval Workflow
+    status: Implemented
+    api: "POST /api/separation/{id}/hr-approve"
+    service: "SeparationService.HrApproveAsync"
+    permission: "Separation.HrReview"
+    db: "EmployeeSeparations, EmployeeEmployments"
+
+  - id: F-SEP-078
+    name: Concurrent competing transitions on the same case (approve-vs-reject, approve-vs-withdraw, approve-vs-approve) resolve to exactly one success via EF optimistic concurrency (ConcurrencyVersion)
+    group: Approval Workflow
+    status: Implemented
+    api: "POST /api/separation/{id}/manager-approve, /manager-reject, /hr-approve, /hr-reject, /withdraw"
+    service: "SeparationService.cs"
+    permission: "varies"
+    db: "EmployeeSeparations.ConcurrencyVersion"
+
+  - id: F-SEP-079
+    name: Get the manager review queue (team-scoped) and the HR review queue (tenant-wide, ViewAll/HrReview permission)
+    group: Approval Workflow
+    status: Implemented
+    ui: "SeparationInboxPage (manager and hr modes)"
+    api: "GET /api/separation/inbox/manager, /inbox/hr"
+    service: "SeparationService.GetManagerInboxAsync / GetHrInboxAsync"
+    permission: "Separation.ManagerReview / HrReview"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-080
+    name: "GetTeamAsync/manager-inbox resolve 'my team' as of TODAY, while ManagerApprove/Reject resolve authority as of the separation's REQUEST DATE - a manager-scope date asymmetry"
+    group: Approval Workflow
+    status: Implemented
+    api: "GET /api/separation/team, /inbox/manager"
+    service: "SeparationService.GetTeamAsync vs ManagerApproveAsync"
+    permission: "Separation.ViewTeam / ManagerReview"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-SEP-081
+    name: "GetTeamAsync/GetManagerInboxAsync resolve every employee's current manager via IEmployeeManagerResolver in an O(n) per-request loop over ALL tenant separation cases - no role-scope (HRBP/SuperHR) fallback exists"
+    group: Approval Workflow
+    status: Implemented
+    api: "GET /api/separation/team, /inbox/manager"
+    service: "SeparationService.GetTeamAsync"
+    permission: "Separation.ViewTeam"
+    db: "EmployeeEmploymentHistory"
+
+  # ═══════════════════════════════ F. EMPLOYMENT / EMPLOYEE STATUS INTEGRATION ═══════════════════════════════
+  - id: F-SEP-082
+    name: Throughout Draft/ManagerReview/HrReview/Approved/notice period, Employee.Status remains fully Active - Separation's own lifecycle service never mutates Employee.Status before exit execution
+    group: Employment Integration
+    status: Implemented
+    api: "GET /api/separation/{id}"
+    service: "SeparationService.cs (absence of Employee.Status writes)"
+    permission: "Separation.ViewAll"
+    db: "Employees.Status"
+
+  - id: F-SEP-083
+    name: "Exit readiness evaluation (10 blocker checks in exact order): SeparationNotApproved, MissingFinalLwd, LwdNotReached, NoticeNotFinalized, ClearanceIncomplete, AssetReturnPending, ExitInterviewIncomplete, FinalSettlementIncomplete, EmploymentStateInvalid, ManagerReassignmentRequired"
+    group: Employment Integration
+    status: Implemented
+    ui: "SeparationExitClosurePage dashboard row"
+    api: "GET /api/separation/exit/{id}/readiness"
+    service: "SeparationExitService.EvaluateAsync"
+    permission: "Separation.ViewAll"
+    db: "EmployeeSeparations, SeparationClearances, SeparationExitInterviews, SeparationSettlementOrchestrations"
+
+  - id: F-SEP-084
+    name: An already-Closed separation short-circuits readiness to IsReady=true with zero blockers
+    group: Employment Integration
+    status: Implemented
+    api: "GET /api/separation/exit/{id}/readiness"
+    service: "SeparationExitService.EvaluateAsync"
+    permission: "Separation.ViewAll"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-085
+    name: Exit execution cannot run before the repository business date reaches the Approved LWD (LwdNotReached blocker)
+    group: Employment Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.EvaluateAsync / ExecuteAsync"
+    permission: "Separation.Manage"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-086
+    name: "ExecuteEmploymentAsync (checkpoint 1 of 4): if Employee.Status==Active, sets DateOfLeaving=FinalLastWorkingDate, Status=Terminated, JobStatus='Separated'"
+    group: Employment Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteEmploymentAsync"
+    permission: "Separation.Manage"
+    db: "Employees.Status, DateOfLeaving, JobStatus"
+
+  - id: F-SEP-087
+    name: ExecuteEmploymentAsync end-dates every current EmployeeEmploymentHistory row (EffectiveTo=finalLwd, EmploymentStatus=Terminated)
+    group: Employment Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteEmploymentAsync"
+    permission: "Separation.Manage"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-SEP-088
+    name: Each of the 4 exit-execution checkpoints is individually idempotency-guarded (its own *ExecutedAtUtc marker) and independently committed - not one all-or-nothing transaction
+    group: Employment Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteAsync"
+    permission: "Separation.Manage"
+    db: "SeparationExitExecutions"
+
+  - id: F-SEP-089
+    name: A partial exit-execution failure marks the execution Failed with FailureCode/FailureMessage; already-committed checkpoints are NOT rolled back, and Retry resumes from the next incomplete checkpoint
+    group: Employment Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/retry"
+    service: "SeparationExitService.RetryAsync / ExecuteAsync"
+    permission: "Separation.Manage"
+    db: "SeparationExitExecutions"
+
+  - id: F-SEP-090
+    name: Repeated Execute after Completed is idempotent success with no re-mutation and no duplicate SeparationClosed event
+    group: Employment Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteAsync"
+    permission: "Separation.Manage"
+    db: "SeparationExitExecutions"
+
+  - id: F-SEP-091
+    name: "PayrollResult, gratuity, loans, reimbursements, GL, bank advice, and already-generated document bytes/hashes are never mutated by exit execution"
+    group: Employment Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteAsync"
+    permission: "Separation.Manage"
+    db: "PayrollResults (unaffected)"
+
+  - id: F-SEP-092
+    name: EmployeeSeparation.Status=Closed is set nowhere else in the codebase besides this one execution checkpoint - confirmed by repo-wide grep
+    group: Employment Integration
+    status: Implemented
+    api: "n/a"
+    service: "SeparationExitService.ExecuteAsync"
+    permission: "n/a"
+    db: "EmployeeSeparations.Status"
+
+  - id: F-SEP-093
+    name: "AccountEmployeeCurrentLink itself is never deleted/unlinked by exit execution - only User.IsActive and role assignments change; link history is preserved"
+    group: Employment Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteAccessAsync"
+    permission: "Separation.Manage"
+    db: "AccountEmployeeCurrentLinks (unaffected)"
+
+  - id: F-SEP-094
+    name: Get the exit dashboard (paged, filterable) and execute/retry actions
+    group: Employment Integration
+    status: Implemented
+    ui: "SeparationExitClosurePage"
+    api: "GET /api/separation/exit/dashboard, POST /{id}/execute, /{id}/retry"
+    service: "SeparationExitService.GetDashboardAsync / ExecuteAsync / RetryAsync"
+    permission: "Separation.ViewAll (dashboard) / Manage (execute/retry)"
+    db: "SeparationExitExecutions"
+
+  # ═══════════════════════════════ G. CR-53 - LOGIN / ACCOUNT / ROLE BEHAVIOR ═══════════════════════════════
+  - id: F-SEP-095
+    name: "ExecuteAccessAsync (checkpoint 2): sets the linked tenant User.IsActive=false, only when an AccountEmployeeCurrentLink exists"
+    group: CR-53 Account Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteAccessAsync"
+    permission: "Separation.Manage"
+    db: "Users.IsActive"
+
+  - id: F-SEP-096
+    name: "ExecuteSessionsAsync (checkpoint 3): revokes every currently-active RefreshToken for the linked user (RevokedAtUtc stamped, not deleted)"
+    group: CR-53 Account Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteSessionsAsync"
+    permission: "Separation.Manage"
+    db: "RefreshTokens.RevokedAtUtc"
+
+  - id: F-SEP-097
+    name: "ExecuteRolesAsync (checkpoint 4): end-dates every currently-effective UserRole (EffectiveTo=finalLwd) and appends a Revoked UserRoleAssignmentEvent per role - roles are end-dated, not deleted"
+    group: CR-53 Account Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteRolesAsync"
+    permission: "Separation.Manage"
+    db: "UserRoles.EffectiveTo, UserRoleAssignmentEvents"
+
+  - id: F-SEP-098
+    name: "AuthService.SignIn rejects a deactivated user with Forbidden 'This account has been deactivated. Please contact your administrator.' - a login attempt genuinely fails post-exit"
+    group: CR-53 Account Integration
+    status: Implemented
+    api: "POST /api/auth/login"
+    service: "AuthService.SignInAsync"
+    permission: "AllowAnonymous"
+    db: "Users.IsActive"
+
+  - id: F-SEP-099
+    name: "AuthService refresh-token redemption rejects a deactivated/revoked-token user - a session held before exit cannot be refreshed after exit"
+    group: CR-53 Account Integration
+    status: Implemented
+    api: "POST /api/auth/refresh"
+    service: "AuthService.RefreshTokenAsync"
+    permission: "AllowAnonymous"
+    db: "RefreshTokens, Users.IsActive"
+
+  - id: F-SEP-100
+    name: "'An employee cannot execute their own separation exit' - the linked account owner is explicitly Forbidden from self-executing"
+    group: CR-53 Account Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteAsync"
+    permission: "Separation.Manage"
+    db: "n/a"
+
+  - id: F-SEP-101
+    name: "Closed is terminal and one-directional - clearance reopen, exit-interview reopen, and settlement initiation are all separately blocked by their own 'SeparationAlreadyClosed' guard once Closed; ordinary retry cannot reactivate a Terminated employee"
+    group: CR-53 Account Integration
+    status: Implemented
+    api: "POST /api/separation/clearance/{id}/reopen, /exit-interview/for/{id}/reopen, /{id}/settlement/initiate"
+    service: "ClearanceService.ReopenAsync / ExitInterviewService.ReopenAsync / SeparationSettlementOrchestrationService.InitiateAsync"
+    permission: "varies"
+    db: "EmployeeSeparations.Status"
+
+  - id: F-SEP-102
+    name: "GET /api/auth/me reflects the post-exit account state (deactivated user cannot even reach this endpoint once their session is revoked and re-login is blocked)"
+    group: CR-53 Account Integration
+    status: Implemented
+    api: "GET /api/auth/me"
+    service: "AuthController / AuthService"
+    permission: "authenticated"
+    db: "Users.IsActive"
+
+  - id: F-SEP-103
+    name: A never-linked employee (no AccountEmployeeCurrentLink) completes exit execution's access/session/role checkpoints as no-ops with no crash
+    group: CR-53 Account Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteAccessAsync / ExecuteSessionsAsync / ExecuteRolesAsync"
+    permission: "Separation.Manage"
+    db: "AccountEmployeeCurrentLinks (absence)"
+
+  - id: F-SEP-104
+    name: "A crash window exists between checkpoints: if the process fails after ExecuteEmploymentAsync commits but before ExecuteAccessAsync commits, the employee is Status=Terminated while User.IsActive is STILL true and sessions are still live, until Retry runs"
+    group: CR-53 Account Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute (failure-injected)"
+    service: "SeparationExitService.ExecuteAsync"
+    permission: "Separation.Manage"
+    db: "Employees.Status, Users.IsActive"
+
+  # ═══════════════════════════════ H. MANAGER / SUPERVISOR IMPACT ═══════════════════════════════
+  - id: F-SEP-105
+    name: "ManagerReassignmentRequired blocker: exit execution is blocked while any OTHER Active employee's legacy Employee.ReportingManagerId still points at the separating employee"
+    group: Manager Impact
+    status: Implemented
+    api: "GET /api/separation/exit/{id}/readiness"
+    service: "SeparationExitService.EvaluateAsync"
+    permission: "Separation.ViewAll"
+    db: "Employees.ReportingManagerId"
+
+  - id: F-SEP-106
+    name: "The ManagerReassignmentRequired check reads ONLY the legacy flat Employee.ReportingManagerId column, never EmployeeEmploymentHistory.ManagerId - a manager recorded solely via Employment History produces no blocker at all"
+    group: Manager Impact
+    status: Implemented
+    api: "GET /api/separation/exit/{id}/readiness"
+    service: "SeparationExitService.EvaluateAsync"
+    permission: "Separation.ViewAll"
+    db: "Employees.ReportingManagerId (not EmployeeEmploymentHistory)"
+
+  - id: F-SEP-107
+    name: Reassigning a blocked direct report's manager clears the ManagerReassignmentRequired blocker and allows execution to proceed
+    group: Manager Impact
+    status: Implemented
+    api: "GET /api/separation/exit/{id}/readiness (after reassignment)"
+    service: "SeparationExitService.EvaluateAsync"
+    permission: "Separation.ViewAll"
+    db: "Employees.ReportingManagerId"
+
+  - id: F-SEP-108
+    name: "No code path anywhere reassigns direct reports, EmployeeSupervisor rows (L1-L5/Time/ERO/CHRO), or manager-approval authority when a manager is separated - only the narrow blocker above exists, never an active reassignment"
+    group: Manager Impact
+    status: Implemented
+    api: "n/a"
+    service: "SeparationExitService.cs (absence of any EmployeeSupervisor write)"
+    permission: "n/a"
+    db: "EmployeeSupervisor (never touched)"
+
+  - id: F-SEP-109
+    name: "EmployeeSupervisor references (L1ManagerId...ChroManagerId) to a now-departed manager are never cleaned up, blocked, or warned about by Separation at all"
+    group: Manager Impact
+    status: Implemented
+    api: "n/a"
+    service: "SeparationExitService.cs (absence)"
+    permission: "n/a"
+    db: "EmployeeSupervisor"
+
+  - id: F-SEP-110
+    name: "ExecuteRolesAsync time-bounds the SEPARATING employee's own roles (including any auto-granted Manager role) but does nothing about any OTHER employee's continued Manager-role or reporting-line integrity"
+    group: Manager Impact
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteRolesAsync"
+    permission: "Separation.Manage"
+    db: "UserRoles"
+
+  - id: F-SEP-111
+    name: "SeparationService.GetTeamAsync (canonical IEmployeeManagerResolver) and ClearanceService.GetInboxAsync (raw legacy Employee.ReportingManagerId SQL join) are two DIFFERENT, disagreeing manager-resolution mechanisms within the same module"
+    group: Manager Impact
+    status: Implemented
+    api: "GET /api/separation/team, /clearance/inbox/manager"
+    service: "SeparationService.GetTeamAsync vs ClearanceService.GetInboxAsync"
+    permission: "Separation.ViewTeam / Clearance.ViewTeam"
+    db: "EmployeeEmploymentHistory vs Employees.ReportingManagerId"
+
+  # ═══════════════════════════════ I. LEAVE INTEGRATION ═══════════════════════════════
+  - id: F-SEP-112
+    name: Leave requests may be freely submitted/approved throughout the notice period - Employee.Status remains Active until exit execution, and no NoticePeriodMode/leave-freeze concept exists anywhere in Leave keyed off Separation state
+    group: Leave Integration
+    status: Implemented
+    api: "POST /api/leave/requests"
+    service: "LeaveRequestSubmissionService.cs"
+    permission: "Leave.Request"
+    db: "LeaveRequests"
+
+  - id: F-SEP-113
+    name: "Leave approved BEFORE separation exit execution is fully preserved untouched by exit execution (Status/day-rows unchanged)"
+    group: Leave Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteAsync (absence of Leave writes)"
+    permission: "Separation.Manage"
+    db: "LeaveRequests (unaffected)"
+
+  - id: F-SEP-114
+    name: "A NEW leave request dated after the exit-execution's final LWD is rejected Forbidden by Leave's own LeaveRequestValidationService.ValidateEmploymentContext, which reads Employee.DateOfLeaving/EmployeeEmploymentHistory.EmploymentStatus - both written by Separation's ExecuteEmploymentAsync"
+    group: Leave Integration
+    status: Implemented
+    api: "POST /api/leave/requests"
+    service: "LeaveRequestValidationService.ValidateEmploymentContext"
+    permission: "Leave.Request"
+    db: "Employees.DateOfLeaving, EmployeeEmploymentHistory.EmploymentStatus"
+
+  - id: F-SEP-115
+    name: "A leave request spanning the LWD (starting before, ending after) is not specifically validated by Separation or Leave - only a request dated ENTIRELY after LWD is rejected by the employment-context check"
+    group: Leave Integration
+    status: Implemented
+    api: "POST /api/leave/requests"
+    service: "LeaveRequestValidationService.cs"
+    permission: "Leave.Request"
+    db: "LeaveRequests"
+
+  - id: F-SEP-116
+    name: "A pending leave request left unresolved at separation completion is not auto-cancelled, auto-rejected, or otherwise touched by exit execution - it remains Pending indefinitely unless a manager acts"
+    group: Leave Integration
+    status: Implemented
+    api: "GET /api/leave/manager/inbox (post-exit)"
+    service: "SeparationExitService.ExecuteAsync (absence of Leave writes)"
+    permission: "Leave.Approve"
+    db: "LeaveRequests"
+
+  - id: F-SEP-117
+    name: "Leave-balance-based encashment input for Final Settlement is computed by SeparationBenefitsService.CalculateLeaveAsync reading EmployeeLeaveBalances directly - and never marks any quantity reserved/consumed on that table"
+    group: Leave Integration
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "SeparationBenefitsService.CalculateLeaveAsync"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "EmployeeLeaveBalances (read-only)"
+
+  - id: F-SEP-118
+    name: "Because the encashment read never reserves the balance, the same leave days could still be separately consumed by an approved leave request submitted during the notice period (a narrower sibling of CR-110's double-benefit pattern)"
+    group: Leave Integration
+    status: Implemented
+    api: "POST /api/leave/requests (during notice) + POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "LeaveRequestSubmissionService.cs + SeparationBenefitsService.CalculateLeaveAsync"
+    permission: "Leave.Request + Payroll.SeparationBenefits.Calculate"
+    db: "EmployeeLeaveBalances"
+
+  - id: F-SEP-119
+    name: "Carry-forward vs final-settlement: leave-encashment calculation is capped by GratuityPolicyVersion.MaximumLeaveEncashmentDays and divided by LeaveEncashmentDivisor - a policy configuration input, not a Leave-module carry-forward rule"
+    group: Leave Integration
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "SeparationBenefitsService.CalculateLeaveAsync"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "GratuityPolicyVersions"
+
+  # ═══════════════════════════════ J. ATTENDANCE INTEGRATION ═══════════════════════════════
+  - id: F-SEP-120
+    name: "Attendance BEFORE the LWD is fully preserved, unchanged, by exit execution"
+    group: Attendance Integration
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute"
+    service: "SeparationExitService.ExecuteAsync (absence of Attendance writes)"
+    permission: "Separation.Manage"
+    db: "EmployeeAttendanceDays (unaffected)"
+
+  - id: F-SEP-121
+    name: "The day-processor is guaranteed never to run for a post-exit date - a test double that throws if invoked proves AttendanceWorkflowService never attempts processing for an inactive employee"
+    group: Attendance Integration
+    status: Implemented
+    api: "n/a (internal guarantee)"
+    service: "AttendanceWorkflowService.cs"
+    permission: "n/a"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-SEP-122
+    name: "AttendanceWorkflowService.SubmitRegularizationAsync/SubmitOnDutyAsync check Employee.Status!=Active and DateOfLeaving directly - both fields written by Separation's ExecuteEmploymentAsync - and reject with Forbidden for any post-exit business date"
+    group: Attendance Integration
+    status: Implemented
+    api: "POST /api/attendance/me/regularizations, /me/on-duty"
+    service: "AttendanceWorkflowService.SubmitRegularizationAsync / SubmitOnDutyAsync"
+    permission: "Attendance.Regularization.Request / OnDuty.Request"
+    db: "Employees.Status, DateOfLeaving"
+
+  - id: F-SEP-123
+    name: "Regularization/On-Duty submission attempted DURING the notice period (before LWD, while Status is still Active) succeeds normally - only post-LWD dates are blocked"
+    group: Attendance Integration
+    status: Implemented
+    api: "POST /api/attendance/me/regularizations, /me/on-duty"
+    service: "AttendanceWorkflowService.cs"
+    permission: "Attendance.Regularization.Request / OnDuty.Request"
+    db: "AttendanceRegularizationRequests"
+
+  - id: F-SEP-124
+    name: "A pending Regularization/On-Duty approval left unresolved at separation completion is never auto-cancelled - and (per Module 8's CR-123) a manager can still approve/reject it after the employee is separated, since the transition/approval methods never check the target's Employee.Status"
+    group: Attendance Integration
+    status: Implemented
+    api: "POST /api/attendance/manager/regularizations/{id}/approve (post-exit)"
+    service: "AttendanceWorkflowService.TransitionRegularization"
+    permission: "Attendance.Regularization.Approve"
+    db: "AttendanceRegularizationRequests"
+
+  - id: F-SEP-125
+    name: "Monthly attendance summary / payroll snapshot for the exit month is unaffected by exit execution - historical WorkedMinutes/punches/day status are never rewritten"
+    group: Attendance Integration
+    status: Implemented
+    api: "GET /api/attendance/me/calendar (post-exit, historical month)"
+    service: "AttendanceReadService.cs"
+    permission: "Attendance.View"
+    db: "EmployeeAttendanceDays"
+
+  - id: F-SEP-126
+    name: No Overtime-specific reference to Separation/DateOfLeaving was found in OvertimeService - Overtime's own eligibility gates are not separately hardened against separation state beyond what Employee.Status already implies elsewhere
+    group: Attendance Integration
+    status: Implemented
+    api: "POST /api/attendance/overtime/requests (post-exit)"
+    service: "OvertimeService.cs"
+    permission: "Attendance.Overtime.Request"
+    db: "OvertimeRequests"
+
+  # ═══════════════════════════════ K. COMP-OFF / OVERTIME ═══════════════════════════════
+  - id: F-SEP-127
+    name: "Outstanding Comp-Off and approved-but-unpaid Overtime are NEVER read by SeparationBenefitsService or SeparationSettlementOrchestrationService - confirmed by grep, zero matches in either file - CR-110's double-benefit pattern does not extend into Separation"
+    group: Comp-Off Overtime
+    status: Implemented
+    api: "n/a"
+    service: "SeparationBenefitsService.cs / SeparationSettlementOrchestrationService.cs (absence)"
+    permission: "n/a"
+    db: "CompOffEarnings, OvertimeRequests (never joined)"
+
+  - id: F-SEP-128
+    name: "Separation initiating/approving/completing while an employee has outstanding Comp-Off/approved-Overtime leaves those balances entirely untouched and unresolved by the Separation module - no settlement input pulls them in at all"
+    group: Comp-Off Overtime
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "SeparationBenefitsService.cs"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "CompOffEarnings, OvertimeRequests"
+
+  - id: F-SEP-129
+    name: "Final settlement calculation never posts a Comp-Off-payout or Overtime-payout line - if such a payout is intended, it must be added as a fully manual FinalSettlementLine, unlinked to the source Comp-Off/Overtime record"
+    group: Comp-Off Overtime
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/lines"
+    service: "PayrollRetroSettlementService.AddSettlementLineAsync"
+    permission: "Payroll.FinalSettlementManage"
+    db: "FinalSettlementLines"
+
+  # ═══════════════════════════════ L. CLEARANCE ═══════════════════════════════
+  - id: F-SEP-130
+    name: "Clearance owner types: Role, Department, SpecificUser, Manager, Hr, Accounts, It, Admin; clearance status: NotStarted, InProgress, ReadyForCompletion(dead), Completed, Reopened, Cancelled(dead)"
+    group: Clearance
+    status: Implemented
+    api: "n/a (enum)"
+    service: "Backend/HRMS.Domain/Enums/SeparationClearanceEnums.cs"
+    permission: "n/a"
+    db: "SeparationClearances.Status"
+
+  - id: F-SEP-131
+    name: "Clearance task status: Pending, InProgress(dead), Cleared, Blocked, Rejected(dead), Waived, NotApplicable(dead-for-tasks); task category: Manager, Hr, It, Admin, Finance, Accounts, Security, Facilities, Asset, Other"
+    group: Clearance
+    status: Implemented
+    api: "n/a (enum)"
+    service: "Backend/HRMS.Domain/Enums/SeparationClearanceEnums.cs"
+    permission: "n/a"
+    db: "SeparationClearanceTasks.Status"
+
+  - id: F-SEP-132
+    name: Configure a clearance template (code/name/items, effective-dated, optionally reason/type-scoped)
+    group: Clearance
+    status: Implemented
+    api: "GET/POST /api/separation/clearance/templates"
+    service: "ClearanceService.GetTemplatesAsync / CreateTemplateAsync"
+    permission: "Separation.Clearance.Configure"
+    db: "SeparationClearanceTemplates"
+
+  - id: F-SEP-133
+    name: "Clearance start (ClearanceService.StartAsync) requires the separation be Approved or NoticePeriod, requires an effective template, and snapshots each active template item into a task at start time - a historical snapshot immune to later template edits"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/for/{separationId}/start"
+    service: "ClearanceService.StartAsync"
+    permission: "Separation.Clearance.Start"
+    db: "SeparationClearances, SeparationClearanceTasks"
+
+  - id: F-SEP-134
+    name: A clearance can only be started once per separation - a second Start attempt is Conflict
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/for/{separationId}/start"
+    service: "ClearanceService.StartAsync"
+    permission: "Separation.Clearance.Start"
+    db: "SeparationClearances"
+
+  - id: F-SEP-135
+    name: "No effective clearance template configured for the separation's type/reason at start time is Conflict"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/for/{separationId}/start"
+    service: "ClearanceService.StartAsync"
+    permission: "Separation.Clearance.Start"
+    db: "SeparationClearanceTemplates"
+
+  - id: F-SEP-136
+    name: "Task DueDate = ApprovedLastWorkingDate - DueDaysBeforeLwd if both set, else falls back to the LWD itself"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/for/{separationId}/start"
+    service: "ClearanceService.StartAsync"
+    permission: "Separation.Clearance.Start"
+    db: "SeparationClearanceTasks.DueDate"
+
+  - id: F-SEP-137
+    name: There is no add-task-to-an-in-flight-clearance endpoint - once started, task identity/count is fixed; only status/comment/assets can change
+    group: Clearance
+    status: Implemented
+    api: "n/a (absence)"
+    service: "ClearanceService.cs"
+    permission: "n/a"
+    db: "SeparationClearanceTasks"
+
+  - id: F-SEP-138
+    name: "'All clear' (MandatoryTotal/MandatoryResolved/ReadyForExit) is computed live from the current Tasks collection on every read, never cached"
+    group: Clearance
+    status: Implemented
+    api: "GET /api/separation/clearance/for/{separationId}, /{id}"
+    service: "ClearanceService.ToDto"
+    permission: "Separation.Clearance.ViewAll"
+    db: "SeparationClearanceTasks"
+
+  - id: F-SEP-139
+    name: "Clearance completion is blocked while ANY mandatory task remains unresolved (not in {Cleared, Waived, NotApplicable}); non-mandatory tasks never block completion"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/{id}/complete"
+    service: "ClearanceService.CompleteAsync"
+    permission: "Separation.Clearance.Complete"
+    db: "SeparationClearanceTasks"
+
+  - id: F-SEP-140
+    name: "Completing an already-Completed clearance is idempotent success, not an error"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/{id}/complete"
+    service: "ClearanceService.CompleteAsync"
+    permission: "Separation.Clearance.Complete"
+    db: "SeparationClearances"
+
+  - id: F-SEP-141
+    name: "Clearance completion is blocked with the bare-code message 'SeparationAlreadyClosed' once the parent separation is Closed"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/{id}/complete"
+    service: "ClearanceService.CompleteAsync"
+    permission: "Separation.Clearance.Complete"
+    db: "EmployeeSeparations.Status"
+
+  - id: F-SEP-142
+    name: "Successful clearance completion pushes the parent separation from Approved/NoticePeriod to ReadyForExit - the one cross-module write Clearance performs on Separation"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/{id}/complete"
+    service: "ClearanceService.CompleteAsync"
+    permission: "Separation.Clearance.Complete"
+    db: "EmployeeSeparations.Status"
+
+  - id: F-SEP-143
+    name: "TaskActionAsync (Clear/Block/Waive) enforces terminal-state/completed-clearance guards, self-clear block ('an employee cannot clear their own task'), and SpecificUser/Manager ownership - but has NO enforcement branch at all for Role/Department/Hr/Accounts/It/Admin owner types"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/clear, /block, /waive"
+    service: "ClearanceService.TaskActionAsync"
+    permission: "Separation.Clearance.ManageTask / Waive"
+    db: "SeparationClearanceTasks"
+
+  - id: F-SEP-144
+    name: "Anyone holding the blanket ClearanceManageTask/Waive permission can clear/block/waive ANY task regardless of its Category/OwnerType/AssignedDepartmentId - only per-task-listing (inbox) queries apply department/assignment filtering, not the action endpoints themselves"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/clear"
+    service: "ClearanceService.TaskActionAsync"
+    permission: "Separation.Clearance.ManageTask"
+    db: "SeparationClearanceTasks"
+
+  - id: F-SEP-145
+    name: "Block/Waive require a non-blank Reason; Clear requires a Comment when the task's RequiresComment flag is set"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/block, /waive, /clear"
+    service: "ClearanceService.TaskActionAsync"
+    permission: "Separation.Clearance.ManageTask / Waive"
+    db: "SeparationClearanceTasks"
+
+  - id: F-SEP-146
+    name: "Clear is blocked when RequiresAssetReturn is set and no asset row has status Returned or NotApplicable"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/clear"
+    service: "ClearanceService.TaskActionAsync"
+    permission: "Separation.Clearance.ManageTask"
+    db: "SeparationAssetReturns"
+
+  - id: F-SEP-147
+    name: Waive is only permitted on mandatory tasks - waiving a non-mandatory task is Invalid
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/waive"
+    service: "ClearanceService.TaskActionAsync"
+    permission: "Separation.Clearance.Waive"
+    db: "SeparationClearanceTasks"
+
+  - id: F-SEP-148
+    name: "Manager-owner tasks require the actor to be the resolved effective manager (via the ClearanceService-local mechanism, distinct from SeparationService's own manager resolver - see Group X)"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/clear (Manager owner type)"
+    service: "ClearanceService.TaskActionAsync"
+    permission: "Separation.Clearance.ManageTask"
+    db: "SeparationClearanceTasks"
+
+  - id: F-SEP-149
+    name: Add and update an asset return record on a task requiring asset return (AssetReference/AssetName required, ReturnStatus/Condition/RecoveryRequired/RecoveryReference fields)
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/assets, /assets/{assetId}"
+    service: "ClearanceService.AddAssetReturnAsync / UpdateAssetReturnAsync"
+    permission: "Separation.Clearance.AssetManage"
+    db: "SeparationAssetReturns"
+
+  - id: F-SEP-150
+    name: "ActualReturnDate and IssuedDate on SeparationAssetReturn are never populated by the service, even when ReturnStatus transitions to Returned"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/assets/{assetId}"
+    service: "ClearanceService.UpdateAssetReturnAsync"
+    permission: "Separation.Clearance.AssetManage"
+    db: "SeparationAssetReturns.ActualReturnDate, IssuedDate"
+
+  - id: F-SEP-151
+    name: "An already-resolved asset return (status other than PendingReturn) cannot be changed to a DIFFERENT terminal status - re-saving the SAME status is accepted"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/assets/{assetId}"
+    service: "ClearanceService.UpdateAssetReturnAsync"
+    permission: "Separation.Clearance.AssetManage"
+    db: "SeparationAssetReturns"
+
+  - id: F-SEP-152
+    name: "Multiple asset-return rows can be added to the same task with no uniqueness check - but inbox/dashboard summaries only surface the FIRST asset (ordered by Id), hiding the others"
+    group: Clearance
+    status: Implemented
+    api: "GET /api/separation/clearance/inbox, /hr-dashboard"
+    service: "ClearanceService.GetInboxAsync / GetHrDashboardAsync"
+    permission: "Separation.Clearance.ViewTeam / ViewAll"
+    db: "SeparationAssetReturns"
+
+  - id: F-SEP-153
+    name: "There is no monetary recovery-amount field on SeparationAssetReturn at all - only RecoveryRequired (bool) and RecoveryReference (free-text string)"
+    group: Clearance
+    status: Implemented
+    api: "GET /api/separation/clearance/{id}"
+    service: "SeparationAssetReturn entity"
+    permission: "Separation.Clearance.ViewAll"
+    db: "SeparationAssetReturns"
+
+  - id: F-SEP-154
+    name: "Reopen a Completed clearance (requires reason, blocked once the separation is Closed) - preserves prior event history append-only"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/{id}/reopen"
+    service: "ClearanceService.ReopenAsync"
+    permission: "Separation.Clearance.Reopen"
+    db: "SeparationClearances, SeparationClearanceEvents"
+
+  - id: F-SEP-155
+    name: Manager clearance inbox, functional (department/role) clearance inbox, and HR clearance dashboard - each server-paged and tenant-scoped
+    group: Clearance
+    status: Implemented
+    ui: "ClearanceOperationsPage (manager/functional/hr modes)"
+    api: "GET /api/separation/clearance/inbox/manager, /inbox, /hr-dashboard"
+    service: "ClearanceService.GetManagerInboxAsync / GetFunctionalInboxAsync / GetHrDashboardAsync"
+    permission: "Separation.Clearance.ViewTeam / ViewAll"
+    db: "SeparationClearanceTasks"
+
+  - id: F-SEP-156
+    name: "ClearanceViewSelf is defined but referenced by zero controller actions - there is no way for an employee to view even their own clearance progress through this specific permission"
+    group: Clearance
+    status: Implemented
+    api: "n/a (permission never used as a gate)"
+    service: "Permissions.cs / SeparationClearanceController.cs"
+    permission: "Separation.Clearance.ViewSelf"
+    db: "n/a"
+
+  - id: F-SEP-157
+    name: "Seeded IT/Accounts roles hold zero Separation.Clearance.* permissions - ClearanceOwnerType.It/Accounts/Finance tasks can only ever be acted on by SuperAdmin/TenantAdmin/HRAdmin/HRManager in the seeded matrix"
+    group: Clearance
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/clear (as IT/Accounts role)"
+    service: "SeedData.cs RolePermissionMap"
+    permission: "Separation.Clearance.ManageTask"
+    db: "n/a"
+
+  - id: F-SEP-158
+    name: Tenant isolation across every clearance query (template, start, task action, inbox, dashboard, asset, reopen)
+    group: Clearance
+    status: Implemented
+    api: "all /api/separation/clearance/* routes"
+    service: "ClearanceService.cs"
+    permission: "varies"
+    db: "SeparationClearances (TenantId filter)"
+
+  # ═══════════════════════════════ M. CLEARANCE CONCURRENCY ═══════════════════════════════
+  - id: F-SEP-159
+    name: "Clear vs Block on the same task - optimistic concurrency (ConcurrencyVersion) yields exactly one authoritative final task status, loser gets 409"
+    group: Clearance Concurrency
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/clear, /block"
+    service: "ClearanceService.TaskActionAsync"
+    permission: "Separation.Clearance.ManageTask"
+    db: "SeparationClearanceTasks.ConcurrencyVersion"
+
+  - id: F-SEP-160
+    name: Clear vs Waive on the same task - single authoritative final status
+    group: Clearance Concurrency
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/clear, /waive"
+    service: "ClearanceService.TaskActionAsync"
+    permission: "Separation.Clearance.ManageTask / Waive"
+    db: "SeparationClearanceTasks.ConcurrencyVersion"
+
+  - id: F-SEP-161
+    name: "Complete vs concurrent task update - the clearance can never be observed Completed while a mandatory task remains unresolved, under any race interleaving"
+    group: Clearance Concurrency
+    status: Implemented
+    api: "POST /api/separation/clearance/{id}/complete + tasks/{taskId}/block"
+    service: "ClearanceService.CompleteAsync / TaskActionAsync"
+    permission: "Separation.Clearance.Complete / ManageTask"
+    db: "SeparationClearances, SeparationClearanceTasks"
+
+  - id: F-SEP-162
+    name: "Reopen vs Complete race - final clearance status is always one of {Completed, Reopened}, never an invalid intermediate state"
+    group: Clearance Concurrency
+    status: Implemented
+    api: "POST /api/separation/clearance/{id}/reopen, /complete"
+    service: "ClearanceService.ReopenAsync / CompleteAsync"
+    permission: "Separation.Clearance.Reopen / Complete"
+    db: "SeparationClearances.ConcurrencyVersion"
+
+  - id: F-SEP-163
+    name: "Asset return vs 'reported lost' race on the same asset row - single final asset status, never both applied"
+    group: Clearance Concurrency
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/assets/{assetId} (concurrent)"
+    service: "ClearanceService.UpdateAssetReturnAsync"
+    permission: "Separation.Clearance.AssetManage"
+    db: "SeparationAssetReturns.ConcurrencyVersion"
+
+  - id: F-SEP-164
+    name: "LWD revision vs clearance completion race (cross-module) - separation ends in a valid state (ReadyForExit/Approved/NoticePeriod), clearance is never left Cancelled"
+    group: Clearance Concurrency
+    status: Implemented
+    api: "POST /api/separation/{id}/revise-approved-lwd + /clearance/{id}/complete"
+    service: "SeparationService.ReviseApprovedLwdAsync / ClearanceService.CompleteAsync"
+    permission: "Separation.ReviseApprovedLastWorkingDate / Clearance.Complete"
+    db: "EmployeeSeparations, SeparationClearances"
+
+  - id: F-SEP-165
+    name: "A pre-commit failure at Clear/Complete/AddAssetReturn rolls back with zero partial writes/events, and a clean retry succeeds exactly once"
+    group: Clearance Concurrency
+    status: Implemented
+    api: "POST /api/separation/clearance/tasks/{taskId}/clear, /complete, /assets (failure-injected)"
+    service: "ClearanceService.cs"
+    permission: "varies"
+    db: "SeparationClearanceEvents"
+
+  # ═══════════════════════════════ N. BENEFITS ═══════════════════════════════
+  - id: F-SEP-166
+    name: "GratuityPolicy (tenant-scoped, code-unique) has many effective-dated GratuityPolicyVersion rows (Draft/Published/Retired) carrying the actual formula/cap/eligibility configuration"
+    group: Benefits
+    status: Implemented
+    api: "GET/POST /api/payroll/gratuity-policies"
+    service: "SeparationBenefitsService.GetPoliciesAsync / CreatePolicyAsync"
+    permission: "Payroll.SeparationBenefits.View / ManagePolicies"
+    db: "GratuityPolicies, GratuityPolicyVersions"
+
+  - id: F-SEP-167
+    name: "Published GratuityPolicyVersions of the same policy must not date-overlap; Draft/Retired versions may overlap freely"
+    group: Benefits
+    status: Implemented
+    api: "POST /api/payroll/gratuity-policies/{id}/versions"
+    service: "SeparationBenefitsService.CreateVersionAsync"
+    permission: "Payroll.SeparationBenefits.ManagePolicies"
+    db: "GratuityPolicyVersions"
+
+  - id: F-SEP-168
+    name: "Formula types: ServiceDaysBased/ServiceMonthsBased/ServiceYearsBased/FixedAmount/CustomConfigured, with MaximumBenefit cap and MinimumBenefit floor, and TaxTreatment Taxable/NonTaxable/PartiallyTaxable"
+    group: Benefits
+    status: Implemented
+    api: "POST /api/payroll/gratuity-policies/{id}/versions"
+    service: "SeparationBenefitsService.ValidateVersion"
+    permission: "Payroll.SeparationBenefits.ManagePolicies"
+    db: "GratuityPolicyVersions"
+
+  - id: F-SEP-169
+    name: Preview a gratuity/benefits calculation without persisting (no GratuityCalculation row, no number allocation)
+    group: Benefits
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/preview"
+    service: "SeparationBenefitsService.PreviewAsync"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "n/a (no persistence)"
+
+  - id: F-SEP-170
+    name: "Calculate and persist a gratuity/benefits snapshot against a FinalSettlementId - repeated calls for the SAME FinalSettlementId short-circuit to the existing snapshot rather than recomputing or duplicating"
+    group: Benefits
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "SeparationBenefitsService.CalculateCoreAsync"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "GratuityCalculations, FinalSettlementLines"
+
+  - id: F-SEP-171
+    name: "FinalSettlementId is required for a persisted calculation - a request without it is a plain 400 at the controller"
+    group: Benefits
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "SeparationBenefitsController.cs"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "n/a"
+
+  - id: F-SEP-172
+    name: "Gratuity eligibility by reason: Resignation/Retirement/Termination/Redundancy default eligible; Death/Disability default NOT eligible (both overridable); ContractEnd and Other have NO switch case at all and can NEVER be eligible"
+    group: Benefits
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "SeparationBenefitsService.IsReasonEligible"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "GratuityPolicyVersions"
+
+  - id: F-SEP-173
+    name: "If more than one GratuityPolicy.IsActive=true exists for the tenant, calculation silently picks the alphabetically-first Code with no explicit default flag or ambiguity error"
+    group: Benefits
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "SeparationBenefitsService.CalculateCoreAsync"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "GratuityPolicies"
+
+  - id: F-SEP-174
+    name: "Wage basis resolution (Basic/BasicPlusDA/Gross/FixedConfiguredAmount/SelectedSalaryComponents) reads EmployeeSalaryAssignments - a zero-resolved or unconfigured wage basis is Conflict"
+    group: Benefits
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "SeparationBenefitsService.ResolveWageAsync"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "EmployeeSalaryAssignments"
+
+  - id: F-SEP-175
+    name: Override a finalized-ineligible (not-yet-finalized) gratuity amount with a mandatory non-negative amount and reason; a Finalized gratuity cannot be overridden
+    group: Benefits
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/gratuity/{id}/override"
+    service: "SeparationBenefitsService.OverrideAsync"
+    permission: "Payroll.SeparationBenefits.Override"
+    db: "GratuityCalculations"
+
+  - id: F-SEP-176
+    name: "Approve a pending gratuity override via IPayrollApprovalGuard maker-checker (requester cannot self-approve)"
+    group: Benefits
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/gratuity/{id}/approve-override"
+    service: "SeparationBenefitsService.ApproveOverrideAsync"
+    permission: "Payroll.SeparationBenefits.Approve"
+    db: "GratuityCalculations"
+
+  - id: F-SEP-177
+    name: Finalize a gratuity calculation (idempotent - a second finalize on an already-Finalized row is a no-op success, not an error)
+    group: Benefits
+    status: Implemented
+    api: "n/a (invoked internally by PayrollRetroSettlementService.FinalizeSettlementAsync)"
+    service: "SeparationBenefitsService.FinalizeAsync"
+    permission: "Payroll.FinalSettlementFinalize"
+    db: "GratuityCalculations.Status"
+
+  - id: F-SEP-178
+    name: View the tenant-wide separation-benefits register (paged) and per-employee benefit detail/history
+    group: Benefits
+    status: Implemented
+    ui: "SeparationBenefitsPage"
+    api: "GET /api/payroll/separation-benefits/register, /{employeeId}, /{employeeId}/history"
+    service: "SeparationBenefitsService.GetRegisterAsync / GetAsync / GetHistoryAsync"
+    permission: "Payroll.SeparationBenefits.View / ViewHistory"
+    db: "GratuityCalculations"
+
+  - id: F-SEP-179
+    name: "Self-service /api/me/separation-benefits and /history resolve the caller's own employee via account link"
+    group: Benefits
+    status: Implemented
+    ui: "MySeparationBenefitsPage"
+    api: "GET /api/me/separation-benefits, /history"
+    service: "SeparationBenefitsService.cs (self overload)"
+    permission: "Payroll.SeparationBenefits.View / ViewHistory"
+    db: "GratuityCalculations"
+
+  - id: F-SEP-180
+    name: "No seeded role except SuperAdmin/TenantAdmin holds ANY Payroll.SeparationBenefits.* permission (HRAdmin included) - the self-service /api/me routes require the SAME admin-tier permission, making them unreachable by a seeded Employee role"
+    group: Benefits
+    status: Implemented
+    api: "GET /api/me/separation-benefits"
+    service: "SeedData.cs RolePermissionMap"
+    permission: "Payroll.SeparationBenefits.View"
+    db: "n/a"
+
+  - id: F-SEP-181
+    name: "IncludeNoticePeriodInService and NoticeWageBasisType on GratuityPolicyVersion are settable via the API but never read by any calculation - dead configuration fields"
+    group: Benefits
+    status: Implemented
+    api: "POST /api/payroll/gratuity-policies/{id}/versions"
+    service: "SeparationBenefitsService.CalculateNoticeAsync (absence of reads)"
+    permission: "Payroll.SeparationBenefits.ManagePolicies"
+    db: "GratuityPolicyVersions"
+
+  - id: F-SEP-182
+    name: Tenant isolation across every gratuity/benefits query and mutation
+    group: Benefits
+    status: Implemented
+    api: "all /api/payroll/gratuity-policies/*, /separation-benefits/* routes"
+    service: "SeparationBenefitsService.cs"
+    permission: "varies"
+    db: "GratuityPolicies, GratuityCalculations (TenantId filter)"
+
+  # ═══════════════════════════════ O. RECOVERIES / DEDUCTIONS ═══════════════════════════════
+  - id: F-SEP-183
+    name: "There is no dedicated Recovery/Deduction entity, enum, controller, or service anywhere - recovery concepts are folded narrowly into Clearance (RecoveryRequired/RecoveryReference, non-monetary) and Benefits/Notice (NoticeRecovery line, the only place an actual amount is computed)"
+    group: Recoveries
+    status: Implemented
+    api: "n/a"
+    service: "SeparationBenefitsService.cs / ClearanceService.cs"
+    permission: "n/a"
+    db: "SeparationAssetReturns, FinalSettlementLines"
+
+  - id: F-SEP-184
+    name: "Notice-pay-shortfall recovery: NoticeSettlementType.NoticeRecovery drives a Deduction-type FinalSettlementLine, computed from wage/Divisor*max(0, required-served) - independent of EmployeeSeparation's own notice snapshot (reads EmployeeEmployments instead)"
+    group: Recoveries
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "SeparationBenefitsService.CalculateNoticeAsync"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "EmployeeEmployments, FinalSettlementLines"
+
+  - id: F-SEP-185
+    name: "No automated/monetary path exists from Clearance asset recovery into Final Settlement - any actual money recovery for a lost/damaged asset must be added as a fully manual, unlinked Recovery-type settlement line"
+    group: Recoveries
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/lines"
+    service: "PayrollRetroSettlementService.AddSettlementLineAsync"
+    permission: "Payroll.FinalSettlementManage"
+    db: "FinalSettlementLines"
+
+  - id: F-SEP-186
+    name: "Loans (outstanding, Active status) are auto-pulled into settlement as one Recovery line per loan for the full OutstandingTotal - actual LoanRepayment is posted only at Finalize"
+    group: Recoveries
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/calculate"
+    service: "PayrollRetroSettlementService.CalculateSettlementAsync"
+    permission: "Payroll.FinalSettlementCalculate"
+    db: "EmployeeLoans, FinalSettlementLines"
+
+  - id: F-SEP-187
+    name: "Reimbursement claims flagged ReadyForSettlement/FinalSettlement are auto-pulled as a Reimbursement line - actual ReimbursementSettlement posted at Finalize"
+    group: Recoveries
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/calculate"
+    service: "PayrollRetroSettlementService.CalculateSettlementAsync"
+    permission: "Payroll.FinalSettlementCalculate"
+    db: "ReimbursementClaimLines, FinalSettlementLines"
+
+  - id: F-SEP-188
+    name: "Payroll adjustments flagged SettlementMethod=FinalSettlement are auto-pulled as a Recovery(deduction) or Other(earning) line depending on sign"
+    group: Recoveries
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/calculate"
+    service: "PayrollRetroSettlementService.CalculateSettlementAsync"
+    permission: "Payroll.FinalSettlementCalculate"
+    db: "PayrollAdjustments, FinalSettlementLines"
+
+  - id: F-SEP-189
+    name: "Manual FinalSettlementLineRequest.Amount has NO sign validation at all - a negative amount on a manual line is silently accepted, unlike GratuityOverrideRequest.OverrideAmount which explicitly rejects negatives"
+    group: Recoveries
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/lines"
+    service: "PayrollRetroSettlementService.AddSettlementLineAsync"
+    permission: "Payroll.FinalSettlementManage"
+    db: "FinalSettlementLines"
+
+  # ═══════════════════════════════ P. EXIT INTERVIEW ═══════════════════════════════
+  - id: F-SEP-190
+    name: "Exit-interview status: NotStarted, EmployeeInProgress, EmployeeSubmitted, HrInProgress, Completed, CompletedWithoutEmployeeResponse, Reopened, Cancelled; question types: SingleChoice/MultiChoice/Rating/YesNo/ShortText/LongText/Number/Date"
+    group: Exit Interview
+    status: Implemented
+    api: "n/a (enum)"
+    service: "Backend/HRMS.Domain/Enums/SeparationExitInterviewEnums.cs"
+    permission: "n/a"
+    db: "SeparationExitInterviews.Status"
+
+  - id: F-SEP-191
+    name: "Exit-interview template configuration (create/version/publish) is gated by Separation.ClearanceConfigure - a Clearance-named permission with no dedicated ExitInterview permission family existing anywhere"
+    group: Exit Interview
+    status: Implemented
+    api: "GET/POST /api/separation/exit-interview/templates"
+    service: "ExitInterviewService.GetTemplatesAsync / CreateTemplateAsync"
+    permission: "Separation.Clearance.Configure"
+    db: "SeparationExitInterviewTemplates"
+
+  - id: F-SEP-192
+    name: "Assign an exit interview to a separation - resolves the effective published template version by business date/type/reason (most-specific-reason wins); ambiguous or missing configuration is Conflict; only one active (non-Cancelled) interview per separation is allowed"
+    group: Exit Interview
+    status: Implemented
+    api: "POST /api/separation/exit-interview/for/{separationId}/assign"
+    service: "ExitInterviewService.AssignAsync"
+    permission: "Separation.HrReview"
+    db: "SeparationExitInterviews"
+
+  - id: F-SEP-193
+    name: Exit-interview assignment is independent of Clearance/ReadyForExit and can run in parallel with it
+    group: Exit Interview
+    status: Implemented
+    api: "POST /api/separation/exit-interview/for/{separationId}/assign"
+    service: "ExitInterviewService.AssignAsync"
+    permission: "Separation.HrReview"
+    db: "SeparationExitInterviews, SeparationClearances"
+
+  - id: F-SEP-194
+    name: "Only IsActive && IsEmployeeVisible && !IsHrOnly questions are ever loaded for the employee - HR-only questions are never sent to or accepted from the employee"
+    group: Exit Interview
+    status: Implemented
+    ui: "MyExitInterviewPage"
+    api: "GET /api/separation/exit-interview/me, /me/{separationId}"
+    service: "ExitInterviewService.GetMineAsync"
+    permission: "Separation.ViewSelf"
+    db: "SeparationExitInterviewQuestions"
+
+  - id: F-SEP-195
+    name: "Employee draft save and submit; response validation is question-type-specific (ShortText/LongText need text, Rating/Number need in-range numeric, YesNo needs boolean, SingleChoice needs exactly 1 code, MultiChoice needs >=1, Date needs non-empty text)"
+    group: Exit Interview
+    status: Implemented
+    ui: "MyExitInterviewPage"
+    api: "PUT /api/separation/exit-interview/for/{separationId}/my-responses, POST .../submit"
+    service: "ExitInterviewService.SaveEmployeeAsync"
+    permission: "Separation.ViewSelf"
+    db: "SeparationExitInterviewResponses, SeparationExitInterviewResponseRevisions"
+
+  - id: F-SEP-196
+    name: "On submit, all IsRequired questions must have a non-empty answer, else Invalid, naming the missing question code"
+    group: Exit Interview
+    status: Implemented
+    api: "POST /api/separation/exit-interview/for/{separationId}/submit"
+    service: "ExitInterviewService.SaveEmployeeAsync"
+    permission: "Separation.ViewSelf"
+    db: "SeparationExitInterviewResponses"
+
+  - id: F-SEP-197
+    name: "Each response upsert creates an append-only SeparationExitInterviewResponseRevision snapshot of the PREVIOUS value before overwriting - full edit history retained"
+    group: Exit Interview
+    status: Implemented
+    api: "PUT /api/separation/exit-interview/for/{separationId}/my-responses"
+    service: "ExitInterviewService.SaveEmployeeAsync"
+    permission: "Separation.ViewSelf"
+    db: "SeparationExitInterviewResponseRevisions"
+
+  - id: F-SEP-198
+    name: "Re-submitting while status is exactly EmployeeSubmitted is idempotent success ('Employee submission already accepted')"
+    group: Exit Interview
+    status: Implemented
+    api: "POST /api/separation/exit-interview/for/{separationId}/submit"
+    service: "ExitInterviewService.SaveEmployeeAsync"
+    permission: "Separation.ViewSelf"
+    db: "SeparationExitInterviews"
+
+  - id: F-SEP-199
+    name: "Once HR calls StartHr (status becomes HrInProgress), a further employee Submit call is NOT blocked by the read-only guard (which only fires for a plain save, not submit) - it falls through, re-validates, and SILENTLY RESETS status back to EmployeeSubmitted, discarding HR's in-progress state"
+    group: Exit Interview
+    status: Implemented
+    api: "POST /api/separation/exit-interview/for/{separationId}/submit (while HrInProgress)"
+    service: "ExitInterviewService.SaveEmployeeAsync"
+    permission: "Separation.ViewSelf"
+    db: "SeparationExitInterviews.Status"
+
+  - id: F-SEP-200
+    name: "Saving (not submitting) is read-only-blocked once status is EmployeeSubmitted/Completed/CompletedWithoutEmployeeResponse - 'Submitted responses are read-only until the interview is reopened'"
+    group: Exit Interview
+    status: Implemented
+    api: "PUT /api/separation/exit-interview/for/{separationId}/my-responses"
+    service: "ExitInterviewService.SaveEmployeeAsync"
+    permission: "Separation.ViewSelf"
+    db: "SeparationExitInterviews"
+
+  - id: F-SEP-201
+    name: "HR starts the interview (StartHr) - only allowed from EmployeeSubmitted/EmployeeInProgress/Reopened"
+    group: Exit Interview
+    status: Implemented
+    ui: "ExitInterviewHrDetailPage"
+    api: "POST /api/separation/exit-interview/for/{separationId}/start-hr"
+    service: "ExitInterviewService.StartHrAsync"
+    permission: "Separation.HrReview"
+    db: "SeparationExitInterviews.Status"
+
+  - id: F-SEP-202
+    name: "Add a confidential HR note (always IsConfidential=true by entity default) - never included in the employee-facing DTO under any circumstance"
+    group: Exit Interview
+    status: Implemented
+    ui: "ExitInterviewHrDetailPage"
+    api: "POST /api/separation/exit-interview/for/{separationId}/hr-note"
+    service: "ExitInterviewService.AddHrNoteAsync"
+    permission: "Separation.HrReview"
+    db: "SeparationExitInterviewHrNotes"
+
+  - id: F-SEP-203
+    name: "Complete the interview - normal completion requires prior EmployeeSubmitted/HrInProgress status; CompletedWithoutEmployeeResponse=true requires a mandatory CompletionReason and bypasses the employee-submission requirement"
+    group: Exit Interview
+    status: Implemented
+    ui: "ExitInterviewHrDetailPage"
+    api: "POST /api/separation/exit-interview/for/{separationId}/complete"
+    service: "ExitInterviewService.CompleteAsync"
+    permission: "Separation.HrReview"
+    db: "SeparationExitInterviews.Status, HrCompletedAtUtc"
+
+  - id: F-SEP-204
+    name: "'Complete' is offered by the UI (and reachable by API) even when status is NotStarted/EmployeeSubmitted (before Start-HR was ever called) - no client or server guard requires Start-HR to have run first"
+    group: Exit Interview
+    status: Implemented
+    api: "POST /api/separation/exit-interview/for/{separationId}/complete (without prior start-hr)"
+    service: "ExitInterviewService.CompleteAsync"
+    permission: "Separation.HrReview"
+    db: "SeparationExitInterviews"
+
+  - id: F-SEP-205
+    name: "Reopen a completed interview (Completed/CompletedWithoutEmployeeResponse only) with a mandatory reason; blocked once the parent separation is Closed"
+    group: Exit Interview
+    status: Implemented
+    ui: "ExitInterviewHrDetailPage"
+    api: "POST /api/separation/exit-interview/for/{separationId}/reopen"
+    service: "ExitInterviewService.ReopenAsync"
+    permission: "Separation.Manage"
+    db: "SeparationExitInterviews.Status"
+
+  - id: F-SEP-206
+    name: "RehireRecommendation (Recommended/NotRecommended/Conditional/NotAssessed) is explicitly input-only - setting it never stamps FinalizedAtUtc or drives any other workflow transition"
+    group: Exit Interview
+    status: Implemented
+    ui: "ExitInterviewHrDetailPage"
+    api: "POST /api/separation/exit-interview/for/{separationId}/complete"
+    service: "ExitInterviewService.CompleteAsync"
+    permission: "Separation.HrReview"
+    db: "SeparationExitInterviews.RehireRecommendation"
+
+  - id: F-SEP-207
+    name: HR inbox of assigned exit interviews (paged, status/employee filterable) and analytics aggregate
+    group: Exit Interview
+    status: Implemented
+    ui: "ExitInterviewHrInboxPage"
+    api: "GET /api/separation/exit-interview/inbox, /analytics"
+    service: "ExitInterviewService.GetInboxAsync / GetAnalyticsAsync"
+    permission: "Separation.HrReview"
+    db: "SeparationExitInterviews"
+
+  - id: F-SEP-208
+    name: "Tenant isolation across every exit-interview query/mutation; DocumentGenerationFailed/Viewed/Downloaded-style completeness does not apply here, but HrNotes/RehireRecommendation/ReasonComment are structurally excluded from the employee DTO, not just UI-hidden"
+    group: Exit Interview
+    status: Implemented
+    api: "all /api/separation/exit-interview/* routes"
+    service: "ExitInterviewService.cs"
+    permission: "varies"
+    db: "SeparationExitInterviews (TenantId filter)"
+
+  - id: F-SEP-209
+    name: "HRManager role has HrReview but lacks ClearanceConfigure and Manage - can run the day-to-day interview inbox/complete/note workflow but cannot create/publish templates and cannot Reopen a completed interview"
+    group: Exit Interview
+    status: Implemented
+    api: "POST /api/separation/exit-interview/templates, /for/{id}/reopen (as HRManager)"
+    service: "SeedData.cs RolePermissionMap"
+    permission: "Separation.Clearance.Configure / Separation.Manage"
+    db: "n/a"
+
+  # ═══════════════════════════════ Q. EXIT / OFFBOARDING (readiness + execution covered in Group F/G) ═══════════════════════════════
+  - id: F-SEP-210
+    name: "ExitInterviewIncomplete blocker: exit execution requires a non-Cancelled exit interview in Completed or CompletedWithoutEmployeeResponse status"
+    group: Exit Offboarding
+    status: Implemented
+    api: "GET /api/separation/exit/{id}/readiness"
+    service: "SeparationExitService.EvaluateAsync"
+    permission: "Separation.ViewAll"
+    db: "SeparationExitInterviews"
+
+  - id: F-SEP-211
+    name: "FinalSettlementIncomplete blocker: exit execution requires SeparationSettlementOrchestration.Status==Completed AND the linked FinalSettlementCase.Status==Finalized"
+    group: Exit Offboarding
+    status: Implemented
+    api: "GET /api/separation/exit/{id}/readiness"
+    service: "SeparationExitService.EvaluateAsync"
+    permission: "Separation.ViewAll"
+    db: "SeparationSettlementOrchestrations, FinalSettlementCases"
+
+  - id: F-SEP-212
+    name: "AssetReturnPending blocker: no clearance-task asset may have ReturnStatus==PendingReturn"
+    group: Exit Offboarding
+    status: Implemented
+    api: "GET /api/separation/exit/{id}/readiness"
+    service: "SeparationExitService.EvaluateAsync"
+    permission: "Separation.ViewAll"
+    db: "SeparationAssetReturns"
+
+  - id: F-SEP-213
+    name: "EmploymentStateInvalid blocker: (only checked if the employment step hasn't executed yet) Employee.Status must be Active"
+    group: Exit Offboarding
+    status: Implemented
+    api: "GET /api/separation/exit/{id}/readiness"
+    service: "SeparationExitService.EvaluateAsync"
+    permission: "Separation.ViewAll"
+    db: "Employees.Status"
+
+  - id: F-SEP-214
+    name: Repeated Retry calls after a prior successful Execute both report Succeeded with no re-mutation
+    group: Exit Offboarding
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/retry"
+    service: "SeparationExitService.RetryAsync"
+    permission: "Separation.Manage"
+    db: "SeparationExitExecutions"
+
+  - id: F-SEP-215
+    name: "SeparationExitDashboardItemDto.ClosedAtUtc is populated from the execution's CompletedAtUtc - the de facto 'separation closed at' timestamp surfaced to dashboards; there is no dedicated ClosedAtUtc column on EmployeeSeparation itself"
+    group: Exit Offboarding
+    status: Implemented
+    ui: "SeparationExitClosurePage"
+    api: "GET /api/separation/exit/dashboard"
+    service: "SeparationExitService.GetDashboardAsync"
+    permission: "Separation.ViewAll"
+    db: "SeparationExitExecutions.CompletedAtUtc"
+
+  # ═══════════════════════════════ R. SEPARATION DOCUMENTS ═══════════════════════════════
+  - id: F-SEP-216
+    name: "Document type: RelievingLetter, ExperienceLetter, ServiceCertificate, CustomSeparationDocument; generated-document status: DraftGenerated, PendingApproval, Approved, Issued, Superseded, Cancelled"
+    group: Documents
+    status: Implemented
+    api: "n/a (enum)"
+    service: "Backend/HRMS.Domain/Enums/SeparationDocumentEnums.cs"
+    permission: "n/a"
+    db: "SeparationGeneratedDocuments.Status"
+
+  - id: F-SEP-217
+    name: "Configure a document template + version (Draft/Published/Retired, RequiresApproval flag) - Published versions are immutable and effective-dated, and must not date-overlap"
+    group: Documents
+    status: Implemented
+    ui: "SeparationDocumentTemplateConfigurationPage"
+    api: "GET/POST /api/separation/documents/templates, /templates/{id}/versions, /versions/{id}/publish"
+    service: "SeparationDocumentService.GetTemplatesAsync / CreateTemplateAsync / PublishVersionAsync"
+    permission: "Separation.Manage"
+    db: "SeparationDocumentTemplates, SeparationDocumentTemplateVersions"
+
+  - id: F-SEP-218
+    name: "Merge-field whitelist (Employee.*, Separation.*, Employment.Last*, Organization.*, Document.*) - an unknown {{field}} token is rejected before publish"
+    group: Documents
+    status: Implemented
+    api: "POST /api/separation/documents/templates/{id}/versions"
+    service: "SeparationDocumentService.ValidateBody"
+    permission: "Separation.Manage"
+    db: "SeparationDocumentTemplateVersions"
+
+  - id: F-SEP-219
+    name: "Template body is rejected if it contains <script, javascript:, file:, http://, https://, localhost, 127.0.0.1, or ../ (case-insensitive) - 'Executable or unsafe template content is not allowed'"
+    group: Documents
+    status: Implemented
+    api: "POST /api/separation/documents/templates/{id}/versions"
+    service: "SeparationDocumentService.ValidateBody"
+    permission: "Separation.Manage"
+    db: "SeparationDocumentTemplateVersions"
+
+  - id: F-SEP-220
+    name: "Readiness gate for document generation: ApprovedLastWorkingDateRequired, SeparationNotApproved, FinalSettlementNotFinalized, ClearanceIncomplete, DocumentTemplateUnavailable"
+    group: Documents
+    status: Implemented
+    api: "GET /api/separation/documents/for/{separationId}/readiness"
+    service: "SeparationDocumentService.GetReadinessAsync"
+    permission: "Separation.ViewAll"
+    db: "EmployeeSeparations, SeparationClearances, FinalSettlementCases"
+
+  - id: F-SEP-221
+    name: "Generate a document - idempotent when a non-terminal document of the SAME type already exists and no explicit SupersedesDocumentId is given (returns the existing doc, no duplicate)"
+    group: Documents
+    status: Implemented
+    ui: "SeparationDocumentsPage"
+    api: "POST /api/separation/documents/for/{separationId}/generate"
+    service: "SeparationDocumentService.GenerateAsync"
+    permission: "Separation.Manage"
+    db: "SeparationGeneratedDocuments"
+
+  - id: F-SEP-222
+    name: "Generation resolves HISTORICAL employment facts (designation/department/grade/work location) as of the Approved LWD via EffectiveEmploymentResolver, never current mutable Employee fields"
+    group: Documents
+    status: Implemented
+    api: "POST /api/separation/documents/for/{separationId}/generate"
+    service: "SeparationDocumentService.GenerateAsync"
+    permission: "Separation.Manage"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-SEP-223
+    name: "Numbering is per-tenant/type/year sequential (RL/EL/SC/SD prefix) - Preview never allocates a number"
+    group: Documents
+    status: Implemented
+    api: "POST /api/separation/documents/for/{separationId}/generate, /templates/versions/{id}/preview"
+    service: "SeparationDocumentService.GenerateAsync / PreviewAsync"
+    permission: "Separation.Manage"
+    db: "SeparationDocumentNumberSequences"
+
+  - id: F-SEP-224
+    name: "If the template RequiresApproval, generation lands PendingApproval; else it self-approves and is auto-Issued at generation time"
+    group: Documents
+    status: Implemented
+    api: "POST /api/separation/documents/for/{separationId}/generate"
+    service: "SeparationDocumentService.GenerateAsync"
+    permission: "Separation.Manage"
+    db: "SeparationGeneratedDocuments.Status"
+
+  - id: F-SEP-225
+    name: "Approve requires PendingApproval status and blocks the SAME user who generated the document from approving it (maker-checker) - re-validates the SHA-256 content hash before approving"
+    group: Documents
+    status: Implemented
+    ui: "SeparationDocumentsPage"
+    api: "POST /api/separation/documents/{id}/approve"
+    service: "SeparationDocumentService.TransitionAsync"
+    permission: "Separation.Manage"
+    db: "SeparationGeneratedDocuments.Status"
+
+  - id: F-SEP-226
+    name: Issue requires Approved status; transitioning to a status the document is already in is idempotent success, wrong prior status is Conflict
+    group: Documents
+    status: Implemented
+    ui: "SeparationDocumentsPage"
+    api: "POST /api/separation/documents/{id}/issue"
+    service: "SeparationDocumentService.TransitionAsync"
+    permission: "Separation.Manage"
+    db: "SeparationGeneratedDocuments.Status"
+
+  - id: F-SEP-227
+    name: "Supersede a document (requires reason) - old doc becomes Superseded, CurrentDocumentKey flips off 'CURRENT', new doc's bytes/hash/snapshot are independently generated, old artifact preserved byte-for-byte"
+    group: Documents
+    status: Implemented
+    api: "POST /api/separation/documents/{id}/supersede"
+    service: "SeparationDocumentService.SupersedeAsync"
+    permission: "Separation.Manage"
+    db: "SeparationGeneratedDocuments"
+
+  - id: F-SEP-228
+    name: "Cancel a document (requires reason) - already Superseded/Cancelled is idempotent success ('Document was already closed')"
+    group: Documents
+    status: Implemented
+    api: "POST /api/separation/documents/{id}/cancel"
+    service: "SeparationDocumentService.CancelAsync"
+    permission: "Separation.Manage"
+    db: "SeparationGeneratedDocuments.Status"
+
+  - id: F-SEP-229
+    name: "Employee self-view only ever returns documents in Issued or Superseded status - drafts/pending-approval/approved-not-yet-issued are HR-only and never shown to the employee, even for a different document of the same type"
+    group: Documents
+    status: Implemented
+    ui: "MySeparationDocumentsPage"
+    api: "GET /api/separation/documents/mine/{separationId}"
+    service: "SeparationDocumentService.GetForSeparationAsync"
+    permission: "Separation.ViewSelf"
+    db: "SeparationGeneratedDocuments"
+
+  - id: F-SEP-230
+    name: "Self-download requires Status be Issued or Superseded specifically (NOT Approved) - re-verifies the SHA-256 content hash at download time"
+    group: Documents
+    status: Implemented
+    ui: "MySeparationDocumentsPage"
+    api: "GET /api/separation/documents/mine/{id}/download"
+    service: "SeparationDocumentService.DownloadAsync"
+    permission: "Separation.ViewSelf"
+    db: "SeparationGeneratedDocuments"
+
+  - id: F-SEP-231
+    name: "Post-separation document access is gated purely by EmployeeId ownership + document Status, never Employee.Status/User.IsActive directly - but since exit execution deactivates the account and revokes tokens (Group G), a terminated employee cannot reach the endpoint at all through the normal portal; no alumni/magic-link access path exists"
+    group: Documents
+    status: Implemented
+    api: "GET /api/separation/documents/mine/{id}/download (post-exit)"
+    service: "SeparationDocumentService.DownloadAsync + AuthService (login gate)"
+    permission: "Separation.ViewSelf"
+    db: "Users.IsActive"
+
+  - id: F-SEP-232
+    name: "HR (non-self) download allows Approved, Issued, or Superseded - HR can download an Approved-but-not-yet-Issued document, bypassing the Issue gate that blocks the employee"
+    group: Documents
+    status: Implemented
+    ui: "SeparationDocumentsPage"
+    api: "GET /api/separation/documents/{id}/download"
+    service: "SeparationDocumentService.DownloadAsync"
+    permission: "Separation.ViewAll"
+    db: "SeparationGeneratedDocuments"
+
+  - id: F-SEP-233
+    name: "DocumentGenerationFailed, DocumentViewed, and DocumentDownloaded event types are declared in the enum but never raised by SeparationDocumentService - downloads/views/generation-failures are invisible in the document History endpoint"
+    group: Documents
+    status: Implemented
+    api: "GET /api/separation/documents/{id}/history"
+    service: "SeparationDocumentService.cs (absence of AddEvent calls)"
+    permission: "Separation.ViewHistory"
+    db: "SeparationDocumentEvents"
+
+  - id: F-SEP-234
+    name: "The PDF renderer is a hand-rolled, minimal, single-page/single-font/fixed-position writer with no text-wrapping or pagination for long field values - a genuine overflow/truncation risk for long employee names or organization addresses"
+    group: Documents
+    status: Implemented
+    api: "POST /api/separation/documents/for/{separationId}/generate"
+    service: "SeparationDocumentService.RenderPdf"
+    permission: "Separation.Manage"
+    db: "n/a"
+
+  - id: F-SEP-235
+    name: "Full PDF bytes live inline in SeparationGeneratedDocument.ContentBase64 - no external blob store, and superseded/cancelled documents' bytes are never purged, a storage-growth risk at scale"
+    group: Documents
+    status: Implemented
+    api: "n/a"
+    service: "SeparationDocumentService.cs"
+    permission: "n/a"
+    db: "SeparationGeneratedDocuments.ContentBase64"
+
+  - id: F-SEP-236
+    name: HR document generation dashboard (paged, type/status/date filterable)
+    group: Documents
+    status: Implemented
+    ui: "SeparationDocumentsPage"
+    api: "GET /api/separation/documents/dashboard"
+    service: "SeparationDocumentService.GetDashboardAsync"
+    permission: "Separation.ViewAll"
+    db: "SeparationGeneratedDocuments"
+
+  - id: F-SEP-237
+    name: "Preview a template version (non-official, fixed sample data, no number/record allocated) - permission is the SAME tier (Separation.Manage) as full generate/approve, no lighter-weight preview-only permission exists"
+    group: Documents
+    status: Implemented
+    ui: "SeparationDocumentTemplateConfigurationPage"
+    api: "POST /api/separation/documents/templates/versions/{id}/preview"
+    service: "SeparationDocumentService.PreviewAsync"
+    permission: "Separation.Manage"
+    db: "n/a (no persistence)"
+
+  - id: F-SEP-238
+    name: "HRManager role lacks Separation.Manage and Separation.ViewAll - cannot generate/approve/issue/supersede/cancel any document, cannot view the HR document list/readiness/dashboard, and cannot download the HR copy"
+    group: Documents
+    status: Implemented
+    api: "POST /api/separation/documents/for/{id}/generate (as HRManager)"
+    service: "SeedData.cs RolePermissionMap"
+    permission: "Separation.Manage"
+    db: "n/a"
+
+  - id: F-SEP-239
+    name: Tenant isolation across every document template/generation/approval/download query
+    group: Documents
+    status: Implemented
+    api: "all /api/separation/documents/* routes"
+    service: "SeparationDocumentService.cs"
+    permission: "varies"
+    db: "SeparationGeneratedDocuments (TenantId filter)"
+
+  # ═══════════════════════════════ S. FINAL SETTLEMENT HANDOFF ═══════════════════════════════
+  - id: F-SEP-240
+    name: "Settlement readiness blockers: SeparationNotApproved, MissingApprovedLwd, NoticeNotFinalized, ClearanceIncomplete, PendingAssetReturn, ExitInterviewIncomplete, EmployeeIdentityMissing"
+    group: Settlement Handoff
+    status: Implemented
+    ui: "SettlementDashboardPage"
+    api: "GET /api/separation/{id}/settlement/readiness"
+    service: "SeparationSettlementOrchestrationService.EvaluateAsync"
+    permission: "Separation.ViewAll"
+    db: "EmployeeSeparations, SeparationClearances, SeparationExitInterviews"
+
+  - id: F-SEP-241
+    name: "Initiate settlement - on success, calls Payroll's CreateSettlementAsync (SeparationDate=LastWorkingDate=ApprovedLastWorkingDate; SettlementDate=max(today,LWD)), links the returned FinalSettlementCase.Id, and is fully idempotent once linked (a second Initiate short-circuits to the current status with no new row)"
+    group: Settlement Handoff
+    status: Implemented
+    ui: "SettlementDashboardPage"
+    api: "POST /api/separation/{id}/settlement/initiate"
+    service: "SeparationSettlementOrchestrationService.InitiateAsync"
+    permission: "Separation.Manage"
+    db: "SeparationSettlementOrchestrations, FinalSettlementCases"
+
+  - id: F-SEP-242
+    name: "IdempotencyKey is stored on first creation but never compared against the incoming request's key on replay - a second Initiate with a DIFFERENT key string still short-circuits as if it matched"
+    group: Settlement Handoff
+    status: Implemented
+    api: "POST /api/separation/{id}/settlement/initiate"
+    service: "SeparationSettlementOrchestrationService.InitiateAsync"
+    permission: "Separation.Manage"
+    db: "SeparationSettlementOrchestrations.IdempotencyKey"
+
+  - id: F-SEP-243
+    name: "If the Payroll-side create call fails, orchestration transitions to Failed with the Payroll ResultStatus/message captured verbatim"
+    group: Settlement Handoff
+    status: Implemented
+    api: "POST /api/separation/{id}/settlement/initiate"
+    service: "SeparationSettlementOrchestrationService.InitiateAsync"
+    permission: "Separation.Manage"
+    db: "SeparationSettlementOrchestrations.LastFailureCode/Message"
+
+  - id: F-SEP-244
+    name: "Retry - blocked once PayrollSettlementStatus==Finalized; re-evaluates readiness before retrying; resumes/re-links rather than creating a duplicate Payroll case"
+    group: Settlement Handoff
+    status: Implemented
+    ui: "SettlementDashboardPage"
+    api: "POST /api/separation/{id}/settlement/retry"
+    service: "SeparationSettlementOrchestrationService.RetryAsync"
+    permission: "Separation.Manage"
+    db: "SeparationSettlementOrchestrations"
+
+  - id: F-SEP-245
+    name: "Salary through LWD (UnpaidSalary line type) is NOT auto-computed by any service - it exists only as a manually-addable line type"
+    group: Settlement Handoff
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/lines"
+    service: "PayrollRetroSettlementService.AddSettlementLineAsync"
+    permission: "Payroll.FinalSettlementManage"
+    db: "FinalSettlementLines"
+
+  - id: F-SEP-246
+    name: "Attendance data and Overtime/Comp-Off data are NEVER read by settlement calculation - confirmed zero references in PayrollRetroSettlementService.cs and SeparationBenefitsService.cs"
+    group: Settlement Handoff
+    status: Implemented
+    api: "n/a"
+    service: "PayrollRetroSettlementService.cs / SeparationBenefitsService.cs (absence)"
+    permission: "n/a"
+    db: "AttendanceDays, OvertimeRequests (never joined)"
+
+  - id: F-SEP-247
+    name: "Leave-encashment, Gratuity, and Notice pay/recovery ARE integrated (via SeparationBenefitsService, see Groups I/N/O); Loans/Reimbursements/Variable-pay/Adjustments ARE integrated (via PayrollRetroSettlementService.CalculateSettlementAsync)"
+    group: Settlement Handoff
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/calculate"
+    service: "PayrollRetroSettlementService.CalculateSettlementAsync"
+    permission: "Payroll.FinalSettlementCalculate"
+    db: "FinalSettlementLines"
+
+  - id: F-SEP-248
+    name: "Taxes (TDS/income-tax statutory computation) are NOT integrated into the settlement at all beyond gratuity/leave/notice's own internal taxable/non-taxable split - no reference from YearEndTaxService or StatutoryPayrollService to FinalSettlement exists"
+    group: Settlement Handoff
+    status: Implemented
+    api: "n/a"
+    service: "YearEndTaxService.cs / StatutoryPayrollService.cs (absence)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-249
+    name: "Recalculation is additive/incremental, not a full rebuild - existing lines are never cleared; new loan/reimbursement/variable-pay/adjustment lines are only added if no line with the same SourceType+SourceId already exists"
+    group: Settlement Handoff
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/calculate (repeated)"
+    service: "PayrollRetroSettlementService.CalculateSettlementAsync"
+    permission: "Payroll.FinalSettlementCalculate"
+    db: "FinalSettlementLines"
+
+  - id: F-SEP-250
+    name: "Re-running SeparationBenefitsService's gratuity calculation for the SAME FinalSettlementId is a no-op - editing the gratuity policy after first calculation does NOT retroactively update an already-calculated settlement"
+    group: Settlement Handoff
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate (repeated)"
+    service: "SeparationBenefitsService.CalculateCoreAsync"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "GratuityCalculations"
+
+  - id: F-SEP-251
+    name: "Zero settlement (NetSettlement==0) passes every guard with no special-case handling"
+    group: Settlement Handoff
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/finalize (NetSettlement=0)"
+    service: "PayrollRetroSettlementService.cs"
+    permission: "Payroll.FinalSettlementFinalize"
+    db: "FinalSettlementCases"
+
+  - id: F-SEP-252
+    name: "Negative NetSettlement is blocked ONLY at Finalize ('Negative final settlement cannot be finalized') - it can be Calculated and even Approved while negative"
+    group: Settlement Handoff
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/approve, /finalize"
+    service: "PayrollRetroSettlementService.cs"
+    permission: "Payroll.FinalSettlementApprove / Finalize"
+    db: "FinalSettlementCases.NetSettlement"
+
+  - id: F-SEP-253
+    name: "Finalize is a true one-way immutability gate - finalized lines cannot be edited, and a second Finalize call on an already-Finalized case fails"
+    group: Settlement Handoff
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/finalize (repeated)"
+    service: "PayrollRetroSettlementService.FinalizeSettlementAsync"
+    permission: "Payroll.FinalSettlementFinalize"
+    db: "FinalSettlementCases.Status"
+
+  - id: F-SEP-254
+    name: "Settlement status (Status/ReadyForFinalExitClosure) is read via GetStatusAsync, which polls Payroll's FinalSettlementCases table directly through IHrmsDbContext rather than exclusively through IPayrollRetroSettlementService - a layering deviation"
+    group: Settlement Handoff
+    status: Implemented
+    ui: "SettlementDashboardPage"
+    api: "GET /api/separation/{id}/settlement"
+    service: "SeparationSettlementOrchestrationService.GetStatusAsync"
+    permission: "Separation.ViewAll"
+    db: "FinalSettlementCases"
+
+  - id: F-SEP-255
+    name: "Payroll never writes back into Separation's own orchestration/event tables - the relationship is entirely poll-based from Separation to Payroll's FinalSettlementCases, with no push notification on finalize"
+    group: Settlement Handoff
+    status: Implemented
+    api: "n/a"
+    service: "SeparationSettlementOrchestrationService.cs / PayrollRetroSettlementService.cs"
+    permission: "n/a"
+    db: "SeparationSettlementOrchestrations, FinalSettlementCases"
+
+  - id: F-SEP-256
+    name: "There is no Payroll-side GET-final-settlement-by-EmployeeId/SeparationDate endpoint - a Payroll user must obtain PayrollFinalSettlementId from Separation's own Status/Dashboard response"
+    group: Settlement Handoff
+    status: Implemented
+    api: "GET /api/separation/{id}/settlement (only discovery path)"
+    service: "SeparationSettlementOrchestrationService.GetStatusAsync"
+    permission: "Separation.ViewAll"
+    db: "FinalSettlementCases"
+
+  - id: F-SEP-257
+    name: "SeparationReasonCategory maps to Payroll's SeparationReason enum explicitly for Resignation/Retirement/Termination/Redundancy/Death/ContractEnd; every other value (Absconding/MutualSeparation/Other/null) silently maps to Other with no error"
+    group: Settlement Handoff
+    status: Implemented
+    api: "POST /api/separation/{id}/settlement/initiate"
+    service: "SeparationSettlementOrchestrationService.MapReason"
+    permission: "Separation.Manage"
+    db: "FinalSettlementCases.SeparationReason"
+
+  - id: F-SEP-258
+    name: "CaptureSnapshot overwrites on every un-linked Initiate/Retry call - if clearance/notice/LWD facts change between a Failed attempt and a successful Retry, the snapshot reflects the LATEST facts, not the facts at first attempt"
+    group: Settlement Handoff
+    status: Implemented
+    api: "POST /api/separation/{id}/settlement/initiate, /retry"
+    service: "SeparationSettlementOrchestrationService.CaptureSnapshot"
+    permission: "Separation.Manage"
+    db: "SeparationSettlementOrchestrations"
+
+  # ═══════════════════════════════ T. SETTLEMENT STATE MACHINE ═══════════════════════════════
+  - id: F-SEP-259
+    name: "SeparationSettlementOrchestrationStatus declared order: NotReady, Ready, InitiationPendingApproval, Initiated, Processing, Completed, Failed, Cancelled - only NotReady(default/never-persisted), Initiated, Failed, and Completed are ever actually assigned"
+    group: Settlement State Machine
+    status: Implemented
+    api: "n/a (enum)"
+    service: "Backend/HRMS.Domain/Enums/SeparationSettlementEnums.cs"
+    permission: "n/a"
+    db: "SeparationSettlementOrchestrations.Status"
+
+  - id: F-SEP-260
+    name: "FinalSettlementStatus (Payroll side): Draft, Calculated, Reviewed(dead), Approved, Finalized, Cancelled(orphan - no Cancel endpoint exists anywhere to reach it)"
+    group: Settlement State Machine
+    status: Implemented
+    api: "n/a (enum)"
+    service: "Backend/HRMS.Domain/Enums/PayrollEnums.cs"
+    permission: "n/a"
+    db: "FinalSettlementCases.Status"
+
+  - id: F-SEP-261
+    name: "Payroll.FinalSettlementCancel permission is declared and seeded but NO CancelSettlementAsync method/endpoint exists anywhere in the codebase - a genuinely orphan permission"
+    group: Settlement State Machine
+    status: Implemented
+    api: "n/a (no route exists)"
+    service: "Permissions.cs / SeedData.cs"
+    permission: "Payroll.FinalSettlementCancel"
+    db: "n/a"
+
+  - id: F-SEP-262
+    name: "No settlement reversal/reopen endpoint exists on EITHER the Separation or Payroll side once a settlement is Approved/Finalized - post-finalization corrections must go through the separate PayrollRetroCase/PayrollAdjustment mechanism"
+    group: Settlement State Machine
+    status: Implemented
+    api: "n/a (absence)"
+    service: "SeparationSettlementController.cs / PayrollOutputsController.cs"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-263
+    name: "GET /api/separation/{id}/settlement (Separation.ViewAll, a read-permission) can SILENTLY WRITE to the DB - self-heals orchestration Status to Completed and inserts an event row on first observation of Payroll finalization"
+    group: Settlement State Machine
+    status: Implemented
+    api: "GET /api/separation/{id}/settlement"
+    service: "SeparationSettlementOrchestrationService.GetStatusAsync"
+    permission: "Separation.ViewAll"
+    db: "SeparationSettlementOrchestrations.Status"
+
+  - id: F-SEP-264
+    name: "Two independent, non-reconciled notice-fact tracks feed different consumers: Separation's own readiness gate reads EmployeeSeparation.NoticePeriodDays/NoticeServedDays/NoticeShortfallDays, while Payroll's actual notice-pay/recovery MONEY calculation reads a different table entirely, EmployeeEmployments.NoticePeriod/NoticeStartDate/NoticeEndDate"
+    group: Settlement State Machine
+    status: Implemented
+    api: "GET /api/separation/{id}/notice + POST /api/payroll/separation-benefits/{employeeId}/calculate"
+    service: "SeparationService.GetNoticeAsync vs SeparationBenefitsService.CalculateNoticeAsync"
+    permission: "Separation.ViewHistory / Payroll.SeparationBenefits.Calculate"
+    db: "EmployeeSeparations vs EmployeeEmployments"
+
+  - id: F-SEP-265
+    name: Settlement dashboard - server-paged, filterable by orchestration status/employee/LWD range
+    group: Settlement State Machine
+    status: Implemented
+    ui: "SettlementDashboardPage"
+    api: "GET /api/separation/settlement/dashboard"
+    service: "SeparationSettlementOrchestrationService.GetDashboardAsync"
+    permission: "Separation.ViewAll"
+    db: "SeparationSettlementOrchestrations"
+
+  - id: F-SEP-266
+    name: Settlement event history (readiness-evaluated event type is declared but never raised - only initiation/link/failed/retry/completed events are actually recorded)
+    group: Settlement State Machine
+    status: Implemented
+    api: "GET /api/separation/{id}/settlement/history"
+    service: "SeparationSettlementOrchestrationService.GetHistoryAsync"
+    permission: "Separation.ViewHistory"
+    db: "SeparationSettlementEvents"
+
+  - id: F-SEP-267
+    name: "Concurrent Initiate-vs-Initiate, Retry-vs-Retry races each resolve to exactly one surviving orchestration/FinalSettlementCase pair"
+    group: Settlement State Machine
+    status: Implemented
+    api: "POST /api/separation/{id}/settlement/initiate, /retry (concurrent)"
+    service: "SeparationSettlementOrchestrationService.cs"
+    permission: "Separation.Manage"
+    db: "SeparationSettlementOrchestrations.ConcurrencyVersion"
+
+  - id: F-SEP-268
+    name: "Settlement completion (self-heal to Completed) racing an LWD revision confirms a Finalized settlement blocks further approved-LWD edits (the LWD revision fails once settlement is Finalized)"
+    group: Settlement State Machine
+    status: Implemented
+    api: "GET /api/separation/{id}/settlement + POST /revise-approved-lwd (concurrent)"
+    service: "SeparationSettlementOrchestrationService.GetStatusAsync vs SeparationService.ReviseApprovedLwdAsync"
+    permission: "Separation.ViewAll / ReviseApprovedLastWorkingDate"
+    db: "EmployeeSeparations, FinalSettlementCases"
+
+  - id: F-SEP-269
+    name: "A pre-commit failure at Initiate/payroll-link/completion-sync rolls back cleanly (or leaves the state safely retryable) with no duplicate Payroll case created on retry"
+    group: Settlement State Machine
+    status: Implemented
+    api: "POST /api/separation/{id}/settlement/initiate (failure-injected)"
+    service: "SeparationSettlementOrchestrationService.cs"
+    permission: "Separation.Manage"
+    db: "SeparationSettlementOrchestrations, FinalSettlementCases"
+
+  # ═══════════════════════════════ V. AUTHORIZATION / SCOPE ═══════════════════════════════
+  - id: F-SEP-270
+    name: "Full inventory of Separation.* permission constants (ViewSelf/ViewTeam/ViewAll/CreateSelf/Initiate/Submit/Withdraw/Review/Manage/ViewHistory/ManagerReview/HrReview/ReviseLastWorkingDate/Approve/Reject/NoticeManage/NoticeWaive/ReviseApprovedLastWorkingDate) plus the Clearance.* and Payroll.SeparationBenefits.* families"
+    group: Authorization Scope
+    status: Implemented
+    api: "n/a"
+    service: "Backend/HRMS.Domain/Authorization/Permissions.cs:318-394"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-271
+    name: "Separation.Approve, Separation.Review, and Separation.NoticeManage are declared and seeded to multiple roles (SuperAdmin/TenantAdmin/HRAdmin/HRManager/HRBP) but checked by ZERO controller [HasPermission] attributes anywhere - dead permissions"
+    group: Authorization Scope
+    status: Implemented
+    api: "n/a (never gates an endpoint)"
+    service: "SeparationController.cs (full grep of [HasPermission])"
+    permission: "Separation.Approve / Review / NoticeManage"
+    db: "n/a"
+
+  - id: F-SEP-272
+    name: "HRManager lacks Separation.ViewAll - cannot call GET /api/separation (list-all) or GET /{id}, must use inbox/team views instead"
+    group: Authorization Scope
+    status: Implemented
+    api: "GET /api/separation, /{id} (as HRManager)"
+    service: "SeedData.cs RolePermissionMap"
+    permission: "Separation.ViewAll"
+    db: "n/a"
+
+  - id: F-SEP-273
+    name: "Employee role holds ViewSelf/CreateSelf/Submit/Withdraw/ViewHistory only - correctly scoped to self-service, no team/all/review permission"
+    group: Authorization Scope
+    status: Implemented
+    api: "n/a"
+    service: "SeedData.cs RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-274
+    name: "Manager role holds ViewSelf/ViewTeam/Review/ViewHistory/ManagerReview/Reject - no Submit/CreateSelf/Withdraw, and no way to self-initiate a report's separation"
+    group: Authorization Scope
+    status: Implemented
+    api: "n/a"
+    service: "SeedData.cs RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-275
+    name: "HRBP holds ViewAll/HrReview/ReviseLastWorkingDate/Reject/ViewHistory/NoticeManage/NoticeWaive/ReviseApprovedLastWorkingDate but NO Initiate/Submit/CreateSelf - can process cases but never create one"
+    group: Authorization Scope
+    status: Implemented
+    api: "n/a"
+    service: "SeedData.cs RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-276
+    name: "SuperHR holds ZERO Separation-family or Payroll.SeparationBenefits.* permissions natively in the seeded matrix, despite the role name implying broad HR authority - mirrors Module 8's CR-113 pattern"
+    group: Authorization Scope
+    status: Implemented
+    api: "n/a"
+    service: "SeedData.cs RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-277
+    name: "IT, Accounts, ERO, TimeManager hold zero Separation-family permission whatsoever in the seeded matrix"
+    group: Authorization Scope
+    status: Implemented
+    api: "n/a"
+    service: "SeedData.cs RolePermissionMap"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-278
+    name: "A caller who IS the effective manager but holds zero Separation permissions is still denied - relationship alone never substitutes for permission"
+    group: Authorization Scope
+    status: Implemented
+    api: "POST /api/separation/{id}/manager-approve"
+    service: "SeparationController.cs [HasPermission]"
+    permission: "Separation.ManagerReview"
+    db: "n/a"
+
+  - id: F-SEP-279
+    name: "SeparationService reuses NEITHER RoleScopeResolver, EmployeeAccessScopeService, LeaveAuthorizationService, NOR AttendanceAuthorizationService anywhere - it is an independent, 6th-or-later scope mechanism"
+    group: Authorization Scope
+    status: Implemented
+    api: "n/a"
+    service: "SeparationService.cs (absence of those service references)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-280
+    name: "ClearanceService.GetInboxAsync uses a raw SQL join against the legacy Employee.ReportingManagerId column - a THIRD, different manager-resolution mechanism from SeparationService's own IEmployeeManagerResolver-based GetTeamAsync, disagreeing internally within the same module"
+    group: Authorization Scope
+    status: Implemented
+    api: "GET /api/separation/clearance/inbox/manager vs /api/separation/team"
+    service: "ClearanceService.GetInboxAsync vs SeparationService.GetTeamAsync"
+    permission: "Separation.Clearance.ViewTeam / ViewTeam"
+    db: "Employees.ReportingManagerId vs EmployeeEmploymentHistory"
+
+  - id: F-SEP-281
+    name: "ViewAll-holders (HRAdmin, HRManager, HRBP, SuperAdmin/TenantAdmin) get a flat tenant-wide Where(TenantId==x) with no further scope narrowing once ViewAll/HrReview is held - by design"
+    group: Authorization Scope
+    status: Implemented
+    api: "GET /api/separation, /inbox/hr"
+    service: "SeparationService.GetAllAsync / GetHrInboxAsync"
+    permission: "Separation.ViewAll / HrReview"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-282
+    name: "Exit-interview template configuration is gated by Separation.ClearanceConfigure - a permission whose name has nothing to do with exit interviews, confirmed intentional by an existing passing test"
+    group: Authorization Scope
+    status: Implemented
+    api: "POST /api/separation/exit-interview/templates"
+    service: "ExitInterviewService.CreateTemplateAsync"
+    permission: "Separation.Clearance.Configure"
+    db: "n/a"
+
+  - id: F-SEP-283
+    name: "No dedicated Settlement/Document/ExitClosure permission family exists at all - settlement initiate/retry, document generate/approve/issue/supersede/cancel, and exit execute/retry are ALL gated by the single general-purpose Separation.Manage, with no way to grant one capability without the others"
+    group: Authorization Scope
+    status: Implemented
+    api: "POST /api/separation/{id}/settlement/initiate, /documents/for/{id}/generate, /exit/{id}/execute"
+    service: "SeparationSettlementController.cs / SeparationDocumentController.cs / SeparationExitController.cs"
+    permission: "Separation.Manage"
+    db: "n/a"
+
+  # ═══════════════════════════════ W. CR-66 PRIVILEGE ESCALATION IMPACT ═══════════════════════════════
+  - id: F-SEP-284
+    name: "PageAccessService.UpdateAsync validates a requested permission ONLY against Permissions.All membership - every Separation.*, Separation.Clearance.*, and Payroll.SeparationBenefits.* permission is an ordinary member with no carve-out"
+    group: PageAccess Escalation
+    status: Implemented
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions"
+
+  - id: F-SEP-285
+    name: "SuperHR (holding PageAccess.Manage but zero native Separation permissions per F-SEP-276) can self-grant Separation.Manage, every Clearance permission, and all six Payroll.SeparationBenefits.* permissions in one PUT call, then immediately drive the entire separation lifecycle end-to-end"
+    group: PageAccess Escalation
+    status: Implemented
+    api: "PUT /api/page-access/roles/{roleId} then POST /api/separation/*"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions"
+
+  - id: F-SEP-286
+    name: "HRAdmin can additionally self-grant the two dead permissions Separation.Approve/NoticeManage via the same path - which accomplishes nothing functionally, since no endpoint checks them (F-SEP-271)"
+    group: PageAccess Escalation
+    status: Implemented
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions"
+
+  - id: F-SEP-287
+    name: "The self-escalation grant IS fully audited (AuthorizationConfigurationEvents records actor/reason) - traceable after the fact, but nothing prevents or flags it at write time"
+    group: PageAccess Escalation
+    status: Implemented
+    api: "PUT /api/page-access/roles/{roleId}"
+    service: "PageAccessService.UpdateAsync"
+    permission: "PageAccess.Manage"
+    db: "AuthorizationConfigurationEvents"
+
+  # ═══════════════════════════════ X. TENANT ISOLATION ═══════════════════════════════
+  - id: F-SEP-288
+    name: Cross-tenant separation-case id lookup returns NotFound, not Forbidden, for GET/history/action endpoints
+    group: Tenant Isolation
+    status: Implemented
+    api: "GET /api/separation/{tenantAId}, /history (as Tenant B)"
+    service: "SeparationService.GetAsync / GetHistoryAsync"
+    permission: "Separation.ViewAll / ViewHistory"
+    db: "EmployeeSeparations (TenantId filter)"
+
+  - id: F-SEP-289
+    name: "Cross-tenant mutation attempts (manager-approve/reject, hr-approve/reject, withdraw) on a foreign-tenant case id have zero side effects and return NotFound"
+    group: Tenant Isolation
+    status: Implemented
+    api: "POST /api/separation/{tenantAId}/manager-approve (as Tenant B)"
+    service: "SeparationService.LoadForActionAsync"
+    permission: "varies"
+    db: "EmployeeSeparations (TenantId filter)"
+
+  - id: F-SEP-290
+    name: Cross-tenant clearance/benefits/exit-interview/document/settlement id lookups all return NotFound/Forbidden with zero data leakage or side effect
+    group: Tenant Isolation
+    status: Implemented
+    api: "GET /api/separation/clearance/{tenantAId} (as Tenant B), etc."
+    service: "ClearanceService.cs / SeparationBenefitsService.cs / ExitInterviewService.cs / SeparationDocumentService.cs / SeparationSettlementOrchestrationService.cs"
+    permission: "varies"
+    db: "TenantId filter on every query"
+
+  - id: F-SEP-291
+    name: "Gratuity policy number sequences are isolated per tenant - two different tenants both independently allocate document/gratuity numbers starting at 1"
+    group: Tenant Isolation
+    status: Implemented
+    api: "POST /api/separation/documents/for/{id}/generate (Tenant A and Tenant B)"
+    service: "SeparationDocumentService.GenerateAsync"
+    permission: "Separation.Manage"
+    db: "SeparationDocumentNumberSequences"
+
+  - id: F-SEP-292
+    name: "A foreign tenant's SeparationExitExecutions/settlement/clearance rows remain completely empty/untouched after executing a Tenant A exit/settlement/clearance action"
+    group: Tenant Isolation
+    status: Implemented
+    api: "POST /api/separation/exit/{id}/execute (Tenant A), then query as Tenant B"
+    service: "SeparationExitService.cs"
+    permission: "Separation.Manage"
+    db: "SeparationExitExecutions (TenantId filter)"
+
+  - id: F-SEP-293
+    name: HR-initiated creation for a cross-tenant employeeId is denied at the Employees.TenantId existence check, not merely at a later authorization layer
+    group: Tenant Isolation
+    status: Implemented
+    api: "POST /api/separation/employees/{crossTenantEmployeeId}"
+    service: "SeparationService.CreateForEmployeeAsync"
+    permission: "Separation.Initiate"
+    db: "Employees (TenantId filter)"
+
+  # ═══════════════════════════════ Y. AUDIT / HISTORY ═══════════════════════════════
+  - id: F-SEP-294
+    name: "EmployeeSeparationEventType full audit trail is append-only, immutable, with actor/timestamp/from-status/to-status/reason/comment per event"
+    group: Audit History
+    status: Implemented
+    api: "GET /api/separation/{id}/history"
+    service: "SeparationService.GetHistoryAsync"
+    permission: "Separation.ViewHistory"
+    db: "EmployeeSeparationEvents"
+
+  - id: F-SEP-295
+    name: "LWD-change and notice-waiver events record old/new values in the Comment/Reason fields ('{old} -> {new}')"
+    group: Audit History
+    status: Implemented
+    api: "GET /api/separation/{id}/history"
+    service: "SeparationService.ReviseLwdAsync / ApplyNoticeWaiverAsync"
+    permission: "Separation.ViewHistory"
+    db: "EmployeeSeparationEvents"
+
+  - id: F-SEP-296
+    name: Clearance history (Started/TaskCleared/TaskBlocked/TaskWaived/AssetReturned/Completed/Reopened) is append-only and reopen preserves prior events rather than erasing them
+    group: Audit History
+    status: Implemented
+    api: "GET /api/separation/clearance/{id} (Events collection)"
+    service: "ClearanceService.cs"
+    permission: "Separation.Clearance.ViewAll"
+    db: "SeparationClearanceEvents"
+
+  - id: F-SEP-297
+    name: Exit-interview event history and document event history are each append-only, immutable, tenant-scoped
+    group: Audit History
+    status: Implemented
+    api: "GET .../for/{id} (Events)"
+    service: "ExitInterviewService.cs / SeparationDocumentService.cs"
+    permission: "Separation.HrReview / ViewHistory"
+    db: "SeparationExitInterviewEvents, SeparationDocumentEvents"
+
+  - id: F-SEP-298
+    name: "Settlement event history records initiation/link/failed/retry/completed events - the declared SettlementReadinessEvaluated and FinalSettlementProcessing/ReadyForFinalExitClosure event types are never actually raised"
+    group: Audit History
+    status: Implemented
+    api: "GET /api/separation/{id}/settlement/history"
+    service: "SeparationSettlementOrchestrationService.GetHistoryAsync"
+    permission: "Separation.ViewHistory"
+    db: "SeparationSettlementEvents"
+
+  - id: F-SEP-299
+    name: "Exit execution's own audit trail (SeparationClosed event, checkpoint markers) survives repeated Execute/Retry calls with no duplication - exactly one SeparationClosed event no matter how many times Execute is called afterward"
+    group: Audit History
+    status: Implemented
+    api: "GET /api/separation/exit/dashboard (event count assertion)"
+    service: "SeparationExitService.cs"
+    permission: "Separation.ViewAll"
+    db: "SeparationExitExecutions"
+
+  # ═══════════════════════════════ Z. REPORTS / QUEUES ═══════════════════════════════
+  - id: F-SEP-300
+    name: Manager and HR separation-approval inboxes (pending queues)
+    group: Reports Queues
+    status: Implemented
+    ui: "SeparationInboxPage (manager and hr modes)"
+    api: "GET /api/separation/inbox/manager, /inbox/hr"
+    service: "SeparationService.GetManagerInboxAsync / GetHrInboxAsync"
+    permission: "Separation.ManagerReview / HrReview"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-301
+    name: "Upcoming exits / notice-serving employees are surfaced only implicitly through the Exit-readiness/Settlement/Clearance dashboards' LWD columns - there is no dedicated 'notice-serving employees' report endpoint"
+    group: Reports Queues
+    status: Implemented
+    ui: "SeparationExitClosurePage, SettlementDashboardPage"
+    api: "GET /api/separation/exit/dashboard, /settlement/dashboard"
+    service: "SeparationExitService.GetDashboardAsync / SeparationSettlementOrchestrationService.GetDashboardAsync"
+    permission: "Separation.ViewAll"
+    db: "EmployeeSeparations"
+
+  - id: F-SEP-302
+    name: Clearance pending queues (manager, functional/department, HR-wide dashboard)
+    group: Reports Queues
+    status: Implemented
+    ui: "ClearanceOperationsPage (manager/functional/hr modes)"
+    api: "GET /api/separation/clearance/inbox/manager, /inbox, /hr-dashboard"
+    service: "ClearanceService.GetManagerInboxAsync / GetFunctionalInboxAsync / GetHrDashboardAsync"
+    permission: "Separation.Clearance.ViewTeam / ViewAll"
+    db: "SeparationClearanceTasks"
+
+  - id: F-SEP-303
+    name: Settlement pending queue (dashboard filterable by status/employee/LWD range)
+    group: Reports Queues
+    status: Implemented
+    ui: "SettlementDashboardPage"
+    api: "GET /api/separation/settlement/dashboard"
+    service: "SeparationSettlementOrchestrationService.GetDashboardAsync"
+    permission: "Separation.ViewAll"
+    db: "SeparationSettlementOrchestrations"
+
+  - id: F-SEP-304
+    name: Completed-exit queue/dashboard (server-paged, isReady/blockerCount columns)
+    group: Reports Queues
+    status: Implemented
+    ui: "SeparationExitClosurePage"
+    api: "GET /api/separation/exit/dashboard"
+    service: "SeparationExitService.GetDashboardAsync"
+    permission: "Separation.ViewAll"
+    db: "SeparationExitExecutions"
+
+  - id: F-SEP-305
+    name: "Exit-interview HR inbox is filterable by status/employee and server-paged"
+    group: Reports Queues
+    status: Implemented
+    ui: "ExitInterviewHrInboxPage"
+    api: "GET /api/separation/exit-interview/inbox"
+    service: "ExitInterviewService.GetInboxAsync"
+    permission: "Separation.HrReview"
+    db: "SeparationExitInterviews"
+
+  - id: F-SEP-306
+    name: "Document generation HR dashboard is filterable by type/status/date and server-paged; separation-benefits register is server-paged"
+    group: Reports Queues
+    status: Implemented
+    ui: "SeparationDocumentsPage, SeparationBenefitsPage"
+    api: "GET /api/separation/documents/dashboard, /api/payroll/separation-benefits/register"
+    service: "SeparationDocumentService.GetDashboardAsync / SeparationBenefitsService.GetRegisterAsync"
+    permission: "Separation.ViewAll / Payroll.SeparationBenefits.View"
+    db: "SeparationGeneratedDocuments, GratuityCalculations"
+
+  - id: F-SEP-307
+    name: "Authorization/filtering is applied server-side BEFORE paging on every dashboard/inbox/register listed above - confirmed by large-data tests seeding 1000+ rows and asserting correct page slices/totals with no leakage across tenants"
+    group: Reports Queues
+    status: Implemented
+    api: "all dashboard/inbox/register endpoints, page 2+"
+    service: "SeparationService.cs / ClearanceService.cs / SeparationSettlementOrchestrationService.cs / SeparationExitService.cs / ExitInterviewService.cs / SeparationDocumentService.cs / SeparationBenefitsService.cs"
+    permission: "varies"
+    db: "TenantId filter applied inside the paged query"
+
+  - id: F-SEP-308
+    name: "No export (CSV/Excel) capability was found on any Separation-family dashboard/inbox/register endpoint"
+    group: Reports Queues
+    status: Implemented
+    api: "n/a (absence)"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  # ═══════════════════════════════ AB. PROVIDER PARITY ═══════════════════════════════
+  - id: F-SEP-309
+    name: "SQL Server / MySQL provider-acceptance coverage exists per feature area (Foundation/Approval/Notice/Clearance/Benefits/ExitInterview/Document/Exit/Settlement) - each skips silently when its env var is absent, per CLAUDE.md's documented convention"
+    group: Provider Parity
+    status: Implemented
+    api: "n/a (test-only)"
+    service: "SeparationFoundationProviderAcceptance.cs and 8 sibling *ProviderAcceptance.cs files"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-310
+    name: "Most provider-acceptance classes are schema/connectivity smoke tests only (assert entity types registered, table empty on fresh migration) - only Foundation, Approval, and the Payroll-Separation-Benefits pair actually run a full business-flow twice against a real throwaway database"
+    group: Provider Parity
+    status: Implemented
+    api: "n/a (test-only)"
+    service: "SeparationClearanceProviderAcceptance.cs, SeparationSettlementProviderAcceptance.cs, etc."
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-311
+    name: "MySQL lock semantics (SELECT ... FOR UPDATE) vs SQL Server (UPDLOCK, HOLDLOCK) and app-managed binary(16) concurrency tokens (MySQL) vs native rowversion (SQL Server) apply uniformly across every Separation-family entity's ConcurrencyVersion/optimistic-concurrency field, per CLAUDE.md's documented provider divergence"
+    group: Provider Parity
+    status: Implemented
+    api: "n/a"
+    service: "Backend/HRMS.Infrastructure/Persistence (EF concurrency-token configuration)"
+    permission: "n/a"
+    db: "EmployeeSeparations, SeparationClearances, SeparationClearanceTasks, SeparationAssetReturns, SeparationExitInterviews, SeparationGeneratedDocuments, SeparationSettlementOrchestrations"
+
+  - id: F-SEP-312
+    name: "The one-active-case-per-employee uniqueness constraint (ActiveEmployeeKey) relies on provider-native nullable-unique-index semantics that must be independently verified on real SQL Server and MySQL, not assumed from SQLite's in-memory provider"
+    group: Provider Parity
+    status: Implemented
+    api: "POST /api/separation/me (concurrent, real provider)"
+    service: "SeparationFoundationProviderAcceptance.cs"
+    permission: "Separation.CreateSelf"
+    db: "EmployeeSeparations (ActiveEmployeeKey)"
+
+  - id: F-SEP-313
+    name: "Document number sequence allocation (per tenant/type/year) must be verified race-free on a real provider, not only SQLite's in-memory/file-backed test doubles"
+    group: Provider Parity
+    status: Implemented
+    api: "POST /api/separation/documents/for/{id}/generate (concurrent, real provider)"
+    service: "SeparationDocumentProviderAcceptance.cs"
+    permission: "Separation.Manage"
+    db: "SeparationDocumentNumberSequences"
+
+  - id: F-SEP-314
+    name: "Gratuity/leave-encashment calculation idempotency (single snapshot per FinalSettlementId under concurrent calculate calls) must be verified on both MySQL and SQL Server, per PayrollSeparationBenefitsProviderAcceptance's twice-repeated run pattern"
+    group: Provider Parity
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate (real provider, twice)"
+    service: "MySqlPayrollSeparationBenefitsIntegrationTests / SqlServerPayrollSeparationBenefitsIntegrationTests"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "GratuityCalculations"
+
+  # ═══════════════════════════════ AC. LARGE-DATA ═══════════════════════════════
+  - id: F-SEP-315
+    name: "Clearance functional/HR dashboards remain correctly paged and authorization-filtered at 1000 clearance cases / 5000 tasks"
+    group: Large Data
+    status: Implemented
+    api: "GET /api/separation/clearance/inbox, /hr-dashboard (1000+ rows)"
+    service: "SeparationClearanceLargeDataTests.cs"
+    permission: "Separation.Clearance.ViewAll"
+    db: "SeparationClearances, SeparationClearanceTasks"
+
+  - id: F-SEP-316
+    name: "Separation-benefits calculations remain correct and tenant-scoped at 100 concurrent employee settlements"
+    group: Large Data
+    status: Implemented
+    api: "POST /api/payroll/separation-benefits/{employeeId}/calculate (100 employees)"
+    service: "SeparationBenefitsLargeDataTests.cs"
+    permission: "Payroll.SeparationBenefits.Calculate"
+    db: "GratuityCalculations"
+
+  - id: F-SEP-317
+    name: "Exit-interview inbox/analytics remain correctly paged and aggregated at 1000 interviews / 10000 responses, under a 2-minute perf ceiling"
+    group: Large Data
+    status: Implemented
+    api: "GET /api/separation/exit-interview/inbox, /analytics (1000+ rows)"
+    service: "SeparationExitInterviewLargeDataTests.cs"
+    permission: "Separation.HrReview"
+    db: "SeparationExitInterviews"
+
+  - id: F-SEP-318
+    name: "Document dashboard/employee-lookup remain correct and correctly paged at 2000 raw document metadata rows across 1000 separations"
+    group: Large Data
+    status: Implemented
+    api: "GET /api/separation/documents/dashboard (2000+ rows)"
+    service: "SeparationDocumentLargeDataTests.cs"
+    permission: "Separation.ViewAll"
+    db: "SeparationGeneratedDocuments"
+
+  - id: F-SEP-319
+    name: "Settlement dashboard pages 1000 orchestration projections server-side under a 30-second perf ceiling with correct TotalCount/page-slice math"
+    group: Large Data
+    status: Implemented
+    api: "GET /api/separation/settlement/dashboard (1000 rows)"
+    service: "SeparationSettlementLargeDataTests.cs"
+    permission: "Separation.ViewAll"
+    db: "SeparationSettlementOrchestrations"
+
+  - id: F-SEP-320
+    name: "Exit dashboard and 100 REAL end-to-end exit executions (not just seeded rows) scale correctly across 1000 total separations, with exact counts (100 Closed, 100 Terminated employees, 100 deactivated Users, 100 Terminated employment-history rows) - no leakage into the other 900 untouched separations"
+    group: Large Data
+    status: Implemented
+    api: "GET /api/separation/exit/dashboard + POST /{id}/execute x100 (of 1000 seeded)"
+    service: "SeparationExitLargeDataTests.cs"
+    permission: "Separation.ViewAll / Manage"
+    db: "SeparationExitExecutions, Employees, Users"
+
+  # ═══════════════════════════════ AA. FRONTEND ═══════════════════════════════
+  - id: F-SEP-321
+    name: "16 Separation-family pages plus 2 Payroll-hosted Separation-Benefits pages exist; only MySeparationPage performs any client-side permission check - the other 15 rely solely on the page-level RequirePermission route guard"
+    group: Frontend
+    status: Implemented
+    ui: "all Separation-family pages"
+    api: "n/a"
+    service: "src/pages/separation/*.tsx, src/pages/payroll/SeparationBenefitsPage.tsx"
+    permission: "varies"
+    db: "n/a"
+
+  - id: F-SEP-322
+    name: "MySeparationPage self-service resignation form - create/submit/withdraw, notice card, clearance-progress card, history timeline"
+    group: Frontend
+    status: Implemented
+    ui: "MySeparationPage"
+    api: "listSeparationReasons, getMySeparation, getSeparationNotice, getSeparationClearance, getSeparationHistory, createMySeparation, submitSeparation, withdrawSeparation"
+    permission: "Separation.ViewSelf + RequireEmployeeIdentity"
+    db: "n/a"
+
+  - id: F-SEP-323
+    name: "MySeparationPage's create-request form renders on ANY current.error truthiness (network failure, 500, auth hiccup), not on a specific 'no active separation' condition - a user could be misled into thinking they have no active case"
+    group: Frontend
+    status: Implemented
+    ui: "MySeparationPage"
+    api: "getMySeparation (forced error)"
+    permission: "Separation.ViewSelf"
+    db: "n/a"
+
+  - id: F-SEP-324
+    name: "SeparationInboxPage (manager and hr modes) - approve/reject/revise-LWD via window.prompt(); no in-component permission gating, no loading/empty state, and NO pagination at all despite every other Separation dashboard being server-paged"
+    group: Frontend
+    status: Implemented
+    ui: "SeparationInboxPage"
+    api: "getManagerSeparationInbox, getHrSeparationInbox, managerApproveSeparation, managerRejectSeparation, hrApproveSeparation, hrRejectSeparation, reviseSeparationLwd"
+    permission: "Separation.ManagerReview / HrReview"
+    db: "n/a"
+
+  - id: F-SEP-325
+    name: "SeparationInboxPage has ZERO automated (Vitest) test coverage of any kind - the core manager/HR approval workflow UI is untested"
+    group: Frontend
+    status: Implemented
+    ui: "SeparationInboxPage"
+    api: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-326
+    name: "ClearanceOperationsPage (manager/functional/hr modes) - PageHeader text claims 'permission-gated' but performs ZERO client-side permission checks; NO error rendering at all on fetch failure (silently-empty table)"
+    group: Frontend
+    status: Implemented
+    ui: "ClearanceOperationsPage"
+    api: "getManagerClearanceInbox, getFunctionalClearanceInbox, getHrClearanceDashboard, clearClearanceTask, blockClearanceTask, updateClearanceAssetReturn"
+    permission: "Separation.Clearance.ViewTeam / ViewAll"
+    db: "n/a"
+
+  - id: F-SEP-327
+    name: "No client function or UI exists anywhere for waiving a clearance task, or for completing/reopening the WHOLE clearance (as opposed to per-task clear) - these backend endpoints are API-only, not manually testable through the UI"
+    group: Frontend
+    status: Implemented
+    ui: "n/a (absence)"
+    api: "POST /api/separation/clearance/tasks/{id}/waive, /{id}/complete, /{id}/reopen"
+    permission: "Separation.Clearance.Waive / Complete / Reopen"
+    db: "n/a"
+
+  - id: F-SEP-328
+    name: "SettlementDashboardPage - initiate/retry per row; blocker DETAIL (as opposed to a bare blockerCount number) is never shown anywhere, since the dedicated readiness endpoint is a dead export"
+    group: Frontend
+    status: Implemented
+    ui: "SettlementDashboardPage"
+    api: "getSettlementDashboard, initiateSettlement, retrySettlement (getSettlementReadiness/getSettlementStatus dead)"
+    permission: "Separation.ViewAll / Manage"
+    db: "n/a"
+
+  - id: F-SEP-329
+    name: "SeparationExitClosurePage - execute/retry via window.confirm(); same blocker-detail-not-shown gap as Settlement (getSeparationExitReadiness is a dead export)"
+    group: Frontend
+    status: Implemented
+    ui: "SeparationExitClosurePage"
+    api: "getSeparationExitDashboard, executeSeparationExit, retrySeparationExit"
+    permission: "Separation.ViewAll / Manage"
+    db: "n/a"
+
+  - id: F-SEP-330
+    name: "SeparationDocumentsPage - template create/version, generate/approve/issue/download all on one screen; imported publish/preview handlers are wired to nothing (void publish; void preview) matching Attendance's dead-handler pattern"
+    group: Frontend
+    status: Implemented
+    ui: "SeparationDocumentsPage"
+    api: "getSeparationDocumentTemplates, createSeparationDocumentTemplate, addSeparationDocumentTemplateVersion, generateSeparationDocument, getSeparationDocumentDashboard, approveSeparationDocument, issueSeparationDocument, downloadSeparationDocument"
+    permission: "Separation.ViewAll / Manage"
+    db: "n/a"
+
+  - id: F-SEP-331
+    name: "SeparationDocumentsPage hardcodes expectedConcurrencyVersion=1 for both Approve and Issue actions - a real bug if the document's actual server-side version has advanced past 1 for any reason"
+    group: Frontend
+    status: Implemented
+    ui: "SeparationDocumentsPage"
+    api: "approveSeparationDocument(id, 1), issueSeparationDocument(id, 1)"
+    permission: "Separation.Manage"
+    db: "n/a"
+
+  - id: F-SEP-332
+    name: "SeparationDocumentsPage has ZERO automated test coverage - document generate/approve/issue lifecycle UI (including the hardcoded-concurrency-version bug) is entirely unverified by any Vitest file"
+    group: Frontend
+    status: Implemented
+    ui: "SeparationDocumentsPage"
+    api: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-333
+    name: "No client function exists at all for POST /api/separation/documents/{id}/cancel; supersedeSeparationDocument is exported but never called by any page - document cancellation/supersession are API-only"
+    group: Frontend
+    status: Implemented
+    ui: "n/a (absence)"
+    api: "POST /api/separation/documents/{id}/cancel, /supersede"
+    permission: "Separation.Manage"
+    db: "n/a"
+
+  - id: F-SEP-334
+    name: "SeparationDocumentTemplateConfigurationPage - correctly threads the real concurrencyVersion on Publish (contrast with the hardcoded-1 bug elsewhere); requiresApproval is hardcoded true on create with NO checkbox to toggle it, so a no-approval-required template can never be created from this UI"
+    group: Frontend
+    status: Implemented
+    ui: "SeparationDocumentTemplateConfigurationPage"
+    api: "createSeparationDocumentTemplate, addSeparationDocumentTemplateVersion, publishSeparationDocumentTemplateVersion, previewSeparationDocumentTemplateVersion"
+    permission: "Separation.Manage"
+    db: "n/a"
+
+  - id: F-SEP-335
+    name: "MySeparationDocumentsPage - manual separation-ID entry, download hidden only for Cancelled status, no loading/empty-state text"
+    group: Frontend
+    status: Implemented
+    ui: "MySeparationDocumentsPage"
+    api: "getMySeparationDocuments, downloadSeparationDocument(id, true)"
+    permission: "Separation.ViewSelf + RequireEmployeeIdentity"
+    db: "n/a"
+
+  - id: F-SEP-336
+    name: "ExitInterviewConfigurationPage - template creation always seeds exactly one hardcoded Q1 question inline; no separate 'add more questions to a draft' UI is discoverable"
+    group: Frontend
+    status: Implemented
+    ui: "ExitInterviewConfigurationPage"
+    api: "getExitInterviewTemplates, createExitInterviewTemplate, createExitInterviewVersion, publishExitInterviewVersion"
+    permission: "Separation.Clearance.Configure"
+    db: "n/a"
+
+  - id: F-SEP-337
+    name: "ExitInterviewHrInboxPage - correctly server-paged (25/page), status filter dropdown"
+    group: Frontend
+    status: Implemented
+    ui: "ExitInterviewHrInboxPage"
+    api: "getExitInterviewInbox"
+    permission: "Separation.HrReview"
+    db: "n/a"
+
+  - id: F-SEP-338
+    name: "ExitInterviewHrDetailPage - 'Complete interview' has NO state guard preventing it before 'Start HR interview'; employee responses render via raw JSON.stringify rather than a formatted view; confidential notes and rehire-recommendation controls render correctly gated server-side"
+    group: Frontend
+    status: Implemented
+    ui: "ExitInterviewHrDetailPage"
+    api: "getHrExitInterview, startHrExitInterview, addExitInterviewHrNote, completeHrExitInterview, reopenHrExitInterview"
+    permission: "Separation.HrReview / Manage (reopen)"
+    db: "n/a"
+
+  - id: F-SEP-339
+    name: "SeparationBenefitsPage (payroll) / MySeparationBenefitsPage - no in-component permission gating beyond route-level payroll.separationBenefitsView; policy version form hardcodes formulaType='FixedAmount' and status='Published' with no draft/review step in this UI"
+    group: Frontend
+    status: Implemented
+    ui: "SeparationBenefitsPage, MySeparationBenefitsPage"
+    api: "listGratuityPolicies, createGratuityPolicy, addGratuityPolicyVersion, listSeparationBenefitRegister, getSeparationBenefits, getSeparationBenefitHistory, getMySeparationBenefits, getMySeparationBenefitHistory"
+    permission: "Payroll.SeparationBenefits.View"
+    db: "n/a"
+
+  - id: F-SEP-340
+    name: "Backend endpoints for notice waiver and post-approval LWD revision have no corresponding client function called by any page - both are API-only, not manually testable through the UI"
+    group: Frontend
+    status: Implemented
+    ui: "n/a (absence)"
+    api: "POST /api/separation/{id}/notice/waive, /revise-approved-lwd"
+    permission: "Separation.NoticeWaive / ReviseApprovedLastWorkingDate"
+    db: "n/a"
+
+  - id: F-SEP-341
+    name: "13 of 17 Separation-family routes have no navigation entry in src/layout/navigation.ts - reachable only by typing the URL, though each still enforces its route-level permission guard on direct navigation"
+    group: Frontend
+    status: Implemented
+    ui: "App.tsx routes vs src/layout/navigation.ts"
+    api: "n/a"
+    permission: "varies"
+    db: "n/a"
+
+  - id: F-SEP-342
+    name: "The 4 nav-linked routes are My Separation/Resignation, Separation Manager Inbox, Separation HR Inbox, and Separation Exit Closure - all 4 correctly resolve, no orphan nav entries exist"
+    group: Frontend
+    status: Implemented
+    ui: "src/layout/navigation.ts"
+    api: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-SEP-343
+    name: "useApiQuery's stale-while-revalidate behavior keeps prior rows on screen during a refetch, and silently swallows aborted/canceled requests without populating error - relevant for rapid page/filter-change race conditions across every Separation dashboard"
+    group: Frontend
+    status: Implemented
+    ui: "all useApiQuery-backed Separation pages"
+    api: "n/a"
+    permission: "n/a"
+    db: "n/a"
+

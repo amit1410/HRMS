@@ -1,0 +1,346 @@
+sheet: Attendance_Daily
+submodule: Daily Attendance Derivation - AttendanceDayProcessor status decision tree and punch-pairing algorithm
+defaults:
+  role: HRADMIN
+  perm: "Attendance.View"
+  tenant: A
+  pre: "Tenant A; the default fixture shift is 09:00-18:00, GraceIn=0, GraceOut=0, AllowPresentOnSinglePunch=false, IsMarkOutMandatory=false unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-DERIVE-001
+    func: [F-ATT-080]
+    sc: In/Out punches produce a Present day with correct worked minutes
+    t: A clean 09:00-18:00 In/Out pair derives to Present, 540 worked minutes, 1 session
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Punches: In 09:00, Out 18:00, default shift => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] Status=Present, WorkedMinutes=540, SessionCount=1, PunchCount=2"
+    auto: API
+
+  - id: ATT-DERIVE-002
+    func: [F-ATT-080]
+    sc: Multiple session pairs are summed deterministically
+    t: Two In/Out pairs (with a lunch gap) sum to the correct total minutes across 2 sessions
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] Punches: In 09:00, Out 13:00, In 14:00, Out 18:00 => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] WorkedMinutes=480, SessionCount=2"
+    auto: API
+
+  - id: ATT-DERIVE-003
+    func: [F-ATT-080]
+    sc: Effective in/out precedence - AdminCorrection beats approved Regularization beats raw punches
+    t: When all three sources exist for the same day, the AdminCorrection's times are used for WorkedMinutes
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Setup] Raw punches: In 09:30, Out 17:30; an approved Regularization sets effective 09:00-18:00; an AdminCorrection sets corrected 09:05-18:05 (most recent/highest-version) => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] the day's effective in/out reflect the AdminCorrection (09:05-18:05), not the Regularization or raw punches"
+    auto: DB-assisted
+
+  - id: ATT-DERIVE-004
+    func: [F-ATT-081]
+    sc: A Holiday day with no override is set to Holiday status directly, raw punches don't override it
+    t: Punches recorded on a Holiday (if any) do not turn the day Present
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] date D is a configured Holiday, no roster override => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Holiday, ProcessingOutcome mentions non-working calendar day, raw punches (if any) remain listed but do not change the status"
+    auto: API
+
+  - id: ATT-DERIVE-005
+    func: [F-ATT-081]
+    sc: A WeeklyOff day with no override is set to WeeklyOff status
+    t: A Sunday weekly-off day with no manual override resolves as WeeklyOff
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] date D is the tenant's configured WeeklyOff, no roster override => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=WeeklyOff"
+    auto: API
+
+  - id: ATT-DERIVE-006
+    func: [F-ATT-082]
+    sc: A working day with no resolvable shift stays NotProcessed indefinitely, never Absent
+    t: Missing shift configuration produces NotProcessed with a NoEffectiveShift outcome, regardless of punches
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] date D has no active Shift/Pattern/default resolvable for the employee, and is not a Holiday/WeeklyOff => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=NotProcessed, ProcessingOutcome='NoEffectiveShift: attendance was not finalized.' - never Absent"
+    auto: API
+
+  - id: ATT-DERIVE-007
+    func: [F-ATT-083]
+    sc: A zero-punch day before the shift's finalization point is NotProcessed, not Absent
+    t: Querying a day whose shift hasn't ended+grace yet returns NotProcessed
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Setup] Shift EndTime=23:59, current clock time is 20:00 same day, no punches, no leave => precondition established"
+      - "[GET /api/attendance/me/days/{today}] => [200] Status=NotProcessed, ProcessingOutcome='Shift has not reached its finalization point.'"
+    auto: API
+
+  - id: ATT-DERIVE-008
+    func: [F-ATT-083]
+    sc: A zero-punch day AFTER the finalization point with no approved leave is Absent
+    t: This is the ONLY path that produces the Absent status
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] date D is fully in the past, default shift, zero punches, no approved leave for D => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Absent, ProcessingOutcome='No qualifying punch was recorded.'"
+    auto: API
+
+  - id: ATT-DERIVE-009
+    func: [F-ATT-083]
+    sc: A zero-punch day with an approved Leave covering it is OnLeave, not Absent
+    t: Approved leave short-circuits the Absent path
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] date D, zero punches, an APPROVED LeaveRequestDay covers D => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=OnLeave"
+    auto: API
+
+  - id: ATT-DERIVE-010
+    func: [F-ATT-084]
+    sc: A single unmatched punch is Incomplete by default
+    t: A lone In punch with AllowPresentOnSinglePunch=false is Incomplete with HasMissingOutPunch
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] Punches: In 09:00 only, AllowPresentOnSinglePunch=false => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] Status=Incomplete, IsSinglePunch=true, HasMissingOutPunch=true"
+    auto: API
+
+  - id: ATT-DERIVE-011
+    func: [F-ATT-084]
+    sc: A single punch is Present (not fabricated hours) when AllowPresentOnSinglePunch is enabled
+    t: With the shift flag on, a lone In is Present with WorkedMinutes=null
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] Punches: In 09:00 only, AllowPresentOnSinglePunch=true => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] Status=Present, WorkedMinutes=null, IsSinglePunch=true - hours are NOT fabricated from the shift schedule"
+    auto: API
+
+  - id: ATT-DERIVE-012
+    func: [F-ATT-085]
+    sc: A missing mandatory mark-out forces Incomplete even for a lone In
+    t: IsMarkOutMandatory=true makes a lone In Incomplete regardless of AllowPresentOnSinglePunch
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Punches: In 09:00 only, IsMarkOutMandatory=true => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] Status=Incomplete, HasMissingOutPunch=true"
+    auto: API
+
+  - id: ATT-DERIVE-013
+    func: [F-ATT-086]
+    sc: An Out-before-In sequence is reported as Incomplete without throwing
+    t: A malformed punch order is handled gracefully as HasInvalidPunchSequence
+    src: ["AttendanceDayProcessor.Pair"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] Punches: Out 09:00, In 10:00 => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] Status=Incomplete, HasInvalidPunchSequence=true - no exception, no crash"
+    auto: API
+
+  - id: ATT-DERIVE-014
+    func: [F-ATT-086]
+    sc: A consecutive double In sets HasInvalidPunchSequence but the first In still pairs with a later Out
+    t: In,In,Out sequence flags invalid but still yields a session
+    src: ["AttendanceDayProcessor.Pair"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Punches: In 09:00, In 09:05, Out 18:00 => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] HasInvalidPunchSequence=true, PunchCount=3, but one session [09:00,18:00] is still emitted (the second In does not start its own session)"
+    auto: API
+
+  - id: ATT-DERIVE-015
+    func: [F-ATT-087]
+    sc: Late-in grace boundary - exactly at the grace cutoff is grace, one minute over is late
+    t: 09:15 with 15-min grace and a 09:00 start is grace-not-late; 09:16 is late
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Shift start=09:00, GraceInMinutes=15; Punches: In 09:15, Out 18:00 => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] IsLateIn=false, IsGraceApplied=true"
+      - "[Setup] Same shift, Punches: In 09:16, Out 18:00 => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] IsLateIn=true"
+    auto: API
+
+  - id: ATT-DERIVE-016
+    func: [F-ATT-087]
+    sc: Early-out grace boundary - exactly at the grace cutoff is not early, one minute under is early
+    t: 17:50 with 10-min grace and an 18:00 end is not early; 17:40 is early
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Shift end=18:00, GraceOutMinutes=10; Punches: In 09:00, Out 17:50 => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] IsEarlyOut=false"
+      - "[Setup] Same shift, Punches: In 09:00, Out 17:40 => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] IsEarlyOut=true"
+    auto: API
+
+  - id: ATT-DERIVE-017
+    func: [F-ATT-087]
+    sc: RequiresMarkOutApproval applies only under RequiresApprovalBeyondLimit past MaximumPostShiftMinutes
+    t: A late checkout beyond the post-shift limit, under that mode, flags RequiresMarkOutApproval
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Shift end=18:00, PostShiftMarkOutMode=RequiresApprovalBeyondLimit, MaximumPostShiftMinutes=30; Punches: In 09:00, Out 18:45 (45 min past end) => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] RequiresMarkOutApproval=true"
+    auto: API
+
+  - id: ATT-DERIVE-018
+    func: [F-ATT-088]
+    sc: Unpaid breaks reduce worked minutes; paid breaks do not
+    t: A 60-minute unpaid break subtracts 60 from WorkedMinutes; the same break marked paid subtracts nothing
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] Shift 09:00-18:00 with an UNPAID break 13:00-14:00; Punches: In 09:00, Out 18:00 => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] BreakMinutes=60, WorkedMinutes=480"
+      - "[Setup] Same shift, break marked PAID instead => precondition established"
+      - "[GET /api/attendance/me/days/{date}] => [200] BreakMinutes=0, WorkedMinutes=540"
+    auto: API
+
+  - id: ATT-DERIVE-019
+    func: [F-ATT-089]
+    sc: A calendar override on a Holiday date is processed as a normal working day
+    t: A manual working-Shift roster override on a Holiday date with punches derives to Present, not Holiday
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] date D is a configured Holiday; a manual roster override assigns a working Shift for D (IsCalendarOverride=true); Punches: In 09:00, Out 18:00 => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Present - the calendar override takes precedence over the underlying Holiday"
+    auto: API
+
+  - id: ATT-DERIVE-020
+    func: [F-ATT-089]
+    sc: A calendar override on a WeeklyOff date is processed as a normal working day
+    t: Same override pattern, applied to a WeeklyOff date
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[Setup] date D is the tenant WeeklyOff; a manual working-Shift override applies; Punches: In 09:00, Out 18:00 => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Present"
+    auto: API
+
+  - id: ATT-DERIVE-021
+    func: [F-ATT-090]
+    sc: An approved On-Duty overrides everything, including Holiday/WeeklyOff and NotProcessed
+    t: OnDuty status wins over what the rest of the decision tree would otherwise have produced
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] date D is a configured Holiday (would otherwise be Status=Holiday); an APPROVED OnDuty request covers D => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=OnDuty, ProcessingOutcome='Approved On Duty applies; raw punches remain visible.' - overrides the Holiday status"
+    auto: API
+
+  - id: ATT-DERIVE-022
+    func: [F-ATT-090]
+    sc: A merely-PENDING On-Duty request does NOT override the day's status
+    t: Only an approved (not pending) On-Duty flips the status
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] date D, zero punches, past finalization point, no leave; an On-Duty request for D is PENDING, not approved => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Absent (or whatever the rest of the tree would produce) - the pending On-Duty has no effect"
+    auto: API
+
+  - id: ATT-DERIVE-023
+    func: [F-ATT-091]
+    sc: LeaveConflict is set when approved leave coexists with actual punches, without changing the status
+    t: An approved-leave day with punches is still Present, but flagged LeaveConflict
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] date D has an approved Leave covering it AND punches: In 09:00, Out 18:00 => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] Status=Present, LeaveConflict=true, ProcessingOutcome='Attendance present with approved Leave conflict.'"
+    auto: API
+
+  - id: ATT-DERIVE-024
+    func: [F-ATT-092, F-ATT-094]
+    sc: Reprocessing after adding an Out punch updates the same daily row and stays a single aggregate under concurrency
+    t: An Incomplete->Present transition reuses the same EmployeeAttendanceDay.Id; concurrent reprocessing never duplicates the row
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Setup] Punches: In 09:00 only => process => Status=Incomplete, note EmployeeAttendanceDay.Id=X"
+      - "[Setup] Add Out 18:00, reprocess => [200] Status=Present, same row Id=X reused, EmployeeAttendanceDays.Count()==1 for this employee/date"
+      - "[Manual/DB] Fire two ProcessAsync calls concurrently for the same employee/date via separate DbContexts => exactly ONE EmployeeAttendanceDay row exists afterward, no exception surfaced to either caller"
+    auto: DB-assisted
+
+  - id: ATT-DERIVE-025
+    func: [F-ATT-093]
+    sc: An approved Regularization silences raw-punch irregularity flags while raw punches remain visible
+    t: HasMissingInPunch/HasMissingOutPunch/HasInvalidPunchSequence all reset to false once a correction/adjustment exists, even though the raw punches are still genuinely malformed
+    src: ["AttendanceDayProcessor.ProcessAsync (Pair is skipped when an adjustment/correction exists)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Raw punches for date D: Out 09:00, In 10:00 (an invalid sequence on its own) => without any correction, GET /api/attendance/me/days/{D} would show HasInvalidPunchSequence=true"
+      - "[Setup] Approve a Regularization for D with effective in/out 09:00-18:00 => precondition established"
+      - "[GET /api/attendance/me/days/{D}] => [200] HasMissingInPunch=false, HasMissingOutPunch=false, HasInvalidPunchSequence=false (all silenced) - but the RAW punches list in the same response STILL shows the original Out-09:00/In-10:00 sequence, visibly inconsistent with the clean flags"
+    auto: API
+    cr: [CR-99]
+
+  - id: ATT-DERIVE-026
+    func: [F-ATT-079]
+    sc: Derivation is blocked for a date inside a closed Attendance period
+    t: Reprocessing a day inside a Closed (not reopened) period Conflicts
+    src: ["AttendanceDayProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Close the Attendance period covering date D => [200] Closed"
+      - "[Manual/DB] Trigger a reprocess for D (e.g. via a late device punch requiring reprocessing) => [409] 'The Attendance period is closed and must be reopened before this change.' - the day's derived status is NOT recomputed while closed"
+    auto: DB-assisted
+
+  - id: ATT-DERIVE-027
+    func: [F-ATT-095]
+    sc: The day-status contract exposes exactly the 8 authoritative EmployeeAttendanceDayStatus values, never a synthetic Late/EarlyOut/MissingPunch status string
+    t: Confirm the status field is always one of Present/Absent/OnLeave/OnDuty/Holiday/WeeklyOff/Incomplete/NotProcessed
+    src: ["AttendanceReadService"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[GET /api/attendance/me/calendar?year=2026&month=7] Across a month containing late, early-out, and missing-punch days => [200] every row's attendanceStatus is one of the 8 documented values; lateness/early-out/missing-punch information is carried ONLY in the separate boolean flags (isLateIn, isEarlyOut, hasMissingInPunch, hasMissingOutPunch), never as an alternate status string"
+    auto: API

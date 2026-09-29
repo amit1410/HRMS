@@ -1,0 +1,206 @@
+sheet: Employee_Bank
+submodule: Bank Details
+defaults:
+  role: HR_ADMIN
+  perm: "Employee.Edit + EmployeeSensitive.Edit"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (Employee.View/.Edit, EmployeeSensitive.View/.Edit); employee EMP-BANK-001 exists; an Active Bank master 'SBI' and an inactive Bank master 'OLDBANK' exist."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: EMP-BANK-001
+    func: [F-EMP-055]
+    sc: A bank detail is chosen by id from the Bank master and must be Active
+    t: An inactive or nonexistent BankId is rejected on create
+    src: ["EmployeeBankDetailService.BankExistsAndActiveAsync"]
+    type: Negative
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employees/{id}/bank-details] bankId=OLDBANK (inactive) => [400] bank is inactive or does not exist"
+      - "[POST /api/employees/{id}/bank-details] bankId=<random guid> => [400] bank is inactive or does not exist"
+      - "[POST /api/employees/{id}/bank-details] bankId=SBI (active) => [201] created"
+    auto: API
+    ex: ["xU:EmployeeBankDetailsEndpointsTests.Adding_with_an_inactive_bank_is_rejected"]
+
+  - id: EMP-BANK-002
+    func: [F-EMP-056]
+    sc: Required/optional field validation matrix
+    t: Account holder name and account number are required with length caps; IFSC is alphanumeric-only when supplied; branch name is capped
+    src: ["EmployeeBankDetailRequestValidator"]
+    type: Boundary
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/bank-details] accountHolderName omitted => [400] required"
+      - "[POST /api/employees/{id}/bank-details] accountNumber 31 characters => [400] max length exceeded"
+      - "[POST /api/employees/{id}/bank-details] ifscCode='SBI-0001' (contains a hyphen) => [400] 'IFSC code must be alphanumeric.'"
+      - "[POST /api/employees/{id}/bank-details] ifscCode='SBIN0001234' => [200] accepted"
+    auto: API
+
+  - id: EMP-BANK-003
+    func: [F-EMP-057]
+    sc: Exactly one Active bank detail per (employee, AccountPurpose)
+    t: Adding or reactivating a second Active record for the same purpose is a 409
+    src: ["EmployeeBankDetailService.ActiveForPurposeExistsAsync"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    smoke: true
+    pre: "EMP-BANK-001 already has one Active bank detail with AccountPurpose=Salary."
+    steps:
+      - "[POST /api/employees/{id}/bank-details] A second record with accountPurpose=Salary, status=Active => [409] 'An active bank account already exists for this purpose. Deactivate it before adding or activating another.'"
+      - "[POST /api/employees/{id}/bank-details] A record with accountPurpose=Gratuity, status=Active => [201] created (different purpose)"
+    auto: API
+    ex: ["xU:EmployeeBankDetailsEndToEndTests.One_active_record_per_purpose_is_enforced", "xU:EmployeeBankDetailsEndpointsTests.Adding_a_second_active_record_for_the_same_purpose_conflicts"]
+
+  - id: EMP-BANK-004
+    func: [F-EMP-058]
+    sc: Multiple bank detail records for different purposes coexist
+    t: Salary and Gratuity accounts for the same employee are independent rows
+    src: ["EmployeeBankDetailService.CreateAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/employees/{id}/bank-details] After creating both Salary and Gratuity records => [200] both rows are listed, each masked"
+    auto: API
+
+  - id: EMP-BANK-005
+    func: [F-EMP-059]
+    sc: A new bank detail must be created as Active; Frozen/Closed are rejected on create
+    t: Only Status=Active is ever accepted on the create endpoint
+    src: ["EmployeeBankDetailService.CreateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/bank-details] status=Frozen => [400] 'A new bank detail must be Active. Freeze, close, or deactivate an existing current record instead.'"
+      - "[POST /api/employees/{id}/bank-details] status=Closed => [400] same rejection"
+      - "[POST /api/employees/{id}/bank-details] status=Active => [201] created"
+    auto: API
+    ex: ["xU:EmployeeBankDetailsEndToEndTests.New_bank_detail_must_start_active", "xU:EmployeeBankDetailsEndpointsTests.Adding_a_historical_status_is_rejected"]
+
+  - id: EMP-BANK-006
+    func: [F-EMP-060]
+    sc: Moving to Frozen/Closed is a one-way transition into immutable history
+    t: A record moved to Frozen can never be edited or reactivated again; a replacement is always a new record
+    src: ["EmployeeBankDetailService.UpdateAsync (IsCurrent gate)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/bank-details/{bankDetailId}] status=Frozen on a currently-Active record => [200] accepted, becomes historical"
+      - "[PUT /api/employees/{id}/bank-details/{bankDetailId}] Attempt to edit ANY field on that now-Frozen record => [409] 'Historical bank details cannot be edited or reactivated. Add a new bank detail to create a current account.'"
+      - "[PUT /api/employees/{id}/bank-details/{bankDetailId}] Attempt status=Active on the Frozen record => [409] same rejection"
+    auto: API
+    ex: ["xU:EmployeeBankDetailsEndToEndTests.Non_active_status_moves_the_record_to_immutable_history_and_requires_a_new_replacement"]
+
+  - id: EMP-BANK-007
+    func: [F-EMP-061]
+    sc: Delete soft-deactivates a current record; deleting an already-historical record is an idempotent no-op success
+    t: DELETE never hard-removes a bank detail row
+    src: ["EmployeeBankDetailService.DeleteAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[DELETE /api/employees/{id}/bank-details/{bankDetailId}] A currently-Active record => [200] IsActive=false, Status=Closed"
+      - "[DELETE /api/employees/{id}/bank-details/{bankDetailId}] The SAME already-historical record again => [200] 'Bank detail is already historical.' - not an error"
+    auto: API
+    ex: ["xU:EmployeeBankDetailsEndToEndTests.Deleted_purpose_can_be_reused_and_bank_master_is_never_deleted"]
+
+  - id: EMP-BANK-008
+    func: [F-EMP-062]
+    sc: Account number/IFSC are masked on the list read; unmasked only via the sensitive-details-for-edit endpoint
+    t: The masked list view never leaks the raw account number
+    src: ["SensitiveDataMasker.AccountNumber/Ifsc"]
+    type: Positive
+    tags: [Security]
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/employees/{id}/bank-details] Call => [200] accountNumber/ifscCode are masked (e.g. only last 4 digits visible)"
+      - "[GET /api/employees/{id}/bank-details/{bankDetailId}/sensitive-details] As a caller holding EmployeeSensitive.View => [200] raw accountNumber/ifscCode returned"
+    auto: API
+
+  - id: EMP-BANK-009
+    func: [F-EMP-063]
+    sc: The sensitive-details-for-edit endpoint refuses to serve a historical record's raw values
+    t: A Frozen/Closed record's unmasked data is not reachable even through the edit-only endpoint
+    src: ["EmployeeBankDetailService.GetForEditAsync"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    steps:
+      - "[GET /api/employees/{id}/bank-details/{historicalBankDetailId}/sensitive-details] Call => [409] historical-record message, no raw values in the body"
+    auto: API
+
+  - id: EMP-BANK-010
+    func: [F-EMP-064]
+    sc: A current record can keep its own now-inactive bank, but cannot switch to a DIFFERENT inactive bank
+    t: BankCanBeAssignedAsync allows the status quo but blocks a new assignment to an inactive bank
+    src: ["EmployeeBankDetailService.BankCanBeAssignedAsync"]
+    type: Boundary
+    pri: P2
+    pre: "EMP-BANK-001's current bank detail uses BankId=SBI, which is then deactivated by an admin after the record was created."
+    steps:
+      - "[PUT /api/employees/{id}/bank-details/{bankDetailId}] bankId unchanged (still SBI, now inactive), accountHolderName changed => [200] accepted - keeping the same now-inactive bank is allowed"
+      - "[PUT /api/employees/{id}/bank-details/{bankDetailId}] bankId=OLDBANK (a DIFFERENT inactive bank) => [400] rejected"
+    auto: API
+
+  - id: EMP-BANK-011
+    func: [F-EMP-065]
+    sc: Bank writes require EmployeeSensitive.Edit in addition to Employee.Edit; masked reads need only Employee.View
+    t: A caller with Employee.Edit but not EmployeeSensitive.Edit is refused every bank write
+    src: ["EmployeeSubResourcesController [HasPermission] stacking"]
+    type: Authorization
+    pri: P0
+    smoke: true
+    role: HR_MANAGER
+    perm: Employee.Edit
+    pre: "Caller holds Employee.Edit but NOT EmployeeSensitive.Edit."
+    steps:
+      - "[GET /api/employees/{id}/bank-details] Call => [200] masked list readable with Employee.View alone"
+      - "[POST /api/employees/{id}/bank-details] Call => [403] Forbidden"
+      - "[PUT /api/employees/{id}/bank-details/{bankDetailId}] Call => [403] Forbidden"
+      - "[DELETE /api/employees/{id}/bank-details/{bankDetailId}] Call => [403] Forbidden"
+    auto: API
+    ex: ["xU:EmployeeBankDetailsEndpointsTests.Bank_writes_require_sensitive_edit_permission"]
+
+  - id: EMP-BANK-012
+    func: [F-EMP-066]
+    sc: Bank Details endpoints reject an unauthenticated caller
+    t: Every bank-detail route requires a valid token
+    src: ["JWT auth middleware"]
+    type: Authorization
+    pri: P1
+    steps:
+      - "[GET /api/employees/{id}/bank-details] No Authorization header => [401] Unauthorized"
+    auto: API
+    ex: ["xU:EmployeeBankDetailsEndpointsTests.Bank_details_are_unauthorized_without_a_token"]
+
+  - id: EMP-BANK-013
+    func: [F-EMP-066]
+    sc: Bank Details endpoints reject a cross-tenant employee id
+    t: Tenant B cannot read or write Tenant A's employee's bank details
+    src: ["EmployeeBankDetailService (tenant-filtered)"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[GET /api/employees/{Tenant A id}/bank-details] As Tenant B => [404] Not Found"
+      - "[POST /api/employees/{Tenant A id}/bank-details] As Tenant B => [404] Not Found"
+    auto: API
+
+  - id: EMP-BANK-014
+    func: [F-EMP-057]
+    sc: A previously-used purpose can be reused after its Active record is deactivated
+    t: Deactivating the Active Salary record frees the Salary purpose for a brand-new Active record
+    src: ["EmployeeBankDetailService.ActiveForPurposeExistsAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[DELETE /api/employees/{id}/bank-details/{activeSalaryRecordId}] Deactivate the current Salary record => [200] accepted"
+      - "[POST /api/employees/{id}/bank-details] A new record with accountPurpose=Salary, status=Active => [201] created - the purpose is free again, and the old bank master row is untouched"
+    auto: API
+    ex: ["xU:EmployeeBankDetailsEndToEndTests.Deleted_purpose_can_be_reused_and_bank_master_is_never_deleted"]

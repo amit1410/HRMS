@@ -1,0 +1,330 @@
+sheet: Masters_Import
+submodule: Bulk CSV Import (api/master-import/{kind})
+defaults:
+  role: HR_ADMIN
+  perm: Geography.Manage
+  tenant: A
+  pre: "Tenant A signed in as a user holding the HRAdmin role (Geography.Manage)."
+  data: "kind and CSV content as given in each case's steps."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: IMPORT-001
+    func: [F-MST-28]
+    sc: Template for a flat kind has the base four-column header
+    t: GET the CSV template for a kind with no parent
+    src: ["MasterImportService.Template (parent is null)"]
+    type: Positive
+    pri: P1
+    data: "kind=holding-companies"
+    steps:
+      - "[GET /api/master-import/holding-companies/template] Call => [200] Content-Type text/csv; body header row = 'Code,Name,Description,IsActive'; one EXAMPLE-001 sample row follows"
+    auto: API
+
+  - id: IMPORT-002
+    func: [F-MST-28]
+    sc: Template for a hierarchical kind adds the correct parent column name
+    t: The sub-departments template's fifth column is specifically 'DepartmentCode', not a generic 'ParentCode'
+    src: ["MasterImportService.ParentColumn ('sub-departments' => 'DepartmentCode')"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    data: "kind=sub-departments"
+    steps:
+      - "[GET /api/master-import/sub-departments/template] Call => [200] header = 'Code,Name,Description,IsActive,DepartmentCode'"
+      - "[GET /api/master-import/sections/template] Call => [200] header ends in ',SubDepartmentCode'"
+      - "[GET /api/master-import/sub-sections/template] Call => [200] header ends in ',SectionCode'"
+      - "[GET /api/master-import/sub-functions/template] Call => [200] header ends in ',FunctionCode'"
+      - "[GET /api/master-import/lines-of-business/template] Call => [200] header ends in ',HoldingCompanyCode'"
+    auto: API
+
+  - id: IMPORT-003
+    func: [F-MST-28, F-MST-31]
+    sc: Template generation does not check whether the kind actually supports import
+    t: GET the template for 'countries' (which Validate/Confirm both refuse) still succeeds and returns a generic four-column template, because Template() never calls Supported()
+    src: ["MasterImportService.Template (no Supported(kind) check, unlike ValidateAsync/ConfirmAsync)"]
+    type: Boundary
+    tags: [Contract, Negative]
+    pri: P2
+    data: "kind=countries"
+    steps:
+      - "[GET /api/master-import/countries/template] Call => [200] header = 'Code,Name,Description,IsActive' (downloadable, even though a file built from it can never actually be imported)"
+      - "[POST /api/master-import/countries/validate] Upload that same template, filled in with one valid-looking row => [404] 'Master type is not supported for bulk import.'"
+    auto: API
+    cm: "Not registered as its own clarification: harmless (a client following this template just gets a 404 one step later), but worth keeping visible since it means the template endpoint cannot be used to discover which kinds are importable."
+
+  - id: IMPORT-004
+    func: [F-MST-29]
+    sc: Validating a file of entirely new, valid rows previews every row as Create with zero errors
+    t: A clean two-row CSV for a flat kind previews cleanly
+    src: ["MasterImportService.BuildPreviewAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    data: "kind=cost-centers; CSV: Code,Name,Description,IsActive\\nCC10,Cost Center Ten,,true\\nCC11,Cost Center Eleven,,true"
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload the CSV above, mode=CreateOnly => [200] totalRows=2, validRows=2, newRows=2, errorRows=0, both rows action='Create'"
+    auto: API
+
+  - id: IMPORT-005
+    func: [F-MST-29]
+    sc: A file mixing valid and invalid rows reports per-row results, not an all-or-nothing rejection at validate time
+    t: One good row and one bad row (missing Name) both appear in the preview, the bad one flagged as Error with a specific message
+    src: ["MasterImportService.BuildPreviewAsync"]
+    type: Negative
+    tags: [Positive]
+    pri: P0
+    data: "kind=cost-centers; CSV: Code,Name,Description,IsActive\\nCC12,Cost Center Twelve,,true\\nCC13,,,true"
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload => [200] totalRows=2, validRows=1, errorRows=1; row 2's result has action='Error', errors contains 'Name is required.'"
+    auto: API
+
+  - id: IMPORT-006
+    func: [F-MST-29]
+    sc: A code repeated within the same file is flagged as a duplicate on its second occurrence
+    t: Two rows sharing a code in one upload - the first is fine, the second is an error naming the in-file duplication
+    src: ["MasterImportService.BuildPreviewAsync (seen HashSet)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    data: "kind=cost-centers; CSV: Code,Name,Description,IsActive\\nCC14,Cost Center Fourteen,,true\\nCC14,Duplicate Fourteen,,true"
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload => [200] row 1 action='Create'; row 2 errors contains 'Code is duplicated in this file.'"
+    auto: API
+
+  - id: IMPORT-007
+    func: [F-MST-29]
+    sc: A missing mandatory field is reported per-row, not as a whole-file rejection
+    t: Empty Code and empty Name each produce their own row-level error
+    src: ["MasterImportService.BuildPreviewAsync"]
+    type: Negative
+    pri: P1
+    data: "kind=cost-centers; CSV: Code,Name,Description,IsActive\\n,No Code,,true\\nCC15,,,true"
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload => [200] row 1 errors contains 'Code is required.'; row 2 errors contains 'Name is required.'"
+    auto: API
+
+  - id: IMPORT-008
+    func: [F-MST-29]
+    sc: An unparseable IsActive value rejects the whole file at validate time, not just that row
+    t: Unlike a missing Code/Name (a per-row error), a value in the IsActive column that is not 'true'/'false' throws during CSV parsing itself, before any row-level preview is built
+    src: ["MasterImportService.ParseCsvAsync (bool.TryParse throws InvalidDataException on failure)"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    data: "kind=cost-centers; CSV: Code,Name,Description,IsActive\\nCC16,Cost Center Sixteen,,maybe"
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload => [400] 'Invalid IsActive at row 2.' - the entire request fails; there is no partial preview for the other, otherwise-valid rows in the same file"
+    auto: API
+
+  - id: IMPORT-009
+    func: [F-MST-29]
+    sc: A parent code that does not resolve to an active record in the tenant is a row-level error, and the parent column itself is required for a hierarchical kind
+    t: "Sub Department import - a blank DepartmentCode and a DepartmentCode that does not exist are both flagged"
+    src: ["MasterImportService.BuildPreviewAsync (ParentKind/ResolveParentAsync)"]
+    type: Negative
+    pri: P1
+    pre: "Tenant A has Department DEPT01, active."
+    data: "kind=sub-departments; CSV: Code,Name,Description,IsActive,DepartmentCode\\nSUBDEPT20,Sub Dept Twenty,,true,\\nSUBDEPT21,Sub Dept Twenty One,,true,NOPE"
+    steps:
+      - "[POST /api/master-import/sub-departments/validate] Upload => [200] row 1 errors contains 'Department is required.'; row 2 errors contains 'Parent code does not resolve to an active record in this tenant.'"
+    auto: API
+
+  - id: IMPORT-010
+    func: [F-MST-29]
+    sc: CreateOnly mode flags an already-existing code as an error rather than silently updating it
+    t: Importing a code that already exists, with mode=CreateOnly, is rejected per row
+    src: ["MasterImportService.BuildPreviewAsync (existing is not null && mode == CreateOnly)"]
+    type: Negative
+    pri: P1
+    pre: "Tenant A already has Cost Center CC10 (from IMPORT-004)."
+    data: "kind=cost-centers; CSV: Code,Name,Description,IsActive\\nCC10,Renamed Via Import,,true"
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload, mode=CreateOnly => [200] row errors contains 'Code already exists; use Create or update to change it.'"
+    auto: API
+
+  - id: IMPORT-011
+    func: [F-MST-29]
+    sc: CreateOrUpdate mode treats an existing code as an Update, not an error
+    t: The identical file from IMPORT-010, but with mode=CreateOrUpdate, previews cleanly as an update
+    src: ["MasterImportService.BuildPreviewAsync"]
+    type: Positive
+    pri: P1
+    data: "kind=cost-centers; mode=CreateOrUpdate; same CSV as IMPORT-010"
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload, mode=CreateOrUpdate => [200] errorRows=0, updateRows=1, row action='Update'"
+    auto: API
+
+  - id: IMPORT-012
+    func: [F-MST-29]
+    sc: A CSV missing a required header column is rejected outright
+    t: Omitting the IsActive column (or the parent column for a hierarchical kind) fails before any row is parsed
+    src: ["MasterImportService.ParseCsvAsync (required.All(headers.Contains))"]
+    type: Negative
+    pri: P1
+    data: "kind=cost-centers; CSV: Code,Name,Description\\nCC17,Cost Center Seventeen,"
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload => [400] 'The CSV headers do not match the selected master template.'"
+    auto: API
+
+  - id: IMPORT-013
+    func: [F-MST-29]
+    sc: Only CSV files are accepted; an Excel workbook gets a specific message and any other extension a generic one
+    t: .xlsx and .txt uploads are both refused, with different wording
+    src: ["MasterImportService.ValidateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload a file named 'data.xlsx' => [400] 'Excel workbooks are not yet enabled; upload a UTF-8 CSV template.'"
+      - "[POST /api/master-import/cost-centers/validate] Upload a file named 'data.txt' => [400] 'Only CSV files are accepted.'"
+    auto: API
+
+  - id: IMPORT-014
+    func: [F-MST-29]
+    sc: A file larger than 5 MB is rejected before parsing
+    t: The MaxBytes limit is enforced on Stream.Length
+    src: ["MasterImportService.ValidateAsync (file.Length > MaxBytes)"]
+    type: Boundary
+    pri: P2
+    sev: Low
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload a >5 MB CSV file => [400] 'File exceeds the 5 MB limit.'"
+    auto: Manual only
+
+  - id: IMPORT-015
+    func: [F-MST-29]
+    sc: A file with more than 5000 data rows is rejected
+    t: The MaxRows limit is enforced after parsing
+    src: ["MasterImportService.ValidateAsync (rows.Count > MaxRows)"]
+    type: Boundary
+    pri: P2
+    sev: Low
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload a CSV with 5001 data rows => [400] 'The file contains more than 5000 data rows.'"
+    auto: Manual only
+
+  - id: IMPORT-016
+    func: [F-MST-29]
+    sc: A completely empty file is rejected with its own message
+    t: Zero lines in the uploaded stream is distinguished from a header-only file
+    src: ["MasterImportService.ParseCsvAsync (lines.Count == 0)"]
+    type: Boundary
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] Upload a zero-byte file => [400] 'The CSV is empty.'"
+    auto: API
+
+  - id: IMPORT-017
+    func: [F-MST-31]
+    sc: Validate and Confirm both refuse every kind Supported() excludes
+    t: countries, states, cities and banks all 404 at validate, even with a well-formed CSV
+    src: ["MasterImportService.Supported"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/master-import/countries/validate] Upload a valid-looking CSV => [404] 'Master type is not supported for bulk import.'"
+      - "[POST /api/master-import/banks/validate] Upload a valid-looking CSV => [404]"
+    auto: API
+    cr: [CR-31]
+
+  - id: IMPORT-018
+    func: [F-MST-30]
+    sc: Confirming a validated import creates and updates the previewed rows and records an ImportBatch summary
+    t: A CreateOrUpdate confirm with one new and one existing row reports created=1, updated=1 and a Completed batch status
+    src: ["MasterImportService.ConfirmAsync"]
+    type: Positive
+    pri: P0
+    pre: "Follows on from IMPORT-011's validated rows."
+    steps:
+      - "[POST /api/master-import/cost-centers/confirm] Confirm the rows validated in IMPORT-011, mode=CreateOrUpdate => [200] createdRows/updatedRows reflect the batch, status='Completed'"
+      - "[GET /api/masters/cost-centers?search=Renamed Via Import] Call => [200] the updated record is now visible"
+    auto: API
+
+  - id: IMPORT-019
+    func: [F-MST-30]
+    sc: Confirm re-validates against current data and refuses if it changed since the client's last Validate call
+    t: If a code from the confirmed rows was independently created between Validate and Confirm, the whole confirm is rejected as stale
+    src: ["MasterImportService.ConfirmAsync (BuildPreviewAsync re-run; preview.ErrorRows > 0 => Conflict)"]
+    type: Integration-Concurrency
+    pri: P1
+    pre: "A row was validated as 'Create' for code CC18; before confirming, a separate request creates CC18 directly via POST /api/masters/cost-centers with mode still CreateOnly on the pending import."
+    steps:
+      - "[POST /api/master-import/cost-centers/confirm] Confirm the now-stale CreateOnly batch that still expects CC18 to be new => [409] 'The import changed since validation. Resolve all validation errors and validate again.' - nothing from this batch is written"
+    auto: API
+
+  - id: IMPORT-020
+    func: [F-MST-30]
+    sc: A confirm that fails partway through rolls back the entire batch, including rows that had already succeeded in this same transaction
+    t: If a later row in a multi-row confirm throws (e.g. a race causes _masters.CreateAsync to fail on that specific row despite passing preview), the earlier rows already written this call, and the ImportBatch audit row, are all rolled back together
+    src: ["MasterImportService.ConfirmAsync (single transaction wraps the whole foreach loop; any thrown exception triggers transaction.RollbackAsync before rethrowing)"]
+    type: Integration-Concurrency
+    pri: P1
+    sev: High
+    data: "kind=cost-centers; a 3-row CreateOnly batch where the 2nd row is engineered to fail during CreateAsync after passing the pre-confirm preview (e.g. a concurrent direct create of that exact code between the re-preview and the loop reaching that row)"
+    steps:
+      - "[POST /api/master-import/cost-centers/confirm] Confirm the 3-row batch under the race described above => the request either fails with a propagated exception or a 5xx; afterwards, GET /api/masters/cost-centers confirms row 1 (which would otherwise have succeeded) was NOT persisted either - the batch is genuinely all-or-nothing, not partial"
+    auto: Manual only
+    cm: "Confirms the 'atomic vs partial' functional requirement from the test brief: this import is atomic per confirm call, backed by one database transaction, not a partial/best-effort import."
+
+  - id: IMPORT-021
+    func: [F-MST-30]
+    sc: The route kind and the request body's MasterType must match
+    t: A mismatched pair is rejected before any processing
+    src: ["MasterImportController.Confirm (kind.Equals(request.MasterType) check)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    steps:
+      - "[POST /api/master-import/cost-centers/confirm] Body with masterType: 'grades' (route says cost-centers) => [400] 'Master type does not match the route.'"
+    auto: API
+
+  - id: IMPORT-022
+    func: [F-MST-28, F-MST-30]
+    sc: Import (template/validate/confirm) requires Geography.Manage on every step, even for the departments/designations kinds
+    t: A role holding Department.Create but not Geography.Manage can create individual departments via /api/departments, but cannot import them in bulk
+    src: ["[HasPermission(Permissions.Geography.Manage)] on every MasterImportController action"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: "A role with Department.Create/Edit/Delete but not Geography.Manage (no seeded role has exactly this split - HRAdmin has both; construct a custom test role to isolate the check)"
+    data: "kind=departments"
+    steps:
+      - "[POST /api/departments] As the constructed role, body {code: 'OPS2', name: 'Operations Two'} => [201] (Department.Create is sufficient here)"
+      - "[POST /api/master-import/departments/validate] As the same role, upload a valid departments CSV => [403] (Geography.Manage is required here instead)"
+    auto: API
+    cr: [CR-29]
+
+  - id: IMPORT-023
+    func: [F-MST-30]
+    sc: Import writes only into the caller's own tenant
+    t: A code imported into Tenant A does not appear in, or block, Tenant B's own masters
+    src: ["MasterImportService.ConfirmAsync (delegates to MasterManagementService, which is tenant-scoped)"]
+    type: Tenant-Isolation
+    pri: P1
+    pre: "Tenant B already has a Cost Center coded 'CC-SHARED' (tenant-scoped uniqueness means this does not block Tenant A)."
+    data: "kind=cost-centers; CSV: Code,Name,Description,IsActive\\nCC-SHARED,Tenant A Shared Code,,true"
+    steps:
+      - "[POST /api/master-import/cost-centers/validate] As Tenant A, upload => [200] validRows=1, no conflict reported despite Tenant B already having the same code"
+      - "[POST /api/master-import/cost-centers/confirm] Confirm => [200] created in Tenant A only"
+      - "[GET /api/masters/cost-centers?search=CC-SHARED] As a Tenant B HRAdmin => [200] items contains only Tenant B's own CC-SHARED record, unaffected"
+    auto: API
+
+  - id: IMPORT-024
+    func: [F-MST-29, F-MST-30]
+    sc: Coverage matrix - the same validate/confirm contract holds for a second hierarchical kind (Sections, parent Sub Departments)
+    t: Confirms the ParentKind/ParentColumn mapping table is exercised for more than one hierarchical kind, without repeating every scenario above
+    src: ["MasterImportService.ParentKind/ParentColumn ('sections' => 'sub-departments'/'SubDepartmentCode')"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    pre: "Tenant A has an active Sub Department SUBDEPT01."
+    data: "kind=sections; CSV: Code,Name,Description,IsActive,SubDepartmentCode\\nSECTION10,Section Ten,,true,SUBDEPT01"
+    steps:
+      - "[POST /api/master-import/sections/validate] Upload => [200] validRows=1, newRows=1"
+      - "[POST /api/master-import/sections/confirm] Confirm => [200] created=1; the new Section's parentId resolves to SUBDEPT01"
+    auto: API

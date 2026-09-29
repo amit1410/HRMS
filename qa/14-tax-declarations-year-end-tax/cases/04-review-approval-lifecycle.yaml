@@ -1,0 +1,274 @@
+sheet: TaxDcl_Review_Approval
+submodule: Review, Approval, Lock & Reopen
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-REV-001
+    func: [F-TAXDCL-041]
+    sc: GetReviewAsync is a filtered, paged, tenant-scoped queue
+    t: The review queue filters by CycleId/Status/EmployeeId and is ordered by Status then CreatedDate
+    src: "TaxDeclarationService.cs GetReviewAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "5 declarations across mixed statuses and 2 cycles"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.Review
+    tenant: "T1 (DEMO01)"
+    data: "5 declarations"
+    steps:
+      - "[GET /api/payroll/tax-declarations/review?status=Submitted&page=1&pageSize=10] => [200] only Status=Submitted declarations returned, ordered by Status then CreatedDate"
+    auto: API
+
+  - id: TAXDCL-REV-002
+    func: [F-TAXDCL-042]
+    sc: Review queue rows are built per-id (N+1 pattern), documented for the large-data area
+    t: GetReviewAsync's paging is correct even though each row is fetched via its own follow-up GetAsync call
+    src: "TaxDeclarationService.cs GetReviewAsync (foreach id -> GetAsync)"
+    type: Boundary
+    tags: []
+    pri: P3
+    sev: Low
+    pre: "50 declarations exist"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.Review
+    tenant: "T1 (DEMO01)"
+    data: 50 declarations
+    steps:
+      - "[GET /api/payroll/tax-declarations/review?page=1&pageSize=20] => [200] exactly 20 rows returned, total reflects all 50 - correctness unaffected by the per-row query pattern"
+    auto: API
+
+  - id: TAXDCL-REV-003
+    func: [F-TAXDCL-043, F-TAXDCL-044]
+    sc: "CONFIRMED DEFECT - reviewing a line on an Approved declaration regresses it to UnderReview"
+    t: ReviewLineAsync is only blocked on Draft/Locked; calling it on an Approved declaration silently demotes the declaration's own Status
+    src: "TaxDeclarationService.cs ReviewLineAsync (blocked-status set; unconditional Status=UnderReview assignment)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Declaration is Status=Approved with all lines Approved"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.Review
+    tenant: "T1 (DEMO01)"
+    data: "LineId=one already-Approved line, Decision=Approved (re-review), ApprovedAmount unchanged"
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/review] LineId=<already-approved line>, Decision=Approved, declaration currently Status=Approved => EXPECTED either [409] Conflict OR a no-op that leaves declaration.Status=Approved; ACTUAL [200] success, declaration.Status silently reverts to UnderReview - CONFIRMED DEFECT"
+    secc: true
+    auto: API
+    cr: [CR-245]
+
+  - id: TAXDCL-REV-004
+    func: [F-TAXDCL-043]
+    sc: ReviewLineAsync is blocked on Draft
+    t: A line cannot be reviewed before the declaration has ever been submitted
+    src: "TaxDeclarationService.cs ReviewLineAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Declaration is Status=Draft"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.Review
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/review] declaration Status=Draft => [409] Conflict, 'The declaration is not reviewable.'"
+    auto: API
+
+  - id: TAXDCL-REV-005
+    func: [F-TAXDCL-045]
+    sc: ApprovedAmount bounds and per-decision defaulting
+    t: ApprovedAmount must be within [0, DeclaredAmount]; Rejected forces 0; an omitted amount defaults to the full DeclaredAmount
+    src: "TaxDeclarationService.cs ReviewLineAsync"
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P0
+    sev: High
+    pre: "Line DeclaredAmount=100000, Status=Submitted"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.Review
+    tenant: "T1 (DEMO01)"
+    data: "ApprovedAmount=150000 (exceeds declared); ApprovedAmount=-1 (negative); Decision=Rejected with ApprovedAmount=90000 supplied; Decision=Approved with ApprovedAmount omitted"
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/review] ApprovedAmount=150000 (> DeclaredAmount) => [400] Invalid, field=approvedAmount"
+      - "[POST /api/payroll/tax-declarations/{id}/review] ApprovedAmount=-1 => [400] Invalid"
+      - "[POST /api/payroll/tax-declarations/{id}/review] Decision=Rejected, ApprovedAmount=90000 (ignored) => [200] line.ApprovedAmount forced to 0"
+      - "[POST /api/payroll/tax-declarations/{id}/review] Decision=Approved, ApprovedAmount omitted => [200] line.ApprovedAmount defaults to the full DeclaredAmount=100000"
+    auto: API
+
+  - id: TAXDCL-REV-006
+    func: [F-TAXDCL-046]
+    sc: ReviewLineAsync stamps reviewer fields and is concurrency-guarded
+    t: Every review call stamps ReviewedByUserId/ReviewedAtUtc; a lost concurrency race is Conflict
+    src: "TaxDeclarationService.cs ReviewLineAsync"
+    type: Integration-Concurrency
+    tags: [Positive, Negative]
+    pri: P1
+    sev: Medium
+    pre: "Two concurrent ReviewLineAsync calls on the same declaration"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.Review
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/review] first reviewer commits => [200] ReviewedByUserId/ReviewedAtUtc stamped"
+      - "[POST /api/payroll/tax-declarations/{id}/review] second reviewer, stale ConcurrencyVersion => [409] Conflict, 'The declaration changed while it was being reviewed.'"
+    auto: API
+
+  - id: TAXDCL-REV-007
+    func: [F-TAXDCL-047, F-TAXDCL-048]
+    sc: "CONFIRMED - ApproveAsync succeeds without verifying every line was individually reviewed"
+    t: A whole-declaration Approve succeeds while a line remains Status=Draft/Submitted
+    src: "TaxDeclarationService.cs TransitionAsync (Approved branch, no per-line check)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Declaration Status=UnderReview; Line A Status=Approved (reviewed); Line B Status=Draft (never touched)"
+    role: HRAdmin (approver)
+    perm: Payroll.TaxDeclaration.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/approve] declaration Status=UnderReview, Line B still Draft => [200] Approved - EXPECTED a block until every line has a terminal decision; ACTUAL succeeds regardless"
+    auto: API
+    cr: [CR-246]
+
+  - id: TAXDCL-REV-008
+    func: [F-TAXDCL-047]
+    sc: ApproveAsync required-status guard
+    t: Approve fails Conflict from Draft/Locked/Approved (already)
+    src: "TaxDeclarationService.cs TransitionAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Declaration is Status=Draft"
+    role: HRAdmin (approver)
+    perm: Payroll.TaxDeclaration.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/approve] declaration Status=Draft => [409] Conflict, 'The declaration is not ready for approval.'"
+    auto: API
+
+  - id: TAXDCL-REV-009
+    func: [F-TAXDCL-049]
+    sc: RequestResubmissionAsync has no required-status guard
+    t: A declaration can be sent back to ResubmissionRequired from any current status, including Draft
+    src: "TaxDeclarationService.cs RequestResubmissionAsync -> TransitionAsync"
+    type: Boundary
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: "Declaration Status=Draft"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.Review
+    tenant: "T1 (DEMO01)"
+    data: "comment='Please add missing investment proof'"
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/request-resubmission] declaration Status=Draft, comment supplied => [200] Status=ResubmissionRequired (no prior-status restriction rejects this)"
+    auto: API
+
+  - id: TAXDCL-REV-010
+    func: [F-TAXDCL-050]
+    sc: LockAsync requires exactly Approved and stamps LockedAtUtc/LockedByUserId
+    t: Lock fails outside Approved and stamps the dedicated locked fields on success
+    src: "TaxDeclarationService.cs LockAsync -> TransitionAsync"
+    type: Negative
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Declaration is Status=Submitted (not yet Approved)"
+    role: HRAdmin (approver)
+    perm: Payroll.TaxDeclaration.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/lock] declaration Status=Submitted => [409] Conflict, 'Only an approved declaration can be locked.'"
+      - "[POST /api/payroll/tax-declarations/{id}/approve] => [200] Status=Approved"
+      - "[POST /api/payroll/tax-declarations/{id}/lock] => [200] Status=Locked, LockedAtUtc/LockedByUserId set"
+    auto: API
+
+  - id: TAXDCL-REV-011
+    func: [F-TAXDCL-051]
+    sc: ReopenAsync requires exactly Locked and lands on ResubmissionRequired
+    t: Reopen fails outside Locked and returns to ResubmissionRequired, not Approved
+    src: "TaxDeclarationService.cs ReopenAsync -> TransitionAsync"
+    type: Negative
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Declaration is Status=Approved (not Locked)"
+    role: HRAdmin (reviewer, Reopen permission)
+    perm: Payroll.TaxDeclaration.Reopen
+    tenant: "T1 (DEMO01)"
+    data: "reason='Investment proof needs re-verification'"
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/reopen] declaration Status=Approved (not Locked) => [409] Conflict, 'Only a locked declaration can be reopened.'"
+      - "[POST /api/payroll/tax-declarations/{id}/lock] first lock it => [200] Status=Locked"
+      - "[POST /api/payroll/tax-declarations/{id}/reopen] reason supplied => [200] Status=ResubmissionRequired (NOT Approved)"
+    auto: API
+
+  - id: TAXDCL-REV-012
+    func: [F-TAXDCL-052]
+    sc: Reopen/Approve/Review use three distinct permission constants
+    t: A role holding only Review cannot Lock/Reopen; a role holding only Approve cannot RequestResubmission
+    src: "Backend/HRMS.Domain/Authorization/Permissions.cs; TaxDeclarationsController.cs"
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Custom role R1 holds only Payroll.TaxDeclaration.Review; custom role R2 holds only Payroll.TaxDeclaration.Approve"
+    role: Custom role R1, Custom role R2
+    perm: Payroll.TaxDeclaration.Review, Payroll.TaxDeclaration.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/lock] as R1 (Review only) => [403] Forbidden"
+      - "[POST /api/payroll/tax-declarations/{id}/reopen] as R1 (Review only, no Reopen) => [403] Forbidden"
+      - "[POST /api/payroll/tax-declarations/{id}/request-resubmission] as R2 (Approve only, no Review) => [403] Forbidden"
+    auto: API
+
+  - id: TAXDCL-REV-013
+    func: [F-TAXDCL-053]
+    sc: Every TransitionAsync-routed action is concurrency-guarded
+    t: A stale ConcurrencyVersion on Approve/RequestResubmission/Lock/Reopen surfaces Conflict, not a 500
+    src: "TaxDeclarationService.cs TransitionAsync (try/catch DbUpdateConcurrencyException)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Two concurrent Approve calls on the same declaration"
+    role: HRAdmin (approver)
+    perm: Payroll.TaxDeclaration.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/tax-declarations/{id}/approve] first call commits => [200]"
+      - "[POST /api/payroll/tax-declarations/{id}/approve] second call, stale ConcurrencyVersion => [409] Conflict, 'The declaration changed while the command was in progress.'"
+    auto: API
+
+  - id: TAXDCL-REV-014
+    func: [F-TAXDCL-054]
+    sc: Cross-tenant declaration id on every review-side action is NotFound
+    t: Review/Approve/RequestResubmission/Lock/Reopen/Audit all return NotFound for a T2 declaration id used by a T1 caller
+    src: "TaxDeclarationService.cs (TenantId filter, every review-side method)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Declaration exists in tenant T2 (DEMO02)"
+    role: HRAdmin (T1)
+    perm: Payroll.TaxDeclaration.Review, Approve, Reopen, ViewAudit
+    tenant: "T1 (DEMO01)"
+    data: "declarationId belonging to T2"
+    steps:
+      - "[POST /api/payroll/tax-declarations/{T2 declarationId}/approve] as T1 HRAdmin => [404] NotFound"
+      - "[GET /api/payroll/tax-declarations/{T2 declarationId}/audit] as T1 HRAdmin => [404] NotFound"
+    auto: API
+    secc: true

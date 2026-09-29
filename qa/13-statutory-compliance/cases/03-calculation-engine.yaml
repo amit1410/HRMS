@@ -1,0 +1,281 @@
+sheet: Stat_Calculation
+submodule: Contribution Calculation Engine
+defaults:
+  tenant: "T1 (DEMO01)"
+  role: "n/a (invoked internally by PayrollCalculationEngine during payroll calculation)"
+  perm: "n/a"
+  reg: true
+
+cases:
+  - id: STAT-CALC-001
+    func: [F-STAT-031]
+    sc: No statutory profile configured
+    t: CalculateAsync is a documented no-op when no EmployeeStatutoryProfile is active and effective on the period end date
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: Employee E1 has zero EmployeeStatutoryProfile rows
+    tenant: "T1 (DEMO01)"
+    data: "PayrollResult for E1, PeriodEndDate=2026-09-30"
+    steps:
+      - "[Manual] run CalculateAsync for E1's PayrollResult => Result.Success with message 'No statutory profile is configured.' and StatutoryCalculationSummary(0,0,[])"
+      - "[DB] query PayrollStatutoryResults and PayrollCalculationErrors for E1's run => zero rows in both; the surrounding payroll calculation completes successfully with zero statutory deductions and no separate warning"
+    db: "PayrollStatutoryResults has zero rows for this employee/run"
+    auto: DB-assisted
+
+  - id: STAT-CALC-002
+    func: [F-STAT-032]
+    sc: Profile selection is latest-effective-from, not exact-date
+    t: CalculateAsync selects the most-recently-effective-from profile row covering the period end date
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Employee E2 has two active, non-overlapping profile rows: Row A (2025-01-01..2025-12-31) and Row B (2026-01-01..null)"
+    tenant: "T1 (DEMO01)"
+    data: "PeriodEndDate=2026-03-31"
+    steps:
+      - "[Manual] run CalculateAsync for a PayrollResult with PeriodEndDate=2026-03-31 => Row B (EffectiveFrom=2026-01-01) is selected, not Row A"
+    auto: Manual only
+
+  - id: STAT-CALC-003
+    func: [F-STAT-033, F-STAT-034, F-STAT-035]
+    sc: Configuration matching gates
+    t: Each applicable statutory type is matched independently by TenantId/IsActive/StatutoryType/JurisdictionCode/(StateCode null-or-equal), selecting the highest-Priority eligible version
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Employee E3's profile: PfApplicable=true, EsiApplicable=true, ProfessionalTaxApplicable=false, IncomeTaxApplicable=false, JurisdictionCode=IN, StateCode=KA. Two Active ProvidentFund versions exist effective on the period: Priority=1 (EmployeeRate=12) and Priority=2 (EmployeeRate=10, StateCode=KA-specific)"
+    tenant: "T1 (DEMO01)"
+    data: "period end date within both versions' ranges"
+    steps:
+      - "[Manual] run CalculateAsync => a PayrollStatutoryResult is created ONLY for ProvidentFund and Esi (the two Applicable=true types); no ProfessionalTax/IncomeTax result is attempted at all"
+      - "[DB] inspect the ProvidentFund PayrollStatutoryResult's AppliedRate => 10 (the Priority=2 version's EmployeeRate wins), not 12 (Priority=1's rate)"
+    auto: Manual only
+
+  - id: STAT-CALC-004
+    func: [F-STAT-036]
+    sc: Ambiguous priority tie fails the whole employee calculation
+    t: Two eligible versions sharing the same highest Priority abort the entire employee's payroll calculation, not just that statutory type
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    pre: "Employee E4's profile has EsiApplicable=true; two Active Esi versions both effective on the period, both Priority=1"
+    tenant: "T1 (DEMO01)"
+    data: "two tied-priority Esi versions"
+    steps:
+      - "[Manual] run CalculateAsync => Result.Conflict('Statutory configuration is ambiguous for Esi.')"
+      - "[DB] inspect PayrollResults/PayrollCalculationErrors for E4 on this run => zero PayrollResult rows and one PayrollCalculationError row with ErrorCode=StatutoryCalculationFailed, proving the WHOLE employee calculation aborted, not merely the Esi component"
+    db: "Zero PayrollResult and zero PayrollStatutoryResult rows for E4 on this run; one PayrollCalculationError row with ErrorCode=StatutoryCalculationFailed"
+    auto: DB-assisted
+
+  - id: STAT-CALC-005
+    func: [F-STAT-037]
+    sc: Missing configuration silently skips the type
+    t: Zero matching configurations/versions for an applicable type produces no error and no result row for that type
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Employee E5's profile has ProfessionalTaxApplicable=true, but no StatutoryConfiguration of type ProfessionalTax exists for the tenant/jurisdiction at all"
+    tenant: "T1 (DEMO01)"
+    data: "no matching PT configuration"
+    steps:
+      - "[Manual] run CalculateAsync => Result.Success overall (PF/Esi, if applicable, still calculate normally); the ProfessionalTax type is silently skipped with 'continue' - no error, no warning, no PayrollStatutoryResult row for ProfessionalTax"
+      - "[DB] query PayrollStatutoryResults for this PayrollResult filtered to StatutoryType=ProfessionalTax => zero rows"
+    db: "PayrollStatutoryResults has zero ProfessionalTax rows for this result"
+    auto: DB-assisted
+
+  - id: STAT-CALC-006
+    func: [F-STAT-038, F-STAT-039]
+    sc: Basis resolution and the PF/Esi-vs-PT/IncomeTax null-basis divergence
+    t: A version with zero StatutoryComponentBasis rows returns null; PF/Esi fail Invalid on a null basis while ProfessionalTax/IncomeTax silently fall back to GrossEarnings
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs ResolveBasisAsync, CalculateAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Two Active versions with ZERO StatutoryComponentBasis rows: one ProvidentFund, one ProfessionalTax, both otherwise eligible for employee E6 (PfApplicable=true, ProfessionalTaxApplicable=true)"
+    tenant: "T1 (DEMO01)"
+    data: "GrossEarnings=50000 for E6's PayrollResult"
+    steps:
+      - "[Manual] run CalculateAsync => the ProvidentFund branch returns Result.Invalid('basis', 'No statutory basis is configured for ProvidentFund.'), aborting the WHOLE employee calculation (per F-STAT-036's shared failure path)"
+      - "[Manual] with the ProvidentFund version instead removed/inapplicable so only ProfessionalTax remains: run CalculateAsync => ProfessionalTax's basis silently falls back to result.GrossEarnings=50000 and a slab lookup proceeds normally with NO error, even though its own basis configuration is equally empty"
+    auto: Manual only
+
+  - id: STAT-CALC-007
+    func: [F-STAT-038]
+    sc: Basis resolution - weighted sum over included components
+    t: ResolveBasisAsync sums CalculatedAmount*Weight/100 only over components matching an Included StatutoryComponentBasis row
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs ResolveBasisAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "ProvidentFund version's Basis: Basic (Include=true, Weight=100), DA (Include=true, Weight=50), HRA (Include=false). PayrollResultComponents: Basic=20000, DA=4000, HRA=8000"
+    tenant: "T1 (DEMO01)"
+    data: "Basic=20000, DA=4000, HRA=8000"
+    steps:
+      - "[Manual] trace ResolveBasisAsync's own weighted sum for this basis => 20000*100/100 + 4000*50/100 = 22000 (HRA is excluded entirely, contributing 0 despite being a real earning component)"
+    auto: Manual only
+
+  - id: STAT-CALC-008
+    func: [F-STAT-040]
+    sc: Wage ceiling clamp
+    t: A configured WageCeiling clamps the resolved basis via Math.Min before any rate/slab is applied
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync"
+    type: Boundary
+    tags: []
+    pri: P0
+    sev: High
+    pre: "ProvidentFund version: EmployeeRate=12, WageCeiling=15000. Resolved basis=22000 (above the ceiling)"
+    tenant: "T1 (DEMO01)"
+    data: "resolvedBasis=22000, wageCeiling=15000, employeeRate=12"
+    steps:
+      - "[Manual] run CalculateAsync => appliedBasis is clamped to min(22000,15000)=15000; EmployeeAmount = round(15000*12/100) = 1800.00, NOT round(22000*12/100)=2640.00"
+      - "[DB] inspect the persisted PayrollStatutoryResult => AppliedCeiling=15000 and CalculationBasis=15000 (the clamped value, not the raw resolved basis of 22000)"
+    db: "PayrollStatutoryResults.CalculationBasis and AppliedCeiling reflect the clamped value"
+    auto: DB-assisted
+
+  - id: STAT-CALC-009
+    func: [F-STAT-041]
+    sc: Independent employee/employer rounding for PF/Esi
+    t: EmployeeAmount and EmployerAmount for ProvidentFund/Esi are computed and rounded independently, each defaulting to 0 when its own rate is unset
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "ProvidentFund version: EmployeeRate=12, EmployerRate=null (unset), basis=10000.005 (post-ceiling)"
+    tenant: "T1 (DEMO01)"
+    data: "basis=10000.005, employeeRate=12, employerRate=null"
+    steps:
+      - "[Manual] run CalculateAsync => EmployeeAmount = round(10000.005*12/100, AwayFromZero) = 1200.00; EmployerAmount = 0 (rate is null, no error is raised for a missing employer rate)"
+    auto: Manual only
+
+  - id: STAT-CALC-010
+    func: [F-STAT-042, F-STAT-043, F-STAT-044]
+    sc: Slab-based calculation with OptionalMonth
+    t: ProfessionalTax/IncomeTax use a single matched StatutorySlab row, honoring OptionalMonth, and silently skip when no slab matches
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "ProfessionalTax version has slabs: [0-15000: Rate=0, FixedAmount=0, Sequence=1], [15000-null: Rate=0, FixedAmount=200, Sequence=2], plus a February-only supplementary slab [0-null: FixedAmount=300, OptionalMonth=2, Sequence=3]"
+    tenant: "T1 (DEMO01)"
+    data: "basis=20000 for a March period; basis=20000 for a February period; basis=500000 (no slab covers this range)"
+    steps:
+      - "[Manual] run CalculateAsync for a MARCH PayrollResult with basis=20000 => the Sequence=2 slab matches (FixedAmount=200); EmployeeAmount=200.00; the February-only slab (Sequence=3) is never even considered since PeriodEndDate.Month != 2"
+      - "[Manual] run CalculateAsync for a FEBRUARY PayrollResult with basis=20000 and Sequence evaluated in order => the Sequence=2 slab (FromAmount<=20000, no OptionalMonth) still matches FIRST since slabs are ordered by Sequence, not by OptionalMonth-specificity - the February-only slab (Sequence=3) is only reachable when no lower-Sequence slab matches first"
+      - "[Manual] run CalculateAsync with a basis for which NO slab's FromAmount/ToAmount range covers the value at all => ProfessionalTax is silently skipped exactly like a missing configuration (F-STAT-037) - no error, no zero-value result row"
+    auto: Manual only
+
+  - id: STAT-CALC-011
+    func: [F-STAT-045]
+    sc: Rounding policy vs column precision
+    t: Amounts are rounded to 2 decimals (AwayFromZero) despite (18,6)-precision columns
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync; PayrollStatutoryResultConfiguration"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "A calculation whose raw amount before rounding is 1234.5678901"
+    tenant: "T1 (DEMO01)"
+    data: "raw amount 1234.5678901"
+    steps:
+      - "[DB] inspect the persisted EmployeeAmount/EmployerAmount => exactly 1234.57 (2-decimal, AwayFromZero), not a value carrying more than 2 significant decimal digits, even though the column itself is declared decimal(18,6)"
+    auto: Manual only
+
+  - id: STAT-CALC-012
+    func: [F-STAT-046]
+    sc: Calculation metadata is minimal
+    t: PayrollStatutoryResult.CalculationMetadata captures only {type, VersionId, StateCode}
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: A calculated ProvidentFund PayrollStatutoryResult exists
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[DB] inspect CalculationMetadata JSON => confirm it contains only type/Version Id/StateCode fields - it does NOT capture which basis components/weights contributed, which slab row matched, or which EmployeeStatutoryProfile id drove the calculation"
+    db: "PayrollStatutoryResults.CalculationMetadata JSON shape"
+    auto: DB-assisted
+
+  - id: STAT-CALC-013
+    func: [F-STAT-047]
+    sc: Uniqueness within a single attempt
+    t: The unique index on (TenantId, PayrollResultId, StatutoryType) prevents a duplicate result within one CalculateAsync call
+    src: "Backend/HRMS.Infrastructure/Persistence/Configurations/StatutoryConfiguration.cs PayrollStatutoryResultConfiguration"
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: A PayrollResult with a PF-applicable profile and one matching configuration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[DB] attempt to manually insert a second PayrollStatutoryResult row with the same (TenantId, PayrollResultId, StatutoryType=ProvidentFund) as an existing row => the unique index rejects the insert with a constraint violation"
+    db: "PayrollStatutoryResults unique index enforced"
+    auto: DB-assisted
+
+  - id: STAT-CALC-014
+    func: [F-STAT-048]
+    sc: Cross-tenant PayrollResult is Forbidden, not NotFound
+    t: CalculateAsync's own tenant-mismatch guard returns Forbidden, the sole inconsistency of its kind in the module
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs CalculateAsync"
+    type: Security
+    tags: [Tenant-Isolation]
+    pri: P2
+    sev: Low
+    pre: A PayrollResult exists belonging to tenant T2
+    tenant: "T1 (DEMO01)"
+    data: "T2's PayrollResult passed while resolved as T1"
+    steps:
+      - "[Manual] invoke CalculateAsync directly with a PayrollResult whose TenantId does not match the current ITenantContext => Result.Forbidden('The payroll result does not belong to the current tenant.'), unlike every other cross-tenant check in this module which returns NotFound"
+    auto: Manual only
+
+  - id: STAT-CALC-015
+    func: [F-STAT-049]
+    sc: Labour Welfare Fund has no calculation engine support
+    t: A SalaryComponent tagged LabourWelfareFund is calculated as a plain component with no ceiling/slab/effective-dating
+    src: "Backend/HRMS.Domain/Enums/PayrollEnums.cs StatutoryType; Backend/HRMS.Domain/Entities/SalaryComponent.cs SalaryStatutoryType"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "A SalaryComponent 'LWF' is tagged statutoryType=LabourWelfareFund, CalculationType=FixedAmount, Value=200, isStatutory=true"
+    tenant: "T1 (DEMO01)"
+    data: "LWF component, Value=200"
+    steps:
+      - "[Manual] run payroll calculation for an employee whose salary structure includes the LWF component => the component is calculated purely as a fixed-amount salary component (200.00 every period); no StatutoryConfiguration/StatutorySlab/ceiling logic is ever consulted for it, and no PayrollStatutoryResult row of any kind is produced for it (there is no StatutoryType.LabourWelfareFund to produce one under)"
+      - "[Manual] full grep of the StatutoryType enum => exactly 4 members (ProvidentFund/Esi/ProfessionalTax/IncomeTax); LabourWelfareFund does not exist there at all"
+    auto: Manual only
+    cr: [CR-226]
+
+  - id: STAT-CALC-016
+    func: [F-STAT-050]
+    sc: IncomeTax slab path is independent of the annual TDS engine
+    t: The monthly IncomeTax slab-based path never calls, and is never called by, YearEndTaxService's annual regime-driven engine
+    src: "Backend/HRMS.Application/Services/PayrollCalculationEngine.cs; Backend/HRMS.Application/Services/YearEndTaxService.cs"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of YearEndTaxService.cs for any call into StatutoryPayrollService, and of PayrollCalculationEngine.cs/StatutoryPayrollService.cs for any call into YearEndTaxService => zero matches in either direction"
+      - "[Manual] run payroll for a tenant relying solely on the annual/YearEndTaxService engine with NO StatutoryConfiguration of type IncomeTax configured => no automatic monthly income-tax withholding is produced by this module at all"
+    auto: Manual only

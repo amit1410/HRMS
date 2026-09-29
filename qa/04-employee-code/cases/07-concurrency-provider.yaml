@@ -1,0 +1,148 @@
+sheet: EmployeeCode_Sequence
+submodule: Sequence Concurrency and SQL Server / MySQL Provider Parity
+defaults:
+  role: HR_ADMIN
+  perm: EmploymentHistory.Change
+  tenant: A
+  pre: "Tenant A has an active Rule-Based (or Simple, per case) configuration; caller holds EmploymentHistory.Change."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: CODE-CONC-001
+    func: [F-CODE-30]
+    sc: Two simultaneous Initial Employment calls that both match the same Rule-Based rule never receive the same generated code
+    t: Concurrent allocation against EmployeeCodeSequenceService.AllocateAsync for the same (rule, scope, scopeKey, periodKey) tuple always yields two distinct sequence numbers
+    src: ["EmployeeCodeSequenceService.AllocateAsync (optimistic ExecuteUpdateAsync WHERE NextNumber==expected, retried up to MaxAttempts=8)"]
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/employees/{idA}/employment-history] and [POST /api/employees/{idB}/employment-history] Fire both Initial Employment calls concurrently against the same matching rule => [200, 200] both succeed with two DIFFERENT generated codes; the rule's sequence advances by exactly 2, never producing the same number twice"
+    auto: DB-assisted
+
+  - id: CODE-CONC-002
+    func: [F-CODE-30]
+    sc: A larger burst of simultaneous creations (10+) against the same rule produces a gap-free, duplicate-free run of sequence numbers
+    t: High-concurrency stress on a single rule's sequence
+    src: ["EmployeeCodeSequenceService.AllocateAsync"]
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/employees/{id1..id10}/employment-history] Fire 10 concurrent Initial Employment calls, all matching the same Rule-Based rule => [200 x10] the 10 resulting codes contain 10 distinct sequence numbers with no duplicates; the final EmployeeCodeSequences.NextNumber for that rule equals start+10"
+    auto: DB-assisted
+
+  - id: CODE-CONC-003
+    func: [F-CODE-30]
+    sc: The losing side of a contended optimistic update retries and eventually succeeds, rather than failing outright
+    t: A caller whose ExecuteUpdateAsync affects 0 rows (lost the race) loops and re-reads the current NextNumber before trying again
+    src: ["EmployeeCodeSequenceService.AllocateAsync (for loop, 'rows == 1' check, else continues to the next attempt)"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Contrived] Simulate a losing optimistic update (e.g. via a debugger breakpoint or an injected delay) so the first attempt's expected NextNumber is stale by the time it writes => the method's retry loop re-reads and succeeds on a later attempt within MaxAttempts=8, returning success rather than the exhausted-retries Conflict"
+    auto: Manual only
+
+  - id: CODE-CONC-004
+    func: [F-CODE-30]
+    sc: Exhausting every retry attempt (MaxAttempts=8) under pathological contention returns a handled Conflict, not an unhandled exception
+    t: AllocateAsync's own upper bound is reached and reported cleanly
+    src: ["EmployeeCodeSequenceService.AllocateAsync ('Employee Code sequence is busy; please retry.')"]
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P2
+    steps:
+      - "[Contrived] Force at least 8 consecutive lost races on the same sequence row (e.g. via a test double around IEmployeeCodeSequenceUpdater that always returns 0 rows affected) => [409] 'Employee Code sequence is busy; please retry.'"
+    auto: Manual only
+
+  - id: CODE-CONC-005
+    func: [F-CODE-09]
+    sc: Simple-mode's own NextNumber advance loop is likewise safe under concurrent creations, with no shared cross-rule sequence involved
+    t: Simple mode's per-version ExecuteUpdateAsync loop (separate code path from EmployeeCodeSequenceService) also produces distinct, gap-free numbers under concurrency
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (Simple branch's own inline retry loop)"]
+    type: Integration-Concurrency
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/employees/{idA}/employment-history] and [POST /api/employees/{idB}/employment-history] Fire concurrently under Simple/Auto => [200, 200] two distinct consecutive numbers, version.NextNumber advances by exactly 2"
+    auto: DB-assisted
+
+  - id: CODE-CONC-006
+    func: [F-CODE-41]
+    sc: Two concurrent FIRST-EVER 'Save Configuration' calls for the same tenant can both succeed and create two EmployeeCodeConfig rows
+    t: No unique index/transaction prevents the check-then-insert race described in CR-38
+    src: ["EmployeeCodeConfigurationService.SaveAsync ('config is null' check-then-insert)"]
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    pre: "Tenant A has never saved an Employee Code configuration."
+    steps:
+      - "[PUT /api/employee-code-configuration] Fire two concurrent first-time saves with different Prefix values ('AAA' and 'BBB') => [200, 200] both report success"
+      - "[DB check] Query EmployeeCodeConfigs WHERE TenantId=A => record whether ONE or TWO rows now exist; if two, note which Prefix a subsequent GET happens to return, since no ordering is specified"
+    auto: DB-assisted
+    cr: [CR-38]
+
+  - id: CODE-CONC-007
+    func: [F-CODE-32]
+    sc: (Provider parity) Rule-Based sequence allocation on SQL Server, exercised as a live provider acceptance run
+    t: The same concurrency behavior validated on SQLite in CODE-CONC-001/002 is confirmed against a real SQL Server database, since SqlServerEmployeeCodeSequenceUpdater's locking/optimistic-update semantics are not exercised by the default SQLite-backed suite
+    src: ["Backend/HRMS.Infrastructure/Persistence/SqlServerEmployeeCodeSequenceUpdater.cs"]
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    steps:
+      - "[Provider run] Point HRMS_SQLSERVER_TEST_CONNECTION (+_SERVER/_AUTH) at a disposable SQL Server database, then run a concurrent burst of Initial Employment calls against a Rule-Based rule => expect gap-free, duplicate-free sequence numbers, matching SQLite's behavior"
+    auto: DB-assisted
+    cr: [CR-40]
+    cm: "NOT EXECUTED - environment unavailable if HRMS_SQLSERVER_TEST_CONNECTION is not set; report exactly that status string, never a PASS, when the environment is absent. No existing *ProviderAcceptance.cs file covers this feature yet (CR-40) - this case defines what such a file should assert once written."
+
+  - id: CODE-CONC-008
+    func: [F-CODE-32]
+    sc: (Provider parity) Rule-Based sequence allocation on MySQL, including the app-managed RowVersion stamping path
+    t: MySqlEmployeeCodeSequenceUpdater's additional RowVersion write (absent on SQL Server) is confirmed not to introduce its own race window under concurrent writers
+    src: ["Backend/HRMS.Infrastructure/Persistence/MySqlEmployeeCodeSequenceUpdater.cs; MySqlConcurrencyTokenGenerator"]
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    steps:
+      - "[Provider run] Point HRMS_MYSQL_TEST_CONNECTION at a disposable MySQL database, then run the same concurrent burst as CODE-CONC-007 => expect gap-free, duplicate-free sequence numbers; also confirm the EmployeeCodeSequences.RowVersion column is actually updated on every successful advance (MySQL path only)"
+    auto: DB-assisted
+    cr: [CR-40]
+    cm: "NOT EXECUTED - environment unavailable if HRMS_MYSQL_TEST_CONNECTION is not set; report exactly that status string, never a PASS."
+
+  - id: CODE-CONC-009
+    func: [F-CODE-31]
+    sc: (Provider parity) MySQL deadlock (1213) vs lock-timeout (1205) classification, if Employee Code sequence writes ever surface either error code
+    t: Per CLAUDE.md's documented MySQL transient-error classification (1213 retryable, 1205 deliberately not), confirm whether EmployeeCodeSequenceService/MySqlEmployeeCodeSequenceUpdater route through the shared transient-error classifier at all, or only ever rely on the optimistic NextNumber==expected predicate
+    src: ["CLAUDE.md ('MySQL deadlock 1213 is retryable, lock-timeout 1205 deliberately isn't'); Backend/HRMS.Infrastructure/Persistence/MySqlEmployeeCodeSequenceUpdater.cs (no visible use of a transient-error classifier - relies solely on the affected-rows count)"]
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[Code inspection] Search MySqlEmployeeCodeSequenceUpdater/EmployeeCodeSequenceService for a catch of any MySQL-specific exception type => none found; the entire concurrency story here is optimistic-only (rows-affected count), with no pessimistic-lock/deadlock path to classify"
+      - "[Provider run] If a deadlock/lock-timeout path exists, force one under real MySQL contention => confirm which of the two is retried and which is not, per the documented rule (NOT EXECUTED - environment unavailable if HRMS_MYSQL_TEST_CONNECTION is unset)"
+    auto: Manual only
+    cr: [CR-40]
+
+  - id: CODE-CONC-010
+    func: [F-CODE-19]
+    sc: (Provider parity) The unique index on EmployeeCodeSegments (TenantId, RuleId, SequenceOrder) behaves identically on SQL Server and MySQL for a concurrent 'reorder segments' save
+    t: Two concurrent rule-edit saves that both try to claim the same SequenceOrder for a different segment produce a handled conflict on both providers, not a silent partial write
+    src: ["EmployeeCodeSegmentConfiguration.cs (HasIndex(...).IsUnique())"]
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[Provider run - SQL Server] Two concurrent PUTs to the same rule reordering segments to a colliding SequenceOrder => record the exact resulting status on SQL Server"
+      - "[Provider run - MySQL] Repeat identically on MySQL => compare the resulting status/behavior against the SQL Server run"
+    auto: DB-assisted
+    cr: [CR-40]

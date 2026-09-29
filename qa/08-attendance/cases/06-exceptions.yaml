@@ -1,0 +1,285 @@
+sheet: Attendance_Exceptions
+submodule: Attendance Exceptions - Operations Queue, Dashboard, Bulk Actions, Resolution, Self-View
+defaults:
+  role: HRADMIN
+  perm: "Attendance.Exception.View"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin holding Attendance.Exception.View, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-EXC-001
+    func: [F-ATT-190]
+    sc: List operational exceptions with filters
+    t: The workbench returns every exception type in scope, filterable by date/employee/type/status/search
+    src: ["AttendanceOperationsService.GetOperationalExceptionsAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/attendance/operations/exceptions?fromDate=2026-07-01&toDate=2026-07-31] => [200] a mixed list including MissingInPunch/MissingOutPunch/Incomplete/NotProcessed/LeaveConflict/PendingRegularization/PendingOnDuty/LateArrival/EarlyDeparture/Absent items across in-scope employees"
+      - "[GET /api/attendance/operations/exceptions?exceptionType=Absent&isResolved=false] => [200] only unresolved Absent exceptions"
+    auto: API
+
+  - id: ATT-EXC-002
+    func: [F-ATT-191]
+    sc: Dashboard counts match the authoritative workbench data
+    t: Pending-regularization/correction/on-duty and total-exception counts agree with the filtered queue
+    src: ["AttendanceOperationsService"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/attendance/operations/dashboard] => [200] PendingRegularizationCount/PendingCorrectionCount/PendingOnDutyCount/ExceptionCount"
+      - "[GET /api/attendance/operations/exceptions?exceptionType=PendingRegularization] => [200] item count matches the dashboard's PendingRegularizationCount exactly"
+    auto: API
+
+  - id: ATT-EXC-003
+    func: [F-ATT-192]
+    sc: Resolve (Acknowledge/Waive) an exception requires only View, not a separate manage permission
+    t: A caller holding only Attendance.Exception.View can acknowledge/waive
+    src: ["AttendanceOperationsService"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/operations/exceptions/resolve] Key=<exception stable id>, Action=Acknowledge => [200] resolved - View alone was sufficient, no dedicated manage permission gates this write"
+    auto: API
+
+  - id: ATT-EXC-004
+    func: [F-ATT-192]
+    sc: Waive vs Acknowledge are both terminal resolution actions
+    t: TryParseTerminal accepts both actions case-insensitively
+    src: ["AttendanceExceptionResolutionSemantics"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/operations/exceptions/resolve] Action='waive' (lowercase) => [200] parsed and applied as Waive"
+      - "[POST /api/attendance/operations/exceptions/resolve] Action='NotARealAction' => [400] not a recognized terminal action"
+    auto: API
+
+  - id: ATT-EXC-005
+    func: [F-ATT-193]
+    sc: Bulk approve/reject regularization and on-duty items in one call
+    t: A batch of mixed pending items is processed with a per-item result set
+    src: ["AttendanceOperationsService"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[POST /api/attendance/operations/bulk] Items=[{RegularizationId=R1,Action=Approve},{OnDutyId=O1,Action=Reject}] => [200] per-item results: R1 Approved, O1 Rejected"
+    auto: API
+
+  - id: ATT-EXC-006
+    func: [F-ATT-193]
+    sc: Bulk action respects employee scope per item, not just tenant-wide
+    t: An item referencing an out-of-scope employee is rejected individually while in-scope items still succeed
+    src: ["AttendanceOperationsService"]
+    type: Security
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[POST /api/attendance/operations/bulk] Items=[{RegularizationId=<in-scope>,Action=Approve},{RegularizationId=<out-of-scope>,Action=Approve}] => [200] per-item results show the in-scope item Approved and the out-of-scope item Denied/NotFound - the batch is not all-or-nothing"
+    auto: API
+
+  - id: ATT-EXC-007
+    func: [F-ATT-193]
+    sc: Bulk action is idempotent and conflict-safe on repeated submission
+    t: Resubmitting the same batch after the first run doesn't double-apply or corrupt state
+    src: ["AttendanceOperationsService"]
+    type: Boundary
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[POST /api/attendance/operations/bulk] same Items payload, second call after the first already Approved R1 => [200] R1's result reports Conflict/already-processed, not a duplicate approval"
+    auto: API
+
+  - id: ATT-EXC-008
+    func: [F-ATT-193]
+    sc: Bulk action enforces a documented per-call item-count limit
+    t: A batch over the documented limit (100 items) is rejected
+    src: ["AttendanceOperationsService"]
+    type: Boundary
+    pri: P2
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[POST /api/attendance/operations/bulk] Items with 101 entries => [400] exceeds the maximum batch size"
+    auto: API
+
+  - id: ATT-EXC-009
+    func: [F-ATT-194]
+    sc: Manual attendance submission creates a maker-checker Regularization request
+    t: An HR/operator-submitted manual attendance request funnels through the same approval pipeline
+    src: ["AttendanceOperationsService"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/attendance/operations/manual] EmployeeId=E1, BusinessDate=D, proposed times/reason => [200/201] Status=Pending"
+    auto: API
+
+  - id: ATT-EXC-010
+    func: [F-ATT-194]
+    sc: Bulk-corrections require AdminCorrection.Manage
+    t: A caller lacking AdminCorrection.Manage is denied
+    src: ["AttendanceOperationsController"]
+    type: Authorization
+    pri: P0
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[POST /api/attendance/operations/bulk-corrections] As a caller with Regularization.Approve but not AdminCorrection.Manage => [403] Forbidden"
+    auto: API
+
+  - id: ATT-EXC-011
+    func: [F-ATT-195]
+    sc: Exporting the operational exception queue requires BOTH View and Export permissions
+    t: Holding only one of the two is insufficient
+    src: ["AttendanceOperationsController"]
+    type: Authorization
+    pri: P1
+    role: HRADMIN
+    perm: "Attendance.Exception.View"
+    steps:
+      - "[GET /api/attendance/operations/exceptions/export] As a caller with Exception.View but NOT Report.Export => [403] Forbidden"
+      - "[GET /api/attendance/operations/exceptions/export] As a caller with BOTH => [200] CSV export returned, capped at MaxExportRows=50,000"
+    auto: API
+
+  - id: ATT-EXC-012
+    func: [F-ATT-196]
+    sc: Authorization is applied SQL-side before count/paging at real volume, across three scope mechanisms
+    t: Manager, HRBP, and TimeManager scoped queries all apply their predicate before COUNT/Skip/Take even at large data volume
+    src: ["AttendanceOperationsService.GetExceptionsAsync"]
+    type: Boundary
+    pri: P1
+    tags: [Boundary]
+    steps:
+      - "[Setup] Seed a tenant with 5,000+ employees and a correspondingly large exception set => precondition established for the steps below"
+      - "[GET /api/attendance/operations/exceptions?page=1&pageSize=25] As a Manager scoped to 10 direct reports => [200] response time and result set reflect a SQL-filtered, paged query - not a full-tenant scan filtered client-side"
+      - "[GET /api/attendance/operations/exceptions?page=1&pageSize=25] As an HRBP scoped via role-scope dimensions => [200] same SQL-first guarantee"
+    auto: DB-assisted
+
+  - id: ATT-EXC-013
+    func: [F-ATT-197]
+    sc: The seeded Employee role cannot reach their own exceptions route because it is gated on Attendance.View, not ExceptionViewSelf
+    t: A plain Employee gets 403 on me/exceptions despite holding ExceptionViewSelf
+    src: ["AttendanceOperationsService.GetMyExceptionsAsync"]
+    type: Security
+    pri: P1
+    role: EMPLOYEE
+    perm: "Attendance.Exception.ViewSelf"
+    steps:
+      - "[GET /api/attendance/me/exceptions] As a seeded Employee (holds MonthlyViewSelf/ExceptionViewSelf/CompOffViewSelf, NOT Attendance.View) => [403] Forbidden - the controller's [HasPermission(Attendance.View)] gate rejects before the service's own internal Attendance.View check is even reached"
+    auto: API
+    cr: [CR-111]
+
+  - id: ATT-EXC-014
+    func: [F-ATT-198]
+    sc: An employee with the right permission can view their own exceptions but cannot reach the operational scope
+    t: me/exceptions succeeds for a self-scoped caller; operations/exceptions is denied to the same caller
+    src: ["AttendanceOperationsService"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/me/exceptions] As a caller explicitly granted Attendance.View => [200] own exceptions only"
+      - "[GET /api/attendance/operations/exceptions] Same caller, no Exception.View => [403] Forbidden - self-view permission does not unlock the operational scope"
+    auto: API
+
+  - id: ATT-EXC-015
+    func: [F-ATT-199]
+    sc: A resolved missing-punch exception disappears from the active queue but remains in history
+    t: Approving a regularization for a MissingOutPunch day removes it from active exceptions while it stays visible historically
+    src: ["AttendanceOperationsService"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] date D has a MissingOutPunch exception, appearing in operations/exceptions => precondition established for the steps below"
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] resolving D => [200] Approved"
+      - "[GET /api/attendance/operations/exceptions] => [200] D's MissingOutPunch exception no longer appears as active"
+      - "[GET /api/attendance/operations/employees/{E1}/history] => [200] D's exception is still visible in the employee's history record"
+    auto: API
+
+  - id: ATT-EXC-016
+    func: [F-ATT-200]
+    sc: Rejecting a manual attendance request leaves the authoritative day unchanged, visible historically
+    t: A rejected manual attendance submission has zero effect on EmployeeAttendanceDay
+    src: ["AttendanceOperationsService"]
+    type: Negative
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[POST /api/attendance/manager/regularizations/{id}/reject] the request created by operations/manual => [200] Status=Rejected"
+      - "[GET /api/attendance/me/days/{businessDate}] => [200] status/punches unchanged from before submission"
+      - "[GET /api/attendance/operations/employees/{E1}/history] => [200] the rejected attempt remains visible historically"
+    auto: API
+
+  - id: ATT-EXC-017
+    func: [F-ATT-201]
+    sc: A finalized period's correction requires an explicit reopen and preserves prior payroll snapshot history
+    t: Attempting a manual correction on a Closed period fails until reopened, and reopening doesn't destroy the prior snapshot
+    src: ["AttendanceOperationsService"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Period Closed, payroll snapshot v1 created => precondition established for the steps below"
+      - "[POST /api/attendance/operations/manual] BusinessDate inside the closed period => [409] period-lock Conflict"
+      - "[POST /api/attendance/periods/{id}/reopen] Reason='Correction' => [200]"
+      - "[Manual/DB] Confirm the v1 snapshot is preserved unchanged, IsCurrent flipped false only after the subsequent reprocess+reclose => confirmed"
+    auto: DB-assisted
+
+  - id: ATT-EXC-018
+    func: [F-ATT-202]
+    sc: A caller with zero Attendance permissions cannot bulk-correct or reopen
+    t: Unauthorized user denial for both actions
+    src: ["AttendanceOperationsController / AttendanceMonthlyController"]
+    type: Authorization
+    pri: P0
+    role: EMPLOYEE
+    perm: "n/a"
+    steps:
+      - "[POST /api/attendance/operations/bulk-corrections] As a caller with no Attendance permissions at all => [403]"
+      - "[POST /api/attendance/periods/{id}/reopen] Same caller => [403]"
+    auto: API
+
+  - id: ATT-EXC-019
+    func: [F-ATT-203]
+    sc: A locked period cannot be bulk-corrected without reopening, even by an authorized correction-manager
+    t: AdminCorrection.Manage alone does not bypass a closed period
+    src: ["AttendanceOperationsService"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Period Closed => precondition established for the steps below"
+      - "[POST /api/attendance/operations/bulk-corrections] As a caller holding AdminCorrection.Manage, targeting a date inside the closed period => [409] period-lock Conflict"
+    auto: API
+
+  - id: ATT-EXC-020
+    func: [F-ATT-204]
+    sc: A bulk-correction referencing an out-of-scope employee is denied per-item
+    t: Cross-employee references are checked individually within the batch
+    src: ["AttendanceOperationsService"]
+    type: Security
+    pri: P1
+    role: MANAGER
+    steps:
+      - "[POST /api/attendance/operations/bulk-corrections] Items include an employee outside the caller's scope => [200 with per-item Denied result, or 403] the out-of-scope item is rejected without affecting other in-scope items"
+    auto: API
+
+  - id: ATT-EXC-021
+    func: [F-ATT-205]
+    sc: Cross-tenant operational exception queries return zero data
+    t: A Tenant B caller never sees Tenant A's exceptions
+    src: ["AttendanceOperationsService"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/attendance/operations/exceptions] As Tenant B => [200] zero Tenant A exceptions appear, regardless of scope breadth"
+    auto: API

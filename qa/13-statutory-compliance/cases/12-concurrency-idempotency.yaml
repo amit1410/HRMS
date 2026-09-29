@@ -1,0 +1,127 @@
+sheet: Stat_Concurrency
+submodule: Concurrency and Idempotency
+defaults:
+  tenant: "T1 (DEMO01)"
+  role: "PayrollAdmin / TenantAdmin (see scenario)"
+  pre: "see scenario/steps for setup"
+  reg: true
+
+cases:
+  - id: STAT-CONC-001
+    func: [F-STAT-011]
+    sc: Version overlap race window
+    t: Two concurrent AddVersionAsync calls for the same configuration can both pass the overlap check and persist overlapping versions
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs AddVersionAsync"
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    data: "two concurrent requests for overlapping ranges on the same configuration"
+    steps:
+      - "[Manual] fire two concurrent [POST /api/payroll/statutory-configurations/{id}/versions] requests with overlapping date ranges against the SAME configuration, timed so both AnyAsync overlap checks execute before either INSERT commits => both requests return [201] Created; the resulting table has two overlapping versions for the same configuration, which CalculateAsync's own ambiguity check (F-STAT-036) would then need to arbitrate between if both happen to share a Priority"
+    db: "StatutoryConfigurationVersions can contain two overlapping rows for one configuration"
+    auto: DB-assisted
+    cr: [CR-228]
+
+  - id: STAT-CONC-002
+    func: [F-STAT-023]
+    sc: Employee profile overlap race window
+    t: Two concurrent SaveProfileAsync calls for the same employee can both pass the overlap check
+    src: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs SaveProfileAsync"
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    role: HRAdmin (with EmployeeStatutory.Manage granted)
+    perm: Payroll.EmployeeStatutory.Manage
+    data: "two concurrent profile saves for the same employee, overlapping date ranges"
+    steps:
+      - "[Manual] fire two concurrent [PUT /api/payroll/employees/{employeeId}/statutory-profile] requests with overlapping EffectiveFrom/EffectiveTo, timed so both AnyAsync overlap checks execute before either INSERT commits => both return [201] Created; two overlapping EmployeeStatutoryProfile rows now exist for the same employee, and CalculateAsync's own OrderByDescending(EffectiveFrom).FirstOrDefault selection (F-STAT-032) becomes non-deterministic between them when their EffectiveFrom values also tie"
+    db: "EmployeeStatutoryProfiles can contain two overlapping rows for one employee"
+    auto: DB-assisted
+    cr: [CR-228]
+
+  - id: STAT-CONC-003
+    func: [F-STAT-129, F-STAT-132]
+    sc: Dormant concurrency tokens
+    t: StatutoryConfiguration.ConcurrencyVersion and StatutoryFilingConnectionProfile.ConcurrencyVersion are declared but never used for a genuine compare-and-swap
+    src: "StatutoryPayrollService.cs, StatutoryFilingService.cs UpdateConnectionProfileAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    perm: Payroll.Statutory.Manage, Payroll.StatutoryFiling.ManageConnections
+    data: none
+    steps:
+      - "[Manual] full grep of StatutoryPayrollService.cs for a read/increment/compare of StatutoryConfiguration.ConcurrencyVersion => zero matches (no UpdateConfigurationAsync exists to increment it, per CR-227)"
+      - "[Manual] full grep of StatutoryFilingService.cs for a read/compare of StatutoryFilingConnectionProfile.ConcurrencyVersion outside UpdateConnectionProfileAsync's own increment => zero matches, confirming an advisory-only counter"
+    auto: Manual only
+
+  - id: STAT-CONC-004
+    func: [F-STAT-130]
+    sc: Compliance-return compare-and-swap is genuinely enforced
+    t: ValidateAsync's ExecuteUpdateAsync CAS on (Status, ConcurrencyVersion) correctly rejects a lost race
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs ValidateAsync"
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    perm: Payroll.StatutoryCompliance.Validate
+    data: "two concurrent Validate calls on the same Generated batch"
+    steps:
+      - "[Manual] fire two concurrent [POST /api/payroll/statutory-compliance/returns/{id}/validate] calls on the same Generated batch => exactly ONE succeeds [200] Validated; the loser's ExecuteUpdateAsync affects zero rows (Status/ConcurrencyVersion no longer match what it read) and returns [409] Conflict, 'Return was changed by another operation.'"
+    db: "PayrollStatutoryReturnBatches transitions exactly once despite two concurrent callers"
+    auto: DB-assisted
+
+  - id: STAT-CONC-005
+    func: [F-STAT-131]
+    sc: Filing-run concurrency relies on EF's own detection, not an explicit CAS predicate
+    t: StatutoryFilingRun.ConcurrencyVersion is incremented on transition but concurrency protection comes from a caught DbUpdateConcurrencyException, not an ExecuteUpdateAsync filter
+    src: "Backend/HRMS.Application/Services/StatutoryFilingService.cs TransitionAsync"
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    perm: Payroll.StatutoryFiling.SubmitForApproval
+    data: "two concurrent SubmitForApproval calls on the same Validated run"
+    steps:
+      - "[Manual] fire two concurrent [POST /api/payroll/statutory-filings/runs/{id}/submit-for-approval] calls on the same Validated run => one succeeds [200]; the other's plain SaveChangesAsync raises DbUpdateConcurrencyException, caught and surfaced as [409] Conflict, 'Filing run was changed by another operation.' - functionally correct, but implemented via EF's own row-version detection rather than an explicit Status-keyed ExecuteUpdateAsync predicate like the compliance-return side (F-STAT-130)"
+    auto: DB-assisted
+
+  - id: STAT-CONC-006
+    func: [F-STAT-133]
+    sc: Return/run creation idempotency is app-level only
+    t: One-active-batch-per-period and one-active-run-per-(definition,period) are enforced by an AnyAsync pre-check, not a covering DB unique index
+    src: "PayrollStatutoryComplianceService.GenerateAsync; StatutoryFilingService.CreateRunAsync"
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    perm: Payroll.StatutoryCompliance.Generate, Payroll.StatutoryFiling.Manage
+    data: "two concurrent Generate calls for the same period; two concurrent CreateRun calls for the same definition+period"
+    steps:
+      - "[Manual] fire two concurrent [POST /api/payroll/statutory-compliance/periods/{id}/returns] calls for the SAME period, timed so both pre-checks pass before either commits => in principle both could succeed, producing two return batches for one period despite the documented 'one active return per period' rule (BatchNumber's own uniqueness does not prevent this, since each generated BatchNumber is distinct by construction)"
+      - "[Manual] apply the identical timing to two concurrent [POST /api/payroll/statutory-filings/runs] calls for the same (definitionId, filingPeriod) pair => the same race shape applies, since CreateRunAsync's own idempotency check is an equivalent AnyAsync pre-check"
+    db: "PayrollStatutoryReturnBatches / StatutoryFilingRuns lack a covering unique index for their own documented one-active-per-key invariant"
+    auto: Manual only
+    cr: []
+
+  - id: STAT-CONC-007
+    func: [F-STAT-134, F-STAT-135]
+    sc: DB-enforced uniqueness where it genuinely exists
+    t: Filing package/submission uniqueness and per-attempt statutory-result uniqueness ARE DB-enforced
+    src: "StatutoryFilingPackageConfiguration, StatutoryFilingSubmissionConfiguration, PayrollStatutoryResultConfiguration"
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    perm: Payroll.StatutoryFiling.Generate, Payroll.StatutoryFiling.Submit
+    data: none
+    steps:
+      - "[DB] attempt a direct duplicate insert against (TenantId, RunId, Version), (TenantId, RunId, PackageHash) on StatutoryFilingPackages, and (TenantId, PackageId) on StatutoryFilingSubmissions => each rejected at the database layer by a real unique index"
+      - "[DB] attempt a direct duplicate insert against (TenantId, PayrollResultId, StatutoryType) on PayrollStatutoryResults => rejected by a real unique index, though as CR-219 documents this only protects within one attempt's own PayrollResultId, not across recalculation attempts"
+    db: "The three unique indexes above genuinely reject a duplicate insert"
+    auto: DB-assisted
+    cr: [CR-219]

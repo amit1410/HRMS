@@ -1,0 +1,159 @@
+sheet: Platform_Tenant_List
+submodule: Tenant Directory (List / Get / Web URL)
+defaults:
+  role: PLATFORM_ADMIN
+  perm: PlatformTenant.View
+  tenant: None (platform identity domain)
+  pre: "QA platform.localhost stack running; a bootstrapped PlatformSuperAdmin exists; Tenant A and Tenant B already onboarded as disposable QA tenants."
+  data: "Platform admin token from POST /api/platform/auth/login; Tenant A/B ids captured from onboarding."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: PLAT-LIST-001
+    func: [F-PLAT-01]
+    sc: List returns every tenant with summary fields
+    t: A platform admin lists all tenants and sees code, name, host, provider, shard key, status and web URL
+    src: ["PlatformTenantService.ListAsync", "PlatformTenantListItemDto"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/platform/tenants] Call as PLATFORM_ADMIN => [200] success=true, data is an array containing Tenant A and Tenant B"
+      - "Inspect one row => id, tenantCode, tenantName, host, databaseProvider, shardKey, status, webUrl all present; no email/phone/address/adminEmail/temporaryPassword fields (list DTO is summary-only)"
+    auto: API
+
+  - id: PLAT-LIST-002
+    func: [F-PLAT-01]
+    sc: List is ordered by tenant code
+    t: Tenants are returned sorted by TenantCode ascending
+    src: ["PlatformTenantService.ListAsync (OrderBy TenantCode)"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Low
+    steps:
+      - "[GET /api/platform/tenants] Call with at least 3 tenants seeded (e.g. codes DEMOA, DEMOB, DEMOZ) => [200] data is sorted by tenantCode ascending"
+    auto: API
+
+  - id: PLAT-LIST-003
+    func: [F-PLAT-01]
+    sc: Empty catalog
+    t: Listing on a freshly bootstrapped catalog with zero tenants returns an empty array, not an error
+    src: ["PlatformTenantService.ListAsync"]
+    type: Boundary
+    pri: P2
+    sev: Medium
+    pre: "Requires an isolated QA catalog with zero tenants; do not run against a shared catalog that already has Tenant A/B."
+    steps:
+      - "[GET /api/platform/tenants] Call against an empty catalog => [200] data=[]"
+    auto: API
+
+  - id: PLAT-LIST-004
+    func: [F-PLAT-01, F-PLAT-24]
+    sc: List requires PlatformTenant.View
+    t: A platform user without PlatformTenant.View is refused; one with it succeeds
+    src: ["[PlatformPermission(PlatformPermissions.TenantView)]"]
+    type: Authorization
+    tags: [Negative, Positive]
+    pri: P0
+    sev: Critical
+    role: PLATFORM_LIMITED (authenticated, no roles) and PLATFORM_ADMIN
+    steps:
+      - "[GET /api/platform/tenants] As PLATFORM_LIMITED => [403]"
+      - "[GET /api/platform/tenants] As PLATFORM_ADMIN => [200]"
+      - "[GET /api/platform/tenants] With no token at all => [401]"
+    auto: API
+    ex: ["xU:PlatformTenantAuthorizationTests.Platform_permissions_are_granted_only_to_super_admin_seed_role"]
+
+  - id: PLAT-LIST-005
+    func: [F-PLAT-02]
+    sc: Get detail by id
+    t: A platform admin retrieves the full detail record for one tenant
+    src: ["PlatformTenantService.GetAsync", "PlatformTenantDetailDto"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[GET /api/platform/tenants/{Tenant A id}] Call as PLATFORM_ADMIN => [200] tenantCode/tenantName/host/databaseProvider/shardKey/status/email/phone/address/webUrl match Tenant A's known values"
+      - "Inspect adminEmail/developmentTemporaryPassword => both absent/null (only populated by the create/retry response, not by Get)"
+    auto: API
+    ex: ["xU:PlatformTenantAuthorizationTests.Tenant_metadata_update_contract_excludes_provisioning_identity_and_credentials"]
+
+  - id: PLAT-LIST-006
+    func: [F-PLAT-02]
+    sc: Get with an unknown id
+    t: A well-formed but non-existent tenant id returns 404
+    src: ["PlatformTenantService.GetAsync (tenant is null)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[GET /api/platform/tenants/{random GUID}] Call as PLATFORM_ADMIN => [404] 'Tenant was not found.'"
+    auto: API
+
+  - id: PLAT-LIST-007
+    func: [F-PLAT-02]
+    sc: Get with a malformed id
+    t: A non-GUID id segment is rejected by route model binding, not by the service
+    src: ["Route constraint {id:guid}"]
+    type: Negative
+    tags: [Validation]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[GET /api/platform/tenants/not-a-guid] Call as PLATFORM_ADMIN => [404] (route does not match; ASP.NET Core's guid constraint)"
+    auto: API
+
+  - id: PLAT-LIST-008
+    func: [F-PLAT-02, F-PLAT-24]
+    sc: Get requires PlatformTenant.View
+    t: A platform user without PlatformTenant.View cannot read a single tenant's detail
+    src: ["[PlatformPermission(PlatformPermissions.TenantView)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    role: PLATFORM_LIMITED
+    steps:
+      - "[GET /api/platform/tenants/{Tenant A id}] As PLATFORM_LIMITED => [403]"
+    auto: API
+
+  - id: PLAT-LIST-009
+    func: [F-PLAT-31]
+    sc: Web URL is built from the configured template
+    t: webUrl substitutes the tenant host into Frontend:TenantWebUrlTemplate
+    src: ["PlatformTenantService.WebUrl"]
+    type: Positive
+    tags: [Configuration]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[GET /api/platform/tenants/{Tenant A id}] Call and inspect webUrl => equals the QA stack's Frontend:TenantWebUrlTemplate with {host} replaced by Tenant A's host (e.g. http://demo-a.localhost:5173)"
+    auto: API
+
+  - id: PLAT-LIST-010
+    func: [F-PLAT-31]
+    sc: Web URL falls back when no template is configured
+    t: With no Frontend:TenantWebUrlTemplate configured, webUrl defaults to http://{host}
+    src: ["PlatformTenantService.WebUrl (?? 'http://{host}')"]
+    type: Boundary
+    pri: P3
+    sev: Low
+    pre: "Requires a QA instance with Frontend:TenantWebUrlTemplate unset; otherwise NOT EXECUTED - environment unavailable."
+    steps:
+      - "[GET /api/platform/tenants/{Tenant A id}] Call against that instance => [200] webUrl = 'http://' + Tenant A's host"
+    auto: API
+
+  - id: PLAT-LIST-011
+    func: [F-PLAT-01, F-PLAT-32]
+    sc: Platform tenant endpoints are unreachable at a tenant host
+    t: GET /api/platform/tenants at a customer host is blocked before authentication, per Module 1's platform-host boundary
+    src: ["PlatformRequestRoutingMiddleware"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    tenant: A
+    steps:
+      - "[GET /api/platform/tenants] Call at the Tenant A host (not platform.localhost), with a VALID platform token => [404] 'The platform endpoint is not available on this host.'"
+    auto: API
+    cm: "Cross-reference of Module 1 PLATFORM-AUTH-022; repeated here because it is the entry point to this module's primary workflow."

@@ -1,0 +1,119 @@
+sheet: GLAcc_Export
+submodule: Export
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-EXP-001
+    func: [F-GLACC-088]
+    sc: Export status gate
+    t: ExportAsync succeeds only from Approved/Posted/Exported; Generated/Validated/Cancelled are Conflict
+    src: "PayrollAccountingService.ExportAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "J17 is at Status=Validated (not yet Approved)"
+    role: HRAdmin (custom role holding Accounting.Export)
+    perm: Payroll.Accounting.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/{J17}/export] => [409] Conflict (Only an approved or posted journal can be exported.)"
+      - "[Manual] approve J17, then retry export => [GET /api/payroll/accounting/{J17}/export] => [200] CSV returned"
+    auto: API
+
+  - id: GLACC-EXP-002
+    func: [F-GLACC-089]
+    sc: CSV header and row shape
+    t: The export's header row and per-line data rows match the exact 10-column format, ordered by Sequence
+    src: "PayrollAccountingService.ExportAsync"
+    type: Contract
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "J18 (Approved) has 3 lines with distinct Sequence values 1, 2, 3"
+    role: HRAdmin (custom role holding Accounting.Export)
+    perm: Payroll.Accounting.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/{J18}/export] => [200] header row exactly \"JournalNumber,JournalDate,AccountCode,AccountName,Description,Debit,Credit,Currency,SourceType,SourceId\", 3 data rows in Sequence order"
+    auto: API
+
+  - id: GLACC-EXP-003
+    func: [F-GLACC-090]
+    sc: CSV escaping of special characters
+    t: A line Description containing a comma, double-quote, and newline is correctly RFC4180-escaped
+    src: "PayrollAccountingService.Csv"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "J19 (Approved) has one line whose Description is: Bonus, \"Q1\" adjustment\\nnote"
+    role: HRAdmin (custom role holding Accounting.Export)
+    perm: Payroll.Accounting.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/{J19}/export] => [200] the Description field is quoted, with the embedded double-quote doubled and the comma/newline preserved inside the quoted field"
+    auto: API
+
+  - id: GLACC-EXP-004
+    func: [F-GLACC-091]
+    sc: Repeated export is fully idempotent regardless of eligible status
+    t: Exporting the same journal 3 times, including once while Approved and twice after being Posted, always returns byte-identical CSV with zero side effects
+    src: "PayrollAccountingService.ExportAsync (delegates to GetAsync)"
+    type: Integration-Concurrency
+    tags: [Idempotency, Positive]
+    pri: P1
+    sev: Medium
+    pre: "J20 is Approved"
+    role: HRAdmin (custom role holding Accounting.Export, Post)
+    perm: Payroll.Accounting.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/{J20}/export] while Approved => [200] CSV content C1"
+      - "[Manual] post J20 => Status becomes 'Posted'"
+      - "[GET /api/payroll/accounting/{J20}/export] while Posted => [200] CSV content C2, byte-identical to C1"
+      - "[GET /api/payroll/accounting/{J20}/export] again while Posted => [200] CSV content C3, byte-identical to C1 and C2"
+    auto: API
+    reg: true
+
+  - id: GLACC-EXP-005
+    func: [F-GLACC-092]
+    sc: Filename and content-type
+    t: The exported file is named payroll-journal-{JournalNumber with / replaced by -}.csv with content-type text/csv; charset=utf-8
+    src: "PayrollAccountingService.ExportAsync"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "J21 (Approved), JournalNumber = 'PJ/202610/{runId:N}/1'"
+    role: HRAdmin (custom role holding Accounting.Export)
+    perm: Payroll.Accounting.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/{J21}/export] => [200] filename == \"payroll-journal-PJ-202610-{runId:N}-1.csv\", content-type == \"text/csv; charset=utf-8\""
+    auto: API
+
+  - id: GLACC-EXP-006
+    func: [F-GLACC-093]
+    sc: Large journal export materializes in memory without error
+    t: A journal with a large number of lines (5,000) exports successfully as one in-memory response with no streaming
+    src: "PayrollAccountingService.ExportAsync (StringBuilder over j.Lines)"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "J22 (Approved) has 5,000 journal lines from a large payroll run"
+    role: HRAdmin (custom role holding Accounting.Export)
+    perm: Payroll.Accounting.Export
+    tenant: "T1 (DEMO01)"
+    data: "5,000 PayrollJournalLine rows"
+    steps:
+      - "[GET /api/payroll/accounting/{J22}/export] => [200] CSV with 5,000 data rows returned within an acceptable response time"
+    auto: API

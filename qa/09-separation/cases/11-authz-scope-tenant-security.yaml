@@ -1,0 +1,307 @@
+sheet: Separation_Scope
+submodule: Separation.* permission inventory and seeded role-scope matrix, the PageAccess.Manage self-escalation blast radius (CR-66), and tenant isolation across every Separation-family surface
+defaults:
+  role: HRADMIN
+  perm: "Separation.ViewAll"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: SEP-SCP-001
+    func: [F-SEP-270]
+    sc: Full Separation/Clearance/SeparationBenefits permission constant inventory
+    t: Every declared permission constant matches the documented list exactly
+    src: ["Backend/HRMS.Domain/Authorization/Permissions.cs:318-394"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Inspect Permissions.cs's Separation.*, Separation.Clearance.*, and Payroll.SeparationBenefits.* constants => match the documented inventory (ViewSelf/ViewTeam/ViewAll/CreateSelf/Initiate/Submit/Withdraw/Review/Manage/ViewHistory/ManagerReview/HrReview/ReviseLastWorkingDate/Approve/Reject/NoticeManage/NoticeWaive/ReviseApprovedLastWorkingDate plus the Clearance and SeparationBenefits families) exactly"
+    auto: Manual only
+
+  - id: SEP-SCP-002
+    func: [F-SEP-271]
+    sc: Separation.Approve, Separation.Review, and Separation.NoticeManage are dead permissions
+    t: A role holding ONLY these three (no ManagerReview/HrReview/NoticeWaive) is denied on every approve/reject/notice-manage action, proving the permission grants nothing functionally
+    src: ["SeparationController.cs (full [HasPermission] grep)"]
+    type: Negative
+    pri: P1
+    cr: [CR-134]
+    steps:
+      - "[Setup] A custom role holds Separation.Approve, Separation.Review, Separation.NoticeManage and NOTHING else in the Separation family => precondition established"
+      - "[POST /api/separation/{id}/manager-approve] as that role => [403] Forbidden"
+      - "[POST /api/separation/{id}/hr-approve] as that role => [403] Forbidden"
+      - "[Manual/Code] Grep SeparationController.cs's [HasPermission] attributes => none reference Approve, Review, or NoticeManage"
+    auto: API
+
+  - id: SEP-SCP-003
+    func: [F-SEP-272]
+    sc: HRManager lacks Separation.ViewAll
+    t: HRManager cannot call the list-all or get-by-id endpoints, and must rely on inbox/team views instead
+    src: ["SeedData.cs RolePermissionMap[HRManager]"]
+    type: Authorization
+    pri: P1
+    role: HRMANAGER
+    steps:
+      - "[GET /api/separation] as HRManager => [403] Forbidden"
+      - "[GET /api/separation/{id}] as HRManager => [403] Forbidden"
+      - "[GET /api/separation/inbox/hr] as HRManager => [200] succeeds - the inbox route uses HrReview, which HRManager does hold"
+    auto: API
+
+  - id: SEP-SCP-004
+    func: [F-SEP-273]
+    sc: Employee role is correctly scoped to self-service only
+    t: Employee holds ViewSelf/CreateSelf/Submit/Withdraw/ViewHistory and is denied every team/all/review permission
+    src: ["SeedData.cs RolePermissionMap[Employee]"]
+    type: Authorization
+    pri: P1
+    role: EMPLOYEE
+    steps:
+      - "[POST /api/separation/me] as Employee => [200/201] succeeds (CreateSelf held)"
+      - "[GET /api/separation] (list-all) as Employee => [403] Forbidden (no ViewAll)"
+      - "[POST /api/separation/{id}/manager-approve] as Employee => [403] Forbidden (no ManagerReview)"
+    auto: API
+
+  - id: SEP-SCP-005
+    func: [F-SEP-274]
+    sc: Manager role cannot self-initiate a report's separation and has no Submit/Withdraw
+    t: Manager holds ViewTeam/Review/ManagerReview/Reject/ViewHistory but is denied Initiate/Submit/CreateSelf/Withdraw
+    src: ["SeedData.cs RolePermissionMap[Manager]"]
+    type: Authorization
+    pri: P1
+    role: MANAGER
+    steps:
+      - "[POST /api/separation/employees/{reportId}] as Manager (attempting to HR-initiate a direct report's separation) => [403] Forbidden (no Initiate)"
+      - "[POST /api/separation/{id}/manager-approve] as Manager, for a case where they are the effective manager => [200] succeeds"
+    auto: API
+
+  - id: SEP-SCP-006
+    func: [F-SEP-275]
+    sc: HRBP can process cases end-to-end but can never create one
+    t: HRBP holds ViewAll/HrReview/ReviseLastWorkingDate/Reject/ViewHistory/NoticeManage(dead)/NoticeWaive/ReviseApprovedLastWorkingDate but no Initiate/Submit/CreateSelf
+    src: ["SeedData.cs RolePermissionMap[HRBP]"]
+    type: Authorization
+    pri: P2
+    role: HRBP
+    steps:
+      - "[POST /api/separation/{id}/hr-approve] as HRBP => [200] succeeds"
+      - "[POST /api/separation/employees/{employeeId}] as HRBP => [403] Forbidden (no Initiate)"
+      - "[POST /api/separation/{id}/notice/waive] as HRBP => [200] succeeds (NoticeWaive held)"
+    auto: API
+
+  - id: SEP-SCP-007
+    func: [F-SEP-276, F-SEP-277]
+    sc: SuperHR, IT, Accounts, ERO, and TimeManager hold zero native Separation-family permissions
+    t: Despite role names implying broad HR/departmental authority, none of these five roles is seeded with any Separation.*, Separation.Clearance.*, or Payroll.SeparationBenefits.* permission
+    src: ["SeedData.cs RolePermissionMap[SuperHR/IT/Accounts/EmployeeRelationshipOfficer/TimeManager]"]
+    type: Authorization
+    pri: P1
+    steps:
+      - "[GET /api/separation] as SuperHR => [403] Forbidden"
+      - "[GET /api/separation/clearance/inbox] as IT => [403] Forbidden"
+      - "[GET /api/separation/clearance/inbox] as Accounts => [403] Forbidden"
+      - "[Manual/Code] Grep SeedData.cs's RolePermissionMap for these five roles => zero Separation-family entries confirmed for each"
+    auto: API
+
+  - id: SEP-SCP-008
+    func: [F-SEP-278]
+    sc: Being the effective manager never substitutes for holding the permission
+    t: A caller who IS resolved as the effective manager for a case, but whose role has been stripped of Separation.ManagerReview, is still denied
+    src: ["SeparationController.cs [HasPermission]"]
+    type: Security
+    pri: P0
+    steps:
+      - "[Setup] Caller is genuinely the employee's effective manager as of RequestDate, but their role holds no Separation.ManagerReview permission => precondition established"
+      - "[POST /api/separation/{id}/manager-approve] => [403] Forbidden - the manager relationship alone never grants authority"
+    auto: API
+
+  - id: SEP-SCP-009
+    func: [F-SEP-279, F-SEP-280]
+    sc: SeparationService is an independent, 6th-or-later scope mechanism that disagrees with ClearanceService's own manager resolution
+    t: SeparationService.GetTeamAsync (IEmployeeManagerResolver) and ClearanceService.GetInboxAsync (raw legacy ReportingManagerId join) can return different answers for the identical manager/report pair
+    src: ["SeparationService.GetTeamAsync vs ClearanceService.GetInboxAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Manual/Code] Grep SeparationService.cs for RoleScopeResolver/EmployeeAccessScopeService/LeaveAuthorizationService/AttendanceAuthorizationService => zero references, confirming an independent mechanism"
+      - "[Setup] A manager is recorded ONLY via EmployeeEmploymentHistory.ManagerId, never via the legacy Employees.ReportingManagerId column => precondition established"
+      - "[GET /api/separation/team] as that manager => [200] the report appears (resolved via IEmployeeManagerResolver)"
+      - "[GET /api/separation/clearance/inbox/manager] as the SAME manager, for the SAME report's clearance tasks => [200] the report's tasks do NOT appear (ClearanceService's raw legacy-column join finds nothing) - confirming the two mechanisms disagree"
+    auto: API
+
+  - id: SEP-SCP-010
+    func: [F-SEP-281]
+    sc: ViewAll-holders get a flat tenant-wide scope with no further narrowing
+    t: HRAdmin/HRManager/HRBP/SuperAdmin/TenantAdmin see every tenant case via GetAllAsync/GetHrInboxAsync once ViewAll/HrReview is held, by design - no department/team-level narrowing is applied on top
+    src: ["SeparationService.GetAllAsync / GetHrInboxAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[Setup] Tenant A has 20 separation cases across 5 different departments => precondition established"
+      - "[GET /api/separation] as HRAdmin (ViewAll) => [200] all 20 cases returned regardless of department"
+    auto: API
+
+  - id: SEP-SCP-011
+    func: [F-SEP-282]
+    sc: Exit-interview template configuration is gated by the misleadingly-named ClearanceConfigure permission
+    t: A role holding Separation.Clearance.Configure (and nothing exit-interview-specific, since no such permission exists) can configure exit-interview templates
+    src: ["ExitInterviewService.CreateTemplateAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Setup] A role holds ONLY Separation.Clearance.Configure (no other Separation-family permission) => precondition established"
+      - "[POST /api/separation/exit-interview/templates] => [200/201] succeeds - the same permission also gates clearance template configuration"
+    auto: API
+
+  - id: SEP-SCP-012
+    func: [F-SEP-283]
+    sc: No dedicated Settlement/Document/ExitClosure permission family exists
+    t: Settlement initiate/retry, document generate/approve/issue/supersede/cancel, and exit execute/retry are ALL gated by the single Separation.Manage permission - a grantor cannot give one capability without all three
+    src: ["SeparationSettlementController.cs / SeparationDocumentController.cs / SeparationExitController.cs (all [HasPermission(Separation.Manage)])"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Setup] A role holds ONLY Separation.Manage (nothing else) => precondition established"
+      - "[POST /api/separation/{id}/settlement/initiate] => [200/201] succeeds"
+      - "[POST /api/separation/documents/for/{id}/generate] => [200/201] succeeds"
+      - "[POST /api/separation/exit/{id}/execute] => [200] succeeds - confirming all three capability areas share the one permission with no finer split available"
+    auto: API
+
+  - id: SEP-ESC-001
+    func: [F-SEP-284]
+    sc: PageAccessService validates a requested grant only against Permissions.All membership - no carve-out for Separation-family permissions
+    t: Every Separation.*, Separation.Clearance.*, and Payroll.SeparationBenefits.* permission is grantable via PageAccess with no special-cased restriction
+    src: ["PageAccessService.UpdateAsync"]
+    type: Security
+    pri: P0
+    perm: "PageAccess.Manage"
+    steps:
+      - "[PUT /api/page-access/roles/{roleId}] add Separation.Manage to a role that never held it => [200] granted, no rejection or warning of any kind"
+    auto: API
+    cr: [CR-66]
+
+  - id: SEP-ESC-002
+    func: [F-SEP-285]
+    sc: SuperHR (zero native Separation permissions) self-escalates to full separation-lifecycle control via PageAccess.Manage
+    t: A SuperHR user grants their own role Separation.Manage, every Clearance permission, and all six Payroll.SeparationBenefits.* permissions in one call, then drives the entire lifecycle end-to-end including final exit execution
+    src: ["PageAccessService.UpdateAsync", "SeedData.cs (SuperHR native grants)"]
+    type: Security
+    pri: P0
+    smoke: true
+    role: SUPERHR
+    perm: "PageAccess.Manage"
+    cr: [CR-66]
+    steps:
+      - "[GET /api/separation] as SuperHR, before escalation => [403] Forbidden"
+      - "[PUT /api/page-access/roles/{superHrRoleId}] add Separation.Manage, Separation.Clearance.ManageTask/Waive/Complete/Reopen/Start/Configure/ViewAll/ViewTeam, all 6 Payroll.SeparationBenefits.* permissions => [200] granted in one call"
+      - "[GET /api/separation] as SuperHR, after escalation (fresh token/permission refresh) => [200] now succeeds"
+      - "[POST /api/separation/exit/{id}/execute] as SuperHR, after escalation => [200] succeeds - the same self-granted role can now trigger irreversible account deactivation on any employee in the tenant"
+    auto: API
+
+  - id: SEP-ESC-003
+    func: [F-SEP-286]
+    sc: HRAdmin can additionally self-grant the dead permissions Separation.Approve/NoticeManage, accomplishing nothing functionally
+    t: The same self-escalation path lets HRAdmin add permissions that no endpoint actually checks (per SEP-SCP-002)
+    src: ["PageAccessService.UpdateAsync"]
+    type: Security
+    pri: P2
+    role: HRADMIN
+    perm: "PageAccess.Manage"
+    cr: [CR-66]
+    steps:
+      - "[PUT /api/page-access/roles/{hrAdminRoleId}] add Separation.Approve, Separation.NoticeManage (already holds everything else functionally relevant) => [200] granted"
+      - "[POST /api/separation/{id}/manager-approve] as HRAdmin (Separation.Approve alone would not gate this route) => [403 or 200 depending on ManagerReview] behavior is UNCHANGED by the newly granted dead permissions"
+    auto: API
+
+  - id: SEP-ESC-004
+    func: [F-SEP-287]
+    sc: The self-escalation grant is fully audited but not prevented or flagged at write time
+    t: AuthorizationConfigurationEvents records actor/reason for the PageAccess update, traceable after the fact, but no guard blocks or warns about the escalation as it happens
+    src: ["PageAccessService.UpdateAsync"]
+    type: Security
+    pri: P1
+    perm: "PageAccess.Manage"
+    cr: [CR-66]
+    steps:
+      - "[PUT /api/page-access/roles/{roleId}] SuperHR self-grants Separation.Manage, Reason='Operational need' => [200] no warning/confirmation step returned"
+      - "[GET /api/authorization/configuration-events] (or equivalent audit query) => [200] an AuthorizationConfigurationEvents row records ActorUserId=the SuperHR user, the granted permission, and the supplied reason - fully traceable after the fact, but nothing prevented the write itself"
+    auto: API
+
+  - id: SEP-TEN-001
+    func: [F-SEP-288]
+    sc: Cross-tenant separation-case id lookup returns NotFound, not Forbidden
+    t: GET/history/action endpoints against a foreign-tenant id behave identically to a nonexistent id
+    src: ["SeparationService.GetAsync / GetHistoryAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Tenant A has a separation case with a known id => precondition established"
+      - "[GET /api/separation/{tenantAId}] as Tenant B HRAdmin => [404] Separation not found."
+      - "[GET /api/separation/{tenantAId}/history] as Tenant B HRAdmin => [404] Separation not found."
+    auto: API
+
+  - id: SEP-TEN-002
+    func: [F-SEP-289]
+    sc: Cross-tenant mutation attempts have zero side effects
+    t: Manager-approve/reject, hr-approve/reject, and withdraw against a foreign-tenant case id return NotFound with no state change to the Tenant A row
+    src: ["SeparationService.LoadForActionAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[POST /api/separation/{tenantAId}/manager-approve] as Tenant B => [404] Separation not found."
+      - "[POST /api/separation/{tenantAId}/withdraw] as Tenant B => [404] Separation not found."
+      - "[Manual/DB] Query the Tenant A case's Status/ConcurrencyVersion/EventCount => unchanged by either attempt"
+    auto: API
+
+  - id: SEP-TEN-003
+    func: [F-SEP-290]
+    sc: Cross-tenant clearance/benefits/exit-interview/document/settlement id lookups all fail closed
+    t: Every sibling service applies the same TenantId filter, with zero data leakage or side effect across a foreign-tenant id
+    src: ["ClearanceService.cs / SeparationBenefitsService.cs / ExitInterviewService.cs / SeparationDocumentService.cs / SeparationSettlementOrchestrationService.cs"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[GET /api/separation/clearance/{tenantAClearanceId}] as Tenant B => [404] Not found"
+      - "[GET /api/payroll/separation-benefits/{tenantAEmployeeId}] as Tenant B => [404] Not found"
+      - "[GET /api/separation/exit-interview/for/{tenantASeparationId}] as Tenant B => [404] Not found"
+      - "[GET /api/separation/documents/{tenantADocId}/download] as Tenant B => [404] Not found"
+      - "[GET /api/separation/{tenantASeparationId}/settlement] as Tenant B => [404] Not found"
+    auto: API
+
+  - id: SEP-TEN-004
+    func: [F-SEP-291]
+    sc: Gratuity/document number sequences are isolated per tenant
+    t: Two tenants generating their first document/gratuity number of the year both independently start at 1
+    src: ["SeparationDocumentService.GenerateAsync (AllocateNumberAsync)"]
+    type: Tenant-Isolation
+    pri: P1
+    steps:
+      - "[POST /api/separation/documents/for/{tenantASeparationId}/generate] first RelievingLetter of the year, Tenant A => [200/201] DocumentNumber='RL/{year}/000001'"
+      - "[POST /api/separation/documents/for/{tenantBSeparationId}/generate] first RelievingLetter of the year, Tenant B, same real calendar year => [200/201] DocumentNumber='RL/{year}/000001' - independently starts at 1, no cross-tenant sequence bleed"
+    auto: API
+
+  - id: SEP-TEN-005
+    func: [F-SEP-292]
+    sc: A foreign tenant's exit/settlement/clearance rows remain untouched after a Tenant A action
+    t: Executing a Tenant A exit/settlement/clearance action never mutates or creates rows scoped to Tenant B
+    src: ["SeparationExitService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P1
+    steps:
+      - "[POST /api/separation/exit/{tenantASeparationId}/execute] as Tenant A HRAdmin => [200] Tenant A's SeparationExitExecutions row created/updated"
+      - "[Manual/DB] Query Tenant B's SeparationExitExecutions/SeparationSettlementOrchestrations/SeparationClearances tables => zero new or modified rows as a result of the Tenant A action"
+    auto: DB-assisted
+
+  - id: SEP-TEN-006
+    func: [F-SEP-293]
+    sc: HR-initiated creation for a cross-tenant employeeId is denied at the employee-existence check, not merely a later authorization layer
+    t: The cross-tenant employeeId never resolves to a row at all under the TenantId filter, so the failure occurs at the earliest possible point
+    src: ["SeparationService.CreateForEmployeeAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    steps:
+      - "[POST /api/separation/employees/{tenantBEmployeeId}] as Tenant A HRAdmin, Reason/ProposedLastWorkingDate supplied => [404] Employee not found. - denied at the Employees.TenantId existence check"
+    auto: API

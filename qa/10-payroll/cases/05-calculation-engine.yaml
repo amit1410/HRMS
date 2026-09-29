@@ -1,0 +1,372 @@
+sheet: Payroll_Calculation
+submodule: Calculation Engine - earnings/deductions matrix, proration, statutory/loan/reimbursement/adjustment integration, results and errors
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Run.Calculate"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, with a Prepared payroll run containing at least one eligible employee bound to a multi-component salary structure, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-CALC-001
+    func: [F-PAY-092]
+    sc: Calculate a Prepared run successfully
+    t: A well-formed Prepared run with eligible employees calculates to Calculated with zero errors
+    src: ["PayrollCalculationEngine.CalculateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] Status=Calculated, FailedCount=0"
+    auto: API
+
+  - id: PAY-CALC-002
+    func: [F-PAY-092]
+    sc: Calculate rejects a run that isn't Prepared, and a second Calculate without recalculate is Conflict
+    t: A Draft run cannot be calculated; a Calculated run rejects a plain re-calculate
+    src: ["PayrollCalculationEngine.CalculateAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] on a Draft (unprepared) run => [409] Only prepared payroll runs may be calculated."
+      - "[POST /api/payroll/runs/{id}/calculate] second call on an already-Calculated run => [409] The payroll run is already calculated."
+    auto: API
+
+  - id: PAY-CALC-003
+    func: [F-PAY-093]
+    sc: Recalculate is blocked once Approved/Finalized
+    t: Recalculate against an Approved or Finalized run is Conflict
+    src: ["PayrollCalculationEngine.CalculateAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/runs/{id}/recalculate] on an Approved run => [409] Approved or finalized payroll runs cannot be recalculated."
+    auto: API
+
+  - id: PAY-CALC-004
+    func: [F-PAY-094, F-PAY-095]
+    sc: Recalculation produces a new attempt/version and its own history bookend events
+    t: A second CalculationVersion is created and the prior results' IsCurrent flips to false only after full success
+    src: ["PayrollCalculationEngine.CalculateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[POST /api/payroll/runs/{id}/recalculate] => [200] new CalculationVersion = prior max + 1"
+      - "[GET /api/payroll/runs/{id}/results] => [200] only the new attempt's results are IsCurrent=true"
+      - "[GET /api/payroll/runs/{id}] history (internal) => RecalculationRequested and RecalculationCompleted events both present"
+    auto: API
+
+  - id: PAY-CALC-005
+    func: [F-PAY-096, F-PAY-097]
+    sc: A partial-failure attempt leaves the run recoverable in Prepared
+    t: One employee erroring (e.g. missing salary assignment/structure version on the snapshot) leaves the run in Prepared, not stuck in Processing
+    src: ["PayrollCalculationEngine.CalculateAsync", "PayrollCalculationEngine.CalculateEmployeeAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] One eligible employee's PayrollRunEmployee snapshot has EmployeeSalaryAssignmentId=null => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, message 'No salary assignment/version is present in the prepared payroll snapshot.', ErrorCode=NoSalaryAssignment"
+      - "[GET /api/payroll/runs/{id}/calculation-errors] => [200] the run Status has reverted to Prepared"
+    auto: API
+
+  - id: PAY-CALC-005B
+    func: [F-PAY-102]
+    sc: A structure version with zero active components fails calculation
+    t: A snapshot bound to a version whose every component has been soft-deactivated is NoSalaryStructureVersion
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] The bound SalaryStructureVersion's only component is IsActive=false => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, message 'The salary structure version has no active components.'"
+    auto: API
+
+  - id: PAY-CALC-005C
+    func: [F-PAY-099]
+    sc: An overtime snapshot resolution failure is a per-employee error, not a whole-run abort
+    t: One employee's overtime snapshot failing to resolve produces a CalculationFailed error for that employee only; other eligible employees still calculate
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync (overtime branch)"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[Setup] IPayrollOvertimeSnapshotResolver.ResolveAsync returns a failed Result for one employee => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] that employee has a CalculationFailed error; every other eligible employee's PayrollResult is still produced"
+    auto: API
+
+  - id: PAY-CALC-006
+    func: [F-PAY-098]
+    sc: Attendance integration across all three snapshot states
+    t: No Attendance period is compatible; an open Attendance period is AttendanceNotFinalized; a Closed period with no snapshot is AttendanceSnapshotMissing
+    src: ["AttendancePayrollSnapshotResolver.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] No AttendancePeriod row exists for the payroll period's dates => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] calculation proceeds with no attendance error (legacy-compatible)"
+      - "[Setup] An AttendancePeriod exists but Status != Closed => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, error message starts with AttendanceNotFinalized"
+      - "[Setup] The AttendancePeriod is Closed but no current PayrollAttendanceSnapshot exists for the employee => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, error message starts with AttendanceSnapshotMissing"
+    auto: API
+
+  - id: PAY-CALC-007
+    func: [F-PAY-100]
+    sc: Off-cycle/supplementary runs skip the structure walk
+    t: An Off-Cycle run calculates only adjustments+statutory, never structure components
+    src: ["PayrollCalculationEngine.CalculateAdjustmentOnlyAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/off-cycle-runs/{id}/process] => [200] the resulting PayrollResult's Components contain no Structure-sourced rows, only Adjustment/Statutory ones"
+    auto: API
+
+  - id: PAY-CALC-008
+    func: [F-PAY-101]
+    sc: Multiple overlapping active assignments block calculation, not silently pick one
+    t: Two overlapping Active EmployeeSalaryAssignments for the same employee/period produce a CalculationFailed error
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Direct DB seeding of a second overlapping Active assignment for the same employee (bypassing the API's OverlapsAsync guard) => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, message 'Multiple salary assignments overlap the payroll period; segmented calculation is required.'"
+    auto: DB-assisted
+
+  - id: PAY-CALC-009
+    func: [F-PAY-103, F-PAY-104]
+    sc: Calculation matrix and base-ordering
+    t: FixedAmount/Percentage/Formula/Manual components each compute per the matrix; an employee override on a Percentage's base takes precedence; a base sequenced AFTER its dependent is MissingBaseComponent
+    src: ["PayrollCalculationEngine.CalculateValue"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] BASIC(FixedAmount 20000)+override 22000, HRA(Percentage 40 of BASIC) => [200] BASIC=22000 (Source=EmployeeOverride), HRA=8800 (40% of 22000)"
+      - "[Setup] HRA is sequenced BEFORE its BASIC base => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, message 'Percentage base component is missing or has not been calculated.'"
+    auto: API
+
+  - id: PAY-CALC-010
+    func: [F-PAY-105]
+    sc: A negative computed value is rejected unconditionally
+    t: A Formula component whose result is negative fails, even though the formula is otherwise well-formed
+    src: ["PayrollCalculationEngine.CalculateValue"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] A Formula component 'BASIC - 999999' where BASIC=20000 => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, message 'Negative component values are not supported by the generic engine.'"
+    auto: API
+    cr: [CR-176]
+
+  - id: PAY-CALC-011
+    func: [F-PAY-106]
+    sc: Proration for a mid-period joiner and no double-proration on a dependent
+    t: A component whose payable window is half the period is halved; a Percentage-of-an-already-prorated-base component is NOT prorated again
+    src: ["PayrollCalculationEngine.CalculateValue"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Setup] Employee's assignment EffectiveFrom is the 16th of a 30-day period, BASIC is IsProratable=true => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] BASIC component IsProrated=true, ProrationFactor≈0.5, CalculatedAmount≈half the unprorated value"
+      - "[GET /api/payroll/runs/{id}/results/{employeeId}] => [200] HRA (Percentage of the already-prorated BASIC) has IsProrated=false - its own value is derived from BASIC's already-reduced amount, not prorated a second time"
+    auto: API
+
+  - id: PAY-CALC-012
+    func: [F-PAY-107]
+    sc: Min/Max clamps apply after proration
+    t: A prorated value below MinimumAmount is raised to the minimum post-proration
+    src: ["PayrollCalculationEngine.CalculateValue"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] A component with MinimumAmount=5000 whose prorated value would compute to 3000 => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] the component's CalculatedAmount=5000, not 3000"
+    auto: API
+
+  - id: PAY-CALC-013
+    func: [F-PAY-108]
+    sc: Approved overtime is added as a synthetic OVERTIME component
+    t: Approved overtime with normal/week-off/holiday minutes produces a weighted OVERTIME earning line
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync (overtime add-on)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] Overtime snapshot has NormalDayMinutes=120 at multiplier 1.0, WeekOffMinutes=60 at multiplier 2.0 => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] a ComponentCode=OVERTIME earning line is present with amount = hourlyBasis/monthlyMinutes * (120*1.0 + 60*2.0)"
+    auto: API
+
+  - id: PAY-CALC-014
+    func: [F-PAY-109]
+    sc: Rounding is consistently AwayFromZero at 2 decimal places
+    t: A component landing on a .xx5 boundary rounds away from zero, not to even (banker's rounding)
+    src: ["PayrollRoundingPolicy.RoundMoney"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] A Percentage component computes to exactly 1234.565 => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] CalculatedAmount=1234.57 (rounded away from zero, not 1234.56)"
+    auto: API
+
+  - id: PAY-CALC-015
+    func: [F-PAY-110]
+    sc: Negative net pay is rejected both before and after statutory
+    t: Deductions exceeding earnings post-structure is NegativeNetPay; a case that passes structure but goes negative after statutory is also NegativeNetPay
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] Deduction components sum to more than earning components => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, message 'Total deductions exceed gross earnings.'"
+      - "[Setup] Structure nets to a small positive amount, but statutory deductions exceed it => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, message 'Total deductions exceed gross earnings after statutory deductions.'"
+    auto: API
+
+  - id: PAY-CALC-016
+    func: [F-PAY-111, F-PAY-112]
+    sc: Approved adjustments apply as synthetic components and are marked Applied
+    t: An Approved earning adjustment for this run adds a component and its own status becomes Applied
+    src: ["PayrollCalculationEngine.ApplyAdjustmentsAsync", "PayrollCalculationEngine.PersistAdjustmentApplicationsAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] An Approved PayrollAdjustment (Earning, Amount=2000) targets this run => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] a PayrollAdjustment-sourced component of 2000 is present, GrossEarnings increased by 2000"
+      - "[GET /api/payroll/adjustments/{adjustmentId}] => [200] Status=Applied, AppliedAmount=2000"
+    auto: API
+
+  - id: PAY-CALC-017
+    func: [F-PAY-111]
+    sc: A deducting adjustment that would overshoot net pay is rejected by name
+    t: A deduction adjustment larger than the employee's available net produces a message naming the AdjustmentNumber
+    src: ["PayrollCalculationEngine.ApplyAdjustmentsAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] An Approved Deduction adjustment PADJ/2026/000042 exceeds the employee's available net pay => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, message 'Adjustment PADJ/2026/000042 would create negative net pay.'"
+    auto: API
+
+  - id: PAY-CALC-018
+    func: [F-PAY-112]
+    sc: A rolled-back attempt applies no adjustments
+    t: If the SAME employee's calculation later fails for an unrelated reason, no PayrollAdjustmentApplication row is written for that attempt
+    src: ["PayrollCalculationEngine.PersistAdjustmentApplicationsAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Setup] An eligible employee has both an Approved adjustment AND a separate NegativeNetPay-triggering condition => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1 for that employee"
+      - "[GET /api/payroll/adjustments/{adjustmentId}] => [200] Status remains Approved (never Applied), AppliedAmount=0"
+    auto: API
+
+  - id: PAY-CALC-019
+    func: [F-PAY-113]
+    sc: Statutory deductions layer into the result and can independently fail
+    t: A configured PF deduction reduces net pay and increases employer contributions; a StatutoryCalculationFailed aborts just that employee
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync -> StatutoryPayrollService.CalculateAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] Employee's statutory profile has PfApplicable=true with an active PF configuration => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] TotalDeductions includes the PF employee amount, EmployerContributions includes the PF employer amount"
+    auto: API
+
+  - id: PAY-CALC-020
+    func: [F-PAY-114]
+    sc: Loan recovery policy differences
+    t: DeferInstallment silently skips; RecoverFullOrFail blocks the employee when the installment exceeds net; other policies clamp to available net
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync (loanRecovery branch)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Loan installment due, RecoveryPolicy=DeferInstallment => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] no loan-recovery component added, calculation succeeds"
+      - "[Setup] Loan installment due exceeds available net, RecoveryPolicy=RecoverFullOrFail => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, message contains 'exceeds available net pay'"
+    auto: API
+
+  - id: PAY-CALC-021
+    func: [F-PAY-115]
+    sc: Loan repayments and outstanding balances update only after full success
+    t: A successful calculation writes LoanRepayment and updates EmployeeLoan.OutstandingTotal
+    src: ["PayrollCalculationEngine.PersistLoanRecoveriesAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] a LoanRepayment row exists for this PayrollResultId, and the loan's OutstandingTotal has decreased by the recovered amount"
+    auto: API
+
+  - id: PAY-CALC-022
+    func: [F-PAY-116]
+    sc: Reimbursement recoveries increase gross and net, not decrease them
+    t: An approved payroll-method reimbursement claim's amount is added as an earning
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync (reimbursementResolver branch)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] A ReadyForSettlement reimbursement claim line with SettlementMethod=Payroll, ApprovedAmount=1500 => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] GrossEarnings and NetPay both increase by 1500, a Reimbursement-typed component is present"
+    auto: API
+
+  - id: PAY-CALC-023
+    func: [F-PAY-117]
+    sc: Reimbursement settlement rows are written and the claim's status updates
+    t: A fully-recovered claim line moves the claim to Settled
+    src: ["PayrollCalculationEngine.PersistReimbursementSettlementsAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] a ReimbursementSettlement row exists for this PayrollResultId, and if it exhausts ApprovedAmount the claim's Status becomes Settled"
+    auto: API
+
+  - id: PAY-CALC-024
+    func: [F-PAY-118]
+    sc: Results/errors reads are scoped to the current attempt
+    t: A superseded (recalculated-over) result/error is never returned by the read endpoints
+    src: ["PayrollCalculationService.GetResultsAsync / GetErrorsAsync"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Run.ViewResults"
+    steps:
+      - "[POST /api/payroll/runs/{id}/recalculate] => [200] new attempt succeeds"
+      - "[GET /api/payroll/runs/{id}/calculation-errors] => [200] only IsCurrent=true errors from the latest attempt are returned, never the prior attempt's now-resolved errors"
+    auto: API
+
+  - id: PAY-CALC-025
+    func: [F-PAY-119]
+    sc: Formula engine arithmetic and failure modes
+    t: A well-formed formula with parentheses and component-code references evaluates correctly; division by zero and an unknown token both fail
+    src: ["PayrollFormula.TryEvaluate"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Formula='(BASIC + HRA) * 0.1' => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] the component equals 10% of (BASIC+HRA)"
+      - "[Setup] Formula='BASIC / 0' => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] FailedCount=1, message 'Formula contains an unsupported token or unresolved component.'"
+    auto: API
+
+  - id: PAY-CALC-026
+    func: [F-PAY-120]
+    sc: Cross-tenant run id on calculate/results/errors is not reachable
+    t: Tenant B's run id is NotFound as Tenant A on every calculation-adjacent endpoint
+    src: ["PayrollCalculationEngine.CalculateAsync (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[POST /api/payroll/runs/{tenantBRunId}/calculate] As Tenant A => [404] Payroll run not found."
+    auto: API
+
+  - id: PAY-CALC-027
+    func: [F-PAY-092]
+    sc: Concurrent calculate requests on the same run resolve safely
+    t: Two parallel POST /calculate calls against the same Prepared run never both succeed with two different Calculated states
+    src: ["PayrollCalculationEngine.CalculateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire two concurrent POST /api/payroll/runs/{id}/calculate via Task.WhenAll => exactly one produces the canonical Calculated result set; the run ends in a single consistent Status"
+    auto: DB-assisted

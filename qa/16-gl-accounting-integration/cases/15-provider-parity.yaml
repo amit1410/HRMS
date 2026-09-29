@@ -1,0 +1,44 @@
+sheet: GLAcc_Provider_Parity
+submodule: SQL Server/MySQL Provider Parity
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-PROV-001
+    func: [F-GLACC-128]
+    sc: Migration pairs exist in both provider chains
+    t: AddPayrollAccountingGLPosting and AddFinalSettlementAccountingJournalSql/MySql are both present in the SQL Server and MySQL tenant migration chains
+    src: "Backend/HRMS.Infrastructure/Persistence/Migrations; Backend/HRMS.Infrastructure.MySqlMigrations/Migrations"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] list Backend/HRMS.Infrastructure/Persistence/Migrations for AddPayrollAccountingGLPosting and AddFinalSettlementAccountingJournalSql => both present (20260920033921, 20260921030615)"
+      - "[Manual] list Backend/HRMS.Infrastructure.MySqlMigrations/Migrations for the same feature pair => both present (20260920033934, 20260921030628)"
+    auto: Manual only
+
+  - id: GLACC-PROV-002
+    func: [F-GLACC-129]
+    sc: Provider-specific integration fixtures exist and are opt-in
+    t: SqlServer/MySqlPayrollAccountingIntegrationTests and PayrollAccountingProviderAcceptance exist and skip silently without their env vars, alongside 3 general accounting xUnit classes
+    src: "Backend/HRMS.Tests/SqlServerPayrollAccountingIntegrationTests.cs, MySqlPayrollAccountingIntegrationTests.cs, PayrollAccountingProviderAcceptance.cs"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "HRMS_SQLSERVER_TEST_CONNECTION / HRMS_MYSQL_TEST_CONNECTION are unset in the executing environment"
+    role: n/a (test execution)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] run `dotnet test --filter FullyQualifiedName~PayrollAccounting` with no provider env vars set => SqlServer/MySqlPayrollAccountingIntegrationTests report Skipped, not Failed; PayrollAccountingTests/PayrollFinalSettlementAccountingTests/ReimbursementAccountingTests (SQLite-backed) run and pass"
+    auto: Manual only
+    cm: "A green run with these skips is not evidence of SQL Server/MySQL provider parity on its own, per CLAUDE.md's testing-notes convention; a real provider run requires pointing the env vars at disposable databases."

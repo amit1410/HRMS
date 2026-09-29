@@ -1,0 +1,360 @@
+sheet: Separation_Benefits
+submodule: Gratuity policy configuration, benefit calculation/override/finalization, and recoveries/deductions modeling
+defaults:
+  role: SUPERADMIN
+  perm: "Payroll.SeparationBenefits.ManagePolicies"
+  tenant: A
+  pre: "Tenant A signed in as SuperAdmin (the only seeded role holding Payroll.SeparationBenefits.* permissions besides TenantAdmin), unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: SEP-BEN-001
+    func: [F-SEP-166]
+    sc: Create a gratuity policy and an effective-dated version
+    t: A valid policy/version with formula, eligibility, and tax-treatment fields is created
+    src: ["SeparationBenefitsService.CreatePolicyAsync", "CreateVersionAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/gratuity-policies] Code='STD-GRAT', Name='Standard Gratuity' => [200/201] created"
+      - "[POST /api/payroll/gratuity-policies/{id}/versions] EffectiveFrom=today, FormulaType=FixedAmount, FixedAmount=50000, TaxTreatment=PartiallyTaxable, TaxablePercentage=25, Status=Published => [200/201] created"
+    auto: API
+
+  - id: SEP-BEN-002
+    func: [F-SEP-167]
+    sc: Published versions of the same policy must not date-overlap
+    t: A second Published version overlapping the first's effective window Conflicts; Draft/Retired versions may overlap freely
+    src: ["SeparationBenefitsService.CreateVersionAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/gratuity-policies/{id}/versions] EffectiveFrom=2026-01-01, no EffectiveTo, Status=Published (first) => [200/201]"
+      - "[POST /api/payroll/gratuity-policies/{id}/versions] EffectiveFrom=2026-06-01, Status=Published (second, overlaps) => [409] Published gratuity policy versions cannot overlap."
+      - "[POST /api/payroll/gratuity-policies/{id}/versions] EffectiveFrom=2026-06-01, Status=Draft (overlapping, but Draft) => [200/201] accepted - Draft/Retired never overlap-checked"
+    auto: API
+
+  - id: SEP-BEN-003
+    func: [F-SEP-168]
+    sc: Formula/cap/tax-treatment validation
+    t: Negative benefit amounts, an out-of-range taxable percentage, and inconsistent rounding config are all rejected
+    src: ["SeparationBenefitsService.ValidateVersion"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/gratuity-policies/{id}/versions] MaximumBenefit=-100 => [400] Benefit amounts cannot be negative."
+      - "[POST /api/payroll/gratuity-policies/{id}/versions] TaxTreatment=PartiallyTaxable, TaxablePercentage=150 => [400] A taxable percentage from 0 to 100 is required."
+    auto: API
+
+  - id: SEP-BEN-004
+    func: [F-SEP-169]
+    sc: Preview a calculation without persisting anything
+    t: Preview returns a computed amount but creates no GratuityCalculation row and allocates no number
+    src: ["SeparationBenefitsService.PreviewAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.SeparationBenefits.Calculate"
+    steps:
+      - "[POST /api/payroll/separation-benefits/{employeeId}/preview] => [200] computed amount returned"
+      - "[Manual/DB] Query GratuityCalculations for this employee => zero rows created by the preview call"
+    auto: DB-assisted
+
+  - id: SEP-BEN-005
+    func: [F-SEP-170]
+    sc: Calculate and persist a snapshot against a FinalSettlementId; repeated calls short-circuit to the existing snapshot
+    t: Calling Calculate twice for the same FinalSettlementId returns the SAME persisted amount, never recomputing or duplicating
+    src: ["SeparationBenefitsService.CalculateCoreAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Payroll.SeparationBenefits.Calculate"
+    steps:
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] FinalSettlementId=<fsId> (first) => [200] GratuityAmount=X persisted, 1 FinalSettlementLine created"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] FinalSettlementId=<fsId> (second, identical) => [200] returns the SAME existing snapshot, no second calculation, no duplicate line"
+    auto: API
+
+  - id: SEP-BEN-006
+    func: [F-SEP-171]
+    sc: FinalSettlementId is required for a persisted calculation
+    t: A calculate request with no FinalSettlementId is a plain 400 at the controller
+    src: ["SeparationBenefitsController.cs"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.SeparationBenefits.Calculate"
+    steps:
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] No FinalSettlementId in body => [400] FinalSettlementId is required for a persisted calculation."
+    auto: API
+
+  - id: SEP-BEN-007
+    func: [F-SEP-172]
+    sc: Gratuity eligibility by separation reason - Resignation/Retirement/Termination/Redundancy default eligible, Death/Disability default not, ContractEnd/Other never eligible
+    t: Six reason categories are each tested against the default eligibility flags
+    src: ["SeparationBenefitsService.IsReasonEligible"]
+    type: Boundary
+    pri: P0
+    perm: "Payroll.SeparationBenefits.Calculate"
+    steps:
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] SeparationReasonCategory=Resignation (default IsResignationEligible=true) => [200] gratuity computed"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] SeparationReasonCategory=Death (default IsDeathEligible=false) => [200] 'No active gratuity policy applies.' - zero benefit, unless overridden in policy config"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] SeparationReasonCategory=ContractEnd => [200] 'No active gratuity policy applies.' - can NEVER be eligible, no policy config can change this"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] SeparationReasonCategory=Other => [200] 'No active gratuity policy applies.' - same as ContractEnd"
+    auto: API
+    cr: [CR-144]
+
+  - id: SEP-BEN-008
+    func: [F-SEP-173]
+    sc: Two simultaneously-active gratuity policies produce an ambiguous, alphabetically-resolved result
+    t: Creating a second IsActive=true policy causes calculation to silently pick the alphabetically-first Code
+    src: ["SeparationBenefitsService.CalculateCoreAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Two GratuityPolicy rows, both IsActive=true, Codes 'AAA-POLICY' and 'ZZZ-POLICY' => precondition established"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] => [200] the result reflects 'AAA-POLICY' (alphabetically first), with no ambiguity warning of any kind"
+    auto: DB-assisted
+    cr: [CR-145]
+
+  - id: SEP-BEN-009
+    func: [F-SEP-174]
+    sc: Wage-basis resolution failures are Conflict, not a silent zero
+    t: An unconfigured, or zero-resolving, wage basis is rejected explicitly
+    src: ["SeparationBenefitsService.ResolveWageAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] WageBasisType=FixedConfiguredAmount but no FixedAmount is configured on the version => precondition established"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] => [409] Fixed gratuity wage basis is not configured."
+      - "[Setup] WageBasisType=Basic, employee has no active EmployeeSalaryAssignment => precondition established"
+      - "[POST /api/payroll/separation-benefits/{employeeId2}/calculate] => [409] No effective salary assignment is available for the gratuity wage basis."
+    auto: DB-assisted
+
+  - id: SEP-BEN-010
+    func: [F-SEP-175]
+    sc: Override a not-yet-Finalized gratuity amount; a Finalized calculation cannot be overridden
+    t: A valid non-negative override with reason succeeds pre-finalize; is blocked post-finalize
+    src: ["SeparationBenefitsService.OverrideAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.SeparationBenefits.Override"
+    steps:
+      - "[POST /api/payroll/separation-benefits/gratuity/{id}/override] OverrideAmount=-500, Reason='x' => [400] A non-negative override amount and reason are required."
+      - "[POST /api/payroll/separation-benefits/gratuity/{id}/override] OverrideAmount=60000, Reason='Ex-gratia adjustment' => [200/201] pending override recorded"
+      - "[Setup] Calculation is Finalized => precondition established"
+      - "[POST /api/payroll/separation-benefits/gratuity/{finalizedId}/override] OverrideAmount=1000, Reason='x' => [409] Finalized gratuity cannot be overridden."
+    auto: API
+
+  - id: SEP-BEN-011
+    func: [F-SEP-176]
+    sc: Approve an override via maker-checker
+    t: The requester cannot self-approve their own override
+    src: ["SeparationBenefitsService.ApproveOverrideAsync"]
+    type: Security
+    pri: P1
+    perm: "Payroll.SeparationBenefits.Approve"
+    steps:
+      - "[POST /api/payroll/separation-benefits/gratuity/{id}/approve-override] As the SAME user who requested the override => [403] self-approval blocked by IPayrollApprovalGuard"
+      - "[POST /api/payroll/separation-benefits/gratuity/{id}/approve-override] As a different authorized approver => [200] override approved"
+    auto: API
+
+  - id: SEP-BEN-012
+    func: [F-SEP-176]
+    sc: Approving an override when none is pending is NotFound
+    t: A calculation with no pending override attempt to approve fails cleanly
+    src: ["SeparationBenefitsService.ApproveOverrideAsync"]
+    type: Negative
+    pri: P2
+    perm: "Payroll.SeparationBenefits.Approve"
+    steps:
+      - "[POST /api/payroll/separation-benefits/gratuity/{id}/approve-override] No pending override exists => [404] No pending gratuity override found."
+    auto: API
+
+  - id: SEP-BEN-013
+    func: [F-SEP-177]
+    sc: Finalize a gratuity calculation; a second finalize is idempotent, not an error
+    t: Finalize flips Status to Finalized once; repeated calls are a no-op success
+    src: ["SeparationBenefitsService.FinalizeAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/API] Finalize the linked FinalSettlementCase (which internally calls SeparationBenefitsService.FinalizeAsync) => [200] GratuityCalculation.Status=Finalized"
+      - "[Manual/API] Call FinalizeAsync again for the same calculation => [200] 'Gratuity was already finalized.' - not an error"
+    auto: API
+
+  - id: SEP-BEN-014
+    func: [F-SEP-178]
+    sc: View the tenant-wide benefits register and per-employee detail/history
+    t: The register is paged; detail/history returns the full calculation trail for one employee
+    src: ["SeparationBenefitsService.GetRegisterAsync", "GetAsync", "GetHistoryAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.SeparationBenefits.View"
+    steps:
+      - "[GET /api/payroll/separation-benefits/register] => [200] paged list"
+      - "[GET /api/payroll/separation-benefits/{employeeId}] => [200] current calculation detail"
+      - "[GET /api/payroll/separation-benefits/{employeeId}/history] => [200] full history"
+    auto: API
+
+  - id: SEP-BEN-015
+    func: [F-SEP-179]
+    sc: Self-service benefit view resolves the caller's own employee via account link
+    t: An employee holding the (elevated, test-only) required permission sees only their own record via /api/me
+    src: ["SeparationBenefitsService.cs (self overload)"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.SeparationBenefits.View"
+    steps:
+      - "[GET /api/me/separation-benefits] => [200] the caller's own finalized gratuity/benefits, never another employee's"
+      - "[GET /api/me/separation-benefits/history] => [200] the caller's own history only"
+    auto: API
+
+  - id: SEP-BEN-016
+    func: [F-SEP-180]
+    sc: A plain seeded Employee cannot reach the self-service benefits endpoint at all
+    t: The seeded Employee role holds no Payroll.SeparationBenefits.View permission, so /api/me/separation-benefits is unreachable
+    src: ["SeedData.cs RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    role: EMPLOYEE
+    perm: "n/a"
+    steps:
+      - "[GET /api/me/separation-benefits] As a plain seeded Employee (no elevated grant) => [403] Forbidden - the seeded Employee role holds no Payroll.SeparationBenefits.* permission at all"
+    auto: API
+    cr: [CR-146]
+
+  - id: SEP-BEN-017
+    func: [F-SEP-180]
+    sc: HRAdmin cannot configure gratuity policies or view the register out of the box
+    t: The seeded HRAdmin role lacks every Payroll.SeparationBenefits.* permission
+    src: ["SeedData.cs RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    role: HRADMIN
+    perm: "n/a"
+    steps:
+      - "[POST /api/payroll/gratuity-policies] As a plain seeded HRAdmin => [403] Forbidden"
+      - "[GET /api/payroll/separation-benefits/register] As HRAdmin => [403] Forbidden"
+    auto: API
+    cr: [CR-146]
+
+  - id: SEP-BEN-018
+    func: [F-SEP-181]
+    sc: IncludeNoticePeriodInService and NoticeWageBasisType are configurable but have zero observable effect
+    t: Toggling either field produces no change in the calculated notice/service-length output
+    src: ["SeparationBenefitsService.ServiceLength", "CalculateNoticeAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Two otherwise-identical policy versions, differing only in IncludeNoticePeriodInService=true vs false => precondition established"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] under each version => [200] identical service-length/gratuity output in both cases, proving the field has no effect"
+    auto: DB-assisted
+    cr: [CR-143]
+
+  - id: SEP-BEN-019
+    func: [F-SEP-182]
+    sc: Tenant isolation across every gratuity/benefits query and mutation
+    t: A Tenant B caller cannot see or mutate Tenant A's policies/calculations
+    src: ["SeparationBenefitsService.cs"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/payroll/gratuity-policies] As Tenant B => [200] Tenant A's policies are absent"
+      - "[GET /api/payroll/separation-benefits/{tenantAEmployeeId}] As Tenant B => [404]"
+    auto: API
+
+  # ── Recoveries / Deductions ──
+  - id: SEP-REC-001
+    func: [F-SEP-183]
+    sc: There is no dedicated Recovery/Deduction entity, enum, controller, or service
+    t: Confirmed absence via a full grep - recovery is folded narrowly into Clearance (non-monetary) and Benefits/Notice (the only computed amount)
+    src: ["SeparationBenefitsService.cs", "ClearanceService.cs"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Grep the whole Backend tree for a dedicated 'Recovery' or 'Deduction' entity/enum/controller specific to Separation => none found; only SeparationAssetReturn's RecoveryRequired/RecoveryReference and FinalSettlementLineType.NoticeRecovery exist"
+    auto: Manual only
+
+  - id: SEP-REC-002
+    func: [F-SEP-184]
+    sc: Notice-pay-shortfall recovery is a Deduction-type settlement line computed from EmployeeEmployments
+    t: NoticeSettlementType.NoticeRecovery posts a Deduction line with the correct sign/amount
+    src: ["SeparationBenefitsService.CalculateNoticeAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.SeparationBenefits.Calculate"
+    steps:
+      - "[Setup] GratuityPolicyVersion.NoticeSettlementType=NoticeRecovery; EmployeeEmployments shows a notice shortfall => precondition established"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] => [200] a FinalSettlementLine with LineType=NoticeRecovery, IsDeduction=true is posted"
+    auto: API
+
+  - id: SEP-REC-003
+    func: [F-SEP-185]
+    sc: No automated path exists from Clearance asset recovery into Final Settlement
+    t: A RecoveryRequired asset does not itself create any settlement line - it must be added manually and unlinked
+    src: ["PayrollRetroSettlementService.AddSettlementLineAsync"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.FinalSettlementManage"
+    steps:
+      - "[Setup] A clearance asset return is marked RecoveryRequired=true with RecoveryReference='Damaged laptop - INR 15000' => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] => [200] the calculated lines do NOT include any automatic line derived from this asset's recovery flag"
+      - "[POST /api/payroll/final-settlements/{id}/lines] LineType=Recovery, Amount=15000, SourceType='Manual' (must be added by hand, no SourceId linking back to the asset) => [200/201] manual line created"
+    auto: API
+    cr: [CR-156]
+
+  - id: SEP-REC-004
+    func: [F-SEP-186]
+    sc: Outstanding loans are auto-pulled into settlement as Recovery lines
+    t: An Active loan with outstanding balance produces exactly one Recovery line for the full OutstandingTotal
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.FinalSettlementCalculate"
+    steps:
+      - "[Setup] Employee has an Active EmployeeLoan with OutstandingTotal=25000 => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] => [200] one FinalSettlementLine LineType=Recovery, Amount=25000 is created"
+    auto: API
+
+  - id: SEP-REC-005
+    func: [F-SEP-187]
+    sc: Ready-for-settlement reimbursement claims are auto-pulled as Reimbursement lines
+    t: A claim flagged Status=ReadyForSettlement and SettlementMethod=FinalSettlement produces a Reimbursement line
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.FinalSettlementCalculate"
+    steps:
+      - "[Setup] A ReimbursementClaimLine is Status=ReadyForSettlement, SettlementMethod=FinalSettlement, ApprovedAmount=3000 => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] => [200] one FinalSettlementLine LineType=Reimbursement, Amount=3000 is created"
+    auto: API
+
+  - id: SEP-REC-006
+    func: [F-SEP-188]
+    sc: Payroll adjustments flagged for final settlement post as Recovery or Other lines depending on sign
+    t: A negative adjustment posts as a deduction Recovery line; a positive one posts as an earning Other line
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.FinalSettlementCalculate"
+    steps:
+      - "[Setup] A PayrollAdjustment SettlementMethod=FinalSettlement, Amount=-2000 (Approved) => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] => [200] a Recovery(deduction) line for 2000 is created"
+      - "[Setup] A second PayrollAdjustment, Amount=+1500 (Approved) => precondition established"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] (recalculate) => [200] an Other(earning) line for 1500 is also created"
+    auto: API
+
+  - id: SEP-REC-007
+    func: [F-SEP-189]
+    sc: A manual settlement line accepts a negative Amount with no sign validation
+    t: Unlike the gratuity override endpoint, AddSettlementLineAsync silently accepts a negative Amount
+    src: ["PayrollRetroSettlementService.AddSettlementLineAsync"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.FinalSettlementManage"
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/lines] LineType=Other, Amount=-500, IsEarning=true => [200/201] accepted with no sign validation - contrast with the Override endpoint's explicit negative-amount rejection"
+    auto: API
+    cr: [CR-157]

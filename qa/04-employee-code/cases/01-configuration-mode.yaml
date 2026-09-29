@@ -1,0 +1,218 @@
+sheet: EmployeeCode_Config
+submodule: Assignment Mode (Manual/Auto), Generation Method Selection, Save Semantics
+defaults:
+  role: TENANT_ADMIN
+  perm: EmployeeCodeConfiguration.Manage
+  tenant: A
+  pre: "Tenant A signed in as a user holding TenantAdmin (EmployeeCodeConfiguration.View/Manage - see CR-44, HRAdmin does not hold this permission)."
+  data: "Tenant A has no Employee Code configuration yet unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: CODE-CONFIG-001
+    func: [F-CODE-01]
+    sc: Reading configuration before any has been saved returns Not Found
+    t: GET returns 404 with a specific message rather than a default/empty configuration object
+    src: ["EmployeeCodeConfigurationService.GetAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[GET /api/employee-code-configuration] Call for a tenant that has never saved one => [404] 'Employee Code configuration has not been created.'"
+    auto: API
+
+  - id: CODE-CONFIG-002
+    func: [F-CODE-02]
+    sc: First-ever save creates both the EmployeeCodeConfig row and its first EmployeeCodeConfigVersion, Auto/Simple
+    t: A first PUT with AssignmentMode=Auto, GenerationMethod=Simple persists a config+version pair and returns it
+    src: ["EmployeeCodeConfigurationService.SaveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {assignmentMode:'Auto', generationMethod:'Simple', prefix:'EMP', nextNumber:1, padding:5, separator:'-', effectiveFrom:'2026-01-01'} => [200] 'Employee Code configuration saved.'; response includes a new versionId, isActive=true"
+      - "[GET /api/employee-code-configuration] Call => [200] echoes assignmentMode=Auto, generationMethod=Simple, prefix=EMP, padding=5"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Simple_configuration_creates_version_and_assigns_sequential_codes_to_pending_employees"]
+
+  - id: CODE-CONFIG-003
+    func: [F-CODE-02]
+    sc: First-ever save with AssignmentMode=Manual persists generationMethod as null
+    t: A Manual-mode save never stores a GenerationMethod value even if one happened to be supplied
+    src: ["EmployeeCodeConfigurationService.SaveAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {assignmentMode:'Manual', generationMethod:null, autoGenerate:false, prefix:'EMP', nextNumber:1, padding:0, separator:'-', effectiveFrom:'2026-01-01'} => [200] 'Employee Code configuration saved.'"
+      - "[GET /api/employee-code-configuration] Call => [200] generationMethod is null, assignmentMode='Manual'"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Manual_assignment_rejects_duplicate_codes_without_creating_history"]
+
+  - id: CODE-CONFIG-004
+    func: [F-CODE-03]
+    sc: Legacy AutoGenerate=false forces AssignmentMode=Manual and GenerationMethod=null server-side, overriding a contradictory client value
+    t: A legacy-style request that sends autoGenerate=false but assignmentMode='Auto'/generationMethod='RuleBased' is saved as Manual/null, not as the client's contradictory Auto values
+    src: ["EmployeeCodeConfigurationService.SaveAsync ('Legacy callers still send AutoGenerate only')"]
+    type: Boundary
+    tags: [Configuration]
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {autoGenerate:false, assignmentMode:'Auto', generationMethod:'RuleBased', prefix:'EMP', effectiveFrom:'2026-01-01'} => [200] saved"
+      - "[GET /api/employee-code-configuration] Call => [200] assignmentMode='Manual', generationMethod=null (the client's Auto/RuleBased values were overridden, not honored)"
+    auto: API
+
+  - id: CODE-CONFIG-005
+    func: [F-CODE-04]
+    sc: AutoGenerate=true with an explicit AssignmentMode=Manual and a non-null GenerationMethod is rejected
+    t: Because the server only overrides the mode when AutoGenerate is false, sending AutoGenerate=true alongside an explicit Manual mode plus a GenerationMethod value hits the validator's Manual-forbids-method rule
+    src: ["EmployeeCodeConfigurationService.SaveAsync (override condition is `if (!request.AutoGenerate)` only); EmployeeCodeConfigurationRequestValidator (GenerationMethod Null When Manual)"]
+    type: Boundary
+    tags: [Validation]
+    pri: P2
+    sev: Low
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {autoGenerate:true, assignmentMode:'Manual', generationMethod:'Simple', prefix:'EMP', effectiveFrom:'2026-01-01'} => [400] 'Generation method must be empty for Manual assignment.'"
+    auto: API
+
+  - id: CODE-CONFIG-006
+    func: [F-CODE-02]
+    sc: Saving with the same versionId as the currently loaded version updates that version in place
+    t: Re-saving the exact version (same EffectiveFrom, versionId supplied) changes its fields without creating a second version row
+    src: ["EmployeeCodeConfigurationService.SaveAsync (VersionId branch)"]
+    type: Positive
+    pri: P1
+    pre: "Tenant A already saved a configuration effective 2026-01-01 (from CODE-CONFIG-002)."
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {versionId: <existing versionId>, prefix:'STAFF', padding:6, effectiveFrom:'2026-01-01', assignmentMode:'Auto', generationMethod:'Simple', separator:'-'} => [200] saved"
+      - "[GET /api/employee-code-configuration] Call => [200] prefix='STAFF', padding=6, versionId unchanged"
+    auto: API
+
+  - id: CODE-CONFIG-007
+    func: [F-CODE-02]
+    sc: Prefix is trimmed and upper-cased on save regardless of the case/whitespace supplied
+    t: A prefix sent as '  emp  ' is stored and returned as 'EMP'
+    src: ["EmployeeCodeConfigurationService.SaveAsync ('version.Prefix = request.Prefix.Trim().ToUpperInvariant()')"]
+    type: Boundary
+    tags: [Validation]
+    pri: P2
+    sev: Low
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {prefix:'  emp  ', assignmentMode:'Auto', generationMethod:'Simple', effectiveFrom:'2026-02-01'} => [200] saved"
+      - "[GET /api/employee-code-configuration] Call => [200] prefix='EMP'"
+    auto: API
+
+  - id: CODE-CONFIG-008
+    func: [F-CODE-01]
+    sc: GET requires an authenticated tenant
+    t: A caller with no resolvable tenant is unauthorized, not simply given an empty/default configuration
+    src: ["EmployeeCodeConfigurationService.GetAsync ('_tenant.TenantId is not Guid')"]
+    type: Negative
+    tags: [Security]
+    pri: P2
+    sev: Medium
+    role: "Authenticated user with no resolvable tenant"
+    steps:
+      - "[GET /api/employee-code-configuration] Call => [401] 'No authenticated tenant.'"
+    auto: API
+
+  - id: CODE-CONFIG-009
+    func: [F-CODE-02]
+    sc: PUT requires an authenticated tenant
+    t: Mirrors CODE-CONFIG-008 for the save path
+    src: ["EmployeeCodeConfigurationService.SaveAsync"]
+    type: Negative
+    tags: [Security]
+    pri: P2
+    sev: Medium
+    role: "Authenticated user with no resolvable tenant"
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {prefix:'EMP', effectiveFrom:'2026-01-01'} => [401] 'No authenticated tenant.'"
+    auto: API
+
+  - id: CODE-CONFIG-010
+    func: [F-CODE-02]
+    sc: Switching an existing tenant from Manual to Auto/Simple via a NEW version does not disturb the Manual version's own record
+    t: Adding a later-dated Auto/Simple version leaves the earlier Manual version's own fields intact when read by its own versionId semantics (history is additive, not overwritten)
+    src: ["EmployeeCodeConfigurationService.SaveAsync (new version created when EffectiveFrom does not match any existing version)"]
+    type: Positive
+    pri: P1
+    pre: "Tenant A has a Manual version effective 2026-01-01 with EffectiveTo=2026-01-31."
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {assignmentMode:'Auto', generationMethod:'Simple', prefix:'EMP', effectiveFrom:'2026-02-01'} (no versionId, no overlap with the closed Manual version) => [200] a NEW versionId is returned, distinct from the Manual version's id"
+      - "[GET /api/employee-code-configuration] Call => [200] returns the latest-by-EffectiveFrom version (2026-02-01, Auto/Simple) - the 2026-01-01 Manual version is not surfaced by GetAsync (single-version response), but still exists for employment-time resolution as of that earlier date"
+    auto: API
+
+  - id: CODE-CONFIG-011
+    func: [F-CODE-02]
+    sc: Switching Auto -> Manual for a brand-new version clears GenerationMethod even when segments/rules already exist on an earlier version
+    t: A Manual version saved after a Rule-Based version still nulls its own GenerationMethod; existing rules on the earlier version are left untouched
+    src: ["EmployeeCodeConfigurationService.SaveAsync"]
+    type: Positive
+    pri: P2
+    pre: "Tenant A has an Auto/RuleBased version effective 2026-01-01 with at least one Active rule."
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {assignmentMode:'Manual', prefix:'EMP', effectiveFrom:'2026-03-01'} => [200] saved, generationMethod=null on the new version"
+      - "[GET /api/employee-code-configuration/rules] Call => [200] the earlier version's rule(s) are still returned unmodified (rules are per-version, not deleted by a mode switch)"
+    auto: API
+
+  - id: CODE-CONFIG-012
+    func: [F-CODE-43]
+    sc: GET requires EmployeeCodeConfiguration.View
+    t: A caller with neither View nor Manage is refused
+    src: ["[HasPermission(Permissions.EmployeeCodeConfiguration.View)] on GET"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: MANAGER
+    perm: "EmployeeCodeConfiguration.View/Manage (neither held - see CR-44 style gap, Manager role)"
+    steps:
+      - "[GET /api/employee-code-configuration] As MANAGER => [403]"
+    auto: API
+
+  - id: CODE-CONFIG-013
+    func: [F-CODE-43]
+    sc: PUT requires EmployeeCodeConfiguration.Manage even for a caller who holds View
+    t: A View-only caller cannot save
+    src: ["[HasPermission(Permissions.EmployeeCodeConfiguration.Manage)] on PUT"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: "Custom role with EmployeeCodeConfiguration.View only"
+    perm: "EmployeeCodeConfiguration.View (held); EmployeeCodeConfiguration.Manage (missing)"
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {prefix:'EMP', effectiveFrom:'2026-01-01'} => [403]"
+    auto: API
+
+  - id: CODE-CONFIG-014
+    func: [F-CODE-44]
+    sc: HRAdmin - who creates employees and records Initial Employment - cannot view or save Employee Code configuration
+    t: HRAdmin gets 403 on both GET and PUT despite holding Employee.Create and EmploymentHistory.Change
+    src: ["SeedData.RolePermissionMap[RoleNames.HRAdmin] (no EmployeeCodeConfiguration.* entry)"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: High
+    role: HR_ADMIN
+    perm: "Employee.Create, EmploymentHistory.Change (held); EmployeeCodeConfiguration.View/Manage (missing)"
+    steps:
+      - "[GET /api/employee-code-configuration] As HR_ADMIN => [403]"
+      - "[PUT /api/employee-code-configuration] As HR_ADMIN, body {prefix:'EMP', effectiveFrom:'2026-01-01'} => [403]"
+    auto: API
+    cr: [CR-44]
+
+  - id: CODE-CONFIG-015
+    func: [F-CODE-02, F-CODE-45]
+    sc: Configuration is tenant-isolated - Tenant B never sees or affects Tenant A's configuration
+    t: Tenant B's GET returns its own 404/empty state even though Tenant A already has a saved configuration
+    src: ["ITenantContext-scoped EmployeeCodeConfigs query"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A configured, B caller
+    pre: "Tenant A has a saved configuration; Tenant B has never saved one."
+    steps:
+      - "[GET /api/employee-code-configuration] As Tenant B => [404] 'Employee Code configuration has not been created.' (not Tenant A's data)"
+    auto: API

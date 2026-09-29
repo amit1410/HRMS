@@ -1,0 +1,377 @@
+# Module 12 QA-risk register. Numbering continues after Module 11's CR-200 (qa/11-loans-advances/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. Classification starts 'Open - awaiting decision'.
+# CR-201, CR-203, CR-206 and CR-207 are exceptions: they document confirmed source-level/frontend defects,
+# not merely design ambiguities, and are classified accordingly. CR-214 documents a defensive/unreachable
+# enum state (no change requested), the same shape as qa/11-loans-advances' CR-200.
+
+clarifications:
+  - id: CR-201
+    title: "HEADLINE FINDING - CONFIRMED CRITICAL SOURCE-LEVEL DEFECT: OverrideAsync silently persists NOTHING while returning a fabricated Success response"
+    observation: >
+      VariablePayService.OverrideAsync loads the target award via `db.VariablePayAwards.AsNoTracking().
+      FirstOrDefaultAsync(...)`. It then mutates the detached in-memory instance directly (CalculatedAmount
+      = request.OverrideAmount, ApprovedAmount/TaxableAmount/NonTaxableAmount = null, Status = Calculated,
+      Reason, ConcurrencyVersion++) and calls the private AddHistory(award, ...) helper, which appends a new
+      VariablePayAwardHistory only to the entity's own in-memory `History` collection - never to
+      `db.VariablePayAwardHistories.Add(...)`. The method then calls `await db.SaveChangesAsync(ct)`. Because
+      the award was never re-attached (no Update/Attach call, no ExecuteUpdateAsync, and ClearChangeTracker
+      is never invoked to reset a stale tracker either), the EF change tracker has nothing pending for either
+      the award or the history row at that point, so SaveChangesAsync affects zero rows. The method still
+      returns `Result.Success(ToAwardDto(award))`, echoing the overridden amount and Calculated status as
+      though the write succeeded. This is a materially different, more severe shape than qa/11-loans-advances'
+      CR-184 (a genuine field-update omission) - here the ENTIRE mutation, across two tables, is a no-op,
+      while the API contract reports unqualified success. A subsequent GET of the same award
+      (GetAsync/GetAwardsAsync, both of which re-query the database) returns the ORIGINAL pre-override values,
+      and GetHistoryAsync shows no AwardOverridden row at all. Contrast with ApproveAsync/TransitionAsync/
+      SettleAsync, all three of which use the correct pattern (ExecuteUpdateAsync for the award row, plus an
+      explicit `db.VariablePayAwardHistories.Add(...)` for the history row) - OverrideAsync is the sole
+      outlier in the file. No existing xUnit test (VariablePayFoundationTests, VariablePayConcurrencyTests,
+      VariablePayLargeDataTests, PayrollVariablePayProviderAcceptance and its two provider mirrors - all six
+      files read in full, 139 combined lines) ever calls OverrideAsync, so this defect has never been
+      exercised by the existing automated suite despite two of those files explicitly setting
+      AllowManualOverride=true on their test plan versions.
+    risk: >
+      Any operator (or any future frontend built against this endpoint) who calls Override receives an HTTP
+      200 response that visually confirms the override succeeded, with the new amount and reason reflected in
+      the response body - but the award's real, persisted state is completely unchanged, and no audit trail of
+      the attempted override exists anywhere. This is the single highest-severity, most-evidenced defect in
+      this module: it is not a partial gap or a missing edge-case guard, it is a completely fabricated success
+      response for a mutating financial-amount action with zero corresponding side effect.
+    source: "Backend/HRMS.Application/Services/VariablePayService.cs (OverrideAsync, full method; contrast with ApproveAsync/TransitionAsync/SettleAsync's ExecuteUpdateAsync + explicit db.VariablePayAwardHistories.Add pattern); Backend/HRMS.Tests/VariablePayFoundationTests.cs, VariablePayConcurrencyTests.cs, VariablePayLargeDataTests.cs, PayrollVariablePayProviderAcceptance.cs (full read of all four - zero OverrideAsync invocations)"
+    classification: Confirmed defect
+
+  - id: CR-202
+    title: "No seeded role other than SuperAdmin/TenantAdmin natively holds ANY Payroll.VariablePay.* permission, the identical shape to qa/11-loans-advances' CR-183"
+    observation: >
+      A full grep of Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs's RolePermissionMap for every
+      Payroll.VariablePay.* permission constant (View, ManagePlans, Calculate, CreateAward, Submit, Approve,
+      Override, Cancel, ViewHistory - ids 169-177) returns matches ONLY inside the PermissionIds numbering
+      dictionary and the Permissions.All catalogue - zero matches inside any individual role's grant array.
+      SuperAdmin and TenantAdmin both receive the entire module via Permissions.All; HRAdmin, HRManager,
+      Manager, Employee, and SuperHR are all granted precisely zero VariablePay permissions of any kind,
+      native or otherwise - including Employee's own View, meaning a freshly seeded Employee cannot even list
+      their own awards through /api/me/variable-pay out of the box.
+    risk: >
+      Without an explicit, deliberate tenant-level grant, Bonus & Variable Pay is functionally invisible to
+      every role except the two full-tenant-admin roles immediately after a tenant is provisioned - no HR
+      role can configure a plan, generate or approve an award, and no employee can view their own award.
+      Confirm with product whether this is intentional (consistent with the identical pattern already accepted
+      for Loans in qa/11-loans-advances CR-183) or a seeding oversight, since the feature is otherwise fully
+      implemented end-to-end (API, Final Settlement integration, reports, frontend pages).
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, full grep for every VariablePay permission constant); Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll.VariablePay* block, lines 220-228)"
+    classification: Open - awaiting decision
+
+  - id: CR-203
+    title: "CONFIRMED CRITICAL FRONTEND DEFECT - MyVariablePayPage throws at runtime against the real backend API response shape, and the existing Vitest coverage masks it with an incorrect mock"
+    observation: >
+      Frontend/HRMS.Web/src/api/variablePay.ts declares `listMyVariablePay` as
+      `request<VariablePayAward[]>(() => api.get<ApiResponse<VariablePayAward[]>>('/api/me/variable-pay', ...))`
+      - typed and requested as a bare array. The actual backend endpoint,
+      VariablePayController.My (GET /api/me/variable-pay), calls `service.GetAwardsAsync(query, ct)` and
+      returns `ApiResponse<PagedResult<VariablePayAwardDto>>` - the IDENTICAL paged envelope
+      ({items, page, pageSize, totalCount}) used by the admin register endpoint. MyVariablePayPage then calls
+      `awards.data?.map(award => ...)` directly on this value. Against the real API response, `awards.data` is
+      an object of shape {items, page, pageSize, totalCount}, not an array - `.map` is not a function on a
+      plain object, so this throws a TypeError at render time for any employee with variable-pay awards.
+      VariablePayPage.test.tsx's existing coverage for MyVariablePayPage mocks
+      `api.listMyVariablePay.mockResolvedValue([{...}])` - a raw array, matching the frontend's own incorrect
+      assumed shape rather than the real backend's paged envelope - so the existing test passes while
+      completely masking this defect. A corrected mock resolving `{items: [...], page: 1, pageSize: 20,
+      totalCount: 1}` reproduces the crash immediately.
+    risk: >
+      Every employee with linked-employee identity and at least one variable-pay award who navigates to
+      payroll/my-variable-pay (the ESS self-service Variable Pay screen) encounters a crashed page rather than
+      their award list - the single worst possible failure mode for a self-service feature, and one the
+      existing automated test suite is actively certifying as passing.
+    source: "Frontend/HRMS.Web/src/api/variablePay.ts (listMyVariablePay); Frontend/HRMS.Web/src/pages/payroll/VariablePayPage.tsx (MyVariablePayPage component, awards.data?.map); Backend/HRMS.API/Controllers/VariablePayController.cs (My action, line 31-34); Frontend/HRMS.Web/src/pages/payroll/VariablePayPage.test.tsx (line 8, incorrect array mock)"
+    classification: Confirmed defect
+
+  - id: CR-204
+    title: "ApproveAsync's self-approval guard only ever checks SubmittedByUserId (null unless Submit was called) and never CreatedByUserId - combined with Approve accepting a still-Calculated award directly, a generator can approve their own award with the guard never firing"
+    observation: >
+      ApproveAsync's only self-approval protection is `if (award.SubmittedByUserId.HasValue &&
+      award.SubmittedByUserId == tenant.UserId) return Forbidden(...)`. Approve is valid from either
+      Submitted OR Calculated status (F-VPAY-044 - Submit is optional, not a mandatory gate). When an award is
+      approved directly from Calculated (i.e. Submit was never called), SubmittedByUserId remains null, so
+      the guard's `.HasValue` check is false and the comparison never executes - regardless of whether the
+      same user who generated the award (CreatedByUserId) is the one calling Approve. VariablePayService.cs
+      has zero references to PayrollApprovalGuard or PayrollControlConfiguration anywhere (full grep) - unlike
+      Loans/Reimbursements, there is no tenant-configurable RequireMakerChecker/PreventSelfApproval policy
+      integration for this module at all; the only protection is this one narrow, bypassable check, and it
+      applies to Approve alone (Submit/Reject/Cancel have no equivalent check whatsoever).
+    risk: >
+      A single user holding both CreateAward and Approve permissions (plausible under a coarse role design,
+      and the ONLY realistic scenario today since no seeded role holds either permission per CR-202) can
+      generate an award for any employee and approve it themselves in two calls with no self-approval
+      resistance at all, by simply never calling Submit. This is a more direct self-approval bypass than
+      qa/11-loans-advances' CR-183/CR-66 shape (which requires an explicit self-escalation step) - here, the
+      bypass requires no escalation, only omitting one optional API call.
+    source: "Backend/HRMS.Application/Services/VariablePayService.cs (ApproveAsync, line 84-91, full method - no ApprovalGuard/PayrollControlConfiguration reference anywhere in the file)"
+    classification: Open - awaiting decision
+
+  - id: CR-205
+    title: "No automatic Payroll Calculation Engine integration exists for approved Variable Pay awards - unlike Loans' automatic recovery integration, an approved award is never picked up by a regular payroll run and must be manually settled via a separate API call"
+    observation: >
+      A full grep of Backend/HRMS.Application/Services/PayrollCalculationEngine.cs for "VariablePay" returns
+      zero matches. Contrast with qa/11-loans-advances' Loan payroll-deduction integration
+      (LoanPayrollRecoveryResolver + PersistLoanRecoveriesAsync, invoked directly inside
+      PayrollCalculationEngine.CalculateEmployeeAsync), which automatically resolves due installments and adds
+      a payslip deduction component during every calculation. No equivalent exists for Variable Pay: an
+      Approved award's amount is never automatically added as a payslip earning component, and the ONLY way a
+      VariablePaySettlement of SettlementType.Payroll is ever created is a manual POST .../{id}/settle call
+      (which may optionally carry a PayrollRunId/PayrollResultId purely as a free-form reference field with no
+      validation that either actually exists or belongs to a real, in-progress calculation). Consequently, the
+      PayrollControlTotalsDto/payroll-register/final-settlement CSV exports' "VariablePayTotal"/"VariablePay"
+      columns, which are sourced from PayrollResultComponents tagged CalculationSource='VariablePay', are
+      structurally always 0 for every payroll run, since no code path ever writes such a component.
+    risk: >
+      Anyone reading docs/phase-7q-bonus-incentives-variable-pay.md's "Payroll and Final Settlement
+      integrations consume persisted award outcomes" could reasonably expect Variable Pay awards to flow into
+      a payroll run's payslip automatically, the way Loans deductions do - the actual implementation requires
+      a separate manual settlement action per award, entirely decoupled from payroll calculation, and the
+      payroll-run-level reporting total for variable pay is silently and permanently zero regardless of how
+      many awards were settled that period (a settlement's own PayrollRunId reference does not retroactively
+      populate a PayrollResultComponent). Confirm whether manual-settlement-only is the intended design for
+      this phase, or a deferred payroll-engine integration gap.
+    source: "Backend/HRMS.Application/Services/PayrollCalculationEngine.cs (full grep for 'VariablePay' - zero matches); Backend/HRMS.Application/Services/VariablePayService.cs (SettleAsync, the sole path to a Payroll-type VariablePaySettlement); Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (line 40, Source('VariablePay') always-zero total)"
+    classification: Open - awaiting decision
+
+  - id: CR-206
+    title: "CONFIRMED FRONTEND DEFECT - a plan created through VariablePayPage can never have a version added through the UI, making it permanently unusable for award generation without a direct API call"
+    observation: >
+      VariablePayService.CreatePlanAsync does not auto-generate an initial VariablePayPlanVersion (unlike
+      Loans' CreateProductAsync, contrast with qa/11-loans-advances F-LOAN-006) - a freshly created plan has
+      zero versions. CalculateCoreAsync (the basis of both Preview and Generate) requires an existing Published
+      VariablePayPlanVersion effective on the eligibility date; with no version, every award attempt against
+      that plan fails Invalid ("An active published plan version effective on the eligibility date is
+      required."). VariablePayPage.tsx's "Plans" card renders only a create form (Code/Name/PlanType) and a
+      read-only `<ul>` list of existing plans - a full grep of the component for AddVersionAsync/"versions"
+      finds no form, button, or control of any kind to add a version to an existing plan. A plan created
+      entirely through this shipped admin UI can therefore never be used to generate an award unless an
+      operator separately knows to call POST /api/payroll/variable-pay-plans/{id}/versions directly.
+    risk: >
+      This is a more severe UI/backend interaction gap than qa/11-loans-advances' CR-196 (a product form
+      missing two boolean toggles, which still leaves the product itself usable) - here, the core configuration
+      workflow (create a plan, then make it usable) is entirely broken through the shipped UI: step two simply
+      does not exist on the page. An administrator using only this page would create plans that permanently sit
+      idle with zero versions and never understand why award generation always fails.
+    source: "Backend/HRMS.Application/Services/VariablePayService.cs (CreatePlanAsync, full method - no VariablePayPlanVersions.Add call); Frontend/HRMS.Web/src/pages/payroll/VariablePayPage.tsx (VariablePayPage component, full read - no version-creation UI)"
+    classification: Confirmed defect
+
+  - id: CR-207
+    title: "CONFIRMED FRONTEND DEFECT - VariablePayPage has zero award-lifecycle action controls; Generate/Submit/Approve/Reject/Override/Cancel/Settle are all reachable only through direct API calls, not through the shipped admin page"
+    observation: >
+      A full grep of VariablePayPage.tsx (both the VariablePayPage and MyVariablePayPage components) for any
+      of generateVariablePay/submitVariablePay/approveVariablePay/rejectVariablePay/overrideVariablePay/
+      cancelVariablePay/settleVariablePay (or any button invoking such calls) finds none - the corresponding
+      client functions do not even exist in src/api/variablePay.ts, which exposes only
+      listVariablePayPlans/createVariablePayPlan/listVariablePayAwards/listMyVariablePay. The admin page's
+      "Award register" card is entirely read-only (a plain table with no per-row actions). This is a
+      structurally larger gap than qa/11-loans-advances' CR-194/CR-195 (Loans at least has every lifecycle
+      button present, with a hardcoded-amount/wrong-index defect) - here, none of the seven mutating award
+      actions has ANY UI entry point at all.
+    risk: >
+      An HR/payroll administrator using only the shipped Variable Pay admin page can view plans and the award
+      register, but cannot generate, submit, approve, reject, override, cancel, or settle a single award -
+      every real operational action in this module's entire lifecycle requires a direct API call (Swagger,
+      Postman, or a script), making the admin page effectively a read-only dashboard rather than the working
+      surface for this feature.
+    source: "Frontend/HRMS.Web/src/pages/payroll/VariablePayPage.tsx (full component read - zero lifecycle action buttons); Frontend/HRMS.Web/src/api/variablePay.ts (full file read - four exported functions total, none covering Generate/Submit/Approve/Reject/Override/Cancel/Settle)"
+    classification: Confirmed defect
+
+  - id: CR-208
+    title: "VariablePayPlanVersion.RequiresApproval is persisted but never read anywhere in the service - a plan version configured with RequiresApproval=false still requires an explicit Approve call"
+    observation: >
+      A full grep of VariablePayService.cs for "RequiresApproval" shows it is only ever assigned (in
+      AddVersionAsync's field-list and the corresponding DTO round-trip) - it is never read inside
+      TransitionAsync, ApproveAsync, or CalculateCoreAsync. Consequently, an award generated under a version
+      configured RequiresApproval=false remains at Status=Calculated exactly like one configured
+      RequiresApproval=true, and still requires a caller to invoke Approve (or, per CR-204, simply hold both
+      CreateAward and Approve) before it can be settled - the flag has no observable runtime effect anywhere.
+    risk: >
+      An administrator configuring RequiresApproval=false on a plan version, reasonably expecting awards under
+      it to bypass the approval step (e.g. auto-approved on generation, the way Loans' RequiresApproval-false
+      products auto-approve per qa/11-loans-advances F-LOAN-020), will find every award still stuck at
+      Calculated until a separate Approve call, with no indication anywhere that the flag did nothing.
+    source: "Backend/HRMS.Application/Services/VariablePayService.cs (full grep for RequiresApproval - only DTO/entity field assignment, never read in TransitionAsync/ApproveAsync/CalculateCoreAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-209
+    title: "VariablePayPlanVersion.ApplicabilityJson is persisted but never read by CalculateCoreAsync - a version configured with a restrictive applicability filter does not actually restrict which employees can be awarded"
+    observation: >
+      A full grep of VariablePayService.cs for "ApplicabilityJson" shows it is only ever assigned in
+      AddVersionAsync and round-tripped through the DTO - CalculateCoreAsync's eligibility checks are limited
+      to EligibilityMethod (ActiveEmployment/MinimumService), never ApplicabilityJson. Any employee passing the
+      EligibilityMethod/salary-basis/multiplier checks can have an award generated against any Published
+      version, regardless of whatever department/designation/location scoping an operator may have encoded
+      into ApplicabilityJson believing it would be enforced.
+    risk: >
+      The same "declared-but-unenforced configuration field" shape as qa/11-loans-advances' CR-186
+      (MaxConcurrentLoans) - an administrator configuring a scoped applicability rule for a plan version has no
+      indication the field is decorative rather than load-bearing, and every employee remains eligible
+      regardless of the configured scope.
+    source: "Backend/HRMS.Application/Services/VariablePayService.cs (full grep for ApplicabilityJson - only assigned in AddVersionAsync, never read in CalculateCoreAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-210
+    title: "ProrationMethod.CalendarDays, ServiceDays and EligibleDaysInPeriod share one identical day-ratio calculation - three declared distinct enum values produce numerically identical results"
+    observation: >
+      ResolveProration's implementation is a single ternary: CompletedMonths gets its own month-count-ratio
+      branch, and every other non-None method (CalendarDays, ServiceDays, EligibleDaysInPeriod) falls through
+      to the identical `(decimal)eligible/total` day-ratio calculation. Despite VariablePayProrationMethod
+      declaring these as three semantically distinct methods (implying, by name, different day-counting rules
+      - e.g. calendar days vs. actual service days vs. eligible days specifically within the period), the
+      current implementation treats them as one method under three names.
+    risk: >
+      An administrator selecting ServiceDays over CalendarDays for a plan version, expecting a materially
+      different proration outcome for an employee with partial service during the award period, will observe
+      no difference at all - a low-severity but genuine implementation gap relative to what three distinct
+      enum names imply, worth a product decision on whether distinct calculations are actually required for
+      this phase or the shared implementation is intentional/acceptable.
+    source: "Backend/HRMS.Application/Services/VariablePayService.cs (ResolveProration, full method - single day-ratio expression shared by three enum values)"
+    classification: Open - awaiting decision
+
+  - id: CR-211
+    title: "SalaryBasisType.Basic falls through to a misleading 'requires configured salary component IDs' error message, since ResolveSalaryBasisAsync has no explicit branch for it"
+    observation: >
+      ResolveSalaryBasisAsync explicitly branches on FixedConfiguredAmount (short-circuits to 0), Gross
+      (MonthlyCtc/AnnualCtc-derived), and SelectedSalaryComponents (deserializes SelectedSalaryComponentIdsJson)
+      - VariablePaySalaryBasisType.Basic has no matching `if` branch anywhere in the method and falls through
+      to the final catch-all `return Invalid("salaryBasis", "This salary basis requires configured salary
+      component IDs.")`, an error message that has nothing to do with Basic and is copy-pasted from the
+      SelectedSalaryComponents failure path.
+    risk: >
+      A version configured with SalaryBasisType.Basic can NEVER successfully resolve a salary basis (every
+      Preview/Generate call against it fails Invalid), and the error message actively misleads whoever
+      investigates it toward suspecting a missing SelectedSalaryComponentIdsJson configuration rather than the
+      real cause (Basic has no implementation at all). Confirm whether Basic is meant to resolve
+      assignment.Basic (or an equivalent Basic-pay-only figure) and was simply never wired up, or is
+      intentionally unsupported for this phase.
+    source: "Backend/HRMS.Application/Services/VariablePayService.cs (ResolveSalaryBasisAsync, full method - no VariablePaySalaryBasisType.Basic branch)"
+    classification: Open - awaiting decision
+
+  - id: CR-212
+    title: "GenerateBulkAsync is structurally incompatible with a ManualAmount or PerformanceRatingRequired plan version - every employee in the tenant is attempted with no per-employee ManualAmount/PerformanceMultiplier/Reason"
+    observation: >
+      VariablePayBulkGenerationRequest carries only PlanVersionId/AwardPeriodFrom/AwardPeriodTo/EligibilityDate
+      - no per-employee (or even single shared) ManualAmount, PerformanceMultiplier, or Reason field.
+      GenerateBulkAsync iterates every Employee in the tenant and calls GenerateAsync with those four fields
+      only, leaving ManualAmount/PerformanceMultiplier/Reason at their defaults (null/null/null) for every
+      employee. Against a CalculationMethod.ManualAmount version, every single generation attempt in the batch
+      fails Invalid ("A reason is required for a manual award.") since ManualAmount defaults to 0 but Reason is
+      required and blank. Against a version with PerformanceRatingRequired=true and no configured default
+      multiplier, every attempt likewise fails Invalid ("A performance multiplier is required by this plan.").
+    risk: >
+      Bulk generation is only actually usable for FixedAmount/PercentageOfSalary/TargetWithMultiplier (the
+      latter only when PerformanceRatingRequired=false) plan versions - an administrator attempting a bulk run
+      against a ManualAmount or performance-rated plan gets a 100%-Skipped result with no per-employee
+      indication that the request shape itself, not any individual employee's eligibility, is the actual cause.
+    source: "Backend/HRMS.Application/DTOs/Payroll/VariablePayDtos.cs (VariablePayBulkGenerationRequest); Backend/HRMS.Application/Services/VariablePayService.cs (GenerateBulkAsync, line 55-66)"
+    classification: Open - awaiting decision
+
+  - id: CR-213
+    title: "FinalSettlementTreatment.Exclude and .CancelOutstanding both suppress Final Settlement line generation identically - CancelOutstanding does not actually cancel the underlying award"
+    observation: >
+      PayrollRetroSettlementService.CalculateSettlementAsync's award query predicate excludes both
+      `FinalSettlementTreatment != Exclude && FinalSettlementTreatment != CancelOutstanding` from line
+      generation - a full grep of the codebase for CancelOutstanding shows no other handling anywhere: the
+      underlying VariablePayAward is never transitioned to Cancelled, its outstanding balance is never zeroed,
+      and no history event is recorded. The two enum names imply different real-world outcomes (Exclude =
+      "leave it out of this settlement, deal with it separately" vs. CancelOutstanding = "the outstanding
+      balance is forfeited/cancelled as part of separation") but the current implementation treats them
+      identically.
+    risk: >
+      An administrator configuring FinalSettlementTreatment.CancelOutstanding on a plan version, expecting an
+      outstanding award to actually be formally Cancelled (with a corresponding history event and Status
+      change) as part of an employee's Final Settlement, will find the award simply left untouched -
+      Status=Approved/Scheduled/PartiallyPaid with its outstanding balance unchanged and unresolved, invisible
+      to that settlement and to any later settlement unless the treatment is changed.
+    source: "Backend/HRMS.Application/Services/PayrollRetroSettlementService.cs (CalculateSettlementAsync, line 86; full grep for CancelOutstanding - matched only in this one exclusion predicate)"
+    classification: Open - awaiting decision
+
+  - id: CR-214
+    title: "(defensive, not reachable) VariablePayPlanVersionStatus.Inactive and Superseded are declared lifecycle states that no method in VariablePayService ever assigns"
+    observation: >
+      VariablePayPlanVersionStatus declares Draft/Published/Inactive/Superseded. A full grep of
+      VariablePayService.cs shows every version is created with whatever Status the request supplies
+      (defaulting to Published per VariablePayPlanVersionRequest.Status's own default), and no method ever
+      transitions a version to Inactive or Superseded. In practice this means a version created through the
+      API is either Draft (if explicitly requested) or Published forever - there is no API path that
+      deactivates or supersedes an existing version when a newer one is added, mirroring
+      qa/11-loans-advances' CR-200 (LoanProductVersionStatus.Retired).
+    risk: >
+      None functionally today, since there is no API path that would produce an Inactive- or Superseded-status
+      version - this is documented so QA does not spend effort hunting for a way to reach these states through
+      the exposed API (there is none), and so a future feature that adds an explicit deactivate/supersede
+      action for a version is aware these enum values have been dormant since the feature's initial
+      implementation.
+    source: "Backend/HRMS.Domain/Enums/VariablePayEnums.cs (VariablePayPlanVersionStatus); Backend/HRMS.Application/Services/VariablePayService.cs (full grep for VariablePayPlanVersionStatus.Inactive / .Superseded - zero matches)"
+    classification: Design confirmed (no change requested)
+
+  - id: CR-215
+    title: "Settle is gated by Payroll.VariablePay.Approve, not a dedicated settlement permission - there is no Payroll.VariablePay.Settle constant anywhere in Permissions.cs"
+    observation: >
+      VariablePayController.Settle carries `[HasPermission(Permissions.Payroll.VariablePayApprove)]` - the
+      identical permission used by Approve and Reject. A full grep of Permissions.cs's
+      Payroll.VariablePay* block (9 constants, ids 169-177: View/ManagePlans/Calculate/CreateAward/Submit/
+      Approve/Override/Cancel/ViewHistory) confirms no Settle-specific permission is declared at all, unlike
+      Loans (which has a distinct Payroll.Loans.Recover permission separate from Payroll.Loans.Approve).
+    risk: >
+      A tenant wanting to grant a role the ability to record settlements (e.g. a payroll-operations role that
+      should not also be able to approve new awards) cannot do so without also granting full Approve/Reject
+      authority, since the two capabilities share one permission. Confirm whether this coupling is intentional
+      (settlement and approval are considered the same trust level for this module) or a missing permission
+      granularity gap.
+    source: "Backend/HRMS.API/Controllers/VariablePayController.cs (Settle action, line 28); Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll.VariablePay* block, lines 220-228 - no Settle constant)"
+    classification: Open - awaiting decision
+
+  - id: CR-216
+    title: "EligibilityMethod.ConfiguredApplicability and .ManualReview are declared but have no independently-implemented enforcement branch in CalculateCoreAsync"
+    observation: >
+      CalculateCoreAsync's only explicit EligibilityMethod branch is
+      `if (version.EligibilityMethod == VariablePayEligibilityMethod.ActiveEmployment && employee.Status !=
+      Active) return Invalid(...)`. The separate `if (version.MinimumServiceMonths is int months && ...)`
+      check applies whenever MinimumServiceMonths happens to be set, independent of whether EligibilityMethod
+      is actually set to MinimumService, ConfiguredApplicability, or ManualReview - there is no distinct code
+      path that reads ApplicabilityJson for ConfiguredApplicability (see CR-209) or implements any kind of
+      manual-review gate/workflow for ManualReview. All four declared EligibilityMethod values other than
+      ActiveEmployment behave identically to each other (governed only by whatever MinimumServiceMonths is
+      independently set to, if any).
+    risk: >
+      An administrator selecting EligibilityMethod.ConfiguredApplicability or .ManualReview, expecting either
+      applicability-scoped eligibility or a human-review gate before an award can be generated, gets neither -
+      eligibility is governed purely by ActiveEmployment-or-not plus an optional MinimumServiceMonths floor,
+      regardless of which of the four EligibilityMethod values is actually configured.
+    source: "Backend/HRMS.Application/Services/VariablePayService.cs (CalculateCoreAsync, eligibility checks, full method - only ActiveEmployment is explicitly branched on)"
+    classification: Open - awaiting decision
+
+  - id: CR-217
+    title: "(frontend) Neither VariablePayPage nor MyVariablePayPage has a navigation.ts entry - both are reachable only by typing the URL, the same discoverability gap as qa/11-loans-advances' CR-198"
+    observation: >
+      A full grep of Frontend/HRMS.Web/src/layout/navigation.ts for 'variable'/'bonus' (case-insensitive)
+      returns no matches, while both VariablePayPage and MyVariablePayPage are registered routes in App.tsx
+      (payroll/variable-pay and payroll/my-variable-pay, lines 198-199) and are functional pages with real
+      backend integration (subject to CR-206/CR-207/CR-203's own gaps).
+    risk: >
+      Manual QA, payroll administrators, and employees alike can only reach either page by already knowing the
+      exact URL - there is no sidebar, menu, or discoverable in-app path to either screen, compounding the
+      CR-207 finding that the admin page cannot perform lifecycle actions even once reached.
+    source: "Frontend/HRMS.Web/src/layout/navigation.ts (full grep for variable/bonus); Frontend/HRMS.Web/src/App.tsx (route registrations, lines 198-199)"
+    classification: Open - awaiting decision
+
+  - id: CR-218
+    title: "(frontend) The plan-create form on VariablePayPage exposes only Code/Name/PlanType - Description, CurrencyCode and IsActive cannot be set from the UI"
+    observation: >
+      `createVariablePayPlan`'s TypeScript parameter type is `{ code: string; name: string; planType: string;
+      currencyCode?: string }` and VariablePayPage's form state is `{ code, name, planType }` only - Description
+      and IsActive are never collected or sent, and CurrencyCode is declared optional on the client type but
+      never actually populated by any form field either. Every plan created through this UI keeps the
+      backend's own defaults (IsActive=true, CurrencyCode='INR', Description=null) with no way to override
+      them at creation time.
+    risk: >
+      Low severity relative to CR-206/CR-207 (which make the page's core workflow non-functional), but a real
+      gap for any tenant needing a non-INR currency plan or an inactive-on-creation plan (e.g. staged for a
+      future rollout) - both require a direct API call, since the shipped form provides no path to either.
+    source: "Frontend/HRMS.Web/src/api/variablePay.ts (createVariablePayPlan parameter type); Frontend/HRMS.Web/src/pages/payroll/VariablePayPage.tsx (form state, line 12)"
+    classification: Open - awaiting decision

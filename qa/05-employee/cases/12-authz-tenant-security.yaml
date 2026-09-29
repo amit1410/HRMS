@@ -1,0 +1,210 @@
+sheet: Employee_Security
+submodule: Authorization, Tenant Isolation, Audit Log
+defaults:
+  role: HR_ADMIN
+  perm: "Employee.View"
+  tenant: A
+  pre: "Tenant A signed in; roles/permissions per case."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: EMP-SEC-001
+    func: [F-EMP-135]
+    sc: Full role x permission matrix for the Employee module
+    t: Confirm the seeded permission set per role matches SeedData.RolePermissionMap exactly
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/employees] As SuperAdmin/TenantAdmin/HRAdmin/HRManager/HRBP/ERO/SuperHR/Accounts => [200] each succeeds (all hold Employee.View)"
+      - "[GET /api/employees] As Manager => [200] succeeds but scoped to self+direct-reports (EMP-LIST-013)"
+      - "[GET /api/employees] As Employee (self-service) or IT => [403] Forbidden - neither role holds Employee.View at all"
+      - "[POST /api/employees] As HRManager => [201] succeeds (holds Create); as HRBP/ERO/Manager/SuperHR => [403] (none hold Create)"
+      - "[DELETE /api/employees/{id}] As HRManager => [403] Forbidden (HRManager lacks Delete, unlike HRAdmin/SuperAdmin/TenantAdmin)"
+    auto: API
+
+  - id: EMP-SEC-002
+    func: [F-EMP-136]
+    sc: Unauthenticated is 401; authenticated-but-unauthorized is 403 - distinctly
+    t: The two failure modes are never conflated
+    src: ["[HasPermission] policy + fallback-deny"]
+    type: Authorization
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/employees] No Authorization header at all => [401] Unauthorized"
+      - "[GET /api/employees] Valid token, caller's role lacks Employee.View => [403] Forbidden"
+    auto: API
+
+  - id: EMP-SEC-003
+    func: [F-EMP-137]
+    sc: Bank Details masked-read vs. write/unmasked-edit require different permission combinations
+    t: Employee.View alone is enough for the masked list; writes and the unmasked edit view additionally require EmployeeSensitive.Edit/.View
+    src: ["EmployeeSubResourcesController"]
+    type: Authorization
+    pri: P1
+    steps:
+      - "[GET /api/employees/{id}/bank-details] Caller holds Employee.View only => [200] masked list"
+      - "[POST /api/employees/{id}/bank-details] Same caller => [403] Forbidden"
+    auto: API
+
+  - id: EMP-SEC-004
+    func: [F-EMP-138]
+    sc: Sub-resources without a dedicated permission are all-or-nothing at Employee.View/.Edit
+    t: There is no way to grant edit access to Contact alone without granting the full Employee.Edit boundary
+    src: ["EmployeeSubResourcesController class-level permission gating"]
+    type: Authorization
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[PUT /api/employees/{id}/contact] Caller holds Employee.Edit => [200] accepted"
+      - "[PUT /api/employees/{id}/family/{familyId}] The SAME caller (same Employee.Edit) => [200] also accepted - confirms one grant covers every un-dedicated sub-resource"
+    auto: API
+
+  - id: EMP-SEC-005
+    func: [F-EMP-139]
+    sc: An employment-scope role assignment restricts list/get to matching current employment only
+    t: A department- or grade-scoped role sees only employees whose CURRENT employment matches the scope dimensions
+    src: ["EmployeeAccessScopeService.BuildPredicateAsync"]
+    type: Tenant-Isolation
+    tags: [Authorization]
+    pri: P1
+    role: HRBP
+    perm: "Employee.View (department-scoped role assignment)"
+    pre: "The caller's role assignment is scoped to Department=Engineering only."
+    steps:
+      - "[GET /api/employees] As the scoped HRBP => [200] only employees currently in Engineering are returned"
+      - "[GET /api/employees/{id}] An employee currently in Finance => [404] out of scope"
+    auto: API
+
+  - id: EMP-SEC-006
+    func: [F-EMP-140]
+    sc: Cross-tenant employee ids are reported identically to nonexistent ones (404, never a confirming 403)
+    t: List/Get/Create/Update/Delete never reveal a cross-tenant record's existence
+    src: ["HrmsDbContext global query filter"]
+    type: Tenant-Isolation
+    pri: P0
+    smoke: true
+    tenant: A+B
+    steps:
+      - "[GET /api/employees/{Tenant B id}] As Tenant A => [404] Not Found - identical to a fabricated GUID"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.GetById_of_another_tenants_employee_is_not_found"]
+
+  - id: EMP-SEC-007
+    func: [F-EMP-141]
+    sc: Every organizational master reference on an employment change is independently tenant-validated
+    t: A Tenant B id supplied for ANY of the 14 master fields is rejected identically to a fabricated GUID
+    src: ["EmployeeEmploymentService.ValidateEmploymentReferencesAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[POST /api/employees/{Tenant A id}/employment-history] costCenterId belonging to Tenant B => [400] cost center reference invalid, identical to a nonexistent id"
+    auto: API
+
+  - id: EMP-SEC-008
+    func: [F-EMP-142]
+    sc: A cross-tenant Bank master id is rejected identically to inactive/nonexistent
+    t: Bank tenant isolation on writes
+    src: ["EmployeeBankDetailService.BankExistsAndActiveAsync"]
+    type: Tenant-Isolation
+    pri: P2
+    tenant: A+B
+    steps:
+      - "[POST /api/employees/{id}/bank-details] bankId belonging to Tenant B => [400] bank reference invalid"
+    auto: API
+
+  - id: EMP-SEC-009
+    func: [F-EMP-143]
+    sc: A cross-tenant supervisor id (any level) is rejected identically to nonexistent
+    t: Supervisor tenant isolation on writes
+    src: ["EmployeeSupervisorService.ValidateSupervisorReferencesAsync"]
+    type: Tenant-Isolation
+    pri: P2
+    tenant: A+B
+    steps:
+      - "[PUT /api/employees/{id}/supervisor] eroId belonging to Tenant B => [400] supervisor reference invalid"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Supervisor_manager_ids_are_tenant_scoped_and_cannot_self_reference"]
+
+  - id: EMP-SEC-010
+    func: [F-EMP-145]
+    sc: The frontend never sends a tenant id - the server resolves it from the host/token
+    t: Every network call the Employee pages make omits any tenant parameter
+    src: ["frontend api client"]
+    type: Positive
+    tags: [Security]
+    pri: P2
+    steps:
+      - "[UI] Inspect every request EmployeesPage and EmployeeFormPage issue => none carries a tenant id in the URL, query string, or body"
+    auto: UI
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::never sends a tenant id: the server takes it from the token", "V:pages/employees/EmployeeFormPage.test.tsx::never sends a tenant id: the server takes it from the token"]
+
+  - id: EMP-SEC-011
+    func: [F-EMP-146]
+    sc: A malformed GUID in a route segment is a routing 404, never a 400 reaching the service
+    t: The {id:guid} route constraint rejects a non-GUID before any controller code runs
+    src: ["ASP.NET route constraint"]
+    type: Contract
+    pri: P3
+    steps:
+      - "[GET /api/employees/not-a-guid] Call => [404] Not Found (routing-level, not a validation 400)"
+    auto: API
+
+  - id: EMP-SEC-012
+    func: [F-EMP-135]
+    sc: AccountEmployeeLink.* is excluded even from SuperAdmin/TenantAdmin's otherwise-universal permission grant
+    t: SuperAdmin gets 403 on account-employee-link endpoints, a deliberate separation-of-duties carve-out
+    src: ["SeedData.cs (DomainPermissions.All.Where(x => !x.StartsWith(\"AccountEmployeeLink.\")))"]
+    type: Authorization
+    tags: [Security]
+    pri: P1
+    role: SUPER_ADMIN
+    perm: "n/a"
+    steps:
+      - "[GET /api/account-employee-links] As SuperAdmin => [403] Forbidden - AccountEmployeeLink.* is reserved for AccountLinkAdministrator/AccountLinkAuditor only"
+    auto: API
+
+  - id: EMP-SEC-013
+    func: [F-EMP-166]
+    sc: Audit Log accepts an unbounded pageSize silently clamped, and an unsupported sort field silently ignored, rather than rejecting either
+    t: Unlike every other paged query in this module, AuditQuery has no dedicated validator
+    src: ["EmployeeAuditService.GetAsync", "AuditQuery (no validator)"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[GET /api/employees/{id}/audit-log?pageSize=99999] Call => [200] silently clamped to 100 rows, NOT a 400 (contrast with EMP-LIST-002's Employee-query behavior)"
+      - "[GET /api/employees/{id}/audit-log?sortBy=oldValue] Call => [200] accepted but has NO effect - results are still ordered by CreatedDate desc, ThenBy Id desc regardless"
+    auto: API
+    cr: [CR-49]
+
+  - id: EMP-SEC-014
+    func: [F-EMP-166]
+    sc: Every mutating sub-resource action logs an audit entry with EmployeeCode hardcoded to null
+    t: The Audit Log's own EmployeeCode column is never populated by EmployeeSubResourcesController writes
+    src: ["EmployeeSubResourcesController.LogAuditAsync"]
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[PUT /api/employees/{id}/contact] Any change => [200] accepted, an audit row is written"
+      - "[GET /api/employees/{id}/audit-log] Call => [200] the new row's employeeCode field is null, even though the employee has a real code"
+    auto: API
+    cr: [CR-63]
+
+  - id: EMP-SEC-015
+    func: [F-EMP-034]
+    sc: Sensitive-details reads bypass the row-level access-scope predicate (duplicated here for the Security sheet's consolidated matrix)
+    t: See EMP-PD-009 for the full scenario; this entry cross-references it as part of the consolidated authorization sweep
+    src: ["EmployeeService.GetSensitiveDetailsAsync"]
+    type: Security
+    pri: P2
+    steps:
+      - "[GET /api/employees/{out-of-scope id}/sensitive-details] As a scope-restricted role holding EmployeeSensitive.View => [200] raw data returned despite the employee being outside list/detail scope"
+    auto: API
+    cr: [CR-48]

@@ -1,0 +1,113 @@
+sheet: VPay_FinalSettlement
+submodule: Final Settlement line generation and finalization for outstanding variable-pay awards
+defaults:
+  role: HRADMIN
+  perm: "Payroll.FinalSettlement.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.FinalSettlement.Manage granted, a separating employee, and an Approved variable-pay award with an outstanding balance, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: VPAY-FS-001
+    func: [F-VPAY-073]
+    sc: Calculate auto-generates a Bonus-type line for each outstanding, eligible award
+    t: An Approved award whose version's FinalSettlementTreatment is not Exclude/CancelOutstanding produces one FinalSettlementLine sized to its outstanding amount
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] employee with Approved award, ApprovedAmount=5000, SettledAmount=0, FinalSettlementTreatment=IncludeOutstanding => [200] one FinalSettlementLine, LineType=Bonus, ComponentCode=VPA-{awardNumber}, Amount=5000"
+    auto: API
+
+  - id: VPAY-FS-002
+    func: [F-VPAY-074]
+    sc: ProrateAndInclude multiplies the outstanding by the award's own ProrationFactor
+    t: An award with ProrationFactor=0.5 and FinalSettlementTreatment=ProrateAndInclude generates a line at half the outstanding amount
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] award ApprovedAmount=5000, ProrationFactor=0.5, FinalSettlementTreatment=ProrateAndInclude => [200] FinalSettlementLine.Amount=2500"
+    auto: API
+
+  - id: VPAY-FS-003
+    func: [F-VPAY-075]
+    sc: Exclude and CancelOutstanding suppress line generation identically
+    t: An award under either treatment produces no FinalSettlementLine, and CancelOutstanding does NOT itself cancel the award
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Boundary
+    pri: P1
+    cr: [CR-213]
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] award FinalSettlementTreatment=Exclude => [200] no FinalSettlementLine generated for this award"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] a second award FinalSettlementTreatment=CancelOutstanding => [200] no FinalSettlementLine generated for this award either"
+      - "[GET /api/payroll/variable-pay-awards/{cancelOutstandingAwardId}] => [200] Status is still Approved (NOT Cancelled) - CancelOutstanding never actually cancels the underlying award"
+    auto: API
+
+  - id: VPAY-FS-004
+    func: [F-VPAY-076]
+    sc: Re-calculation does not duplicate an already-generated line but also does not refresh its amount
+    t: Re-running Calculate after the award's outstanding balance changed leaves the existing line's stale Amount unchanged
+    src: ["PayrollRetroSettlementService.CalculateSettlementAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Integration-Concurrency]
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] award ApprovedAmount=5000 => [200] one line generated, Amount=5000"
+      - "[POST /api/payroll/variable-pay-awards/{awardId}/settle] Amount=2000 (partial, outside this settlement) => [200] SettledAmount=2000, outstanding now 3000"
+      - "[POST /api/payroll/final-settlements/{id}/calculate] (re-run, still Draft/Calculated) => [200] still exactly one line for this award, Amount is still 5000 (stale, not refreshed to 3000)"
+    auto: API
+
+  - id: VPAY-FS-005
+    func: [F-VPAY-077]
+    sc: Finalization recovers min(line.Amount, outstanding), never over-recovering
+    t: A settlement made between Calculate and Finalize is correctly reflected - finalization recovers only the current outstanding, not the stale line amount
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] award ApprovedAmount=5000 => [200] line Amount=5000"
+      - "[POST /api/payroll/variable-pay-awards/{awardId}/settle] Amount=2000 (outside this settlement) => [200] outstanding now 3000"
+      - "[POST /api/payroll/final-settlements/{id}/finalize] => [200] the variable-pay settlement recorded for this line is min(5000,3000)=3000, not 5000"
+    auto: API
+
+  - id: VPAY-FS-006
+    func: [F-VPAY-078]
+    sc: Finalization records a FinalSettlement-type settlement and updates award Status
+    t: A finalized line creates a VariablePaySettlement (SettlementType=FinalSettlement, Reference=settlement case id) with a proportional tax split, and transitions the award to Paid when it fully clears
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/finalize] award fully outstanding, no prior settlement => [200] one VariablePaySettlement created, SettlementType=FinalSettlement, Reference={settlementId}"
+      - "[GET /api/payroll/variable-pay-awards/{awardId}] => [200] Status=Paid, SettledAmount=ApprovedAmount"
+    auto: API
+
+  - id: VPAY-FS-007
+    func: [F-VPAY-079]
+    sc: A stale (too-small) line amount leaves residual outstanding after finalization
+    t: An award whose outstanding grew after Calculate (via a later re-approval/higher amount) is only ever recovered up to the original line.Amount
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/calculate] award ApprovedAmount=3000 at calculate time => [200] line Amount=3000"
+      - "[Manual/DB] Increase the award's ApprovedAmount to 5000 directly (simulating a later re-approval) => award.ApprovedAmount=5000"
+      - "[POST /api/payroll/final-settlements/{id}/finalize] => [200] settlement recorded for only 3000; award's post-finalization outstanding is 2000, not fully cleared"
+    auto: DB-assisted
+
+  - id: VPAY-FS-008
+    func: [F-VPAY-080]
+    sc: A line whose award is no longer found is silently skipped
+    t: A line referencing a deleted/unresolvable award id is skipped at finalization with no error and no settlement recorded
+    src: ["PayrollRetroSettlementService.TransitionSettlementAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/DB] Create a FinalSettlementLine with SourceType='VariablePayAward', SourceId=a non-existent award id => line persisted"
+      - "[POST /api/payroll/final-settlements/{id}/finalize] => [200] finalization succeeds with no error; no VariablePaySettlement is created for that orphaned line"
+    auto: DB-assisted

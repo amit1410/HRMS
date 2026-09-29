@@ -1,0 +1,190 @@
+sheet: RBAC_PageAccess
+submodule: Page Access (catalog, matrix, navigation, preview, history)
+defaults:
+  role: TENANT_ADMIN
+  perm: "PageAccess.View"
+  tenant: A
+  pre: "Tenant A signed in; roles/permissions per case."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: RBAC-PA-001
+    func: [F-RBAC-110]
+    sc: The page catalog is a fixed 9-page set
+    t: GET the matrix for any role returns exactly the 9 ApplicationPageCatalog pages, never more or fewer
+    src: ["ApplicationPageCatalog.All"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/page-access/roles/{tenantAdminRoleId}] Call => [200] pages array has exactly 9 entries: DASHBOARD, EMPLOYEE.LIST, EMPLOYEE.DETAIL, LEAVE.DASHBOARD, LEAVE.INBOX, ATTENDANCE.DASHBOARD, REPORTS.LEAVE, ADMIN.ROLE_MANAGEMENT, ADMIN.PAGE_ACCESS, ADMIN.ACCOUNT_EMPLOYEE_LINKS"
+    auto: API
+
+  - id: RBAC-PA-002
+    func: [F-RBAC-111]
+    sc: CanView is an OR across a page's RequiredPermissions
+    t: A role holding just ONE of a page's several RequiredPermissions still sees CanView=true for that page
+    src: ["PageAccessService.BuildMatrixAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/page-access/roles/{managerRoleId}] Call => [200] LEAVE.DASHBOARD's requiredPermissions includes Leave.RequestViewOwn/DashboardViewAll/Approve - Manager holds only Approve, and canView is still true"
+    auto: API
+
+  - id: RBAC-PA-003
+    func: [F-RBAC-112]
+    sc: Role Management page requires AssignmentView specifically
+    t: A role holding RoleManagement.View but not AssignmentView does not see the Role Management page as accessible
+    src: ["ApplicationPageCatalog (ADMIN.ROLE_MANAGEMENT RequiredPermissions=[AssignmentView])"]
+    type: Boundary
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[PUT /api/page-access/roles/{customRoleId}] Grant a role ONLY RoleManagement.View (no AssignmentView) => [200]"
+      - "[GET /api/page-access/roles/{customRoleId}] Re-read the matrix => [200] ADMIN.ROLE_MANAGEMENT's canView is FALSE - View alone does not unlock the page"
+    auto: API
+
+  - id: RBAC-PA-004
+    func: [F-RBAC-113]
+    sc: Real-time navigation reflects effective roles for today
+    t: GET /api/auth/navigation returns only pages the caller's CURRENT effective roles unlock, grouped by module
+    src: ["PageAccessService.GetNavigationAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/auth/navigation] As HRManager => [200] grouped items include EMPLOYEE and REPORTS modules; ADMINISTRATION items requiring permissions HRManager lacks are absent"
+    auto: API
+
+  - id: RBAC-PA-005
+    func: [F-RBAC-114]
+    sc: Backend and frontend navigation catalogs disagree
+    t: GET /api/auth/navigation's 9-page catalog is materially smaller than the frontend's own NAV_ITEMS list the sidebar actually renders from
+    src: ["ApplicationPageCatalog.All vs Frontend/HRMS.Web/src/layout/navigation.ts NAV_ITEMS"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[GET /api/auth/navigation] As TenantAdmin => [200] returns at most 9 leaf pages across a handful of modules"
+      - "[UI] TenantAdmin's actual rendered sidebar => shows 50+ items (Payroll, Separation, Attendance sub-screens, etc.) that GET /api/auth/navigation never mentions - confirming the sidebar does not consume this endpoint"
+    auto: API + UI
+    cr: [CR-73]
+
+  - id: RBAC-PA-006
+    func: [F-RBAC-115]
+    sc: Direct URL navigation is enforced at the API, not just the route guard
+    t: Calling the underlying endpoint directly with a token lacking the permission is 403, proving the API is the real boundary
+    src: ["RequirePermission route guard vs server [HasPermission]"]
+    type: Security
+    pri: P1
+    steps:
+      - "[UI] As a role without PageAccess.View, navigate directly to /page-access-management by URL => client-side guard denies/redirects"
+      - "[GET /api/page-access/roles/1] Same caller, direct API call => [403] Forbidden - confirms the API enforces this independently of the UI guard"
+    auto: API + UI
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::denies a direct route visit without PageAccess.View"]
+
+  - id: RBAC-PA-007
+    func: [F-RBAC-116]
+    sc: Page Access history filters
+    t: History supports filtering by role, user, assignment id, event type, and a date range, paged
+    src: ["PageAccessService.GetHistoryAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/page-access/history?roleId={itRoleId}&eventType=RolePermissionGranted] Call => [200] only matching events for that role/type"
+      - "[GET /api/page-access/history?fromDate=2026-01-01&toDate=2026-01-31] Call => [200] only events within the window"
+    auto: API
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::loads paged authorization history with readable permission changes"]
+
+  - id: RBAC-PA-008
+    func: [F-RBAC-117]
+    sc: Preview a user's effective access
+    t: The preview aggregates effective roles (with scope), the permission union, unlocked pages, and manager-access flag
+    src: ["PageAccessService.GetUserPreviewAsync"]
+    type: Positive
+    pri: P1
+    smoke: true
+    steps:
+      - "[GET /api/page-access/users/{hrbpUserId}/preview] Call => [200] roles array includes HRBP with its scope rows; permissions is the union of all effective roles; pages lists every page any of those permissions unlock; tenantWideRoleCount reflects only zero-scope roles"
+      - "[UI] Select a user in the preview picker => PageAccessManagementPage preview section renders effective roles/permissions/pages/tenant-wide count/manager access together"
+    auto: API + UI
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::previews a selected user with effective roles, permissions, pages, scopes, and manager access"]
+
+  - id: RBAC-PA-009
+    func: [F-RBAC-118]
+    sc: "'Manager access' preview reuses an Attendance permission, not a Manager-role check"
+    t: A user granted Attendance.Monthly.ViewTeam through a custom role (without holding the Manager role at all) shows hasManagerAccess=true
+    src: ["PageAccessService.GetUserPreviewAsync"]
+    type: Contract
+    tags: [Authorization]
+    pri: P2
+    steps:
+      - "[PUT /api/page-access/roles/{customRoleId}] Grant a non-Manager role Attendance.Monthly.ViewTeam => [200]"
+      - "[POST /api/role-assignments/users/{userId}] Assign that custom role (not Manager) to a linked account => [200]"
+      - "[GET /api/page-access/users/{userId}/preview] Call => [200] hasManagerAccess=true, even though the user holds no Manager-role assignment anywhere"
+    auto: API
+    cr: [CR-74]
+
+  - id: RBAC-PA-010
+    func: [F-RBAC-119]
+    sc: Search users for the preview picker
+    t: Search matches name/email, capped at 50 results, tenant-scoped
+    src: ["PageAccessService.SearchUsersAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/page-access/users?search=nadia] Call => [200] returns matching users from the caller's own tenant only"
+    auto: API
+
+  - id: RBAC-PA-011
+    func: [F-RBAC-120]
+    sc: A revoked/expired role assignment drops out of the preview automatically
+    t: Once a role assignment is revoked, the next preview call excludes it and its permissions
+    src: ["PageAccessService.GetUserPreviewAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/page-access/users/{userId}/preview] Before revoke => [200] roles includes HRBP"
+      - "[POST /api/role-assignments/{hrbpAssignmentId}/revoke] Revoke it => [200]"
+      - "[GET /api/page-access/users/{userId}/preview] Call again => [200] roles no longer includes HRBP; its unique permissions are gone unless another role also grants them"
+    auto: API
+
+  - id: RBAC-PA-012
+    func: [F-RBAC-121, F-RBAC-025]
+    sc: A refreshed session reflects a Page Access Management change made before the refresh
+    t: Consistent with F-RBAC-025's stale-token finding - a token refresh after a permission grant picks it up
+    src: ["AuthService.IssueTokensAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/page-access/roles/{itRoleId}] Grant IT role Employee.Export => [200]"
+      - "[POST /api/auth/refresh] As an IT user => [200] the new access token's claims include Employee.Export"
+    auto: API
+
+  - id: RBAC-PA-013
+    func: [F-RBAC-122]
+    sc: "TENANT ISOLATION GAP: a Page Access change from one tenant applies to the shared role catalog other tenants use"
+    t: A permission grant made by a Tenant A admin on a shared role id is visible to Tenant B's same role
+    src: ["PageAccessService.UpdateAsync (no TenantId filter on Roles/RolePermissions)"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A+B
+    steps:
+      - "[GET /api/page-access/roles/{hrbpRoleId}] As Tenant B, confirm HRBP's baseline grantedPermissions => [200]"
+      - "[PUT /api/page-access/roles/{hrbpRoleId}] As Tenant A's HRAdmin (PageAccess.Manage), add Employee.Delete to the shared HRBP role => [200]"
+      - "[GET /api/page-access/roles/{hrbpRoleId}] As Tenant B, re-read => [200] Employee.Delete is now ALSO present for Tenant B's HRBP - the change crossed tenant boundaries because the role row is shared"
+    auto: API
+    cr: [CR-75]
+
+  - id: RBAC-PA-014
+    func: [F-RBAC-004]
+    sc: PUT the permission matrix for a role - the actual 'edit a role' surface
+    t: Confirms F-RBAC-004's framing - the only editable thing about a role is its permission set, never its name/description
+    src: ["PageAccessService.UpdateAsync"]
+    type: Contract
+    pri: P3
+    perm: "PageAccess.Manage"
+    steps:
+      - "[PUT /api/page-access/roles/{itRoleId}] Send a request body attempting to also set a 'name' field alongside permissions => [200] name is ignored entirely; the request DTO (PageAccessUpdateRequest) has no name/description field at all"
+    auto: API

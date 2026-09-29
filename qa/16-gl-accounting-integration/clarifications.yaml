@@ -1,0 +1,321 @@
+# Module 16 QA-risk register. Numbering continues after Module 15's CR-273 (qa/15-bank-advice-salary-disbursement/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. Classification starts 'Open - awaiting decision'.
+# CR-275, CR-276, CR-277, CR-278, and CR-283 are exceptions: they document confirmed source-level
+# defects (dead lifecycle states/permissions/configuration fields with zero corresponding
+# functionality), not merely design ambiguities, and are classified accordingly. CR-284 is a
+# confirmed frontend defect for the same reason. CR-289 is a confirmed cross-module defect: a real,
+# supported workflow in a different module (Variable Pay/Bonus settled against a final settlement)
+# produces data this module silently fails to post to the GL.
+
+clarifications:
+  - id: CR-274
+    title: "HEADLINE FINDING - no seeded role except SuperAdmin/TenantAdmin holds any of the 8 Payroll.Accounting* permissions, out of the box"
+    observation: >
+      A full grep of Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs for all 8 Accounting
+      permission constants (AccountingView/Generate/Validate/Approve/Post/Export/ViewHistory/
+      ManageConfiguration) returns matches only in the permission-id-assignment dictionary (ids
+      128-135) - never inside any role's RolePermissionMap array. SuperAdmin and TenantAdmin hold
+      all 8 only via the blanket DomainPermissions.All grant. HRAdmin (which otherwise holds the
+      full Payroll.SalaryComponent*/SalaryStructure*/EmployeeSalary*/Period*/Controls*/Run*/
+      TaxDeclaration*/YearEndTax* surface), HRManager, SuperHR, and the role literally named
+      "Accounts" (whose entire seeded grant is DomainPermissions.Employee.View - nothing else) all
+      hold zero of the 8. This is the identical shape to qa/15's CR-263 for BankAdvice.
+    risk: >
+      A tenant that relies on any seeded role other than SuperAdmin/TenantAdmin to run payroll
+      operations - including the role named "Accounts", the one role whose name most directly
+      suggests it should handle GL posting - cannot view, generate, validate, approve, post, export,
+      or configure a single GL account, mapping, or journal out of the box. Combined with qa/15's
+      CR-263 (BankAdvice), this means BOTH major payroll-output modules are entirely inaccessible to
+      every seeded operational role.
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, full-file grep for the 8 Accounting permission constants - zero matches outside the id-assignment dictionary; HRAdmin/HRManager/SuperHR/Accounts/IT/Manager/Employee role arrays all read in full)"
+    classification: Open - awaiting decision
+
+  - id: CR-275
+    title: "CONFIRMED DEFECT (headline) - there is no way to cancel or reverse a payroll journal through any exposed API, ever, despite the schema and Generate's own guard implying that capability was intended"
+    observation: >
+      IPayrollAccountingService's full 17-method interface has no CancelAsync, ReverseAsync, or any
+      other method that could ever set PayrollJournalStatus.Cancelled. Yet GenerateAsync's own
+      active-journal pre-check explicitly excludes Cancelled status
+      (x.Status != PayrollJournalStatus.Cancelled), and GenerateFinalSettlementAsync's equivalent
+      guard does the same - both signal a cancel-then-regenerate design that was never actually
+      built. Since Cancelled can never be reached, both guards permanently block any second
+      Generate call for the same payroll run or final settlement, for the life of the tenant.
+    risk: >
+      A journal generated with a mistake (a wrong mapping, a since-corrected account, a payroll
+      recalculation after the fact) can never be corrected by regenerating - the only theoretical
+      remedy is direct database intervention outside the product entirely. This is strictly worse
+      than qa/15's BankAdvice module, which at least has a working (if payment-status-buggy per
+      CR-265) Cancel action with a genuine regeneration path.
+    source: "Backend/HRMS.Application/Abstractions/IPayrollAccountingService.cs (full interface, no Cancel/Reverse method); Backend/HRMS.Application/Services/PayrollAccountingService.cs (GenerateAsync, GenerateFinalSettlementAsync - both AnyAsync guards exclude only the unreachable Cancelled status)"
+    classification: Confirmed defect
+
+  - id: CR-276
+    title: "CONFIRMED DEFECT - PayrollJournalStatus.Exported is permanently unreachable; Export is a stateless read-only operation despite the schema implying a stateful export step"
+    observation: >
+      PayrollJournalStatus.Exported and PayrollJournalHistoryChangeType.Exported are both declared,
+      and ExportAsync's own precondition explicitly treats Exported as a valid already-exported
+      state (`j.Status is not Approved and not Posted and not Exported` is the rejection condition).
+      But a full grep of PayrollAccountingService.cs shows no code path anywhere ever assigns
+      Status=Exported, stamps ExportedAtUtc/ExportedByUserId (both declared entity fields), or
+      records an Exported history event. ExportAsync itself performs zero database writes.
+    risk: >
+      There is no way to distinguish, from the data model alone, "generated and approved but never
+      exported" from "already exported" - the Exported branch of every status check is permanently
+      dead code, and any downstream process relying on ExportedAtUtc to know when a journal was last
+      pulled for an external system will find it always null. This contrasts with qa/15's BankAdvice
+      module, whose own Export action DOES perform a real, working first-export state transition.
+    source: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (full grep for PayrollJournalStatus.Exported/ExportedAtUtc/ExportedByUserId assignment - zero matches; ExportAsync, full method - no db write of any kind)"
+    classification: Confirmed defect
+
+  - id: CR-277
+    title: "CONFIRMED DEFECT - PayrollJournalHistoryChangeType.Reversed is dead, and the reconciliation engine's own BrokenAccountingReversalLinkage/BrokenAccountingAdjustmentLinkage findings can never fire against data this service is capable of generating"
+    observation: >
+      Reversed is a declared PayrollJournalHistoryChangeType member with zero corresponding
+      functionality - a full grep of PayrollAccountingService.cs finds no assignment of it anywhere,
+      consistent with CR-275's finding that reversal does not exist at all. Separately,
+      PayrollAnalyticsService's own BrokenAccountingReversalLinkage finding filters
+      PayrollJournalLineSource rows whose SourceType Contains("Reversal", OrdinalIgnoreCase), and
+      BrokenAccountingAdjustmentLinkage does the same for "Adjustment" - but AddLine (the sole
+      construction site for PayrollJournalLineSource) can only ever emit SourceType="EmployeeLoan" or
+      "FinalSettlement" (confirmed by full grep). Neither finding can ever fire against real generated
+      data.
+    risk: >
+      Two of the six GL-specific reconciliation findings this module's own analytics layer is meant
+      to raise are permanently unreachable dead code, reducing the practical reconciliation coverage
+      from 6 findings to 4 (MissingPayrollJournal, AccountingUnbalanced, DuplicatePayrollJournal,
+      AccountingPayrollTotalMismatch) without that reduction being visible anywhere in the product.
+    source: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (full grep for PayrollJournalHistoryChangeType.Reversed - zero matches; AddLine, full grep for SourceType assignment - only EmployeeLoan/FinalSettlement); Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (AddSourceFindingsAsync, BrokenAccountingReversalLinkage/BrokenAccountingAdjustmentLinkage)"
+    classification: Confirmed defect
+
+  - id: CR-278
+    title: "CONFIRMED DEFECT (headline) - journal history is captured correctly (with ActorUserId populated) but is completely unreachable through any exposed API, and Payroll.Accounting.ViewHistory gates nothing"
+    observation: >
+      PayrollJournalHistory rows ARE correctly appended on every transition, with ActorUserId
+      populated (unlike qa/15 BankAdvice's own dead ActorUserId, CR-272). But PayrollJournalDto
+      carries no History field of any kind, and neither GetAsync nor ListAsync ever call
+      Include(x => x.History) - so there is literally no way, through any endpoint, to retrieve a
+      journal's audit trail. Payroll.Accounting.ViewHistory is declared, seeded (id 134), and
+      mirrored on the frontend, but since history is invisible to every caller regardless of which
+      permission they hold, the permission has zero observable effect.
+    risk: >
+      An auditor with full Accounting.View + ViewHistory permissions, wanting to see who approved
+      and posted a journal and when, has no product surface to consult at all - despite the
+      underlying data existing and being correctly attributed. This is a strictly worse outcome than
+      qa/15's own CR-264 (there, history WAS visible, just not permission-gated) - here, no one can
+      see it regardless of permission.
+    source: "Backend/HRMS.Application/DTOs/Payroll/PayrollAccountingDtos.cs (PayrollJournalDto, full field list - no History); Backend/HRMS.Application/Services/PayrollAccountingService.cs (GetAsync, ListAsync, ToDto - no History Include/mapping anywhere); Backend/HRMS.API/Controllers/PayrollOutputsController.cs (PayrollAccountingController, full route grep - no [HasPermission(Permissions.Payroll.AccountingViewHistory)] anywhere)"
+    classification: Confirmed defect
+
+  - id: CR-279
+    title: "PayrollJournalStatus.Draft is a declared default value that is never actually observable via the API"
+    observation: >
+      PayrollJournalStatus.Draft is the entity's declared default value for PayrollJournalBatch, but
+      GenerateAsync and GenerateFinalSettlementAsync (the only two construction sites for
+      PayrollJournalBatch) both always explicitly set Status=Generated before persisting. No code
+      path leaves a persisted row at Draft.
+    risk: >
+      Low severity - a purely cosmetic dead enum member, since every consumer of PayrollJournalStatus
+      (the controller, the frontend page's button-visibility logic, the analytics reconciliation
+      queries) already correctly treats Generated as the first real status. Worth a product decision
+      on whether to remove the unused Draft member for clarity, or whether it signals an
+      originally-intended (but never built) draft-before-generate workflow.
+    source: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (GenerateAsync, GenerateFinalSettlementAsync - both explicitly set Status=Generated; full grep confirms no other PayrollJournalBatch construction site anywhere)"
+    classification: Open - awaiting decision
+
+  - id: CR-280
+    title: "Validate performs no independent balance or mapping re-check of its own - it is a bare status-only transition, redundant with what Generate already guarantees"
+    observation: >
+      ValidateAsync and ApproveAsync/PostAsync all funnel through one shared TransitionAsync method.
+      Validate's own transition (Generated -> Validated) carries no extra logic branch beyond the
+      current-status gate - it does not re-check account activity, re-resolve mappings, or
+      re-verify the balance. Since GenerateAsync itself already refuses to persist an unbalanced
+      journal (the balance check runs BEFORE SaveChangesAsync), every journal reaching Generated
+      status is already guaranteed balanced by construction, so Validate cannot currently discover
+      anything Generate did not already guarantee.
+    risk: >
+      A user who invokes Validate expecting it to perform some additional check (the natural reading
+      of a dedicated "validate" step, distinct from the immediately-following "approve" step) gets no
+      additional assurance beyond what Generate already provided. This may be intentional
+      forward-compatible scaffolding for a future re-check (e.g. against GL accounts deactivated
+      after generation - see CR-281), or it may indicate Validate and Generated->Validated should be
+      collapsed into one step. A product decision is needed either way.
+    source: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (TransitionAsync, ValidateAsync - shared implementation, no extra validation branch for the Validated case)"
+    classification: Open - awaiting decision
+
+  - id: CR-281
+    title: "A GL account can be deactivated after being referenced by an already-Generated/Validated/Approved journal, with no re-check at any later lifecycle stage"
+    observation: >
+      UpdateAccountAsync allows IsActive to be flipped to false on any account, with no check for
+      whether that account is currently referenced by any PayrollJournalLine of a not-yet-Posted
+      journal. Neither ValidateAsync, ApproveAsync, nor PostAsync ever re-queries PayrollGLAccounts
+      to confirm the accounts a journal's lines already reference are still active - only Generate's
+      own mapping-resolution step checks IsActive, and only at generation time.
+    risk: >
+      An account deactivated mid-lifecycle (e.g. between Generate and Approve, during a chart-of-
+      accounts cleanup) silently continues through Validate/Approve/Post with no warning, so a
+      journal can be fully posted referencing an account the tenant has since marked inactive -
+      undermining the intent of the IsActive flag as a real-time posting gate.
+    risk_note: "Compounded by CR-275/CR-278: since there is no cancel/regenerate path and no visible history, there is also no way to detect or remediate this after the fact."
+    source: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (UpdateAccountAsync - no reference check; TransitionAsync - no account-active re-check in any branch)"
+    classification: Open - awaiting decision
+
+  - id: CR-282
+    title: "GenerateAsync/GenerateFinalSettlementAsync's active-journal uniqueness pre-check has no surrounding try/catch, sharing the uncaught-race shape with prior modules' CR-269/CR-262 family - worsened here by a non-versioned journal number"
+    observation: >
+      Both Generate methods run an AnyAsync active-journal pre-check with no try/catch around their
+      own SaveChangesAsync call. Because JournalNumber's trailing segment is a hard-coded literal "1"
+      (not computed via a MaxAsync-style version count, unlike qa/15 BankAdvice's own
+      MaxAsync(Version)+1 pattern), two concurrent Generate calls for the SAME source that both pass
+      the pre-check before either commits will compute the IDENTICAL JournalNumber every time,
+      guaranteeing the unique (TenantId, JournalNumber) index throws for the race loser.
+    risk: >
+      A genuine concurrent-request race (a double-click Generate, or two admins independently
+      triggering generation for the same freshly-approved run/settlement) surfaces as an unhandled
+      exception (likely a 500) rather than a graceful Conflict, with a HIGHER collision probability
+      than the equivalent BankAdvice race (CR-269) since there is no version-number entropy at all
+      here - the two calls do not even need to read a stale Version value to collide, the number is
+      identical by construction every single time.
+    source: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (GenerateAsync, GenerateFinalSettlementAsync - full methods, no try/catch DbUpdateException around SaveChangesAsync; JournalNumber string literals, both hard-coded trailing \"/1\")"
+    classification: Open - awaiting decision
+
+  - id: CR-283
+    title: "CONFIRMED DEFECT - two configuration-time fields have zero effect on generated journals: AggregationMode is never read by Generate, and EmployerContributionAccountId is never used to choose a line's account"
+    observation: >
+      PayrollAccountingConfigurationVersion.AggregationMode (Account/AccountAndCostCenter/
+      EmployeeDetail) is settable via CreateVersionAsync and returned in every configuration DTO, but
+      a full grep of GenerateAsync/GenerateFinalSettlementAsync shows it is never read - every journal
+      is generated at the same fixed per-employee, per-component, per-account granularity regardless
+      of the configured mode. Separately, PayrollGLMapping.EmployerContributionAccountId is a
+      settable field on every mapping request/DTO, but a full grep of AddLine/GenerateAsync shows it
+      is never read either - only DebitAccountId/CreditAccountId ever produce a line, even for
+      employer-contribution components.
+    risk: >
+      A tenant configuring AccountAndCostCenter or EmployeeDetail aggregation, or designating a
+      dedicated employer-contribution account distinct from the ordinary debit/credit pair, gets
+      silently no different behavior than the default - both fields are pure configuration-surface
+      theater with no code behind them, which could mislead an administrator into believing a
+      dimension or account-routing feature exists that does not.
+    source: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (GenerateAsync, GenerateFinalSettlementAsync - full grep for AggregationMode and EmployerContributionAccountId usage; both are read only into DTOs/id-resolution sets, never into line-account selection logic)"
+    classification: Confirmed defect
+
+  - id: CR-284
+    title: "CONFIRMED FRONTEND DEFECT (headline) - there is no UI path to generate a payroll journal, generate a final-settlement journal, create a configuration version, or create/update/deactivate a GL mapping - despite all of these being the core purpose of the feature and all being real, working backend endpoints"
+    observation: >
+      A full read of Frontend/HRMS.Web/src/api/payroll.ts's Accounting section (lines 392-408) shows
+      client functions only for list/get/validate/approve/post/export (journals) and
+      list/create (accounts, configurations). There is no client function for either Generate route,
+      CreateVersion, CreateMapping, UpdateMapping, or DeactivateMapping. PayrollAccountingPage.tsx
+      never offers a way to pick a payroll run or final settlement and generate accounting for it;
+      PayrollAccountingConfigurationPage.tsx never offers a way to add a version or a mapping rule to
+      a configuration once created.
+    risk: >
+      An operator with full Accounting permissions cannot post payroll to the GL, generate final-
+      settlement accounting, or configure a single usable GL mapping rule through the product UI at
+      all - every one of these actions requires Swagger/Postman/a script. A configuration created
+      through the UI is permanently empty and useless without direct API calls, since mapping
+      creation has no UI path either. This is a substantially broader gap than qa/15 BankAdvice's own
+      CR-267 (there, only Generate and Cancel lacked UI wiring; here, the entire configuration and
+      posting workflow does).
+    source: "Frontend/HRMS.Web/src/api/payroll.ts (Accounting section, full read - no generate/version/mapping functions); Frontend/HRMS.Web/src/pages/payroll/PayrollAccountingPage.tsx, PayrollAccountingConfigurationPage.tsx (full components, full grep for any generate/version/mapping call site - zero)"
+    classification: Confirmed defect
+
+  - id: CR-285
+    title: "(frontend, low severity) Neither accounting page has any permission gating on its controls"
+    observation: >
+      PayrollAccountingPage.tsx and PayrollAccountingConfigurationPage.tsx both have no useAuth
+      import and no can() call anywhere (full read of both components) - every button/form renders
+      unconditionally for any user who can reach the page at all (i.e. who holds the route's own View
+      or ManageConfiguration gate).
+    risk: >
+      Low severity, since [HasPermission] is the real backend authorization gate per CLAUDE.md - a
+      user who holds View but not Approve, for example, would see an Approve button that 403s on
+      click rather than a disabled-button affordance. The identical low-severity shape as qa/13's
+      CR-237, qa/14's CR-257, and qa/15's CR-268.
+    source: "Frontend/HRMS.Web/src/pages/payroll/PayrollAccountingPage.tsx, PayrollAccountingConfigurationPage.tsx (full components - no useAuth/can() usage)"
+    classification: Open - awaiting decision
+
+  - id: CR-286
+    title: "PayrollAccountingPage has zero automated test coverage; PayrollAccountingConfigurationPage's single test covers only the render path"
+    observation: >
+      A directory listing of Frontend/HRMS.Web/src/pages/payroll/ confirms no
+      PayrollAccountingPage.test.tsx exists at all. PayrollAccountingConfigurationPage.test.tsx
+      exists with exactly 1 test, which mocks all 4 API calls and asserts only that the page's
+      headings render - it never submits the create-account or create-configuration forms, and no
+      test anywhere in the frontend exercises Validate/Approve/Post/Export.
+    risk: >
+      A regression in the journal-lifecycle page's button wiring, status-conditioned rendering, or
+      export flow would not be caught by the frontend test suite at all - the entire journal
+      lifecycle UI (the page most central to this module's purpose) has no automated safety net.
+    source: "Frontend/HRMS.Web/src/pages/payroll/ (directory listing - PayrollAccountingPage.test.tsx absent); PayrollAccountingConfigurationPage.test.tsx (full file - 1 test, render-only)"
+    classification: Open - awaiting decision
+
+  - id: CR-287
+    title: "Cost center / department / location GL dimensions have no representation anywhere in the mapping or journal-line model beyond one unused column"
+    observation: >
+      PayrollJournalLine declares a CostCenterId column, but PayrollJournalLineConfiguration never
+      configures an FK relationship for it, and AddLine (the sole line-construction site) never sets
+      it - it is permanently null on every generated line. PayrollGLMappingRequest/PayrollGLMapping
+      have no CostCenterId, DepartmentId, or LocationId field of any kind, so mapping rules cannot be
+      scoped by any organizational dimension at all. This is despite PayrollJournalAggregationMode
+      declaring an "AccountAndCostCenter" option (itself dead per CR-283).
+    risk: >
+      A tenant wanting departmental or cost-center-level GL reporting (a standard accounting
+      requirement for any organization with more than one cost center) cannot achieve it through this
+      module in any way - not through mapping configuration, not through journal-line tagging, and
+      not through the aggregation-mode setting that appears to promise it.
+    source: "Backend/HRMS.Domain/Entities/PayrollAccounting.cs (PayrollJournalLine.CostCenterId, full field list); Backend/HRMS.Infrastructure/Persistence/Configurations/PayrollAccountingConfiguration.cs (PayrollJournalLineConfiguration - no CostCenterId FK); Backend/HRMS.Application/Services/PayrollAccountingService.cs (AddLine - full grep, CostCenterId never assigned)"
+    classification: Confirmed defect
+
+  - id: CR-288
+    title: "PayrollJournalBatch.ApprovedByUserId and PostedByUserId are declared entity fields that are never populated by any code path"
+    observation: >
+      TransitionAsync's ExecuteUpdateAsync setters for the Approved branch set only
+      Status/ApprovedAtUtc/ConcurrencyVersion, and for the Posted branch set only
+      Status/PostedAtUtc/ConcurrencyVersion - neither ApprovedByUserId nor PostedByUserId is ever
+      assigned, despite both being declared Guid? fields on the entity and the acting user
+      (tenant.UserId) being available in scope at every call site (it IS correctly used for the
+      corresponding PayrollJournalHistory.ActorUserId, per F-GLACC-094 - only the batch-level
+      by-user columns are affected).
+    risk: >
+      A report or downstream integration that reads PayrollJournalBatch directly for "who approved
+      this journal" or "who posted this journal" (rather than joining through PayrollJournalHistory,
+      which DOES carry the correct actor) will find both columns permanently null, weakening any
+      direct-batch-level accountability trail even though the equivalent history-level trail is
+      sound.
+    source: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (TransitionAsync, full grep for ApprovedByUserId/PostedByUserId assignment - zero matches)"
+    classification: Open - awaiting decision
+
+  - id: CR-289
+    title: "CONFIRMED DEFECT (cross-module, headline) - Variable Pay/Bonus settled against a Final Settlement is silently omitted from GL journal generation; GenerateFinalSettlementAsync has no query, no mapping type, and no missing-mapping signal for it at all"
+    observation: >
+      VariablePayService.SettleAsync accepts SettlementType.FinalSettlement together with a
+      FinalSettlementId, persisting a VariablePaySettlement row exactly the same shape as
+      ReimbursementSettlement's own FinalSettlement-typed rows - which GenerateFinalSettlementAsync
+      DOES read, via db.ReimbursementSettlements (F-GLACC-054). But a full grep of
+      PayrollAccountingService.cs's GenerateFinalSettlementAsync shows no query against
+      db.VariablePaySettlements or db.VariablePayAwards anywhere - the method's complete source list
+      is limited to LoanRepayments, ReimbursementSettlements, GratuityCalculations,
+      LeaveEncashmentCalculations, and NoticeSettlementCalculations. Separately, PayrollGLMappingType's
+      full 23-member enum (Earnings/EmployeeDeduction/EmployerContribution/NetPayable/
+      StatutoryLiability/Loan*/Reimbursement*/Gratuity*/LeaveEncashmentExpense/Notice*/
+      SeparationBenefitExpense/FinalSettlementBenefitPayable) has no VariablePay/Bonus-specific
+      mapping type of any kind - so even a hypothetical fix that started querying
+      VariablePaySettlements would have no dedicated account pair to resolve a line against.
+    risk: >
+      A tenant that settles an approved variable-pay/bonus award against an employee's final
+      settlement - a real, supported cross-module workflow (VariablePayAwardHistory has a dedicated
+      FinalSettlementSettled event type, and VariablePayPlanVersion.FinalSettlementTreatment defaults
+      to IncludeOutstanding) - gets that amount completely excluded from the GL journal with zero
+      signal. GenerateFinalSettlementAsync does not raise MissingGLMapping for it (unlike every one of
+      the 5 supported sources, each of which gets a source-specific Conflict when unmapped, per
+      F-GLACC-052); does not include it in the all-5-sources-empty eligibility check, so a case whose
+      ONLY eligible source is a settled bonus is wrongly rejected with "No finalized separation benefit
+      or recovery is available for this final settlement" despite a real settled amount existing; and
+      cannot trigger the unbalanced-journal Conflict either, since a source the method never reads
+      cannot unbalance a journal it never builds lines for. When combined with any of the 5 supported
+      sources, the journal generates successfully (200 OK) with a plausible-looking, correctly-balanced
+      set of lines that simply never mentions the settled variable-pay amount - the closest thing to a
+      silent GL accounting shortfall this module can produce.
+    source: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (GenerateFinalSettlementAsync, full method - full grep for VariablePay/Bonus, zero matches); Backend/HRMS.Application/Services/VariablePayService.cs (SettleAsync - SettlementType.FinalSettlement + FinalSettlementId, VariablePayHistoryEventType.FinalSettlementSettled); Backend/HRMS.Domain/Entities/VariablePay.cs (VariablePaySettlement.FinalSettlementId, VariablePayPlanVersion.FinalSettlementTreatment default IncludeOutstanding); Backend/HRMS.Domain/Enums/VariablePayEnums.cs (VariablePaySettlementType.FinalSettlement, VariablePayHistoryEventType.FinalSettlementSettled); Backend/HRMS.Domain/Enums/PayrollEnums.cs (PayrollGLMappingType, full 23-member enum - full grep for VariablePay/Bonus, zero matches)"
+    classification: Confirmed defect

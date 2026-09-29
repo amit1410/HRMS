@@ -1,0 +1,254 @@
+sheet: Attendance_Scope
+submodule: Manager/HR/Time-Manager scope resolution - AttendanceAuthorizationService and the CR-57/CR-77 mechanism matrix
+defaults:
+  role: MANAGER
+  perm: "Attendance.Exception.View"
+  tenant: A
+  pre: "Tenant A signed in; scope-mechanism proof cases, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-SCOPE-001
+    func: [F-ATT-206]
+    sc: AttendanceAuthorizationService is a distinct, Attendance-owned scope mechanism, not a rename of Leave's or Employee's
+    t: Prove Attendance's own manager/role-scope predicate produces results independent of LeaveAuthorizationService/EmployeeAccessScopeService.BuildPredicateAsync's own quirks
+    src: ["AttendanceAuthorizationService"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Manual] Compare AttendanceAuthorizationService.BuildEmployeePredicateAsync's manager-arm (own BuildCurrentManagerPredicate over EmployeeEmploymentHistory) against LeaveAuthorizationService.BuildCurrentManagerPredicate (separately coded) and EmployeeAccessScopeService.BuildPredicateAsync (Employee module's own logic) => confirm all three are independently implemented, not calls to a shared primitive, even though they express similar business intent"
+    auto: DB-assisted
+
+  - id: ATT-SCOPE-002
+    func: [F-ATT-207]
+    sc: BuildEmployeePredicateAsync composes self OR role-scope OR current-manager
+    t: Each arm independently grants access; disabling all three denies
+    src: ["AttendanceAuthorizationService.BuildEmployeePredicateAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[GET /api/attendance/me/calendar] includeSelf arm: employee reads their own data => [200] self-match succeeds"
+      - "[GET /api/attendance/manager/team] includeManager arm: a direct manager reads a report's data with no role-scope rows => [200] manager-match succeeds"
+      - "[GET /api/attendance/operations/exceptions] includeRoleScope arm: an HRBP with department-scope rows (no manager relationship) reads data => [200] role-scope-match succeeds"
+      - "[GET /api/attendance/manager/team/{unrelatedEmployeeId}/{date}] A caller with none of the three arms satisfied => [403/404] denied"
+    auto: API
+
+  - id: ATT-SCOPE-003
+    func: [F-ATT-208]
+    sc: CanAccessEmployeeAsync's manager check uses a different code path (IEmployeeManagerResolver) than BuildEmployeePredicateAsync's manager arm
+    t: Both ultimately agree for a simple current-manager case, proving the duplication is currently harmless in the common case
+    src: ["AttendanceAuthorizationService.CanAccessEmployeeAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[POST /api/attendance/admin-corrections] (uses CanAccessTargetAsync -> CanAccessEmployeeAsync's manager-resolver fallback) As the direct effective manager => [200] succeeds"
+      - "[GET /api/attendance/manager/team/{sameEmployeeId}/{date}] (uses BuildEmployeePredicateAsync's own manager-predicate arm) As the same manager => [200] also succeeds - confirm both independently-coded manager checks agree for this simple case"
+    auto: API
+
+  - id: ATT-SCOPE-004
+    func: [F-ATT-209]
+    sc: Permission possession is independently, date-scoped resolved
+    t: A permission granted via a role assignment with a future EffectiveFrom does not yet apply
+    src: ["AttendanceAuthorizationService.HasPermissionAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Grant the caller's role assignment Attendance.Exception.View with EffectiveFrom=today+7 => precondition established"
+      - "[GET /api/attendance/operations/exceptions] Today => [403] Forbidden - the permission is not yet effective"
+    auto: DB-assisted
+
+  - id: ATT-SCOPE-005
+    func: [F-ATT-210]
+    sc: A rotated-off manager still sees a report's historical data for the dates they managed them
+    t: Manager-as-of-query-date, not manager-as-of-today, governs visibility
+    src: ["AttendanceAuthorizationService.BuildEmployeePredicateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Manager X managed E1 through 2026-06-30, Manager Y from 2026-07-01 => precondition established for the steps below"
+      - "[GET /api/attendance/manager/team/{E1}/2026-06-15] As Manager X => [200] visible - X was the effective manager on that historical date"
+      - "[GET /api/attendance/manager/team/{E1}/2026-07-15] As Manager X => [403/404] no longer visible - X is not the current manager for this later date"
+      - "[GET /api/attendance/manager/team/{E1}/2026-07-15] As Manager Y => [200] visible"
+    auto: API
+
+  - id: ATT-SCOPE-006
+    func: [F-ATT-211]
+    sc: A directly-constructed service without DI (test-only scenario) has fully permissive scope, not merely degraded
+    t: Document the risk explicitly even though DI always registers the service in production
+    src: ["AttendanceOperationsService / AttendanceReportService / AttendanceMonthlyProcessor"]
+    type: Security
+    pri: P3
+    steps:
+      - "[Manual/DB] Construct AttendanceOperationsService directly with authorization:null (as some unit-test harnesses do) and call BuildScopeAsync => the resulting predicate is x=>true (fully unrestricted) - document this as a design-consistency risk for anyone reusing these services outside the standard DI container, not a production-reachable bug"
+    auto: DB-assisted
+
+  - id: ATT-SCOPE-007
+    func: [F-ATT-212]
+    sc: Comp-Off Operations has no route-level [HasPermission] but is still denied to a caller with zero relevant permissions
+    t: Service-level authorization substitutes for the missing attribute
+    src: ["CompOffService.GetOperationalAsync"]
+    type: Security
+    pri: P1
+    steps:
+      - "[GET /api/attendance/comp-off/operations] As an authenticated caller holding NONE of CompOffViewAll/ViewTeam/Manage/Approve/ViewHistory => [403] Forbidden - via the service's internal check, since the route itself carries no [HasPermission] attribute at all"
+      - "[Manual] Confirm via reflection over CompOffController that GET operations is the only route in the entire Attendance-family controller set lacking a declared permission attribute => confirmed"
+    auto: DB-assisted
+    cr: [CR-82]
+
+  - id: ATT-SCOPE-008
+    func: [F-ATT-213]
+    sc: Role x permission matrix - spot-check the extremes
+    t: SuperAdmin/TenantAdmin hold everything except AccountEmployeeLink.*; IT and Accounts hold zero Attendance permissions
+    src: ["SeedData.RolePermissionMap"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[GET /api/attendance/shifts] As SuperAdmin => [200]"
+      - "[GET /api/attendance/shifts] As IT => [403] IT holds zero Attendance.* permissions in the seeded matrix"
+      - "[GET /api/attendance/shifts] As Accounts => [403] same"
+    auto: API
+
+  - id: ATT-SCOPE-009
+    func: [F-ATT-214]
+    sc: No seeded role except SuperAdmin/TenantAdmin can request or approve Regularization/On-Duty, submit an admin correction, or hold any Overtime permission
+    t: A wide sweep across HRAdmin/HRManager/Manager/Employee/ERO/HRBP/TimeManager/SuperHR confirms all are denied these specific actions
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    steps:
+      - "[POST /api/attendance/me/regularizations] As HRAdmin => [403] HRAdmin holds no Regularization.Request"
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] As HRBP => [403] HRBP holds no Regularization.Approve"
+      - "[POST /api/attendance/admin-corrections] As TimeManager => [403] TimeManager holds no AdminCorrection.Manage"
+      - "[POST /api/attendance/overtime/requests] As Manager => [403] Manager holds no Overtime.Request"
+    auto: API
+    cr: [CR-112, CR-114]
+
+  - id: ATT-SCOPE-010
+    func: [F-ATT-215]
+    sc: HRAdmin can view/process/close/reopen periods but cannot approve a single regularization
+    t: A precise HRAdmin capability boundary check
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    role: HRADMIN
+    steps:
+      - "[GET /api/attendance/periods] As HRAdmin => [200] succeeds (MonthlyViewAll held)"
+      - "[POST /api/attendance/periods/{id}/close] As HRAdmin => [200] succeeds (MonthlyClose held)"
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] As HRAdmin, even as the request's genuine effective manager => [403] Forbidden - Regularization.Approve is not held"
+    auto: API
+    cr: [CR-112]
+
+  - id: ATT-SCOPE-011
+    func: [F-ATT-216]
+    sc: SuperHR cannot open Operations, Reports, or Device screens through its own role
+    t: SuperHR is restricted to Comp-Off actions only within Attendance
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    role: SUPER
+    steps:
+      - "[GET /api/attendance/operations/exceptions] As SuperHR => [403] no Exception.View held"
+      - "[GET /api/attendance/reports/daily] As SuperHR => [403] no Report.View held"
+      - "[GET /api/attendance/devices] As SuperHR => [403] no Device.View held"
+      - "[GET /api/attendance/comp-off/operations] As SuperHR => [200] succeeds - the only Attendance surface SuperHR can reach"
+    auto: API
+    cr: [CR-113]
+
+  - id: ATT-SCOPE-012
+    func: [F-ATT-217]
+    sc: TimeManager can sync/import/map a device but cannot manage (register/edit/activate/deactivate) one
+    t: A precise TimeManager device-permission boundary check
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    steps:
+      - "[POST /api/attendance/devices/{id}/sync] As TimeManager => [200] succeeds (DeviceSync held)"
+      - "[POST /api/attendance/devices] As TimeManager, attempting to register a new device => [403] Forbidden - DeviceManage not held"
+      - "[GET /api/attendance/reports/daily] As TimeManager => [403] Report.View not held"
+    auto: API
+    cr: [CR-113]
+
+  - id: ATT-SCOPE-013
+    func: [F-ATT-218]
+    sc: A seeded Employee is denied their own daily calendar/exceptions routes
+    t: Cross-reference of CR-111 from the scope-matrix angle
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    role: EMPLOYEE
+    perm: "n/a (seeded matrix, no override)"
+    steps:
+      - "[GET /api/attendance/me/calendar?year=2026&month=7] As a seeded Employee with the DEFAULT seeded permission set (no manual grant of Attendance.View) => [403] Forbidden"
+    auto: API
+    cr: [CR-111]
+
+  - id: ATT-SCOPE-014
+    func: [F-ATT-219]
+    sc: A seeded Manager is denied manager/team routes despite reaching the Operations queue and Monthly summaries
+    t: Prove the split explicitly in one test
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    role: MANAGER
+    perm: "n/a (seeded matrix, no override)"
+    steps:
+      - "[GET /api/attendance/manager/team?fromDate=2026-07-01&toDate=2026-07-07] As a seeded Manager with the DEFAULT seeded permission set => [403] Forbidden - no Attendance.View"
+      - "[GET /api/attendance/operations/exceptions] Same Manager, same session => [200] succeeds - ExceptionView IS held"
+      - "[GET /api/attendance/periods/{id}/summaries] Same Manager => [200 with team-scoped rows, or 403 if MonthlyViewAll specifically is required rather than MonthlyViewTeam - confirm the actual controller gate] MonthlyViewTeam is held but note F-ATT-119's finding that no Monthly route is gated by ViewTeam alone"
+    auto: API
+    cr: [CR-111]
+
+  - id: ATT-SCOPE-015
+    func: [F-ATT-220]
+    sc: Manager operational queries return team-only, excluding same-tenant non-team employees
+    t: An unrelated same-tenant employee never appears in a manager's scoped query
+    src: ["AttendanceOperationsService"]
+    type: Negative
+    pri: P0
+    perm: "Attendance.Exception.View"
+    steps:
+      - "[GET /api/attendance/operations/exceptions] As a manager with 3 direct reports, in a tenant with 50 other employees => [200] only the 3 direct reports' exceptions ever appear"
+    auto: API
+
+  - id: ATT-SCOPE-016
+    func: [F-ATT-221]
+    sc: HRBP and TimeManager role-scope resolution applies before count/paging at real volume
+    t: Large-data proof for the role-scope (not manager-predicate) arm
+    src: ["AttendanceOperationsService"]
+    type: Boundary
+    pri: P1
+    role: HRBP
+    perm: "Attendance.Exception.View"
+    steps:
+      - "[Setup] A tenant with 5,000+ employees, HRBP scoped to one department via role-scope rows => precondition established for the steps below"
+      - "[GET /api/attendance/operations/exceptions?page=1&pageSize=50] => [200] response reflects only the HRBP's department, with SQL-side paging, not an in-memory post-filter of a full-tenant page"
+    auto: DB-assisted
+
+  - id: ATT-SCOPE-017
+    func: [F-ATT-222]
+    sc: The same workbench/history workflow is exercised consistently across Manager/HRBP/TimeManager/HRAdmin personas
+    t: A parametrized persona sweep against the identical exceptions endpoint
+    src: ["AttendanceOperationsService"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/attendance/operations/exceptions] As Manager => [200] team-scoped result"
+      - "[GET /api/attendance/operations/exceptions] As HRBP => [200] role-scoped result"
+      - "[GET /api/attendance/operations/exceptions] As TimeManager => [200] role-scoped result"
+      - "[GET /api/attendance/operations/exceptions] As HRAdmin => [200] broader tenant-scoped result"
+    auto: API
+
+  - id: ATT-SCOPE-018
+    func: [F-ATT-223]
+    sc: Cross-tenant operational/exception queries return zero data regardless of scope mechanism
+    t: Tenant isolation holds across manager, role-scope, and tenant-wide scope types
+    src: ["AttendanceOperationsService"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/attendance/operations/exceptions] As a Tenant B HRAdmin (tenant-wide scope) => [200] zero Tenant A data"
+      - "[GET /api/attendance/operations/exceptions] As a Tenant B Manager (manager-predicate scope) => [200] zero Tenant A data"
+    auto: API

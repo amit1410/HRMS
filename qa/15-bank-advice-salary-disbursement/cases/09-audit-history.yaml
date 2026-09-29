@@ -1,0 +1,101 @@
+sheet: BankAdv_Audit_History
+submodule: Audit & History
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-AUDIT-001
+    func: [F-BANKADV-075]
+    sc: One history row per lifecycle transition, with a full snapshot
+    t: Generate/Prepare/Approve/Export/Cancel each append exactly one BankAdviceHistory row carrying ChangeType/ChangedAtUtc/Message/SnapshotJson
+    src: "BankAdviceService.History"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "BATCH1 is walked through Draft->Prepared->Approved->Exported"
+    role: HRAdmin (custom role holding all BankAdvice permissions)
+    perm: Payroll.BankAdvice.Generate, Validate, Approve, Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{BATCH1}] after each transition => [200] History grows by exactly one row per transition, each with a non-empty SnapshotJson containing BatchNumber/Status/TotalEmployees/TotalAmount"
+    auto: API
+
+  - id: BANKADV-AUDIT-002
+    func: [F-BANKADV-076]
+    sc: History is append-only
+    t: No action ever updates or removes a previously written BankAdviceHistory row
+    src: "Backend/HRMS.Application/Services/BankAdviceService.cs (full grep for db.BankAdviceHistories - Add-only)"
+    type: Contract
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of BankAdviceService.cs for db.BankAdviceHistories => every match is an .Add call; zero .Update/.Remove/.ExecuteUpdateAsync/.ExecuteDeleteAsync against BankAdviceHistories"
+    auto: Manual only
+
+  - id: BANKADV-AUDIT-003
+    func: [F-BANKADV-077]
+    sc: History ordering on read
+    t: History rows on the batch DTO are returned newest-first (ChangedAtUtc descending)
+    src: "BankAdviceService.ToDto"
+    type: Contract
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: "BATCH1 has at least 3 history events from Generate, Prepare, Approve"
+    role: HRAdmin (custom role holding BankAdvice.View)
+    perm: Payroll.BankAdvice.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{BATCH1}] => [200] History[0].ChangeType == \"Approved\" (most recent), the Generated event is last in the array"
+    auto: API
+
+  - id: BANKADV-AUDIT-004
+    func: [F-BANKADV-078]
+    sc: CONFIRMED - ViewHistory permission gates nothing
+    t: A user holding only BankAdvice.View (not ViewHistory) still sees full history on Get/List, because no route checks ViewHistory
+    src: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController, full route grep - no ViewHistory reference)"
+    type: Negative
+    tags: [Authorization]
+    pri: P1
+    sev: Medium
+    pre: "Custom role R1 holds Payroll.BankAdvice.View only, explicitly NOT Payroll.BankAdvice.ViewHistory; BATCH1 has history events"
+    role: Custom role R1
+    perm: Payroll.BankAdvice.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{BATCH1}] as R1 (View only, no ViewHistory) => [200] History array is fully populated, not empty or filtered"
+      - "[Manual] full grep of BankAdviceController for [HasPermission(Permissions.Payroll.BankAdviceViewHistory)] => zero matches anywhere"
+    auto: API
+    cr: [CR-264]
+    secc: true
+
+  - id: BANKADV-AUDIT-005
+    func: [F-BANKADV-079]
+    sc: ActorUserId is never populated
+    t: Every BankAdviceHistory row's ActorUserId is null, even though the acting user's identity is available at every call site
+    src: "BankAdviceService.History (no ActorUserId assignment)"
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: "BATCH1 has a Generated history event created by a known user"
+    role: HRAdmin (custom role holding BankAdvice.Generate, View)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] batch created"
+      - "[Manual] inspect the persisted BankAdviceHistory row for the Generated event => ActorUserId column is NULL despite the batch's own GeneratedByUserId being correctly populated"
+    auto: DB-assisted
+    cr: [CR-272]

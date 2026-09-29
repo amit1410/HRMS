@@ -1,0 +1,82 @@
+sheet: Stat_Tenant_Isolation
+submodule: Tenant Isolation
+defaults:
+  tenant: "T1 (DEMO01) vs T2 (DEMO02)"
+  reg: true
+
+cases:
+  - id: STAT-TEN-001
+    func: [F-STAT-119]
+    sc: Cross-tenant reads/writes across all three services
+    t: Every get/update/transition action across configuration, profile, compliance, and filing surfaces returns NotFound for a cross-tenant id
+    src: "StatutoryPayrollService.cs, PayrollStatutoryComplianceService.cs, StatutoryFilingService.cs"
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    pre: "Tenant T2 has its own StatutoryConfiguration, EmployeeStatutoryProfile, PayrollStatutoryReturnBatch, and StatutoryFilingRun"
+    role: TenantAdmin (T1)
+    perm: "all Statutory/StatutoryCompliance/StatutoryFiling view/manage permissions"
+    tenant: "T1 (DEMO01)"
+    data: "T2's own resource ids"
+    steps:
+      - "[GET /api/payroll/statutory-configurations/{t2ConfigId}] authenticated as T1 => [404]"
+      - "[GET /api/payroll/statutory-compliance/returns/{t2BatchId}] authenticated as T1 => [404]"
+      - "[GET /api/payroll/statutory-filings/runs] authenticated as T1 => [200] the list contains ONLY T1's own runs, never T2's"
+      - "[POST /api/payroll/statutory-filings/runs/{t2RunId}/generate] authenticated as T1 => [404]"
+    auto: API
+
+  - id: STAT-TEN-002
+    func: [F-STAT-120]
+    sc: Composite (TenantId, Id) keys prevent cross-tenant parent/child linkage
+    t: A child row cannot be linked to a parent belonging to a different tenant even if the raw child id is known
+    src: "StatutoryConfiguration.cs, PayrollStatutoryComplianceConfiguration.cs, StatutoryFilingConfiguration.cs (composite FK definitions)"
+    type: Tenant-Isolation
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    pre: "T1 has configuration CFG-1 with version V1; T2 attempts a request referencing CFG-1's id"
+    role: TenantAdmin (T2)
+    perm: Payroll.Statutory.Manage
+    tenant: "T2 (DEMO02)"
+    data: "configurationId=T1's CFG-1 id"
+    steps:
+      - "[POST /api/payroll/statutory-configurations/{cfg1Id}/versions] authenticated as T2, targeting T1's own configuration id => [404] Statutory configuration not found. (the composite (TenantId, Id) foreign key structure means the row simply does not resolve for T2's TenantId)"
+    auto: API
+
+  - id: STAT-TEN-003
+    func: [F-STAT-121]
+    sc: Two tenants may freely reuse identical codes/numbers
+    t: Code/Name/BatchNumber/FilingPeriod uniqueness is scoped per tenant, not globally
+    src: "All statutory EF configurations (TenantId-prefixed unique indexes)"
+    type: Tenant-Isolation
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "T1 already has a StatutoryConfiguration with Code=PF-DEFAULT and a StatutoryFilingDefinition with Code=GENERIC-STATUTORY"
+    role: TenantAdmin (T2)
+    perm: Payroll.Statutory.Manage, Payroll.StatutoryFiling.Manage
+    tenant: "T2 (DEMO02)"
+    data: "code=PF-DEFAULT, code=GENERIC-STATUTORY"
+    steps:
+      - "[POST /api/payroll/statutory-configurations] as T2 with Code=PF-DEFAULT (identical to T1's own code) => [201] created successfully - no cross-tenant collision"
+      - "[POST /api/payroll/statutory-filings/definitions] as T2 with Code=GENERIC-STATUTORY => [201] created successfully"
+    auto: API
+
+  - id: STAT-TEN-004
+    func: [F-STAT-122]
+    sc: No query bypasses the tenant filter
+    t: A spot-check of every LINQ query in all three services confirms none uses IgnoreQueryFilters or raw SQL
+    src: "StatutoryPayrollService.cs, PayrollStatutoryComplianceService.cs, StatutoryFilingService.cs"
+    type: Security
+    tags: [Contract]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of all three service files for 'IgnoreQueryFilters', 'FromSqlRaw', or 'ExecuteSqlRaw' => zero matches; every query relies on the standard EF global query filter plus an explicit TenantId predicate"
+    auto: Manual only

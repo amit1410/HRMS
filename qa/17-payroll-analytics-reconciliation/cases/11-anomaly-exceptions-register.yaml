@@ -1,0 +1,193 @@
+sheet: PYA_Anomaly_Exceptions_Register
+submodule: Anomaly Flags & Tenant-Wide Exceptions Register
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-EXC-001
+    func: [F-PYA-083]
+    sc: Anomaly flags only ever originate from post-payroll reconciliation generation
+    t: There is no standalone endpoint to create a PayrollAnomalyFlag directly - the exceptions register is empty until a post-payroll reconciliation with a NegativeNetPay/ZeroNetPay condition has been generated at least once
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync -> Anomaly()"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Tenant T1 has never generated a post-payroll reconciliation with a negative/zero net condition"
+    role: HRAdmin (custom role holding Payroll.Exceptions.View)
+    perm: Payroll.Exceptions.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/exceptions] => [200] empty Items array, TotalCount=0"
+    auto: API
+
+  - id: PYA-EXC-002
+    func: [F-PYA-084]
+    sc: A repeat negative-net-pay condition does not duplicate the anomaly flag
+    t: Regenerating post-payroll for a run whose employee remains at negative net pay does not add a second Open flag for that employee/type
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1's employee E20 remains at NetPay=-200 across 2 post-payroll generations"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate + Payroll.Exceptions.View)
+    perm: "Payroll.Reconciliation.Generate, Payroll.Exceptions.View"
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] (second generation) => [200] "
+      - "[GET /api/payroll/exceptions?search=E20] => [200] exactly 1 row for E20, not 2"
+    auto: API
+
+  - id: PYA-EXC-003
+    func: [F-PYA-085]
+    sc: Exceptions register is tenant-wide across every payroll run
+    t: The list endpoint returns anomaly flags from every run in the tenant in one call, with no payrollRunId parameter to scope it
+    src: "PayrollAnalyticsController(PayrollExceptionsController).List; PayrollAnalyticsService.GetExceptionsAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN-A and RUN-B each have their own Open NegativeNetPay anomaly flag for different employees"
+    role: HRAdmin (custom role holding Payroll.Exceptions.View)
+    perm: Payroll.Exceptions.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/exceptions] => [200] TotalCount=2, one row from RUN-A and one from RUN-B, in a single unscoped list"
+    auto: API
+    cr: [CR-301]
+
+  - id: PYA-EXC-004
+    func: [F-PYA-086]
+    sc: Search only matches EmployeeCode or Message - no type/severity/status/date filter exists
+    t: There is no query parameter to filter the exceptions list by AnomalyType, Severity, Status, or a date range; only free-text search on EmployeeCode/Message is honored
+    src: "PayrollAnalyticsService.GetExceptionsAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "The tenant has both a NegativeNetPay and a ZeroNetPay anomaly flag"
+    role: HRAdmin (custom role holding Payroll.Exceptions.View)
+    perm: Payroll.Exceptions.View
+    tenant: "T1 (DEMO01)"
+    data: "anomalyType=NegativeNetPay (unsupported parameter)"
+    steps:
+      - "[GET /api/payroll/exceptions?anomalyType=NegativeNetPay] => [200] the anomalyType query parameter is silently ignored (unbound); BOTH anomaly flags are returned, not just the NegativeNetPay one"
+    auto: API
+    cr: [CR-301]
+
+  - id: PYA-EXC-005
+    func: [F-PYA-087]
+    sc: Exceptions ignore sortBy and are always ordered CreatedAtUtc descending, Id ascending
+    t: Passing sortBy=severity has no visible effect on ordering
+    src: "PayrollAnalyticsService.GetExceptionsAsync"
+    type: Negative
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "2 anomaly flags exist with different Severity values but different creation times"
+    role: HRAdmin (custom role holding Payroll.Exceptions.View)
+    perm: Payroll.Exceptions.View
+    tenant: "T1 (DEMO01)"
+    data: "sortBy=severity"
+    steps:
+      - "[GET /api/payroll/exceptions?sortBy=severity] => [200] rows remain ordered by CreatedAtUtc descending, not by Severity"
+    auto: API
+    cr: [CR-300]
+
+  - id: PYA-EXC-006
+    func: [F-PYA-088]
+    sc: A run-level anomaly (null EmployeeId) reports an empty EmployeeCode without erroring
+    t: A ZeroNetPay anomaly (run-level, EmployeeId=null) lists successfully with an empty/absent EmployeeCode rather than the list call erroring
+    src: "PayrollAnalyticsService.GetExceptionsAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN2 has a run-level ZeroNetPay anomaly flag with EmployeeId=null"
+    role: HRAdmin (custom role holding Payroll.Exceptions.View)
+    perm: Payroll.Exceptions.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/exceptions] => [200] the ZeroNetPay row is present with employeeCode=null/empty, not a 500"
+    auto: API
+
+  - id: PYA-EXC-007
+    func: [F-PYA-089]
+    sc: Exceptions CSV export, tenant-wide, unscoped
+    t: ExportExceptionsAsync exports the same tenant-wide set as CSV, honoring only Search
+    src: "PayrollAnalyticsController(PayrollExceptionsController).Export; PayrollAnalyticsService.ExportExceptionsAsync"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Medium
+    pre: "RUN-A and RUN-B's anomaly flags from PYA-EXC-003"
+    role: HRAdmin (custom role holding Payroll.Exceptions.View)
+    perm: Payroll.Exceptions.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/exceptions/export.csv] => [200] filename payroll-exceptions.csv, 2 data rows spanning both runs, RunId column distinguishes them"
+    auto: API
+
+  - id: PYA-EXC-008
+    func: [F-PYA-090]
+    sc: 12 of 14 anomaly types can never appear in the register
+    t: A condition that would obviously map to one of the 12 unused PayrollAnomalyType members (e.g. a bank-advice mismatch, which exists as a Finding) never produces an anomaly-flag entry in the exceptions register
+    src: "PayrollAnalyticsService (enum vs. actual Anomaly() call sites)"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN3 has a BankAdviceAmountMismatch finding (from PYA-BANK-002) generated via post-payroll reconciliation"
+    role: HRAdmin (custom role holding Payroll.Exceptions.View + Payroll.Analytics.View)
+    perm: "Payroll.Exceptions.View, Payroll.Analytics.View"
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN3"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN3}/findings] => [200] confirms BankAdviceAmountMismatch IS present as a Finding"
+      - "[GET /api/payroll/exceptions] => [200] the exceptions register contains ZERO rows for RUN3 - the same condition never surfaces there (no BankMismatch-type anomaly flag exists)"
+    auto: API
+    cr: [CR-298]
+
+  - id: PYA-EXC-009
+    func: [F-PYA-091]
+    sc: There is no action to acknowledge/resolve a PayrollAnomalyFlag directly
+    t: No exposed endpoint anywhere accepts a PayrollAnomalyFlag id to change its Status - Payroll.Exceptions.Manage is granted by seed data but gates nothing
+    src: "PayrollAnalyticsController (full controller surface); IPayrollAnalyticsService (full interface)"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "An Open anomaly flag ANOM1 exists; a custom role holds Payroll.Exceptions.Manage"
+    role: HRAdmin (custom role holding Payroll.Exceptions.Manage)
+    perm: Payroll.Exceptions.Manage
+    tenant: "T1 (DEMO01)"
+    data: "id=ANOM1"
+    steps:
+      - "[Manual] grep the full OpenAPI/Swagger surface under /api/payroll/exceptions and /api/payroll/analytics for any POST/PUT/PATCH accepting an anomaly-flag id => none exists; the only 2 actions under /api/payroll/exceptions are GET (list) and GET export.csv, both gated by Exceptions.View, not Exceptions.Manage"
+    auto: Manual only
+    cr: [CR-292]
+
+  - id: PYA-EXC-010
+    func: [F-PYA-085]
+    sc: Exceptions register is itself tenant-scoped despite being run-unscoped
+    t: Tenant A's exceptions list never includes Tenant B's anomaly flags, regardless of search text
+    src: "PayrollAnalyticsService.GetExceptionsAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "Tenant T2 (DEMO02) has its own Open NegativeNetPay anomaly flag for an employee named 'Johnson'"
+    role: HRAdmin (custom role holding Payroll.Exceptions.View, tenant T1)
+    perm: Payroll.Exceptions.View
+    tenant: "T1 (DEMO01)"
+    data: "search=johnson"
+    steps:
+      - "[GET /api/payroll/exceptions?search=johnson] (authenticated to T1) => [200] returns zero rows - T2's 'Johnson' anomaly is never visible to T1"
+    auto: API

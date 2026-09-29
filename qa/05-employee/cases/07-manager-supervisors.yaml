@@ -1,0 +1,263 @@
+sheet: Employee_Manager
+submodule: Reporting Manager / Supervisor hierarchy (L1-L5, Time, ERO, CHRO)
+defaults:
+  role: HR_ADMIN
+  perm: "Employee.Edit"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (Employee.View, Employee.Edit, EmploymentHistory.Change); employee EMP-MGR-001 exists with a current Employment History record."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: EMP-MGR-001
+    func: [F-EMP-089]
+    sc: The direct (L1) manager is resolved from CURRENT Employment History, not an independently-set field
+    t: GET .../supervisor reflects whatever Employment History currently resolves, and stays in step with a manager change made through Employment
+    src: ["EmployeeManagerResolver.ResolveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/employees/{id}/supervisor] Call => [200] l1ManagerId matches the manager on the employee's current Employment History record"
+    auto: API
+
+  - id: EMP-MGR-002
+    func: [F-EMP-090]
+    sc: PUT supervisor cannot set L1 to anything other than what Employment currently resolves
+    t: Submitting a DIFFERENT l1ManagerId than the resolved one is rejected; submitting the resolved value (or omitting it) is fine
+    src: ["EmployeeSupervisorService.ValidateDirectManagerAsync"]
+    type: Negative
+    tags: [Contract]
+    pri: P0
+    steps:
+      - "[PUT /api/employees/{id}/supervisor] l1ManagerId = a DIFFERENT employee than Employment's resolved manager => [400] 'Direct manager is controlled by Employment. Use Change through Employment.'"
+      - "[PUT /api/employees/{id}/supervisor] l1ManagerId matches Employment's resolved manager exactly => [200] accepted"
+    auto: API
+
+  - id: EMP-MGR-003
+    func: [F-EMP-090]
+    sc: If Employment has never recorded a manager, L1 must be left null on the Supervisor endpoint
+    t: Supplying any l1ManagerId when Employment has no manager opinion at all is rejected
+    src: ["EmployeeSupervisorService.ValidateDirectManagerAsync"]
+    type: Negative
+    pri: P1
+    pre: "Employee's current Employment History record has ManagerId=null."
+    steps:
+      - "[PUT /api/employees/{id}/supervisor] l1ManagerId = any employee id => [400] 'Direct manager is controlled by Employment. Create an effective employment change first.'"
+      - "[PUT /api/employees/{id}/supervisor] l1ManagerId omitted/null => [200] accepted"
+    auto: API
+
+  - id: EMP-MGR-004
+    func: [F-EMP-091]
+    sc: A LegacyConflict resolution blocks the ENTIRE Supervisor upsert until reconciled
+    t: When the legacy ReportingManagerId disagrees with the effective Employment manager, even an unrelated L2-L5/Time/ERO/CHRO edit is refused
+    src: ["EmployeeManagerResolver / EmployeeSupervisorService.ValidateDirectManagerAsync (LegacyConflict)"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    pre: "Employee's Employee.ReportingManagerId (legacy) points at MGR-OLD, while current Employment History resolves the manager as MGR-NEW."
+    steps:
+      - "[PUT /api/employees/{id}/supervisor] Only eroId supplied (an unrelated field, no l1ManagerId in the request) => [400] 'Legacy direct-manager assignments conflict with Employment. Reconcile them before changing additional roles.'"
+    auto: API
+    cr: [CR-54]
+
+  - id: EMP-MGR-005
+    func: [F-EMP-092]
+    sc: L2-L5, Time Manager, ERO and CHRO are freely-assignable peer fields with no cross-level consistency
+    t: Each of the 7 peer slots can be set independently to a different eligible employee, with no relationship required between them
+    src: ["EmployeeSupervisorService.ValidateSupervisorReferencesAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/supervisor] l2ManagerId, l3ManagerId, l4ManagerId, l5ManagerId, timeManagerId, eroId, chroManagerId all set to different valid Active employees, unrelated to one another's own hierarchy => [200] all accepted together"
+      - "[GET /api/employees/{id}/supervisor] Call => [200] all 7 values persisted exactly as submitted"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Supervisor_additional_roles_update_without_changing_authoritative_l1"]
+
+  - id: EMP-MGR-006
+    func: [F-EMP-093]
+    sc: An employee cannot be assigned as their own supervisor at any level
+    t: Self-reference is rejected for L1 through CHRO
+    src: ["EmployeeSupervisorService.ValidateSupervisorReferencesAsync"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/supervisor] l2ManagerId = the employee's own id => [400] 'An employee cannot be assigned as their own supervisor.'"
+      - "[PUT /api/employees/{id}/supervisor] timeManagerId = the employee's own id => [400] same rejection"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Supervisor_manager_ids_are_tenant_scoped_and_cannot_self_reference"]
+
+  - id: EMP-MGR-007
+    func: [F-EMP-094]
+    sc: A supervisor id from another tenant, or an inactive employee, is rejected for every level
+    t: Cross-tenant and inactive-employee checks apply identically across L2-CHRO
+    src: ["EmployeeSupervisorService.ValidateSupervisorReferencesAsync"]
+    type: Negative
+    tags: [Tenant-Isolation]
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[PUT /api/employees/{id}/supervisor] chroManagerId = a Tenant B employee id => [400] 'Supervisor employee does not exist, is inactive, or belongs to another tenant.'"
+      - "[PUT /api/employees/{id}/supervisor] eroId = a Terminated same-tenant employee => [400] same rejection"
+    auto: API
+
+  - id: EMP-MGR-008
+    func: [F-EMP-095]
+    sc: The manager cycle check rejects self, direct and indirect cycles
+    t: Assigning A as B's manager when B is already A's (direct or indirect) manager is rejected
+    src: ["EmployeeEmploymentService.WouldCreateManagerCycleAsync"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    smoke: true
+    pre: "Chain: A manages B, B manages C."
+    steps:
+      - "[POST /api/employees/{A id}/employment-history] managerId = A's own id (self-cycle) => [400] 'The selected manager would create a reporting cycle.'"
+      - "[POST /api/employees/{B id}/employment-history] managerId = C (indirect cycle: C reports to B, B would now report to C) => [400] same rejection"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Self_direct_and_indirect_manager_cycles_are_rejected"]
+
+  - id: EMP-MGR-009
+    func: [F-EMP-096]
+    sc: A manager assignment is rejected when the proposed manager has no active employment on the requested date
+    t: A not-yet-joined, retired, or record-ended manager cannot be assigned
+    src: ["EmployeeEmploymentService.ValidateEmploymentReferencesAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/employment-history] managerId = an employee whose DateOfJoining is AFTER the requested effectiveFrom => [400] 'Manager is not actively employed on the effective date.'"
+      - "[POST /api/employees/{id}/employment-history] managerId = a Terminated (past employment ended) employee, requested date after their termination => [400] same rejection"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Resolver_rejects_missing_future_joining_and_retired_managers_by_date"]
+
+  - id: EMP-MGR-010
+    func: [F-EMP-097]
+    sc: A confirmed manager change updates the Supervisor L1 compatibility fields in the SAME transaction
+    t: EmployeeSupervisors.L1ManagerId/Code/Name are synchronized atomically with the employment-history insert
+    src: ["EmployeeEmploymentService.SynchronizeCurrentSupervisorAsync"]
+    type: Positive
+    pri: P1
+    pre: "Employee already has a Supervisor row (created by a prior PUT .../supervisor)."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] changeReason=ManagerChange, managerId=MGR-NEW, effective today => [200] accepted"
+      - "[GET /api/employees/{id}/supervisor] Call => [200] l1ManagerId/l1ManagerCode/l1ManagerName all reflect MGR-NEW, matching the resolver"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Manager_change_is_persisted_and_normal_changes_inherit_the_manager", "xU:EmployeeEmploymentHardeningTests.Current_employment_change_synchronizes_existing_supervisor_l1_compatibility_fields"]
+
+  - id: EMP-MGR-011
+    func: [F-EMP-098]
+    sc: Manager resolution is date-aware around a scheduled future manager change
+    t: Querying before, on, and after the future change's date returns the correct manager for each
+    src: ["EmployeeManagerResolver.ResolveAsync"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    pre: "A ManagerChange to MGR-NEW is scheduled 30 days from today; the current manager is MGR-OLD."
+    steps:
+      - "[GET /api/employees/{id}/employment-history/current?asOfDate=<today>] Call => [200] manager is MGR-OLD"
+      - "[GET /api/employees/{id}/employment-history/current?asOfDate=<30 days from today>] Call => [200] manager is MGR-NEW"
+      - "[GET /api/employees/{id}/employment-history/current?asOfDate=<31 days from today>] Call => [200] manager is still MGR-NEW"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Resolver_uses_the_manager_effective_before_on_and_after_a_scheduled_change"]
+
+  - id: EMP-MGR-012
+    func: [F-EMP-099]
+    sc: An explicit ManagerChange with a null manager is a deliberate unassignment, not a legacy fallback
+    t: Clearing the manager through ManagerChange does not resurrect the legacy Employee.ReportingManagerId value
+    src: ["EmployeeManagerResolver.ResolveAsync"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[POST /api/employees/{id}/employment-history] changeReason=ManagerChange, managerId=null, effective today => [200] accepted"
+      - "[GET /api/employees/{id}/supervisor] Call => [200] l1ManagerId is null - NOT the legacy ReportingManagerId value, even if that column still holds something"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Resolver_treats_explicit_manager_clearing_as_unassigned_without_legacy_fallback"]
+
+  - id: EMP-MGR-013
+    func: [F-EMP-100]
+    sc: Supervisor-options returns only tenant-scoped, non-self, currently-Active-eligible candidates for a given type
+    t: L1/L2/L3/Other/HR/Time each return a filtered candidate list matching their ManagerCategories flag
+    src: ["EmployeeSupervisorService.GetSupervisorOptionsAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/employees/{id}/supervisor-options?type=L1] Call => [200] only same-tenant, Active, non-self employees whose ManagerCategories includes L1"
+      - "[GET /api/employees/{id}/supervisor-options?type=Time] Call => [200] only employees eligible as Time Manager"
+    auto: API
+
+  - id: EMP-MGR-014
+    func: [F-EMP-101]
+    sc: An unrecognized supervisor type is a 400, not an empty list
+    t: type=NotARealType fails to parse and is rejected explicitly
+    src: ["EmployeeSupervisorService.GetSupervisorOptionsAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[GET /api/employees/{id}/supervisor-options?type=NotARealType] Call => [400] 'Invalid supervisor type: NotARealType'"
+    auto: API
+
+  - id: EMP-MGR-015
+    func: [F-EMP-100]
+    sc: There is no supervisor-options data source for L4, L5, ERO or CHRO
+    t: The four DTO-exposed peer slots without a matching SupervisorType flag have no eligible-candidate endpoint
+    src: ["Backend/HRMS.Domain/Enums/SupervisorType.cs (no L4/L5/Ero/Chro members)"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[GET /api/employees/{id}/supervisor-options?type=L4] Call => [400] 'Invalid supervisor type: L4' - there is no eligible-candidate source for this slot"
+      - "[GET /api/employees/{id}/supervisor-options?type=Ero] Call => [400] same - Ero is not a SupervisorType member either"
+    auto: API
+    cr: [CR-59]
+
+  - id: EMP-MGR-016
+    func: [F-EMP-102]
+    sc: Supervisor options exclude candidates who are inactive-by-date (future joining or past retirement) even though their EmployeeStatus itself is Active
+    t: Date-awareness in the options list mirrors the resolver's own date logic
+    src: ["EmployeeSupervisorService.GetSupervisorOptionsAsync"]
+    type: Negative
+    pri: P2
+    pre: "Candidate X has EmployeeStatus=Active but a DateOfJoining 10 days in the future."
+    steps:
+      - "[GET /api/employees/{id}/supervisor-options?type=L1] Call today => [200] candidate X is NOT in the list (not yet effectively employed)"
+    auto: API
+
+  - id: EMP-MGR-017
+    func: [F-EMP-103]
+    sc: Supervisor GET/PUT reject a cross-tenant employee id
+    t: Tenant isolation on the supervisor endpoints
+    src: ["EmployeeSupervisorService (tenant-filtered)"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[GET /api/employees/{Tenant A id}/supervisor] As Tenant B => [404] Not Found"
+      - "[PUT /api/employees/{Tenant A id}/supervisor] As Tenant B => [404] Not Found"
+    auto: API
+
+  - id: EMP-MGR-018
+    func: [F-EMP-104]
+    sc: Assigning someone as a direct manager auto-provisions their manager-capable role, in the same transaction
+    t: A first-time manager assignment via Employment ensures the manager-role provisioning runs atomically with the change
+    src: ["IManagerRoleProvisioningService.EnsureForManagerEmployeeAsync"]
+    type: Positive
+    pri: P2
+    pre: "Employee MGR-CANDIDATE has never been assigned as anyone's manager before."
+    steps:
+      - "[POST /api/employees/{reportId}/employment-history] managerId=MGR-CANDIDATE, effective today => [200] accepted"
+      - "[GET /api/employees/{MGR-CANDIDATE id}] Confirm MGR-CANDIDATE now holds whatever manager-capable role/claim EnsureForManagerEmployeeAsync grants => [200] provisioned"
+    auto: API
+
+  - id: EMP-MGR-019
+    func: [F-EMP-093]
+    sc: L1 self-reference through the legacy full-edit ReportingManagerId path is rejected identically
+    t: PUT /api/employees/{id} with ReportingManagerId==id is rejected, consistent with the Supervisor endpoint's own self-reference rule
+    src: ["EmployeeService.UpdateAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[PUT /api/employees/{id}] reportingManagerId = the employee's own id => [400] 'An employee cannot report to themselves.'"
+    auto: API

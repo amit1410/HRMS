@@ -1,0 +1,178 @@
+sheet: Payroll_Scope
+submodule: Authorization/Role Scope inventory (seeded role matrix, CR-66 recurrence, dead permissions) and cross-cutting Tenant Isolation
+defaults:
+  role: HRADMIN
+  perm: "n/a"
+  tenant: A
+  pre: "Tenant A, role-permission inventory read directly from Backend/HRMS.Domain/Authorization/Permissions.cs and Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-SCOPE-001
+    func: [F-PAY-211]
+    sc: SuperAdmin/TenantAdmin hold every Payroll permission
+    t: Both roles can call every in-scope Payroll endpoint without a 403
+    src: ["SeedData.cs RolePermissionMap[SuperAdmin/TenantAdmin]"]
+    type: Positive
+    pri: P1
+    role: SUPERADMIN
+    steps:
+      - "[GET /api/payroll/salary-components] As SuperAdmin => [200]"
+      - "[POST /api/payroll/runs/{id}/transition?target=Finalized] As TenantAdmin => [200] or a business-rule Conflict, never 403"
+    auto: API
+
+  - id: PAY-SCOPE-002
+    func: [F-PAY-212]
+    sc: HRManager cannot reach any core payroll surface
+    t: HRManager receives 403 on salary master, periods/runs, adjustments, reimbursements, off-cycle, analytics, retro, and final-settlement endpoints
+    src: ["SeedData.cs RolePermissionMap[HRManager]"]
+    type: Authorization
+    pri: P0
+    role: HRMANAGER
+    steps:
+      - "[GET /api/payroll/salary-components] As HRManager => [403] Forbidden"
+      - "[GET /api/payroll/runs] As HRManager => [403] Forbidden"
+      - "[GET /api/payroll/adjustments] As HRManager => [403] Forbidden"
+      - "[GET /api/payroll/reimbursements] As HRManager => [403] Forbidden"
+      - "[GET /api/payroll/analytics/runs/{id}/overview] As HRManager => [403] Forbidden"
+    auto: API
+    cr: [CR-165]
+
+  - id: PAY-SCOPE-003
+    func: [F-PAY-213]
+    sc: Manager holds zero Payroll permissions
+    t: A Manager role cannot reach any Payroll endpoint, including one scoped to their own reports
+    src: ["SeedData.cs RolePermissionMap[Manager]"]
+    type: Authorization
+    pri: P1
+    role: MANAGER
+    steps:
+      - "[GET /api/payroll/employee-salary-assignments] As Manager => [403] Forbidden"
+    auto: API
+    cr: [CR-168]
+
+  - id: PAY-SCOPE-004
+    func: [F-PAY-214]
+    sc: Employee cannot see their own payslip or file a reimbursement out of the box
+    t: A plain seeded Employee role is 403 on both self-service surfaces despite superficially being "employee self-service" features
+    src: ["SeedData.cs RolePermissionMap[Employee]"]
+    type: Authorization
+    pri: P1
+    role: EMPLOYEE
+    steps:
+      - "[GET /api/me/payslips] As a plain seeded Employee => [403] Forbidden - Payslip.ViewOwn is not in the seeded Employee grant set"
+      - "[POST /api/me/reimbursements] As a plain seeded Employee => [403] Forbidden - Reimbursements.Request is not in the seeded Employee grant set"
+      - "[GET /api/me/payroll-adjustments] As a plain seeded Employee => [200] this one IS seeded"
+    auto: API
+    cr: [CR-179]
+
+  - id: PAY-SCOPE-005
+    func: [F-PAY-215]
+    sc: SuperHR's native payroll footprint reaches irreversible Run.Finalize without any self-escalation
+    t: SuperHR can finalize a payroll run directly, using only its natively-seeded permissions
+    src: ["SeedData.cs RolePermissionMap[SuperHR]"]
+    type: Authorization
+    pri: P0
+    role: SUPERHR
+    steps:
+      - "[POST /api/payroll/runs/{id}/transition?target=Approved] As SuperHR (native RunManage) => [200]"
+      - "[POST /api/payroll/runs/{id}/transition?target=Finalized] As SuperHR (native RunManage) => [200] - no self-escalation was needed to reach an irreversible payroll finalization"
+    auto: API
+    cr: [CR-166]
+
+  - id: PAY-SCOPE-006
+    func: [F-PAY-216]
+    sc: SuperHR self-escalates to the entire remaining Payroll surface via PageAccess.Manage
+    t: One PageAccess update grants SuperHR every Payroll permission it lacked (Adjustments/Reimbursements/OffCycle/Analytics/Retro/FinalSettlement/PayrollInput.*)
+    src: ["PageAccessService.UpdateAsync"]
+    type: Security
+    pri: P0
+    role: SUPERHR
+    steps:
+      - "[GET /api/payroll/reimbursements] As SuperHR before escalation => [403] Forbidden"
+      - "[PUT /api/page-access/roles/{superHrRoleId}] Permissions += [Payroll.Reimbursements.View, ...Approve, ...Settle, Payroll.OffCycle.*, Payroll.FinalSettlement.*] As SuperHR (holds PageAccess.Manage) => [200]"
+      - "[GET /api/payroll/reimbursements] As SuperHR after escalation => [200] full reimbursement approval/settlement authority acquired in one call"
+    auto: API
+    cr: [CR-166]
+
+  - id: PAY-SCOPE-007
+    func: [F-PAY-217]
+    sc: No manager/team-scope permission exists in Payroll
+    t: A repo-wide grep of Permissions.Payroll confirms zero ViewTeam-style constants
+    src: ["Permissions.Payroll.cs (full constant-list grep)"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual] Grep 'ViewTeam' across Backend/HRMS.Domain/Authorization/Permissions.cs within the Payroll class => zero matches, confirming CR-77's manager/team-scope pattern from other modules does not recur here"
+    auto: "Manual only"
+
+  - id: PAY-SCOPE-008
+    func: [F-PAY-218]
+    sc: Run.Approve/Run.Finalize are dead permissions
+    t: A role granted ONLY Run.Approve (and not Run.Manage) cannot actually approve a run
+    src: ["PayrollRunsController.Transition"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] A custom role holds Payroll.Run.Approve and Payroll.Run.Finalize but NOT Payroll.Run.Manage => precondition established"
+      - "[POST /api/payroll/runs/{id}/transition?target=Approved] as that role => [403] Forbidden - Run.Approve alone grants nothing functional"
+    auto: API
+    cr: [CR-167]
+
+  - id: PAY-SCOPE-009
+    func: [F-PAY-219]
+    sc: Exceptions.Manage is a dead permission
+    t: A role granted ONLY Exceptions.Manage (not Exceptions.View) cannot reach either exceptions route
+    src: ["PayrollExceptionsController"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] A custom role holds only Payroll.Exceptions.Manage => precondition established"
+      - "[GET /api/payroll/exceptions] as that role => [403] Forbidden - Exceptions.Manage gates nothing"
+    auto: API
+    cr: [CR-175]
+
+  - id: PAY-SCOPE-010
+    func: [F-PAY-220]
+    sc: PayrollInput.* uses a distinct permission-string prefix
+    t: A permission-inventory tool matching on 'Payroll.' would miss every PayrollInput.* constant
+    src: ["Permissions.Payroll.cs (constant naming)"]
+    type: Boundary
+    pri: P2
+    sev: Low
+    steps:
+      - "[Manual] Grep every constant string value in the Payroll permissions class => PayrollInput.View/Create/Import/Validate/Submit/Approve/Post/Cancel/ViewAudit/ConfigureTemplate all begin with 'PayrollInput.', not 'Payroll.Input.' like every sibling family"
+    auto: "Manual only"
+
+  - id: PAY-SCOPE-011
+    func: [F-PAY-221]
+    sc: Cross-tenant sweep across every in-scope service
+    t: A single sweep confirms NotFound (never 500/Forbidden) for a cross-tenant id on GetById across all ten in-scope services
+    src: ["Every in-scope *Service.cs"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[GET /api/payroll/salary-components/{tenantBId}] As Tenant A => [404]"
+      - "[GET /api/payroll/salary-structures/{tenantBId}] As Tenant A => [404]"
+      - "[GET /api/payroll/employee-salary-assignments/{tenantBId}] As Tenant A => [404]"
+      - "[GET /api/payroll/periods/{tenantBId}] As Tenant A => [404]"
+      - "[GET /api/payroll/runs/{tenantBId}] As Tenant A => [404]"
+      - "[GET /api/payroll/adjustments/{tenantBId}] As Tenant A => [404]"
+      - "[GET /api/payroll/reimbursements/{tenantBId}] As Tenant A => [404]"
+      - "[GET /api/payroll/payslips/{tenantBId}] As Tenant A => [404]"
+      - "[GET /api/payroll/input-batches/{tenantBId}] As Tenant A => [404]"
+    auto: API
+
+  - id: PAY-SCOPE-012
+    func: [F-PAY-222]
+    sc: Number sequences are isolated per tenant
+    t: Two tenants creating a payroll adjustment on the same day both get their own sequence starting from 1, never colliding
+    src: ["PayrollAdjustmentService.NextNumberAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    steps:
+      - "[POST /api/payroll/adjustments] As Tenant A, first adjustment of the year => AdjustmentNumber=PADJ/{year}/000001"
+      - "[POST /api/payroll/adjustments] As Tenant B, first adjustment of the SAME year => AdjustmentNumber=PADJ/{year}/000001 as well - Tenant B's sequence is entirely independent of Tenant A's"
+    auto: API

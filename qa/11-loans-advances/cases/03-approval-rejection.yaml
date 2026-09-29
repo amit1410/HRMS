@@ -1,0 +1,182 @@
+sheet: Loans_Approval_Rejection
+submodule: Submission, Approval and Rejection - state machine, maker-checker guard, history
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Loans.Approve"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, a Draft loan request exists for Employee E1, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-APR-001
+    func: [F-LOAN-023]
+    sc: Submit a Draft loan
+    t: Submit transitions Draft to Submitted
+    src: ["PayrollLoanService.SubmitAsync"]
+    type: Positive
+    pri: P0
+    role: EMPLOYEE
+    perm: "Payroll.Loans.Request"
+    smoke: true
+    steps:
+      - "[POST /api/payroll/loans/{id}/submit] => [200] Status=Submitted"
+    auto: API
+
+  - id: LOAN-APR-002
+    func: [F-LOAN-023]
+    sc: Submit rejects a non-Draft loan
+    t: Submitting an already-Submitted or Approved loan is Conflict
+    src: ["PayrollLoanService.SubmitAsync -> TransitionAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{submittedLoanId}/submit] => [409] Loan must be Draft."
+    auto: API
+
+  - id: LOAN-APR-003
+    func: [F-LOAN-024]
+    sc: Approve requires Submitted status
+    t: Approving a Draft or already-Approved loan is Conflict
+    src: ["PayrollLoanService.ApproveAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loans/{draftLoanId}/approve] => [409] Only submitted loans can be approved."
+    auto: API
+
+  - id: LOAN-APR-004
+    func: [F-LOAN-024]
+    sc: Approve a Submitted loan
+    t: A well-formed approve call transitions Submitted to Approved
+    src: ["PayrollLoanService.ApproveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/loans/{id}/submit] => [200] Status=Submitted"
+      - "[POST /api/payroll/loans/{id}/approve] => [200] Status=Approved, ApprovedAmount=RequestedAmount"
+    auto: API
+
+  - id: LOAN-APR-005
+    func: [F-LOAN-025]
+    sc: Self-approval is blocked under a maker-checker policy
+    t: The original requester cannot approve their own loan when RequireMakerChecker+PreventSelfApproval are enabled
+    src: ["PayrollLoanService.ApproveAsync -> PayrollApprovalGuard.ValidateAsync"]
+    type: Security
+    pri: P0
+    tags: [Security]
+    steps:
+      - "[Manual/DB] Enable PayrollControlConfiguration.RequireMakerChecker=true, PreventSelfApproval=true for Tenant A => policy row updated, maker-checker now enforced"
+      - "[POST /api/payroll/loans/{id}/submit] as the requester => [200] Status=Submitted"
+      - "[POST /api/payroll/loans/{id}/approve] as the SAME requester user => [400] SelfApprovalNotAllowed: the user who created this payroll action cannot approve it."
+    auto: DB-assisted
+
+  - id: LOAN-APR-006
+    func: [F-LOAN-025]
+    sc: A different approver succeeds under the same maker-checker policy
+    t: A second, distinct user can approve the loan the original requester submitted
+    src: ["PayrollLoanService.ApproveAsync -> PayrollApprovalGuard.ValidateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{id}/approve] as a DIFFERENT HRAdmin user (maker-checker enabled) => [200] Status=Approved"
+    auto: API
+
+  - id: LOAN-APR-007
+    func: [F-LOAN-026]
+    sc: Approve accepts amount/tenure overrides
+    t: Approve with amount and tenureMonths query parameters overrides the requested values
+    src: ["PayrollLoanService.ApproveAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{id}/approve?amount=8000&tenureMonths=10] (RequestedAmount was 10000/12) => [200] ApprovedAmount=8000, ApprovedTenureMonths=10"
+    auto: API
+
+  - id: LOAN-APR-008
+    func: [F-LOAN-027]
+    sc: Approve resets outstanding fields to the approved amount
+    t: An override approval updates OutstandingPrincipal/OutstandingTotal to the approved (not requested) amount
+    src: ["PayrollLoanService.ApproveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{id}/approve?amount=7500] (RequestedAmount was 10000) => [200] OutstandingPrincipal=7500, OutstandingTotal=7500"
+    auto: API
+
+  - id: LOAN-APR-009
+    func: [F-LOAN-028]
+    sc: Reject is allowed from Draft OR Submitted
+    t: A Draft loan (never submitted) can be directly rejected, and so can a Submitted one
+    src: ["PayrollLoanService.RejectAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{draftLoanId}/reject?reason=Not eligible] => [200] Status=Rejected"
+      - "[POST /api/payroll/loans/{submittedLoanId}/reject?reason=Budget exceeded] => [200] Status=Rejected"
+    auto: API
+
+  - id: LOAN-APR-010
+    func: [F-LOAN-028]
+    sc: Reject requires a non-blank reason
+    t: A blank rejection reason is Invalid
+    src: ["PayrollLoanService.RejectAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/loans/{id}/reject?reason=] => [400] Rejection reason is required."
+    auto: API
+
+  - id: LOAN-APR-011
+    func: [F-LOAN-029]
+    sc: Reject bypasses the maker-checker guard entirely
+    t: The original requester can reject their own submitted loan even under a self-approval-preventing policy
+    src: ["PayrollLoanService.RejectAsync (no approvalGuard reference)"]
+    type: Security
+    pri: P1
+    tags: [Security]
+    cr: [CR-189]
+    steps:
+      - "[Manual/DB] Enable PayrollControlConfiguration.RequireMakerChecker=true, PreventSelfApproval=true for Tenant A => policy row updated, maker-checker now enforced"
+      - "[POST /api/payroll/loans/{id}/submit] as the requester => [200] Status=Submitted"
+      - "[POST /api/payroll/loans/{id}/reject?reason=Withdrawing] as the SAME requester user => [200] Status=Rejected (no SelfApprovalNotAllowed block, unlike Approve/Cancel)"
+    auto: DB-assisted
+
+  - id: LOAN-APR-012
+    func: [F-LOAN-030]
+    sc: A terminal-state loan cannot be re-submitted
+    t: Submit on a Rejected, Disbursed, Closed or Cancelled loan is Conflict
+    src: ["PayrollLoanService.TransitionAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{rejectedLoanId}/submit] => [409] Loan must be Draft."
+    auto: API
+
+  - id: LOAN-APR-013
+    func: [F-LOAN-031]
+    sc: Cross-tenant approve/reject is NotFound
+    t: Approving or rejecting a loan belonging to a different tenant returns NotFound
+    src: ["PayrollLoanService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[POST /api/payroll/loans/{tenantALoanId}/approve] signed in as Tenant B HRAdmin => [404] Loan not found."
+    auto: API
+
+  - id: LOAN-APR-014
+    func: [F-LOAN-032]
+    sc: Every transition appends a LoanHistory row
+    t: Submit, Approve and Reject each produce their own LoanHistory event with previous/next status
+    src: ["PayrollLoanService.AddHistory"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{id}/submit] => [200] Status=Submitted"
+      - "[POST /api/payroll/loans/{id}/approve] => [200] Status=Approved"
+      - "[Manual/DB] Query LoanHistories for the loan id => Submitted (PreviousStatus=Draft, NewStatus=Submitted) and Approved (PreviousStatus=Submitted, NewStatus=Approved) rows both present"
+    auto: DB-assisted

@@ -1,0 +1,202 @@
+sheet: Payroll_Audit_Reports
+submodule: Cross-cutting Audit/History append-only proof, and Payroll Reports/Analytics/Exceptions/Reconciliation
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Analytics.View"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, with a Calculated payroll run and its results, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-AUD-001
+    func: [F-PAY-223]
+    sc: History tables are append-only across the module
+    t: A repo-wide grep confirms no *History DbSet is ever the target of an EF Update/Remove call
+    src: ["every in-scope *Service.cs"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual] Grep 'db\\.\\w*Histor(y|ies)\\.(Update|Remove|RemoveRange)' across every in-scope service in Backend/HRMS.Application/Services => zero matches (the sole exception, PayrollRetroSettlementService's db.PayrollRetroResults.RemoveRange, targets the RESULTS snapshot table, not a *History table, and only during re-Evaluate)"
+    auto: "Manual only"
+
+  - id: PAY-AUD-002
+    func: [F-PAY-224]
+    sc: Every history row is attributed to an actor
+    t: A create/update/transition across several services each write a history row with ActorUserId populated
+    src: ["every in-scope *Service.cs AddHistory"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-components] then [GET .../history] => [200] ActorUserId matches the creating user"
+      - "[POST /api/payroll/adjustments/{id}/submit] then [GET .../history] => [200] ActorUserId matches the submitting user"
+    auto: API
+
+  - id: PAY-AUD-003
+    func: [F-PAY-225]
+    sc: Every report shares one controller-level permission
+    t: A role holding Payroll.Analytics.View can reach every report route, including bank-payments
+    src: ["PayrollReportsController"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/payroll/reports/bank-payments] as a role holding ONLY Payroll.Analytics.View => [200] - no finer BankPayments-specific permission exists to further restrict this more sensitive report"
+    auto: API
+
+  - id: PAY-AUD-004
+    func: [F-PAY-226]
+    sc: Reports never leak a superseded or errored result
+    t: A recalculated-over PayrollResult (IsCurrent=false) never appears in any report
+    src: ["PayrollReportsService.Results"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/runs/{id}/recalculate] => [200] new IsCurrent results replace the old ones"
+      - "[GET /api/payroll/reports/payroll-register?payrollRunId={id}] => [200] only the current attempt's rows appear, never the superseded ones"
+    auto: API
+
+  - id: PAY-AUD-005
+    func: [F-PAY-227]
+    sc: Unclassified dimension rows are labeled, not dropped
+    t: A result with no department snapshot appears once under an UNCLASSIFIED bucket rather than being silently excluded
+    src: ["PayrollReportsService.DimensionsAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/payroll/reports/departments?payrollRunId={id}] => [200] one row has Code='UNCLASSIFIED' aggregating every result with no department id"
+    auto: API
+
+  - id: PAY-AUD-006
+    func: [F-PAY-228, F-PAY-229]
+    sc: Components and Statutory Summary aggregate correctly
+    t: The Components report's totals equal the sum of the matching PayrollResultComponent rows; Statutory Summary groups by StatutoryType
+    src: ["PayrollReportsService.GetComponentsAsync / GetStatutorySummaryAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/payroll/reports/components?componentType=Earning] => [200] TotalAmount for BASIC equals the sum of every current result's BASIC CalculatedAmount"
+      - "[GET /api/payroll/reports/statutory-summary] => [200] one row per StatutoryType with EmployeeContribution/EmployerContribution summed"
+    auto: API
+
+  - id: PAY-AUD-007
+    func: [F-PAY-230]
+    sc: Dashboard category totals rely on substring matching, not a structured type
+    t: A component whose CalculationSource does not literally contain the expected substring is excluded from that category's dashboard total, exposing the classification's fragility
+    src: ["PayrollReportsService.GetDashboardAsync"]
+    type: Boundary
+    pri: P1
+    sev: Medium
+    steps:
+      - "[Setup] A component's CalculationSource is set to a value that does NOT contain 'reimbursement' even though it is functionally a reimbursement recovery (e.g. a future-renamed source string) => precondition established"
+      - "[GET /api/payroll/reports/dashboard] => [200] ReimbursementTotal excludes that component's amount entirely, with no error or warning surfaced"
+    auto: API
+    cr: [CR-182]
+
+  - id: PAY-AUD-008
+    func: [F-PAY-231]
+    sc: Trends' placeholder fields are always zero
+    t: GetTrendsAsync's last five fields never reflect real variance data
+    src: ["PayrollReportsService.GetTrendsAsync"]
+    type: Boundary
+    pri: P2
+    sev: Low
+    steps:
+      - "[GET /api/payroll/reports/trends] => [200] every row's last five numeric fields are 0, regardless of how much the underlying run-to-run totals actually varied"
+    auto: API
+
+  - id: PAY-AUD-009
+    func: [F-PAY-232]
+    sc: An unknown report export key is NotFound
+    t: A typo'd report name returns a clean 404, not an empty or malformed file
+    src: ["PayrollReportsService.ExportAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[GET /api/payroll/reports/not-a-real-report.csv] => [404] Unknown Payroll report export."
+    auto: API
+
+  - id: PAY-AUD-010
+    func: [F-PAY-233]
+    sc: Analytics overview/summary/control-totals are run-scoped
+    t: Overview/Summary/ControlTotals for a run reflect only that run's current results
+    src: ["PayrollAnalyticsService.GetOverviewAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/payroll/analytics/runs/{id}/overview] => [200]"
+      - "[GET /api/payroll/analytics/runs/{id}/control-totals] => [200] totals match the run's PayrollResults sums"
+    auto: API
+
+  - id: PAY-AUD-011
+    func: [F-PAY-234]
+    sc: Variance compares two runs when a compareRunId is supplied
+    t: Variance/Components report per-employee/per-component deltas between the two runs
+    src: ["PayrollAnalyticsService.GetVarianceAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/payroll/analytics/runs/{currentRunId}/variance?compareRunId={priorRunId}] => [200] one row per employee showing the delta between the two runs' net pay"
+    auto: API
+
+  - id: PAY-AUD-012
+    func: [F-PAY-235]
+    sc: Every analytics view has a CSV export counterpart
+    t: Findings/Variance/Summary/Control-Totals each export as CSV
+    src: ["PayrollAnalyticsService.ExportFindingsAsync / ExportVarianceAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/payroll/analytics/runs/{id}/findings.csv] => [200] text/csv"
+      - "[GET /api/payroll/analytics/runs/{id}/variance.csv] => [200] text/csv"
+    auto: API
+
+  - id: PAY-AUD-013
+    func: [F-PAY-236]
+    sc: Exceptions has its own permission, separate from the general Analytics gate
+    t: A role holding only Analytics.View (not Exceptions.View) cannot list exceptions
+    src: ["PayrollExceptionsController"]
+    type: Authorization
+    pri: P1
+    steps:
+      - "[GET /api/payroll/exceptions] as a role holding only Payroll.Analytics.View => [403] Forbidden"
+      - "[GET /api/payroll/exceptions] as a role holding Payroll.Exceptions.View => [200]"
+    auto: API
+
+  - id: PAY-AUD-014
+    func: [F-PAY-237]
+    sc: Reconciliation typed generation and the three finding-action verbs
+    t: Pre/Post generate distinct PayrollReconciliationType rows; acknowledge/resolve/accept-exception each transition a finding differently
+    src: ["PayrollAnalyticsService.GenerateReconciliationAsync / ActOnFindingAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.Reconciliation.Generate"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{id}/pre] => [200] Type=PrePayroll"
+      - "[POST /api/payroll/reconciliation/runs/{id}/post] => [200] Type=PostPayroll"
+      - "[POST /api/payroll/reconciliation/findings/{id}/acknowledge] => [200] finding acknowledged"
+      - "[POST /api/payroll/reconciliation/findings/{id}/resolve] => [200] finding resolved"
+    auto: API
+
+  - id: PAY-AUD-015
+    func: [F-PAY-238]
+    sc: Analytics Controls list vs configure split
+    t: A role holding only Analytics.View can list controls but not create/update them
+    src: ["PayrollAnalyticsService.ListControlsAsync / CreateControlAsync"]
+    type: Authorization
+    pri: P2
+    steps:
+      - "[GET /api/payroll/analytics-controls] as a role holding only Payroll.Analytics.View => [200]"
+      - "[POST /api/payroll/analytics-controls] as the same role => [403] Forbidden - Analytics.Configure is required"
+    auto: API
+
+  - id: PAY-AUD-016
+    func: [F-PAY-239]
+    sc: Cross-tenant ids on reports/analytics/reconciliation endpoints are not reachable
+    t: Tenant B's run id is NotFound on every analytics/reconciliation route as Tenant A
+    src: ["PayrollAnalyticsService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[GET /api/payroll/analytics/runs/{tenantBRunId}/overview] As Tenant A => [404]"
+    auto: API

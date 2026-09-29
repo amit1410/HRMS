@@ -1,0 +1,119 @@
+sheet: PYA_Tenant_Isolation
+submodule: Tenant Isolation
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-TENANT-001
+    func: [F-PYA-115]
+    sc: Every read/write filters by the server-resolved TenantId
+    t: The client cannot influence which tenant's data is read/written by any request header, body field, or query parameter - only the resolved host/JWT tid claim determines TenantId
+    src: "All PayrollAnalyticsService methods (TenantId == tenant.TenantId filters)"
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    pre: "RUN-T1 belongs to T1; the caller is authenticated to T1 via demo01.localhost"
+    role: HRAdmin (custom role holding Payroll.Analytics.View, tenant T1)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-T1, X-Tenant-Id header injected with T2's guid (should be ignored)"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-T1}/overview] (with a forged X-Tenant-Id header for T2) => [200] the response still reflects T1's own data - the forged header has no effect"
+    auto: API
+
+  - id: PYA-TENANT-002
+    func: [F-PYA-116, F-PYA-145]
+    sc: A Tenant B run id is invisible from every read/export endpoint under Tenant A
+    t: NotFound/Unauthorized is returned (never Tenant B's data) for overview, summary, control-totals, departments, cost-centers, variance, components, findings, and all 4 CSV exports
+    src: "PayrollAnalyticsService.LoadRunAsync (used by nearly every method)"
+    type: Tenant-Isolation
+    tags: [Negative, Security]
+    pri: P0
+    sev: Critical
+    pre: "RUN-T2 exists under Tenant T2 (DEMO02) with real persisted results"
+    role: HRAdmin (custom role holding Payroll.Analytics.View, tenant T1)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-T2"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-T2}/overview] (authenticated to T1) => [404] Payroll run not found"
+      - "[GET /api/payroll/analytics/runs/{RUN-T2}/summary.csv] (authenticated to T1) => [400] Payroll run not found (export actions return BadRequest on failure, not 404)"
+      - "[GET /api/payroll/analytics/runs/{RUN-T2}/findings] (authenticated to T1) => [404] Payroll run not found"
+    auto: API
+    cr: [CR-305]
+
+  - id: PYA-TENANT-003
+    func: [F-PYA-117]
+    sc: A Tenant B reconciliation/finding id is invisible under Tenant A
+    t: Get/Acknowledge/Resolve/Accept-exception all return NotFound for another tenant's row
+    src: "PayrollAnalyticsService.GetReconciliationAsync, ActOnFindingAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "RECON-T2 and FINDING-T2 exist under Tenant T2"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.View + Acknowledge, tenant T1)
+    perm: "Payroll.Reconciliation.View, Payroll.Reconciliation.Acknowledge"
+    tenant: "T1 (DEMO01)"
+    data: "id=RECON-T2, id=FINDING-T2"
+    steps:
+      - "[GET /api/payroll/reconciliation/{RECON-T2}] (authenticated to T1) => [404] Reconciliation not found"
+      - "[POST /api/payroll/reconciliation/findings/{FINDING-T2}/acknowledge] {} (authenticated to T1) => [404] Finding not found."
+    auto: API
+
+  - id: PYA-TENANT-004
+    func: [F-PYA-118]
+    sc: Controls are tenant-scoped; identical Code/EffectiveFrom is allowed across tenants
+    t: Tenant B may create a control with the exact same Code and EffectiveFrom Tenant A already used, and Tenant A's control is invisible to Tenant B's list/update
+    src: "PayrollAnalyticsService.CreateControlAsync, ListControlsAsync, UpdateControlAsync"
+    type: Tenant-Isolation
+    tags: []
+    pri: P1
+    sev: High
+    pre: "CTRL-SHARED-CODE (Code='SHARED', EffectiveFrom=2026-01-01) already exists under Tenant T1"
+    role: HRAdmin (custom role holding Payroll.Analytics.Configure, tenant T2)
+    perm: Payroll.Analytics.Configure
+    tenant: "T2 (DEMO02)"
+    data: "code='SHARED', effectiveFrom='2026-01-01'"
+    steps:
+      - "[POST /api/payroll/analytics-controls] {code:'SHARED', name:'T2 own', scope:'PayrollRun', metric:'GrossPay', absoluteThreshold:1, effectiveFrom:'2026-01-01'} (authenticated to T2) => [200] succeeds, not Conflict - the unique index is TenantId-scoped"
+    auto: API
+
+  - id: PYA-TENANT-005
+    func: [F-PYA-119]
+    sc: The exceptions register is tenant-scoped
+    t: Tenant A never sees Tenant B's anomaly flags via list or export, regardless of search text
+    src: "PayrollAnalyticsService.GetExceptionsAsync, ExportExceptionsAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "Tenant T2 has its own Open anomaly flag"
+    role: HRAdmin (custom role holding Payroll.Exceptions.View, tenant T1)
+    perm: Payroll.Exceptions.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/exceptions] (authenticated to T1) => [200] TotalCount reflects only T1's own anomaly flags"
+      - "[GET /api/payroll/exceptions/export.csv] (authenticated to T1) => [200] contains only T1's own rows"
+    auto: API
+
+  - id: PYA-TENANT-006
+    func: [F-PYA-120]
+    sc: Default comparison-run lookup is itself tenant-filtered
+    t: A same-RunType run belonging to Tenant B, more recent than any of Tenant A's own runs, is never selected as Tenant A's implicit variance/component-variance comparison baseline
+    src: "PayrollAnalyticsService.GetVarianceAsync, GetComponentVarianceAsync (default comparisonId lookup)"
+    type: Tenant-Isolation
+    tags: []
+    pri: P1
+    sev: High
+    pre: "Tenant T2 has a Regular run dated 2026-09-30 (more recent than any T1 Regular run); Tenant T1's own most recent Regular run before RUN-CURR is dated 2026-08-31"
+    role: HRAdmin (custom role holding Payroll.Analytics.View, tenant T1)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR (T1), no compareRunId"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance] (no compareRunId, authenticated to T1) => [200] BaseGross values match T1's own 2026-08-31 run, never T2's 2026-09-30 run"
+    auto: API

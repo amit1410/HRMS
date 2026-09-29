@@ -1,0 +1,242 @@
+sheet: Leave_Approvals
+submodule: Leave Approval workflow (approve/reject) and the Manager approval inbox
+defaults:
+  role: MANAGER
+  perm: "Leave.Approve"
+  tenant: A
+  pre: "Tenant A signed in; caller is the current direct manager of the request's employee unless stated."
+  data: "n/a unless stated."
+  sev: Critical
+  reg: true
+
+cases:
+  - id: LEAVE-APPR-001
+    func: [F-LEAVE-186]
+    sc: An employee cannot approve or reject their own request
+    t: Self-approval is rejected unconditionally, before any permission/manager/scope check
+    src: ["LeaveRequestApprovalService.AuthorizeAsync"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    role: EMPLOYEE
+    steps:
+      - "[POST /api/leave-requests/{ownRequestId}/approve] As the request's own employee, even if they also happen to hold Leave.Approve via another role => [403] 'ApproverNotAuthorized: An employee cannot approve or reject their own request'"
+    auto: API
+
+  - id: LEAVE-APPR-002
+    func: [F-LEAVE-187]
+    sc: The current direct manager can approve/reject
+    t: A manager holding Leave.Approve, currently the employee's own manager, succeeds
+    src: ["LeaveRequestApprovalService.AuthorizeAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/leave-requests/{requestId}/approve] As the current direct manager => [200] Status=Approved"
+    auto: API
+
+  - id: LEAVE-APPR-003
+    func: [F-LEAVE-188]
+    sc: An unrelated manager cannot approve/reject
+    t: A different manager (holds Leave.Approve, but is not this employee's manager and has no matching scope) is Forbidden
+    src: ["LeaveRequestApprovalService.AuthorizeAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/leave-requests/{requestId}/approve] As an unrelated manager with Leave.Approve but no relationship to this employee => [403] 'ApproverNotAuthorized'"
+    auto: API
+
+  - id: LEAVE-APPR-004
+    func: [F-LEAVE-189]
+    sc: Approving/rejecting a non-PendingApproval request fails; repeated approval is not idempotent
+    t: A second Approve call on an already-Approved request fails Conflict, distinct from a fresh success
+    src: ["LeaveRequestApprovalService.AttemptAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/leave-requests/{requestId}/approve] First call => [200] Approved"
+      - "[POST /api/leave-requests/{requestId}/approve] Second call, same request => [409] 'InvalidStatusTransition: Only PendingApproval requests can be approved or rejected'"
+      - "[POST /api/leave-requests/{requestId}/reject] On the same now-Approved request => [409] same error"
+    auto: API
+
+  - id: LEAVE-APPR-005
+    func: [F-LEAVE-190]
+    sc: A race between the employee's own Cancel/Withdraw and the manager's Approve resolves to exactly one winner
+    t: Firing Withdraw and Approve concurrently on the same PendingApproval request, under the shared employee lock, leaves the request in exactly one terminal state
+    src: ["LeaveRequestApprovalService.AttemptAsync", "IEmployeeSerializationLock"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[POST /api/leave-requests/{requestId}/withdraw] and [POST /api/leave-requests/{requestId}/approve] fired CONCURRENTLY => exactly ONE succeeds [200]; the other returns [409] 'InvalidStatusTransition' - the request ends in exactly one of {Withdrawn, Approved}, never both, never neither"
+    auto: DB-assisted
+
+  - id: LEAVE-APPR-006
+    func: [F-LEAVE-191]
+    sc: "Approval never checks the TARGET employee's own current status - only the approver's own authorization (see CR-53)"
+    t: A manager can still approve a request from an employee who has since separated, as long as the approver is authorized and the request is still PendingApproval
+    src: ["LeaveRequestApprovalService.AttemptAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] The request's employee has since separated (Employee.Status != Active), but their request from before separation is still PendingApproval => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/{requestId}/approve] As the (former) direct manager => [200] Approved - the separated employee's own status is never checked by this service"
+    auto: API
+    cr: [CR-53]
+
+  - id: LEAVE-APPR-007
+    func: [F-LEAVE-192]
+    sc: A manager change re-resolves approval authority at THIS MOMENT, for the SAME still-pending request
+    t: The old manager loses approval rights and the new manager gains them, both evaluated as of today's date
+    src: ["LeaveRequestApprovalService.AuthorizeAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Setup] Employee submitted a request while Manager X was their manager => test preconditions are established for the steps below"
+      - "[Setup] Record an EmploymentHistory change moving the employee to Manager Y, effective today => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/{requestId}/approve] As Manager X (the OLD manager) => [403] 'ApproverNotAuthorized' - no longer the current manager"
+      - "[POST /api/leave-requests/{requestId}/approve] As Manager Y (the NEW manager) => [200] Approved - authorized as of today"
+    auto: API
+
+  - id: LEAVE-APPR-008
+    func: [F-LEAVE-193]
+    sc: A future-dated manager change does NOT yet grant approval rights
+    t: A manager assignment effective next month does not authorize approval today
+    src: ["LeaveRequestApprovalService.AuthorizeAsync", "IEmployeeManagerResolver.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Record an EmploymentHistory change naming Manager Z, EffectiveFrom=today+30days => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/{requestId}/approve] As Manager Z, today => [403] 'ApproverNotAuthorized' - not yet the current manager"
+    auto: API
+
+  - id: LEAVE-APPR-009
+    func: [F-LEAVE-194]
+    sc: An employee with no current manager can only be approved via role-scope, never via the manager path
+    t: With no ManagerId set, the manager-path check never authorizes anyone; a role-scoped HRBP/SuperHR can still approve
+    src: ["LeaveAuthorizationService.CanAccessEmployeeAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee has ManagerId=null on their current effective employment row => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/{requestId}/approve] As a Manager who is NOT scoped to this employee's department => [403] 'ApproverNotAuthorized'"
+      - "[POST /api/leave-requests/{requestId}/approve] As an HRBP scoped to this employee's own Department (via RoleScopeResolver) => [200] Approved - role-scope path succeeds where manager-path cannot"
+    auto: API
+
+  - id: LEAVE-APPR-010
+    func: [F-LEAVE-195]
+    sc: There is no multi-level or HR-blanket approval - one Approve/Reject by one authorized actor resolves the request
+    t: A single Approve call transitions the request fully to Approved; no second required approval step exists
+    src: ["LeaveRequestApprovalService.TransitionAsync"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[POST /api/leave-requests/{requestId}/approve] => [200] Status=Approved immediately - no 'awaiting second-level approval' intermediate state exists anywhere in the response or subsequent GETs"
+    auto: API
+
+  - id: LEAVE-APPR-011
+    func: [F-LEAVE-196]
+    sc: Approving Allocated leave when balance accounting is unavailable fails cleanly
+    t: A misconfigured/unavailable balance-accounting dependency fails the approval Conflict rather than silently skipping accounting
+    src: ["LeaveRequestApprovalService.ApplyAllocatedAccountingAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Simulate ILeaveBalanceAccountingService being unavailable for an Allocated-entitlement request => the forced/simulated state is established for the steps below"
+      - "[POST /api/leave-requests/{requestId}/approve] => [409] 'AllocatedReservationNotFound: Allocated leave reservation accounting is unavailable'"
+    auto: DB-assisted
+
+  - id: LEAVE-APPR-012
+    func: [F-LEAVE-197]
+    sc: Approving Comp-Off leave routes through CompOffService.ConsumeAsync, not standard balance accounting
+    t: A Comp-Off-type request's approval consumes Comp-Off ledger entries, and fails Conflict if Comp-Off accounting is unavailable
+    src: ["LeaveRequestApprovalService.ApplyAllocatedAccountingAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/leave-requests/{compOffRequestId}/approve] => [200] Approved"
+      - "[GET /api/attendance/comp-off/ledger] => [200] a Consume ledger entry now exists for this LeaveRequestId, and GET /api/leave-balances/mine shows NO EmployeeLeaveBalances change from this approval"
+    auto: API
+
+  - id: LEAVE-APPR-013
+    func: [F-LEAVE-198]
+    sc: A failed Attendance-day reprocessing rolls back the whole approval transaction
+    t: If IAttendanceDayProcessor fails for any date in the approved range, the request stays PendingApproval, not partially Approved
+    src: ["LeaveRequestApprovalService.AttemptAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Force IAttendanceDayProcessor.ProcessAsync to fail for one date within the request's range => the forced/simulated state is established for the steps below"
+      - "[POST /api/leave-requests/{requestId}/approve] => [4xx/409] the whole transaction rolls back; GET /api/leave-requests/{requestId} => [200] Status is STILL PendingApproval, and the balance reservation is unchanged (not consumed)"
+    auto: DB-assisted
+
+  - id: LEAVE-INBOX-001
+    func: [F-LEAVE-199, F-LEAVE-200]
+    sc: The inbox lists only in-scope PendingApproval requests; unrelated employees never appear
+    t: A manager's inbox shows exactly their direct reports' pending requests, never an unrelated employee's, even if that manager broadly holds Leave.Approve
+    src: ["LeaveApprovalReadService.GetInboxAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/leave-approvals] As a manager with 2 direct reports (one with a Pending request, one unrelated employee elsewhere also has a Pending request) => [200] items contains only the direct report's request"
+    auto: API
+
+  - id: LEAVE-INBOX-002
+    func: [F-LEAVE-201, F-LEAVE-202]
+    sc: Inbox rows carry employee code/name and are paged/sorted by SubmittedAtUtc desc; invalid paging is rejected
+    t: Rows are ordered newest-first; page=0 is rejected before any query runs
+    src: ["LeaveApprovalReadService.GetInboxAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/leave-approvals?page=1&pageSize=25] => [200] items ordered by submittedAtUtc desc, each with employeeCode/employeeName populated"
+      - "[GET /api/leave-approvals?page=0] => [400] 'Page must be at least 1 and page size must be between 1 and 100'"
+    auto: API
+
+  - id: LEAVE-INBOX-003
+    func: [F-LEAVE-203]
+    sc: A large inbox (many pending reports) is served correctly through the same paged query
+    t: A manager/HRBP with 100+ in-scope pending requests can page through all of them with pageSize=100
+    src: ["LeaveApprovalReadService.GetInboxAsync"]
+    type: Boundary
+    pri: P2
+    tags: [Boundary]
+    steps:
+      - "[Setup] 120 PendingApproval requests within one HRBP's Department scope => test preconditions are established for the steps below"
+      - "[GET /api/leave-approvals?page=1&pageSize=100] => [200] 100 items, hasNextPage=true"
+      - "[GET /api/leave-approvals?page=2&pageSize=100] => [200] the remaining 20 items"
+    auto: API
+
+  - id: LEAVE-INBOX-004
+    func: [F-LEAVE-204]
+    sc: GetById applies the same scope check as the list, 404ing rather than 403ing an out-of-scope request
+    t: An unrelated manager's direct GET for a specific requestId outside their scope returns NotFound, not Forbidden
+    src: ["LeaveApprovalReadService.GetByIdAsync"]
+    type: Security
+    pri: P1
+    steps:
+      - "[GET /api/leave-approvals/{outOfScopeRequestId}] As an unrelated manager holding Leave.Approve => [404] 'Leave request was not found' - never confirms the request's existence to an unauthorized caller"
+    auto: API
+
+  - id: LEAVE-INBOX-005
+    func: [F-LEAVE-205]
+    sc: A historical (Approved/Rejected) request remains visible to GetById as long as scope holds TODAY
+    t: Scope is re-evaluated at read time, not frozen at action time
+    src: ["LeaveApprovalReadService.GetByIdAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/leave-approvals/{alreadyApprovedRequestId}] As the SAME manager who approved it, still the current manager today => [200] full detail with events history"
+    auto: API
+
+  - id: LEAVE-INBOX-006
+    func: [F-LEAVE-206]
+    sc: Tenant isolation - the inbox never leaks another tenant's pending requests
+    t: Tenant B's approver sees zero of Tenant A's pending requests
+    src: ["LeaveApprovalReadService.GetInboxAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[GET /api/leave-approvals] As a Tenant B manager/HRBP holding Leave.Approve => [200] items contains ONLY Tenant B's own requests, none of Tenant A's"
+    auto: API

@@ -1,0 +1,1084 @@
+# Functionality registry for Module 11 - Loans & Advances (phase 7N: Loan Product/Salary-Advance
+# configuration and effective-dated versions, employee loan/advance requests and eligibility, submit/
+# approve/reject lifecycle, manual disbursement and EMI schedule generation (None/Flat/ReducingBalance),
+# payroll deduction (recovery) integration with the Calculation Engine, manual repayment/partial-
+# prepayment/early-closure and outstanding-balance maintenance, cancellation, Final Settlement loan-
+# recovery integration, the tenant-scoped paginated Loan Register, Authorization/Scope, Tenant Isolation,
+# Audit/History, SQL Server/MySQL Provider Parity, Large Data/Paging, and Frontend).
+# Every test case references one or more of these ids; the builder fails if a functionality has zero
+# cases or a case references an unknown id. IDs are allocated in one global sequence (F-LOAN-001...) in
+# the order the case files below were authored - group boundaries are noted with a comment banner.
+#
+# SCOPE NOTE (read before extending this module): this module covers exactly the surface qa/10-payroll's
+# own README named as an explicit out-of-scope carry-forward for a future module: "Loans/Salary Advances
+# (phase 7n)". Loan GL/accounting journal generation (PayrollAccountingService's LoanPayrollRecovery/
+# LoanFinalSettlementRecovery/LoanInterestRecovery mapping types, i.e. the actual debit/credit journal
+# lines and PayrollGLMapping configuration) is explicitly OUT of scope here too, for the identical reason
+# qa/10-payroll excluded all of Payroll Accounting/GL Posting (phase 7i) - it is a separate, self-contained
+# ledger-posting concern with its own configuration surface. This module verifies that a loan recovery
+# correctly produces a LoanRepayment row and updates EmployeeLoan/LoanInstallment state (the business
+# outcome), not that a balanced GL journal is subsequently posted from it (the accounting outcome).
+#
+# Discovered implementation (authoritative source, read directly - not assumed from any design doc;
+# docs/phase-7n-loans-salary-advances.md was read and current code wins wherever they diverge, per
+# CLAUDE.md):
+#   Backend/HRMS.API/Controllers/PayrollLoansController.cs (also hosts the /api/me/loans* ESS routes)
+#   Backend/HRMS.Application/Services/PayrollLoanService.cs, LoanPayrollRecoveryResolver.cs
+#   Backend/HRMS.Application/Abstractions/IPayrollLoanService.cs, ILoanPayrollRecoveryResolver.cs
+#   Backend/HRMS.Application/DTOs/Payroll/PayrollLoanDtos.cs, PayrollLoanRecoveryDtos.cs
+#   Backend/HRMS.Domain/Entities/PayrollLoans.cs (LoanProduct, LoanProductVersion, EmployeeLoan,
+#     LoanInstallment, LoanRepayment, LoanHistory)
+#   Backend/HRMS.Domain/Enums/LoanEnums.cs
+#   Backend/HRMS.Domain/Authorization/Permissions.cs (Permissions.Payroll.Loans* - full 10-entry block
+#     read in full, ids 145-154)
+#   Backend/HRMS.Infrastructure/Persistence/Configurations/PayrollLoansConfiguration.cs
+#   Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap for every seeded role,
+#     read in full - grep-verified for every Loans* permission constant)
+#   Backend/HRMS.Application/Services/PayrollCalculationEngine.cs (loanRecovery integration block and
+#     PersistLoanRecoveriesAsync - read in full), PayrollRetroSettlementService.cs (CalculateSettlementAsync
+#     / TransitionSettlementAsync's Final Settlement loan-recovery-line generation and finalization - read
+#     in full), PayrollApprovalGuard.cs (maker-checker used by Approve/Cancel)
+#   Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (PayrollLoansPage + MyLoansPage),
+#     PayrollLoansPage.test.tsx, src/api/payroll.ts (loan client functions)
+#   Existing xUnit (PayrollLoansFoundationTests, PayrollLoansConcurrencyTests, PayrollLoansProviderAcceptance,
+#     MySqlPayrollLoansIntegrationTests, SqlServerPayrollLoansIntegrationTests - not individually classified,
+#     per the qa/10-payroll precedent explained in README.md) and PayrollLoansPage.test.tsx (Vitest).
+#
+# ── Headline findings that shape this whole module's cases (see clarifications.yaml for full detail) ──
+# CR-183: grep-verified against SeedData.cs's RolePermissionMap - NO seeded role other than SuperAdmin and
+# TenantAdmin (both of which receive Permissions.All) holds ANY Payroll.Loans.* permission. HRAdmin (which
+# natively holds the entire Salary/Structure/Period/Run/Controls/TaxDeclaration/YearEndTax grant list in
+# qa/10-payroll), SuperHR (which natively holds an equivalent Payroll footprint there), HRManager, Manager,
+# and Employee are ALL granted zero Loans permissions out of the box - including Employee's own
+# Payroll.Loans.Request, meaning a freshly seeded Employee cannot even submit a loan/advance request for
+# themselves through /api/me/loans without an explicit tenant grant. This is a materially larger native gap
+# than any single-role finding in qa/10-payroll (CR-165/168/179).
+# CR-184: CONFIRMED SOURCE-LEVEL BUG - a loan whose OutstandingTotal reaches zero purely through payroll
+# deduction recovery (PayrollCalculationEngine.PersistLoanRecoveriesAsync) is never transitioned to Closed,
+# unlike PayrollLoanService.RecordRepaymentAsync's manual-repayment path, which explicitly closes the loan
+# the moment OutstandingTotal hits zero. The loan remains Status=Active indefinitely once fully recovered by
+# payroll alone.
+# CR-185: Payroll.Loans.Manage and Payroll.Loans.ViewHistory are declared/seeded (ids 147 and 153) but
+# checked by zero [HasPermission] attributes anywhere in the codebase - the same dead-permission shape as
+# qa/10-payroll's CR-167/173/175. No /history endpoint exists for loans at all.
+
+functionalities:
+  # ═══════════════════════════════ A. LOAN PRODUCTS AND CONFIGURATION ═══════════════════════════════
+  - id: F-LOAN-001
+    name: List loan products for the tenant, ordered by Code
+    group: Loan Products and Configuration
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "GET /api/payroll/loan-products"
+    service: "PayrollLoanService.GetProductsAsync"
+    permission: "Payroll.Loans.View"
+    db: LoanProducts
+
+  - id: F-LOAN-002
+    name: Create a loan product - Code and Name are required
+    group: Loan Products and Configuration
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "POST /api/payroll/loan-products"
+    service: "PayrollLoanService.CreateProductAsync"
+    permission: "Payroll.Loans.ManageProducts"
+    db: LoanProducts
+
+  - id: F-LOAN-003
+    name: "Amount limits are validated: MinAmount/MaxAmount cannot be negative and Min cannot exceed Max"
+    group: Loan Products and Configuration
+    status: Implemented
+    api: "POST/PUT /api/payroll/loan-products"
+    service: "PayrollLoanService.CreateProductAsync / UpdateProductAsync"
+    permission: "Payroll.Loans.ManageProducts"
+    db: LoanProducts
+
+  - id: F-LOAN-004
+    name: "Tenure limits are validated: MinTenureMonths/MaxTenureMonths must be >=1 and Min cannot exceed Max"
+    group: Loan Products and Configuration
+    status: Implemented
+    api: "POST/PUT /api/payroll/loan-products"
+    service: "PayrollLoanService.CreateProductAsync / UpdateProductAsync"
+    permission: "Payroll.Loans.ManageProducts"
+    db: LoanProducts
+
+  - id: F-LOAN-005
+    name: Product Code is trimmed and must be unique per tenant, else Conflict
+    group: Loan Products and Configuration
+    status: Implemented
+    api: "POST /api/payroll/loan-products"
+    service: "PayrollLoanService.CreateProductAsync"
+    permission: "Payroll.Loans.ManageProducts"
+    db: LoanProducts
+
+  - id: F-LOAN-006
+    name: Creating a product auto-generates one open-ended Active LoanProductVersion effective from today, carrying the same terms
+    group: Loan Products and Configuration
+    status: Implemented
+    service: "PayrollLoanService.CreateProductAsync"
+    permission: "Payroll.Loans.ManageProducts"
+    db: LoanProductVersions
+
+  - id: F-LOAN-007
+    name: Update requires the product to exist in the tenant (NotFound) and re-checks code uniqueness excluding itself (Conflict)
+    group: Loan Products and Configuration
+    status: Implemented
+    api: "PUT /api/payroll/loan-products/{id}"
+    service: "PayrollLoanService.UpdateProductAsync"
+    permission: "Payroll.Loans.ManageProducts"
+    db: LoanProducts
+
+  - id: F-LOAN-008
+    name: "Update never touches LoanProductVersions - the product header's own Min/Max amount and tenure fields (used later as CreateLoanAsync's eligibility bounds) and each version's own independently-set Min/Max fields can drift out of sync"
+    group: Loan Products and Configuration
+    status: Implemented
+    api: "PUT /api/payroll/loan-products/{id}"
+    service: "PayrollLoanService.UpdateProductAsync"
+    permission: "Payroll.Loans.ManageProducts"
+    db: LoanProducts, LoanProductVersions
+
+  - id: F-LOAN-009
+    name: "CreateProductVersionAsync validates EffectiveTo>=EffectiveFrom, non-negative/ordered amount and tenure bounds, and non-negative InterestRate"
+    group: Loan Products and Configuration
+    status: Implemented
+    api: "POST /api/payroll/loan-products/{id}/versions"
+    service: "PayrollLoanService.CreateProductVersionAsync"
+    permission: "Payroll.Loans.ManageProducts"
+    db: LoanProductVersions
+
+  - id: F-LOAN-010
+    name: A new Active version's date range cannot overlap an existing Active version's range for the same product, else Conflict
+    group: Loan Products and Configuration
+    status: Implemented
+    api: "POST /api/payroll/loan-products/{id}/versions"
+    service: "PayrollLoanService.CreateProductVersionAsync"
+    permission: "Payroll.Loans.ManageProducts"
+    db: LoanProductVersions
+
+  - id: F-LOAN-011
+    name: "LoanProductVersionStatus.Retired is a declared lifecycle state that no service method ever assigns - a version can never be explicitly retired through the API"
+    group: Loan Products and Configuration
+    status: Implemented
+    service: "PayrollLoanService.cs (full grep for LoanProductVersionStatus.Retired)"
+    permission: "Payroll.Loans.ManageProducts"
+    db: LoanProductVersions.Status
+
+  # ═══════════════════════════════ B. ELIGIBILITY AND EMPLOYEE LOAN REQUESTS ═══════════════════════════════
+  - id: F-LOAN-012
+    name: CreateLoanAsync requires RequestedAmount>0 and RequestedTenureMonths>0, else Invalid
+    group: Eligibility and Employee Loan Requests
+    status: Implemented
+    ui: MyLoansPage
+    api: "POST /api/payroll/loans, POST /api/me/loans"
+    service: "PayrollLoanService.CreateLoanAsync"
+    permission: "Payroll.Loans.Request"
+    db: EmployeeLoans
+
+  - id: F-LOAN-013
+    name: The referenced loan product must exist in the tenant and be Active, else NotFound
+    group: Eligibility and Employee Loan Requests
+    status: Implemented
+    api: "POST /api/payroll/loans"
+    service: "PayrollLoanService.CreateLoanAsync"
+    permission: "Payroll.Loans.Request"
+    db: LoanProducts
+
+  - id: F-LOAN-014
+    name: "The target employee must exist in the tenant, else NotFound - CreateLoanAsync does not additionally require the employee's own Status to be Active, unlike Payroll Run population eligibility"
+    group: Eligibility and Employee Loan Requests
+    status: Implemented
+    api: "POST /api/payroll/loans"
+    service: "PayrollLoanService.CreateLoanAsync"
+    permission: "Payroll.Loans.Request"
+    db: Employees
+
+  - id: F-LOAN-015
+    name: RequestedAmount must fall within the product header's MinAmount/MaxAmount (when set), else Invalid
+    group: Eligibility and Employee Loan Requests
+    status: Implemented
+    api: "POST /api/payroll/loans"
+    service: "PayrollLoanService.CreateLoanAsync"
+    permission: "Payroll.Loans.Request"
+    db: LoanProducts
+
+  - id: F-LOAN-016
+    name: RequestedTenureMonths must fall within the product header's MinTenureMonths/MaxTenureMonths (when set), else Invalid
+    group: Eligibility and Employee Loan Requests
+    status: Implemented
+    api: "POST /api/payroll/loans"
+    service: "PayrollLoanService.CreateLoanAsync"
+    permission: "Payroll.Loans.Request"
+    db: LoanProducts
+
+  - id: F-LOAN-017
+    name: "MaxConcurrentLoans is stored on the product but is never read or enforced anywhere in CreateLoanAsync - an employee may hold unlimited concurrent loans against a product declaring a cap"
+    group: Eligibility and Employee Loan Requests
+    status: Implemented
+    service: "PayrollLoanService.cs (full grep for MaxConcurrentLoans usage)"
+    permission: "Payroll.Loans.Request"
+    db: LoanProducts.MaxConcurrentLoans
+
+  - id: F-LOAN-018
+    name: "The loan's interest terms (InterestMethod/InterestRate) and RecoveryPolicy are resolved from the currently-effective Active LoanProductVersion (latest EffectiveFrom<=today, EffectiveTo null or >=today); when none resolves, the request still succeeds falling back to the product-header InterestMethod/InterestRate/RecoveryPolicy with LoanProductVersionId left at Guid.Empty"
+    group: Eligibility and Employee Loan Requests
+    status: Implemented
+    api: "POST /api/payroll/loans"
+    service: "PayrollLoanService.CreateLoanAsync"
+    permission: "Payroll.Loans.Request"
+    db: LoanProductVersions
+
+  - id: F-LOAN-019
+    name: LoanNumber is generated as {LN|ADV}/{year}/{random-GUID-fragment} truncated to 22 characters and upper-cased - not a deterministic sequential number
+    group: Eligibility and Employee Loan Requests
+    status: Implemented
+    api: "POST /api/payroll/loans"
+    service: "PayrollLoanService.CreateLoanAsync"
+    permission: "Payroll.Loans.Request"
+    db: EmployeeLoans.LoanNumber
+
+  - id: F-LOAN-020
+    name: "Status resolves to Draft when the product requires approval (default), or straight to Approved (with ApprovedAmount/ApprovedTenureMonths pre-filled from the request) when the product does not"
+    group: Eligibility and Employee Loan Requests
+    status: Implemented
+    api: "POST /api/payroll/loans"
+    service: "PayrollLoanService.CreateLoanAsync"
+    permission: "Payroll.Loans.Request"
+    db: EmployeeLoans.Status
+
+  - id: F-LOAN-021
+    name: OutstandingPrincipal and OutstandingTotal are pre-populated to RequestedAmount at creation time, before any approval has happened
+    group: Eligibility and Employee Loan Requests
+    status: Implemented
+    api: "POST /api/payroll/loans"
+    service: "PayrollLoanService.CreateLoanAsync"
+    permission: "Payroll.Loans.Request"
+    db: EmployeeLoans.OutstandingPrincipal, OutstandingTotal
+
+  - id: F-LOAN-022
+    name: "Creating a loan appends a Created LoanHistory row, and the ESS self-service create route (POST /api/me/loans) forcibly overwrites the submitted EmployeeId with the caller's own linked-employee id before calling CreateLoanAsync"
+    group: Eligibility and Employee Loan Requests
+    status: Implemented
+    api: "POST /api/me/loans"
+    service: "PayrollLoansController.MyCreate"
+    permission: "Payroll.Loans.Request"
+    db: LoanHistories
+
+  # ═══════════════════════════════ C. SUBMISSION, APPROVAL AND REJECTION ═══════════════════════════════
+  - id: F-LOAN-023
+    name: Submit transitions a loan from Draft to Submitted only, else Conflict
+    group: Submission, Approval and Rejection
+    status: Implemented
+    ui: MyLoansPage
+    api: "POST /api/payroll/loans/{id}/submit, POST /api/me/loans/{id}/submit"
+    service: "PayrollLoanService.SubmitAsync"
+    permission: "Payroll.Loans.Request"
+    db: EmployeeLoans.Status
+
+  - id: F-LOAN-024
+    name: Approve requires the loan to be Submitted, else Conflict
+    group: Submission, Approval and Rejection
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "POST /api/payroll/loans/{id}/approve"
+    service: "PayrollLoanService.ApproveAsync"
+    permission: "Payroll.Loans.Approve"
+    db: EmployeeLoans.Status
+
+  - id: F-LOAN-025
+    name: Approve invokes PayrollApprovalGuard maker-checker and rejects self-approval when the tenant's PayrollControlConfiguration has RequireMakerChecker and PreventSelfApproval enabled and the approver is the original requester
+    group: Submission, Approval and Rejection
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/approve"
+    service: "PayrollLoanService.ApproveAsync -> PayrollApprovalGuard.ValidateAsync"
+    permission: "Payroll.Loans.Approve"
+    db: PayrollControlConfigurations
+
+  - id: F-LOAN-026
+    name: Approve accepts optional approvedAmount/approvedTenureMonths overrides, defaulting to the originally requested values when omitted
+    group: Submission, Approval and Rejection
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/approve?amount=&tenureMonths="
+    service: "PayrollLoanService.ApproveAsync"
+    permission: "Payroll.Loans.Approve"
+    db: EmployeeLoans.ApprovedAmount, ApprovedTenureMonths
+
+  - id: F-LOAN-027
+    name: Approve resets OutstandingPrincipal and OutstandingTotal to the (possibly overridden) ApprovedAmount and stamps ApprovedAtUtc/ApprovedByUserId
+    group: Submission, Approval and Rejection
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/approve"
+    service: "PayrollLoanService.ApproveAsync"
+    permission: "Payroll.Loans.Approve"
+    db: EmployeeLoans.OutstandingPrincipal, OutstandingTotal
+
+  - id: F-LOAN-028
+    name: "Reject is allowed from EITHER Submitted or Draft status (not Submitted-only) and requires a non-blank reason, else Invalid"
+    group: Submission, Approval and Rejection
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/reject?reason="
+    service: "PayrollLoanService.RejectAsync"
+    permission: "Payroll.Loans.Approve"
+    db: EmployeeLoans.Status, RejectionReason
+
+  - id: F-LOAN-029
+    name: "Reject does NOT invoke PayrollApprovalGuard at all - unlike Approve and Cancel, a self-requester can reject their own loan even under a maker-checker/self-approval policy, and RequireReasonForCancellation-style policy reasons never apply to Reject"
+    group: Submission, Approval and Rejection
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/reject"
+    service: "PayrollLoanService.RejectAsync (full method - no approvalGuard reference)"
+    permission: "Payroll.Loans.Approve"
+    db: "n/a"
+
+  - id: F-LOAN-030
+    name: "A loan already Approved, Rejected, Disbursed/Active, Closed or Cancelled cannot be Submitted again"
+    group: Submission, Approval and Rejection
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/submit"
+    service: "PayrollLoanService.TransitionAsync"
+    permission: "Payroll.Loans.Request"
+    db: EmployeeLoans.Status
+
+  - id: F-LOAN-031
+    name: "A cross-tenant loan id (submit/approve/reject) is NotFound, not Forbidden"
+    group: Submission, Approval and Rejection
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/approve"
+    service: "PayrollLoanService.cs (TenantId filter)"
+    permission: "Payroll.Loans.Approve"
+    db: EmployeeLoans (TenantId filter)
+
+  - id: F-LOAN-032
+    name: Every submit/approve/reject transition appends an append-only LoanHistory row carrying the previous and next status
+    group: Submission, Approval and Rejection
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/submit, /approve, /reject"
+    service: "PayrollLoanService.AddHistory"
+    permission: "Payroll.Loans.Request"
+    db: LoanHistories
+
+  # ═══════════════════════════════ D. DISBURSEMENT AND EMI SCHEDULE ═══════════════════════════════
+  - id: F-LOAN-033
+    name: RecordDisbursementAsync requires the loan to be Approved, else Conflict
+    group: Disbursement and EMI Schedule
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "POST /api/payroll/loans/{id}/record-disbursement"
+    service: "PayrollLoanService.RecordDisbursementAsync"
+    permission: "Payroll.Loans.Disburse"
+    db: EmployeeLoans.Status
+
+  - id: F-LOAN-034
+    name: "Disbursed amount defaults to ApprovedAmount, must be >0 and cannot exceed ApprovedAmount - a disbursed amount below the approved amount (partial disbursement) is accepted"
+    group: Disbursement and EMI Schedule
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/record-disbursement?amount="
+    service: "PayrollLoanService.RecordDisbursementAsync"
+    permission: "Payroll.Loans.Disburse"
+    db: EmployeeLoans.DisbursedAmount
+
+  - id: F-LOAN-035
+    name: Disbursement moves the loan to Active and stamps DisbursedAtUtc, appending both Disbursed and Activated LoanHistory events
+    group: Disbursement and EMI Schedule
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/record-disbursement"
+    service: "PayrollLoanService.RecordDisbursementAsync"
+    permission: "Payroll.Loans.Disburse"
+    db: EmployeeLoans.Status, LoanHistories
+
+  - id: F-LOAN-036
+    name: "The installment schedule (BuildSchedule) is generated exactly once per loan, double-guarded by a hadSchedule check before persistence and an internal early-return when installments already exist"
+    group: Disbursement and EMI Schedule
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/record-disbursement"
+    service: "PayrollLoanService.BuildSchedule"
+    permission: "Payroll.Loans.Disburse"
+    db: LoanInstallments
+
+  - id: F-LOAN-037
+    name: "InterestMethod.None produces a zero-interest schedule - principal split evenly across the tenure, with the final installment absorbing any rounding remainder"
+    group: Disbursement and EMI Schedule
+    status: Implemented
+    service: "PayrollLoanService.BuildSchedule"
+    permission: "Payroll.Loans.Disburse"
+    db: LoanInstallments
+
+  - id: F-LOAN-038
+    name: "InterestMethod.Flat computes total interest as Principal*Rate%*(TenureMonths/12), split evenly per installment, with principal likewise split evenly and the remainder absorbed by the final installment"
+    group: Disbursement and EMI Schedule
+    status: Implemented
+    service: "PayrollLoanService.BuildSchedule"
+    permission: "Payroll.Loans.Disburse"
+    db: LoanInstallments
+
+  - id: F-LOAN-039
+    name: "InterestMethod.ReducingBalance computes a standard amortizing EMI from the monthly rate and tenure, with each installment's principal component derived from the prior installment's closing balance"
+    group: Disbursement and EMI Schedule
+    status: Implemented
+    service: "PayrollLoanService.BuildSchedule"
+    permission: "Payroll.Loans.Disburse"
+    db: LoanInstallments
+
+  - id: F-LOAN-040
+    name: Each installment persists OpeningPrincipal/PrincipalAmount/InterestAmount/InstallmentAmount/ClosingPrincipal and a DueDate of the disbursement date advanced by its installment number in months
+    group: Disbursement and EMI Schedule
+    status: Implemented
+    api: "GET /api/payroll/loans/{id}/schedule"
+    service: "PayrollLoanService.BuildSchedule"
+    permission: "Payroll.Loans.View"
+    db: LoanInstallments
+
+  - id: F-LOAN-041
+    name: After disbursement, OutstandingInterest and OutstandingTotal are recomputed as the sum of the generated installments' InterestAmount plus the disbursed principal
+    group: Disbursement and EMI Schedule
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/record-disbursement"
+    service: "PayrollLoanService.RecordDisbursementAsync"
+    permission: "Payroll.Loans.Disburse"
+    db: EmployeeLoans.OutstandingInterest, OutstandingTotal
+
+  - id: F-LOAN-042
+    name: GetScheduleAsync returns the persisted installment set ordered by InstallmentNumber, NotFound for an unknown or cross-tenant loan id
+    group: Disbursement and EMI Schedule
+    status: Implemented
+    ui: PayrollLoansPage, MyLoansPage
+    api: "GET /api/payroll/loans/{id}/schedule"
+    service: "PayrollLoanService.GetScheduleAsync"
+    permission: "Payroll.Loans.View"
+    db: LoanInstallments
+
+  - id: F-LOAN-043
+    name: "The EmployeeLoanDto returned by every read/mutation endpoint embeds the full ordered installment schedule inline, so /api/me/loans/{id} already exposes an ESS employee's own schedule without a separate self-service history/schedule route"
+    group: Disbursement and EMI Schedule
+    status: Implemented
+    api: "GET /api/me/loans/{id}"
+    service: "PayrollLoanService.ToDto(EmployeeLoan)"
+    permission: "Payroll.Loans.Request"
+    db: LoanInstallments
+
+  # ═══════════════════════════════ E. PAYROLL DEDUCTION INTEGRATION ═══════════════════════════════
+  - id: F-LOAN-044
+    name: "LoanPayrollRecoveryResolver.ResolveAsync selects due installments for Active loans only (Status Scheduled or PartiallyRecovered, DueDate<=payDate, RecoveredAmount<InstallmentAmount), ordered by the owning product's RecoveryPriority, then DueDate, then InstallmentNumber"
+    group: Payroll Deduction Integration
+    status: Implemented
+    service: "LoanPayrollRecoveryResolver.ResolveAsync"
+    permission: "Payroll.Run.Calculate"
+    db: LoanInstallments
+
+  - id: F-LOAN-045
+    name: "During calculation, the engine adds one LOAN-{loanNumber} deduction PayrollResultComponent per due installment returned by the resolver, tagged CalculationSource=LoanRecovery with loan/installment traceability"
+    group: Payroll Deduction Integration
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync (loanRecovery block)"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResultComponents
+
+  - id: F-LOAN-046
+    name: RecoveryPolicy.DeferInstallment skips the installment entirely for that payroll cycle - it remains Scheduled/PartiallyRecovered, un-recovered, with no calculation error
+    group: Payroll Deduction Integration
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync"
+    permission: "Payroll.Run.Calculate"
+    db: LoanInstallments.Status
+
+  - id: F-LOAN-047
+    name: "RecoveryPolicy.RecoverFullOrFail fails the entire employee's payroll calculation (CalculationFailed) when the installment's TotalDue exceeds the employee's available net pay at that point"
+    group: Payroll Deduction Integration
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollCalculationErrors
+
+  - id: F-LOAN-048
+    name: RecoveryPolicy.PartialRecovery clips the recovered amount down to whatever net pay remains (floored at zero) instead of failing the calculation
+    group: Payroll Deduction Integration
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResultComponents
+
+  - id: F-LOAN-049
+    name: "Multiple due installments across multiple loans for the same employee are applied in RecoveryPriority order, each one decrementing the running NetPay before the next is evaluated"
+    group: Payroll Deduction Integration
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync"
+    permission: "Payroll.Run.Calculate"
+    db: PayrollResultComponents
+
+  - id: F-LOAN-050
+    name: "On a successful calculation, PersistLoanRecoveriesAsync creates one LoanRepayment (RepaymentType.Payroll) per recovered installment and updates the LoanInstallment's RecoveredAmount/Status/PayrollRunId/PayrollResultId/RecoveredAtUtc"
+    group: Payroll Deduction Integration
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.PersistLoanRecoveriesAsync"
+    permission: "Payroll.Run.Calculate"
+    db: LoanRepayments, LoanInstallments
+
+  - id: F-LOAN-051
+    name: "Persisting a payroll recovery is idempotent per (LoanInstallmentId, PayrollResultId) - a recalculation of the same result does not double-record the LoanRepayment"
+    group: Payroll Deduction Integration
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/recalculate"
+    service: "PayrollCalculationEngine.PersistLoanRecoveriesAsync"
+    permission: "Payroll.Run.Recalculate"
+    db: LoanRepayments
+
+  - id: F-LOAN-052
+    name: An installment's Status becomes Recovered once RecoveredAmount>=InstallmentAmount, otherwise PartiallyRecovered
+    group: Payroll Deduction Integration
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.PersistLoanRecoveriesAsync"
+    permission: "Payroll.Run.Calculate"
+    db: LoanInstallments.Status
+
+  - id: F-LOAN-053
+    name: Payroll recovery correctly decrements the loan's own OutstandingPrincipal/OutstandingInterest/OutstandingTotal aggregate fields (not only the installment's own RecoveredAmount)
+    group: Payroll Deduction Integration
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.PersistLoanRecoveriesAsync"
+    permission: "Payroll.Run.Calculate"
+    db: EmployeeLoans.OutstandingPrincipal, OutstandingInterest, OutstandingTotal
+
+  - id: F-LOAN-054
+    name: "CONFIRMED DEFECT - a loan whose OutstandingTotal is driven to exactly zero purely through payroll-recovery installments is NEVER transitioned to Closed by PersistLoanRecoveriesAsync, unlike RecordRepaymentAsync's manual-repayment path which explicitly closes the loan the moment OutstandingTotal reaches zero; the loan remains Status=Active indefinitely"
+    group: Payroll Deduction Integration
+    status: Implemented
+    api: "POST /api/payroll/runs/{id}/calculate"
+    service: "PayrollCalculationEngine.PersistLoanRecoveriesAsync (contrast with PayrollLoanService.RecordRepaymentAsync)"
+    permission: "Payroll.Run.Calculate"
+    db: EmployeeLoans.Status
+
+  # ═══════════════════ F. MANUAL REPAYMENT, PARTIAL PREPAYMENT, EARLY CLOSURE AND OUTSTANDING BALANCE ═══════════════════
+  - id: F-LOAN-055
+    name: RecordRepaymentAsync (manual repayment) requires the loan to be Active and a positive Amount not exceeding OutstandingTotal, else Conflict/Invalid
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "POST /api/payroll/loans/{id}/repayments"
+    service: "PayrollLoanService.RecordRepaymentAsync"
+    permission: "Payroll.Loans.Recover"
+    db: EmployeeLoans.Status
+
+  - id: F-LOAN-056
+    name: "A manual repayment applies to OutstandingInterest first, then OutstandingPrincipal with the remainder, recording principal/interest split on the LoanRepayment row (RepaymentType.Manual)"
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/repayments"
+    service: "PayrollLoanService.RecordRepaymentAsync"
+    permission: "Payroll.Loans.Recover"
+    db: LoanRepayments
+
+  - id: F-LOAN-057
+    name: A manual repayment that drives OutstandingTotal to exactly zero auto-closes the loan (Status=Closed, ClosedAtUtc/ClosedByUserId/ClosureReason stamped)
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/repayments"
+    service: "PayrollLoanService.RecordRepaymentAsync"
+    permission: "Payroll.Loans.Recover"
+    db: EmployeeLoans.Status
+
+  - id: F-LOAN-058
+    name: PartialPrepayAsync requires the owning product's AllowPartialPrepayment flag to be enabled, else Conflict
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "POST /api/payroll/loans/{id}/prepay"
+    service: "PayrollLoanService.PartialPrepayAsync"
+    permission: "Payroll.Loans.Recover"
+    db: LoanProducts.AllowPartialPrepayment
+
+  - id: F-LOAN-059
+    name: PartialPrepayAsync requires the loan to be Active and Amount positive and no greater than OutstandingPrincipal, applying the full amount to principal only (no interest apportionment)
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/prepay"
+    service: "PayrollLoanService.PartialPrepayAsync"
+    permission: "Payroll.Loans.Recover"
+    db: EmployeeLoans.OutstandingPrincipal
+
+  - id: F-LOAN-060
+    name: "INCONSISTENCY - PartialPrepayAsync does NOT auto-close the loan even when the prepayment reduces OutstandingTotal to exactly zero, unlike RecordRepaymentAsync's auto-close-at-zero behavior for the structurally identical scenario"
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/prepay"
+    service: "PayrollLoanService.PartialPrepayAsync (contrast with RecordRepaymentAsync)"
+    permission: "Payroll.Loans.Recover"
+    db: EmployeeLoans.Status
+
+  - id: F-LOAN-061
+    name: A partial prepayment appends a PartialPrepayment LoanHistory row and records a LoanRepayment with RepaymentType.PartialPrepayment
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/prepay"
+    service: "PayrollLoanService.PartialPrepayAsync"
+    permission: "Payroll.Loans.Recover"
+    db: LoanRepayments, LoanHistories
+
+  - id: F-LOAN-062
+    name: CloseAsync (early closure) requires the owning product's AllowEarlyClosure flag, else Conflict, and the loan must be Active
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "POST /api/payroll/loans/{id}/close"
+    service: "PayrollLoanService.CloseAsync"
+    permission: "Payroll.Loans.Close"
+    db: LoanProducts.AllowEarlyClosure
+
+  - id: F-LOAN-063
+    name: "A supplied non-zero Amount must exactly equal the loan's current OutstandingTotal, else Invalid with the required amount echoed back in the message; Amount=0 is accepted as shorthand for the current outstanding total"
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/close"
+    service: "PayrollLoanService.CloseAsync"
+    permission: "Payroll.Loans.Close"
+    db: "n/a"
+
+  - id: F-LOAN-064
+    name: "Early closure zeroes OutstandingPrincipal/Interest/Total, sets Status=Closed, records a LoanRepayment (RepaymentType.EarlyClosure) for the full outstanding amount, and cancels every remaining Scheduled installment"
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/close"
+    service: "PayrollLoanService.CloseAsync"
+    permission: "Payroll.Loans.Close"
+    db: EmployeeLoans, LoanInstallments.Status
+
+  - id: F-LOAN-065
+    name: "Repayment/prepayment/closure all increment EmployeeLoan.ConcurrencyVersion, a genuine EF IsConcurrencyToken column, so a true concurrent race between two of these actions on the same loan throws DbUpdateConcurrencyException rather than silently double-applying"
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    service: "PayrollLoanService.cs (ConcurrencyVersion++ in RecordRepaymentAsync/PartialPrepayAsync/CloseAsync)"
+    permission: "Payroll.Loans.Recover"
+    db: EmployeeLoans.ConcurrencyVersion
+
+  - id: F-LOAN-066
+    name: "None of the Loan mutation endpoints (repayments/prepay/close/approve/record-disbursement) accept a client-supplied expectedConcurrencyVersion parameter, unlike SalaryComponent/SalaryStructure/EmployeeSalaryAssignment - an ordinary stale-form conflict is caught only by EF's own DbUpdateConcurrencyException (mapped by the global ExceptionHandlingMiddleware to a generic 500), never as a clean, pre-checked 409"
+    group: Repayment, Prepayment, Closure and Outstanding Balance
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/repayments, /prepay, /close, /approve, /record-disbursement"
+    service: "PayrollLoansController.cs (full route-parameter grep)"
+    permission: "Payroll.Loans.Recover"
+    db: "n/a"
+
+  # ═══════════════════════════════ G. CANCELLATION ═══════════════════════════════
+  - id: F-LOAN-067
+    name: Cancel is blocked only when the loan is Active or Closed - every other state (Draft/Submitted/Approved/Rejected/already-Cancelled) is accepted
+    group: Cancellation
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "POST /api/payroll/loans/{id}/cancel"
+    service: "PayrollLoanService.CancelCoreAsync"
+    permission: "Payroll.Loans.Cancel"
+    db: EmployeeLoans.Status
+
+  - id: F-LOAN-068
+    name: "IDEMPOTENCY GAP - because Cancelled itself is not in the blocked-state list, cancelling an already-Cancelled loan a second time succeeds again, writing a duplicate Cancelled LoanHistory row rather than returning a no-op or Conflict"
+    group: Cancellation
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/cancel"
+    service: "PayrollLoanService.CancelCoreAsync"
+    permission: "Payroll.Loans.Cancel"
+    db: LoanHistories
+
+  - id: F-LOAN-069
+    name: "Cancel invokes PayrollApprovalGuard, so a tenant with RequireReasonForCancellation enabled rejects a Cancel call with a blank reason as Invalid; PreventSelfApproval likewise blocks the original requester from cancelling their own loan under a maker-checker policy"
+    group: Cancellation
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/cancel?reason="
+    service: "PayrollLoanService.CancelCoreAsync -> PayrollApprovalGuard.ValidateAsync"
+    permission: "Payroll.Loans.Cancel"
+    db: PayrollControlConfigurations
+
+  - id: F-LOAN-070
+    name: A successful cancellation appends a Cancelled LoanHistory row carrying the previous status and the supplied reason
+    group: Cancellation
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/cancel"
+    service: "PayrollLoanService.CancelCoreAsync"
+    permission: "Payroll.Loans.Cancel"
+    db: LoanHistories
+
+  - id: F-LOAN-071
+    name: "A cross-tenant loan id on cancel is NotFound, not Forbidden"
+    group: Cancellation
+    status: Implemented
+    api: "POST /api/payroll/loans/{id}/cancel"
+    service: "PayrollLoanService.cs (TenantId filter)"
+    permission: "Payroll.Loans.Cancel"
+    db: EmployeeLoans (TenantId filter)
+
+  # ═══════════════════════════════ H. FINAL SETTLEMENT INTEGRATION ═══════════════════════════════
+  - id: F-LOAN-072
+    name: "CalculateSettlementAsync auto-generates one Recovery FinalSettlementLine per Active loan with OutstandingTotal>0 for the settlement's employee, sized to the loan's OutstandingTotal at generation time"
+    group: Final Settlement Integration
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/calculate"
+    service: "PayrollRetroSettlementService.CalculateSettlementAsync"
+    permission: "Payroll.FinalSettlement.Manage"
+    db: FinalSettlementLines, EmployeeLoans
+
+  - id: F-LOAN-073
+    name: Re-running CalculateSettlementAsync (still Draft/Calculated) does not duplicate a loan-recovery line that was already generated for the same loan, but also does not refresh an existing line's Amount if the loan's OutstandingTotal has since changed
+    group: Final Settlement Integration
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/calculate"
+    service: "PayrollRetroSettlementService.CalculateSettlementAsync"
+    permission: "Payroll.FinalSettlement.Manage"
+    db: FinalSettlementLines
+
+  - id: F-LOAN-074
+    name: "On FinalizeSettlementAsync, each EmployeeLoan-sourced line recovers min(line.Amount, loan.OutstandingTotal) - not the possibly-stale line.Amount outright - so a manual repayment made between Calculate and Finalize is correctly reflected and the loan is never over-recovered"
+    group: Final Settlement Integration
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/finalize"
+    service: "PayrollRetroSettlementService.TransitionSettlementAsync"
+    permission: "Payroll.FinalSettlement.Manage"
+    db: EmployeeLoans.OutstandingTotal
+
+  - id: F-LOAN-075
+    name: "Finalization records a LoanRepayment (RepaymentType.FinalSettlement, SourceType=FinalSettlement, Reference=the settlement id) splitting interest/principal from the recovered amount, and idempotently skips a loan line already recovered under the same settlement Reference"
+    group: Final Settlement Integration
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/finalize"
+    service: "PayrollRetroSettlementService.TransitionSettlementAsync"
+    permission: "Payroll.FinalSettlement.Manage"
+    db: LoanRepayments
+
+  - id: F-LOAN-076
+    name: "Finalization closes the loan (Status=Closed, ClosureReason='Recovered through final settlement.') the moment the recovery brings its OutstandingTotal to zero, and appends a FinalSettlementRecovery LoanHistory row regardless"
+    group: Final Settlement Integration
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/finalize"
+    service: "PayrollRetroSettlementService.TransitionSettlementAsync"
+    permission: "Payroll.FinalSettlement.Manage"
+    db: EmployeeLoans.Status, LoanHistories
+
+  - id: F-LOAN-077
+    name: "A loan whose OutstandingTotal exceeds the recorded settlement line's Amount (e.g. a top-up disbursement after Calculate) is only ever recovered up to line.Amount at finalization - the residual outstanding balance survives the settlement and is not separately flagged"
+    group: Final Settlement Integration
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/finalize"
+    service: "PayrollRetroSettlementService.TransitionSettlementAsync"
+    permission: "Payroll.FinalSettlement.Manage"
+    db: EmployeeLoans.OutstandingTotal
+
+  - id: F-LOAN-078
+    name: "A loan that is not Active (e.g. already Closed or Cancelled) at finalization time is silently skipped by its generated settlement line, with no error and no repayment recorded"
+    group: Final Settlement Integration
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/finalize"
+    service: "PayrollRetroSettlementService.TransitionSettlementAsync"
+    permission: "Payroll.FinalSettlement.Manage"
+    db: EmployeeLoans.Status
+
+  # ═══════════════════════════════ I. LOAN REGISTER AND REPORTS ═══════════════════════════════
+  - id: F-LOAN-079
+    name: "GetRegisterAsync is a true paged endpoint (Page/PageSize/total count) supporting ProductId/ProductType/EmployeeId/Status/From-To(RequestedAtUtc) filters"
+    group: Loan Register and Reports
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "GET /api/payroll/loans/register"
+    service: "PayrollLoanService.GetRegisterAsync"
+    permission: "Payroll.Loans.View"
+    db: EmployeeLoans
+
+  - id: F-LOAN-080
+    name: "LoanRegisterQuery has no registered FluentValidation validator - Page/PageSize are never bounded server-side (no MaxPageSize=100 enforcement, unlike other PagedQuery-derived DTOs in the app), so an oversized PageSize defeats pagination and Page<=0 feeds an unguarded Skip() calculation"
+    group: Loan Register and Reports
+    status: Implemented
+    api: "GET /api/payroll/loans/register"
+    service: "PayrollLoanService.cs (full grep for a LoanRegisterQuery validator)"
+    permission: "Payroll.Loans.View"
+    db: "n/a"
+
+  - id: F-LOAN-081
+    name: The register's per-row NextDueDate is the earliest Scheduled/PartiallyRecovered installment's DueDate, and PrincipalRecovered/InterestRecovered/TotalRecovered are live sums over LoanRepayments rather than stored snapshots
+    group: Loan Register and Reports
+    status: Implemented
+    api: "GET /api/payroll/loans/register"
+    service: "PayrollLoanService.GetRegisterAsync"
+    permission: "Payroll.Loans.View"
+    db: LoanRepayments, LoanInstallments
+
+  - id: F-LOAN-082
+    name: "GetLoansAsync (the admin GET /api/payroll/loans listing and every /api/me/loans* ESS route) is NOT paginated at all - it hard-caps at the 500 most-recently-requested loans (OrderByDescending RequestedAtUtc) with no page/pageSize parameters, unlike the true-paged register"
+    group: Loan Register and Reports
+    status: Implemented
+    api: "GET /api/payroll/loans, GET /api/me/loans"
+    service: "PayrollLoanService.GetLoansAsync"
+    permission: "Payroll.Loans.View, Payroll.Loans.Request"
+    db: EmployeeLoans
+
+  - id: F-LOAN-083
+    name: "There is no dedicated register CSV/export endpoint or reporting sheet for Loans (unlike Payroll Reports/Payroll Analytics/Reimbursements' own Register export) - the design doc itself lists register export as historically deferred scope"
+    group: Loan Register and Reports
+    status: Deferred
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  # ═══════════════════════════════ J. AUTHORIZATION, SCOPE AND TENANT ISOLATION ═══════════════════════════════
+  - id: F-LOAN-084
+    name: "CONFIRMED - grep of SeedData.cs's RolePermissionMap shows NO seeded role other than SuperAdmin/TenantAdmin (both via Permissions.All) is granted ANY Payroll.Loans.* permission natively"
+    group: Authorization, Scope and Tenant Isolation
+    status: Implemented
+    service: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, full grep for LoansView/Request/Manage/Approve/Disburse/Recover/Close/Cancel/ViewHistory/ManageProducts)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LOAN-085
+    name: HRAdmin holds zero Payroll.Loans.* permissions despite natively holding the entire Salary/Structure/Period/Run/Controls/TaxDeclaration/YearEndTax grant list in qa/10-payroll
+    group: Authorization, Scope and Tenant Isolation
+    status: Implemented
+    service: "SeedData.cs (RolePermissionMap[HRAdmin])"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LOAN-086
+    name: SuperHR holds zero native Payroll.Loans.* permissions but can self-escalate to full Loans management (View/Request/Approve/Disburse/Recover/Close/Cancel/ManageProducts) via one PageAccess.Manage call, the same CR-66 self-escalation shape documented in qa/06-rbac-account-linking and re-verified in every module since
+    group: Authorization, Scope and Tenant Isolation
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PageAccessService.cs (UpdateAsync); SeedData.cs (RolePermissionMap[SuperHR])"
+    permission: "PageAccess.Manage"
+    db: "n/a"
+
+  - id: F-LOAN-087
+    name: Employee holds zero Payroll.Loans.* permissions out of the box, including Payroll.Loans.Request - a freshly seeded Employee cannot submit a loan/advance request for themselves through /api/me/loans without an explicit tenant grant
+    group: Authorization, Scope and Tenant Isolation
+    status: Implemented
+    api: "POST /api/me/loans"
+    service: "SeedData.cs (RolePermissionMap[Employee])"
+    permission: "Payroll.Loans.Request"
+    db: "n/a"
+
+  - id: F-LOAN-088
+    name: Manager holds zero Payroll.Loans.* permissions - there is no manager/team-scope view of direct reports' loans, consistent with the CR-77 pattern (no team-scope permission concept) already documented for Payroll
+    group: Authorization, Scope and Tenant Isolation
+    status: Implemented
+    service: "SeedData.cs (RolePermissionMap[Manager])"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LOAN-089
+    name: "Payroll.Loans.Manage and Payroll.Loans.ViewHistory are declared and seeded (ids 147, 153) but checked by zero [HasPermission] attributes anywhere in the codebase - each mutating action is instead gated by its own granular permission and no /history endpoint exists for loans at all"
+    group: Authorization, Scope and Tenant Isolation
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollLoansController.cs (full [HasPermission] grep); Permissions.cs"
+    permission: "Payroll.Loans.Manage, Payroll.Loans.ViewHistory"
+    db: "n/a"
+
+  - id: F-LOAN-090
+    name: "The ESS routes (/api/me/loans*) are gated by the SAME Payroll.Loans.Request permission used for the plain create/submit actions - there is no separate self-view permission, so any role holding Request can also list/read its own linked-employee loans"
+    group: Authorization, Scope and Tenant Isolation
+    status: Implemented
+    api: "GET /api/me/loans, GET /api/me/loans/{id}"
+    service: "PayrollLoansController.cs (full [HasPermission] grep on /api/me/loans* routes)"
+    permission: "Payroll.Loans.Request"
+    db: "n/a"
+
+  - id: F-LOAN-091
+    name: "An unlinked user (no AccountEmployeeLink) calling any /api/me/loans* route receives Unauthorized (No linked employee identity), not an empty result set"
+    group: Authorization, Scope and Tenant Isolation
+    status: Implemented
+    api: "GET /api/me/loans"
+    service: "PayrollLoansController.LinkedEmployeeAsync"
+    permission: "Payroll.Loans.Request"
+    db: AccountEmployeeLinks
+
+  - id: F-LOAN-092
+    name: "MyLoan (GET /api/me/loans/{id}) returns NotFound for a loan id that exists but belongs to a different employee than the caller's own linked identity, even within the same tenant - it never leaks another employee's loan by id"
+    group: Authorization, Scope and Tenant Isolation
+    status: Implemented
+    api: "GET /api/me/loans/{id}"
+    service: "PayrollLoansController.MyLoan"
+    permission: "Payroll.Loans.Request"
+    db: "n/a"
+
+  - id: F-LOAN-093
+    name: "A cross-tenant loan/product id on every read and mutation route (products, loans, register, schedule) is NotFound, not Forbidden - verified across the full TenantId-filter surface"
+    group: Authorization, Scope and Tenant Isolation
+    status: Implemented
+    api: "GET/POST /api/payroll/loan-products/{id}, /loans/{id}"
+    service: "PayrollLoanService.cs (TenantId filter throughout)"
+    permission: "Payroll.Loans.View"
+    db: LoanProducts, EmployeeLoans (TenantId filter)
+
+  - id: F-LOAN-094
+    name: The Loan Register and every admin listing endpoint filter strictly by the resolved tenant - a second tenant's loans/products never appear regardless of query filters supplied
+    group: Authorization, Scope and Tenant Isolation
+    status: Implemented
+    api: "GET /api/payroll/loans/register"
+    service: "PayrollLoanService.GetRegisterAsync"
+    permission: "Payroll.Loans.View"
+    db: EmployeeLoans (TenantId filter)
+
+  # ═══════════════════════════════ K. AUDIT AND HISTORY ═══════════════════════════════
+  - id: F-LOAN-095
+    name: "LoanHistory is append-only across the entire lifecycle (Created/Submitted/Approved/Rejected/Disbursed/Activated/PayrollRecovery/ManualRepayment/PartialPrepayment/EarlyClosure/FinalSettlementRecovery/Cancelled) - no update or delete path exists for any LoanHistory row"
+    group: Audit and History
+    status: Implemented
+    service: "PayrollLoanService.AddHistory, PayrollCalculationEngine.PersistLoanRecoveriesAsync, PayrollRetroSettlementService.AddLoanHistory"
+    permission: "n/a"
+    db: LoanHistories
+
+  - id: F-LOAN-096
+    name: Every LoanHistory row stamps ActorUserId from the current tenant context and OccurredAtUtc from the injected clock, giving full actor attribution even for system-triggered PayrollRecovery/FinalSettlementRecovery events
+    group: Audit and History
+    status: Implemented
+    service: "PayrollLoanService.AddHistory"
+    permission: "n/a"
+    db: LoanHistories.ActorUserId, OccurredAtUtc
+
+  - id: F-LOAN-097
+    name: "There is no exposed GET /history endpoint for a loan despite the append-only LoanHistory table existing and being fully populated - history can only be read directly from the database, not through the API, in contrast with every history-bearing entity in qa/10-payroll"
+    group: Audit and History
+    status: Implemented
+    api: "n/a"
+    service: "IPayrollLoanService.cs (full grep for a GetHistoryAsync method)"
+    permission: "Payroll.Loans.ViewHistory"
+    db: LoanHistories
+
+  - id: F-LOAN-098
+    name: A LoanHistory row for a PayrollRecovery or FinalSettlementRecovery event carries SourceType/SourceId pointing back to the originating PayrollResult or FinalSettlementCase, distinguishing system-triggered recovery from a manually-actioned lifecycle change
+    group: Audit and History
+    status: Implemented
+    service: "PayrollCalculationEngine.PersistLoanRecoveriesAsync, PayrollRetroSettlementService.AddLoanHistory"
+    permission: "n/a"
+    db: LoanHistories.SourceType, SourceId
+
+  # ═══════════════════════════════ L. CONCURRENCY, PROVIDER PARITY AND LARGE DATA ═══════════════════════════════
+  - id: F-LOAN-099
+    name: Two concurrent full manual repayments against the same loan resolve to exactly one authoritative financial effect - the loser fails with DbUpdateConcurrencyException rather than double-recording
+    group: Concurrency, Provider Parity and Large Data
+    status: Implemented
+    service: "PayrollLoanService.RecordRepaymentAsync (EmployeeLoan.ConcurrencyVersion race)"
+    permission: "Payroll.Loans.Recover"
+    db: EmployeeLoans.ConcurrencyVersion
+
+  - id: F-LOAN-100
+    name: A concurrent partial-prepayment vs. payroll-recovery race never over-recovers the authoritative outstanding balance beyond what was actually owed
+    group: Concurrency, Provider Parity and Large Data
+    status: Implemented
+    service: "PayrollLoanService.PartialPrepayAsync vs PayrollCalculationEngine.PersistLoanRecoveriesAsync"
+    permission: "Payroll.Loans.Recover"
+    db: EmployeeLoans.OutstandingTotal
+
+  - id: F-LOAN-101
+    name: A concurrent early-closure vs. manual-repayment race resolves to exactly one valid lifecycle outcome (Active or Closed), never a corrupted intermediate state
+    group: Concurrency, Provider Parity and Large Data
+    status: Implemented
+    service: "PayrollLoanService.CloseAsync vs RecordRepaymentAsync"
+    permission: "Payroll.Loans.Close"
+    db: EmployeeLoans.Status
+
+  - id: F-LOAN-102
+    name: Two concurrent Approve calls on the same Submitted loan resolve to exactly one authoritative Approved state and exactly one Approved LoanHistory row
+    group: Concurrency, Provider Parity and Large Data
+    status: Implemented
+    service: "PayrollLoanService.ApproveAsync"
+    permission: "Payroll.Loans.Approve"
+    db: EmployeeLoans.ConcurrencyVersion, LoanHistories
+
+  - id: F-LOAN-103
+    name: SQL Server and MySQL provider acceptance both execute the identical persisted loan lifecycle (product/version, request, approve, disburse+schedule, payroll recovery, manual repayment, partial prepayment, early closure, Final Settlement recovery, register, tenant isolation) through the shared PayrollLoansProviderAcceptance.RunAsync path with equivalent outcomes
+    group: Concurrency, Provider Parity and Large Data
+    status: Implemented
+    service: "PayrollLoansProviderAcceptance.RunAsync, MySqlPayrollLoansIntegrationTests, SqlServerPayrollLoansIntegrationTests"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LOAN-104
+    name: "The Loan Register correctly pages and reconciles 100+ loans for a single tenant with no cross-tenant leakage, evidencing GetRegisterAsync's paging contract at scale even though it has no dedicated *LargeDataTests.cs class of its own (see F-LOAN-080's validator gap)"
+    group: Concurrency, Provider Parity and Large Data
+    status: Implemented
+    api: "GET /api/payroll/loans/register"
+    service: "PayrollLoanService.GetRegisterAsync"
+    permission: "Payroll.Loans.View"
+    db: EmployeeLoans
+
+  # ═══════════════════════════════ M. FRONTEND ═══════════════════════════════
+  - id: F-LOAN-105
+    name: "PayrollLoansPage and MyLoansPage perform ZERO client-side permission checks (no useAuth/usePermission/hasPermission/can() reference anywhere in the file) - every action button (Approve/Reject/Record disbursement/Manual repayment/Partial prepayment/Early closure/Cancel) renders regardless of the signed-in user's actual permissions"
+    group: Frontend
+    status: Implemented
+    ui: PayrollLoansPage, MyLoansPage
+    api: "n/a"
+    service: "Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (full grep for permission checks)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LOAN-106
+    name: "CONFIRMED FRONTEND DEFECT - the admin 'Manual repayment' and 'Partial prepayment' buttons hardcode amount:1 with no input field for the operator to specify an actual amount; clicking either button in production always submits a trivial 1-currency-unit repayment/prepayment regardless of intent"
+    group: Frontend
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "n/a"
+    service: "Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (LoanActions component)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LOAN-107
+    name: "The Reject and Cancel admin actions likewise hardcode a fixed reason string ('Rejected by payroll administrator' / 'Cancelled by payroll administrator') with no free-text reason input, so every audit trail entry for these actions is byte-identical regardless of the real reason"
+    group: Frontend
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "n/a"
+    service: "Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (LoanActions component)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LOAN-108
+    name: "CONFIRMED FRONTEND DEFECT - the 'Edit first product' control always edits products.data[0] regardless of which product the operator actually wants to change; with more than one loan product configured, every product after the first can never be edited through this page"
+    group: Frontend
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "n/a"
+    service: "Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (ProductForm/editing state)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LOAN-109
+    name: "The Loan Product create/edit form has no input controls for AllowPartialPrepayment, AllowEarlyClosure or MaxConcurrentLoans - every product created through the UI is silently fixed at AllowPartialPrepayment=false and AllowEarlyClosure=false (the ProductForm's blankProduct defaults), making Partial Prepayment and Early Closure permanently unreachable for any UI-created product unless amended by a direct API call"
+    group: Frontend
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "n/a"
+    service: "Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (ProductForm)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LOAN-110
+    name: "src/layout/navigation.ts has no entry for either PayrollLoansPage or MyLoansPage - both are reachable only by typing the URL directly, the same route-discoverability gap qa/09-separation's CR-163 and qa/10-payroll's CR-169 documented for their own un-navigated screens"
+    group: Frontend
+    status: Implemented
+    ui: PayrollLoansPage, MyLoansPage
+    api: "n/a"
+    service: "Frontend/HRMS.Web/src/layout/navigation.ts (full grep for loans/Loans)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LOAN-111
+    name: ESS employees see only their own linked-employee loans/products and the schedule detail view, correctly rendering the eligible-product limits check before allowing a request to be submitted
+    group: Frontend
+    status: Implemented
+    ui: MyLoansPage
+    api: "n/a"
+    service: "Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (MyLoansPage.submit)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LOAN-112
+    name: The admin Loan Register filter panel and pagination control render correctly against the paged API response, and the per-loan action set shown is state-dependent (only the actions valid for the loan's current Status are rendered)
+    group: Frontend
+    status: Implemented
+    ui: PayrollLoansPage
+    api: "n/a"
+    service: "Frontend/HRMS.Web/src/pages/payroll/PayrollLoansPage.tsx (LoanActions, register filters)"
+    permission: "n/a"
+    db: "n/a"

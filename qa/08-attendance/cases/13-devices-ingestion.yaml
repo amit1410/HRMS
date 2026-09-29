@@ -1,0 +1,556 @@
+sheet: Attendance_Devices
+submodule: Attendance Device management, employee mapping, ingestion/replay idempotency, lease, sync recovery, background worker
+defaults:
+  role: HRADMIN
+  perm: "Attendance.Device.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin/TenantAdmin holding the full Attendance.Device.* permission set, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-DEV-001
+    func: [F-ATT-234]
+    sc: Create a valid device
+    t: A well-formed device with valid TimeZoneId and ConnectionMode is created
+    src: ["AttendanceDeviceOperationsService.ValidateDeviceAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/devices] Code=DEV-01, Name='Lobby Biometric', DeviceType=Biometric, TimeZoneId='UTC', ConnectionMode=Pull => [200/201] created, Status=Active"
+    auto: API
+
+  - id: ATT-DEV-002
+    func: [F-ATT-234]
+    sc: Invalid TimeZoneId and invalid ConnectionMode are rejected
+    t: A non-resolvable timezone string and an undefined enum value both fail validation
+    src: ["AttendanceDeviceOperationsService.ValidateDeviceAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/devices] TimeZoneId='Not/A/RealZone' => [400] timezone does not resolve"
+      - "[POST /api/attendance/devices] ConnectionMode=999 (undefined) => [400] invalid enum value"
+    auto: API
+
+  - id: ATT-DEV-003
+    func: [F-ATT-234]
+    sc: A cross-tenant WorkLocationId is rejected
+    t: A WorkLocationId belonging to a different tenant fails as CrossTenantReference
+    src: ["AttendanceDeviceOperationsService.ValidateDeviceAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/devices] WorkLocationId=<Tenant B's work location id> => [404/400] 'CrossTenantReference'"
+    auto: API
+
+  - id: ATT-DEV-004
+    func: [F-ATT-235]
+    sc: Duplicate Code within a tenant is rejected; cross-tenant same Code is allowed
+    t: The Code uniqueness scope is tenant-bounded
+    src: ["AttendanceDeviceOperationsService.ValidateDeviceAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/attendance/devices] Code=DUP-DEV (first, Tenant A) => [200/201] created"
+      - "[POST /api/attendance/devices] Code=DUP-DEV (second, Tenant A) => [409] 'DuplicateDeviceCode'"
+      - "[POST /api/attendance/devices] Code=DUP-DEV, As Tenant B => [200/201] succeeds - Code uniqueness does not cross tenant boundaries"
+    auto: API
+
+  - id: ATT-DEV-005
+    func: [F-ATT-235]
+    sc: Two devices can share an identical SerialNumber with no rejection
+    t: SerialNumber has no uniqueness enforcement at all
+    src: ["AttendanceDeviceOperationsService.ValidateDeviceAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/devices] Code=DEV-A, SerialNumber=SN-DUPLICATE => [200/201] created"
+      - "[POST /api/attendance/devices] Code=DEV-B, SerialNumber=SN-DUPLICATE (identical serial, different code) => [200/201] created with NO conflict - no uniqueness constraint exists on SerialNumber"
+    auto: API
+    cr: [CR-120]
+
+  - id: ATT-DEV-006
+    func: [F-ATT-236]
+    sc: Disabled is a terminal status
+    t: Once Disabled, no further status transition is possible, including back to Active
+    src: ["AttendanceDeviceOperationsService.SetDeviceStatusAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/attendance/devices/{id}/disable] => [200] Status=Disabled"
+      - "[POST /api/attendance/devices/{id}/activate] => [409] 'Disabled devices cannot be reactivated; create a replacement device.'"
+      - "[POST /api/attendance/devices/{id}/deactivate] => [409] same terminal-state rejection"
+    auto: API
+
+  - id: ATT-DEV-007
+    func: [F-ATT-236]
+    sc: Active/Inactive toggle freely and each real transition writes exactly one audit row
+    t: Repeated identical-status calls do not double-audit
+    src: ["AttendanceDeviceOperationsService.SetDeviceStatusAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/attendance/devices/{id}/deactivate] => [200] Status=Inactive, 1 audit row written"
+      - "[POST /api/attendance/devices/{id}/activate] => [200] Status=Active, 1 more audit row written"
+      - "[POST /api/attendance/devices/{id}/activate] (already Active, calling again) => [200] no-op, no additional audit row since priorStatus==status"
+    auto: DB-assisted
+
+  - id: ATT-DEV-008
+    func: [F-ATT-237]
+    sc: CredentialReference is never returned in any device DTO
+    t: A GET response never surfaces the raw credential value
+    src: ["AttendanceDeviceOperationsService"]
+    type: Security
+    pri: P0
+    steps:
+      - "[POST /api/attendance/devices] CredentialReference='super-secret-token' => [200/201] created"
+      - "[GET /api/attendance/devices/{id}] => [200] response body has no CredentialReference field/value anywhere - only a boolean-style 'configured' indicator at most"
+    auto: API
+    secc: true
+
+  - id: ATT-DEV-009
+    func: [F-ATT-237]
+    sc: A blank CredentialReference on update silently retains the existing value
+    t: There is no way to explicitly clear a configured credential via the API
+    src: ["AttendanceDeviceOperationsService.UpdateDeviceAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Device has CredentialReference='original-secret' configured => precondition established for the steps below"
+      - "[PUT /api/attendance/devices/{id}] CredentialReference='' (blank), other fields updated => [200] update succeeds"
+      - "[Manual/DB] Inspect the persisted CredentialReference => still 'original-secret', unchanged - the blank submission was silently ignored, not treated as a clear request"
+    auto: DB-assisted
+    cr: [CR-116]
+
+  - id: ATT-DEV-010
+    func: [F-ATT-238]
+    sc: Create a valid employee-device mapping
+    t: A well-formed mapping succeeds
+    src: ["AttendanceDeviceOperationsService.CreateMappingAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Attendance.Device.Mapping"
+    steps:
+      - "[POST /api/attendance/devices/mappings] AttendanceDeviceId=D1, ExternalEmployeeIdentifier='EMP-1001', EmployeeId=E1, EffectiveFrom=today => [200/201] Status=Active"
+    auto: API
+
+  - id: ATT-DEV-011
+    func: [F-ATT-238]
+    sc: Mapping identity fields cannot be changed via update
+    t: An UpdateMappingAsync attempting to change DeviceId/EmployeeId/ExternalEmployeeIdentifier is rejected
+    src: ["AttendanceDeviceOperationsService.UpdateMappingAsync"]
+    type: Negative
+    pri: P1
+    perm: "Attendance.Device.Mapping"
+    steps:
+      - "[PUT /api/attendance/devices/mappings/{id}] ExternalEmployeeIdentifier='DIFFERENT-ID' => [409] Conflict - identity is immutable, only EffectiveFrom/EffectiveTo/Status may change"
+      - "[PUT /api/attendance/devices/mappings/{id}] EffectiveTo=<a valid future date> => [200] succeeds - non-identity field update is allowed"
+    auto: API
+
+  - id: ATT-DEV-012
+    func: [F-ATT-238]
+    sc: An overlapping active mapping on the same (device, external id) is Conflict
+    t: A second Active mapping whose effective range overlaps the first's is rejected
+    src: ["AttendanceDeviceOperationsService.CreateMappingAsync"]
+    type: Negative
+    pri: P1
+    perm: "Attendance.Device.Mapping"
+    steps:
+      - "[POST /api/attendance/devices/mappings] AttendanceDeviceId=D1, ExternalEmployeeIdentifier='EMP-1001', EffectiveFrom=2026-01-01, EffectiveTo=2026-12-31 (first) => [200/201]"
+      - "[POST /api/attendance/devices/mappings] same device+external id, EffectiveFrom=2026-06-01, EffectiveTo=2027-06-01 (overlapping) => [409] 'MappingConflict: active effective mappings cannot overlap...'"
+    auto: API
+
+  - id: ATT-DEV-013
+    func: [F-ATT-239]
+    sc: An unrelated persistence failure during mapping create surfaces the same generic MappingConflict message
+    t: A non-overlap DB failure is still reported as if it were an overlap
+    src: ["AttendanceDeviceOperationsService.CreateMappingAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[Manual/DB] Inject a non-overlap-related SaveChanges failure (e.g. a transient interceptor) during mapping create => forced condition established"
+      - "[POST /api/attendance/devices/mappings] a genuinely non-overlapping, valid mapping => [409] 'MappingConflict: active effective mappings cannot overlap...' - the SAME message as a real overlap, potentially misleading the operator about the actual cause; confirm the mapping was correctly rolled back regardless"
+    auto: DB-assisted
+
+  - id: ATT-DEV-014
+    func: [F-ATT-240]
+    sc: An ambiguous mapping match at ingestion time is Rejected, never guessed
+    t: Two Active mappings racing into an overlapping state cause a subsequent ingest to be explicitly rejected as ambiguous
+    src: ["AttendanceDeviceIntegrationService.IngestAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Force two Active mappings to exist for the same (device, external id, date) via a simulated race bypassing the normal create guard => forced condition established"
+      - "[POST /api/attendance/devices/{id}/sync] an event for that external id/date => [200 with a Rejected item] 'Multiple effective mappings exist; no employee was selected' - no punch is guessed/created"
+    auto: DB-assisted
+
+  - id: ATT-DEV-015
+    func: [F-ATT-241]
+    sc: The same event under two different Source values creates two receipt rows but only one authoritative punch
+    t: A worker-sourced event and a subsequent manual-import of the identical event are two receipts, one punch
+    src: ["AttendanceDeviceIntegrationService.IngestAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/attendance/devices/{id}/sync] ExternalEventId=EVT-1 (worker-style source) => [200] Accepted, 1 receipt row, 1 punch"
+      - "[POST /api/attendance/devices/{id}/import] ExternalEventId=EVT-1 (same event, source='manual-import') => [200] a SECOND, distinct receipt row is created (different composite Source key), but ZERO additional AttendancePunch rows - the authoritative punch dedup key (DeviceId, ExternalEventId) is source-independent and catches the duplicate"
+    auto: DB-assisted
+    cr: [CR-117]
+
+  - id: ATT-DEV-016
+    func: [F-ATT-242]
+    sc: A batch over 1000 punches is rejected outright
+    t: The hard batch-size cap
+    src: ["AttendanceDeviceIntegrationService.IngestAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/devices/{id}/sync] Punches.Count=1001 => [400] Invalid - batch too large"
+    auto: API
+
+  - id: ATT-DEV-017
+    func: [F-ATT-242]
+    sc: A per-item rejection within a batch does not abort the rest of the batch
+    t: A mixed batch processes every item independently
+    src: ["AttendanceDeviceIntegrationService.IngestAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/devices/{id}/sync] Punches=[valid item, unmapped item, valid item] => [200] Received=3, Accepted=2, Unmapped=1 - the batch as a whole succeeds with per-item results, not an all-or-nothing failure"
+    auto: API
+
+  - id: ATT-DEV-018
+    func: [F-ATT-243]
+    sc: A clean batch's checkpoint advances; a batch with any unmapped/rejected item does not
+    t: Prove the checkpoint-advance rule precisely
+    src: ["AttendanceDeviceIntegrationService.IngestAsync"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/devices/{id}/sync] Checkpoint='CP-1', all items valid => [200] SyncRun.Status=Succeeded, LastSuccessfulCheckpoint='CP-1'"
+      - "[POST /api/attendance/devices/{id}/sync] Checkpoint='CP-2', includes one unmapped item => [200] SyncRun.Status=PartiallySucceeded, LastSuccessfulCheckpoint STILL 'CP-1', not advanced to 'CP-2'"
+    auto: API
+
+  - id: ATT-DEV-019
+    func: [F-ATT-244]
+    sc: Malformed events, unmapped events, ambiguous mappings, and unknown-direction events are each classified distinctly
+    t: A batch exercising all four classifications reports each correctly
+    src: ["AttendanceDeviceIntegrationService.IngestAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/devices/{id}/sync] one event with an oversized ExternalEventId => [200] Rejected, with a synthesized new ExternalEventId so the receipt row still inserts"
+      - "[POST /api/attendance/devices/{id}/sync] one event for an ExternalEmployeeIdentifier with no mapping => [200] Unmapped"
+      - "[POST /api/attendance/devices/{id}/sync] one event with Direction=Unknown => [200] Rejected, 'Punch direction is unknown...'"
+    auto: API
+
+  - id: ATT-DEV-020
+    func: [F-ATT-245]
+    sc: A late event against a Closed period requires reopen and creates no punch
+    t: RequiresPeriodReopen is returned with zero side effects on the finalized period
+    src: ["AttendanceDeviceIntegrationService.IngestAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] The Attendance period covering the event's business date is Closed, with a finalized payroll snapshot => precondition established for the steps below"
+      - "[POST /api/attendance/devices/{id}/sync] an otherwise-valid event for a date inside the closed period => [200 with item Status=RequiresPeriodReopen] no AttendancePunch created"
+      - "[Manual/DB] Confirm the Payroll snapshot's Id/Version/PayableDays/SourceHash are byte-for-byte unchanged => confirmed"
+    auto: DB-assisted
+
+  - id: ATT-DEV-021
+    func: [F-ATT-246]
+    sc: A daily-processor failure after punch insert retains the punch, not a rollback
+    t: The raw punch survives even though downstream processing failed
+    src: ["AttendanceDeviceIntegrationService.IngestAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Force IAttendanceDayProcessor.ProcessAsync to fail for this employee/date during ingestion => forced condition established"
+      - "[POST /api/attendance/devices/{id}/sync] => [200 with item Status=RequiresPeriodReopen] the AttendancePunch row IS persisted (retained), 0 Accepted count - 'raw punch is retained; daily Attendance processing requires an operational follow-up'"
+    auto: DB-assisted
+
+  - id: ATT-DEV-022
+    func: [F-ATT-247]
+    sc: Every device operation is tenant-isolated
+    t: A foreign-tenant device/mapping/issue id is NotFound or empty across every route
+    src: ["AttendanceDeviceOperationsService / AttendanceDeviceIntegrationService"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/attendance/devices/{tenantADeviceId}] As Tenant B => [404]"
+      - "[POST /api/attendance/devices/{tenantADeviceId}/sync] As Tenant B => [404]"
+      - "[GET /api/attendance/devices/mappings?deviceId={tenantADeviceId}] As Tenant B => [200] empty result"
+    auto: API
+
+  - id: ATT-DEV-023
+    func: [F-ATT-248]
+    sc: Reprocessing an issue is idempotent for the punch but the receipt log accumulates a row per attempt
+    t: Repeated reprocessing produces multiple receipt rows and exactly one punch
+    src: ["AttendanceDeviceIntegrationService.IngestAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] An Unmapped issue exists; add the missing mapping => precondition established for the steps below"
+      - "[POST /api/attendance/devices/issues/{id}/reprocess] first attempt => [200] Accepted, 1 punch created"
+      - "[POST /api/attendance/devices/issues/{id}/reprocess] second attempt on the same issue => [200] Duplicate - no second punch, but a NEW receipt row (source='issue-reprocess') is added to the audit trail each time this is invoked"
+    auto: DB-assisted
+
+  - id: ATT-DEV-024
+    func: [F-ATT-249]
+    sc: A second sync claim while a valid lease is held is denied
+    t: DeviceSyncAlreadyRunning is returned to the contender
+    src: ["AttendanceDeviceLeaseService.TryAcquireAsync"]
+    type: Negative
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/devices/{id}/sync] first call, acquires the lease and begins processing => [200] in-flight"
+      - "[POST /api/attendance/devices/{id}/sync] second call while the first is still holding the lease => [409] 'DeviceSyncAlreadyRunning'"
+    auto: API
+
+  - id: ATT-DEV-025
+    func: [F-ATT-250]
+    sc: A stale (superseded) lease token cannot heartbeat or release after reclaim; an expired lease can be reclaimed by a new owner
+    t: Old-token operations fail silently, expiry enables reclaim
+    src: ["AttendanceDeviceLeaseService"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Let a held lease expire (past LeaseExpiresAtUtc), then have a new claimant TryAcquireAsync => [200] new token issued, reclaim succeeds"
+      - "[Manual/DB] The OLD token attempts Heartbeat/Release after reclaim => both return false/no-op, no exception, no effect on the new owner's lease"
+    auto: DB-assisted
+
+  - id: ATT-DEV-026
+    func: [F-ATT-251]
+    sc: A lease reclaimed mid-batch causes the whole ingestion to roll back with DeviceSyncLeaseLost
+    t: The anti-split-brain guarantee proven end to end
+    src: ["AttendanceDeviceIntegrationService.IngestAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[Manual/DB] Start an ingestion batch holding LeaseToken=T1, then force the lease to be reclaimed by a different owner mid-batch (before the checkpoint-persist re-check) => forced condition established"
+      - "[POST /api/attendance/devices/{id}/sync] (the original T1-held batch attempts to complete) => [409] 'DeviceSyncLeaseLost' - the whole transaction rolls back, zero punches, no checkpoint advance"
+    auto: DB-assisted
+
+  - id: ATT-DEV-027
+    func: [F-ATT-252]
+    sc: A manual import can run concurrently with an active worker/manual sync lease on the same device with no coordination
+    t: The lease bypass for /import is confirmed - no DeviceSyncAlreadyRunning is ever returned to a concurrent /import call
+    src: ["AttendanceDevicesController.Import"]
+    type: Integration-Concurrency
+    pri: P1
+    perm: "Attendance.Device.Import"
+    steps:
+      - "[Setup] An active worker cycle or manual Sync Now currently holds the lease for device D1 => precondition established for the steps below"
+      - "[POST /api/attendance/devices/{D1}/import] a manual file-import batch, concurrently with the held lease => [200] the import proceeds and is accepted with NO 'DeviceSyncAlreadyRunning' denial - the lease system is entirely bypassed for this route"
+      - "[Manual/DB] Confirm no duplicate AttendancePunch rows resulted, relying solely on the dual-layer ingestion idempotency (F-ATT-241), not lease coordination => confirmed"
+    auto: DB-assisted
+    cr: [CR-118]
+
+  - id: ATT-DEV-028
+    func: [F-ATT-253]
+    sc: The lease is released even when sync fails before ingestion starts
+    t: An unsupported-provider Sync Now attempt still releases cleanly
+    src: ["AttendanceDeviceOperationsService.SyncNowAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Device's ConnectionMode/provider key has no registered punch source => precondition established for the steps below"
+      - "[POST /api/attendance/devices/{id}/sync] => [409] 'UnsupportedProvider'"
+      - "[Manual/DB] Confirm zero active leases remain for this device - the finally-block release ran even though ingestion never started => confirmed"
+    auto: DB-assisted
+
+  - id: ATT-DEV-029
+    func: [F-ATT-254]
+    sc: A transient failure is retried and eventually succeeds; a permanent failure is never retried
+    t: Classification determines retry behavior precisely
+    src: ["AttendanceDeviceSyncRecoveryService.ExecuteAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Configure the device's punch source to throw TimeoutException once then succeed => forced condition established"
+      - "[Manual] Trigger the retry-wrapped sync execution => 2 provider calls total, final result Succeeded, 1 punch, ConsecutiveFailureCount reset to 0"
+      - "[Manual/DB] Configure the device to have no registered punch source (UnsupportedProvider) => forced condition established"
+      - "[Manual] Trigger the retry-wrapped sync execution => exactly 1 attempt, immediate Conflict, no retry attempted since this is classified Permanent"
+    auto: DB-assisted
+
+  - id: ATT-DEV-030
+    func: [F-ATT-255]
+    sc: NextRetryAtUtc excludes a mid-backoff device from the next worker poll
+    t: A device with a future NextRetryAtUtc is server-side excluded from device discovery
+    src: ["AttendanceDeviceSyncRecoveryService.RecordFailureAsync / AttendanceDevicePullWorker"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] A device just failed transiently, NextRetryAtUtc set to 60 seconds in the future => precondition established for the steps below"
+      - "[Manual/DB] Query the worker's device-discovery filter (EligibleAtUtc=now) immediately after => [200] this device is EXCLUDED from the eligible set until NextRetryAtUtc passes"
+    auto: DB-assisted
+
+  - id: ATT-DEV-031
+    func: [F-ATT-256]
+    sc: Stale-run and stale-lease reconciliation are independent and both run before device processing each cycle
+    t: A stale run with no matching stale lease is still reconciled, and vice versa
+    src: ["AttendanceDeviceSyncRecoveryService.ReconcileStaleRunsAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Simulate a crashed worker: a SyncRun row stuck Status=Running with StartedAtUtc older than StaleRunThresholdSeconds, AND separately an expired-but-unreleased lease on a DIFFERENT device => precondition established for the steps below"
+      - "[Manual] Trigger ReconcileStaleRunsAsync for the tenant => [200] the stale run flips to Failed/'WorkerLeaseExpired'; independently, the expired lease is cleared (LeaseOwner/Token/ClaimedAt/ExpiresAt all null) - no history rows deleted, only status-transitioned"
+    auto: DB-assisted
+
+  - id: ATT-DEV-032
+    func: [F-ATT-257]
+    sc: A full process crash mid-batch leaves no partial punches
+    t: Restart durability proof
+    src: ["AttendanceDeviceSyncRecoveryService"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Simulate a crash mid-transaction during ingestion (kill the process/connection before commit) => forced condition established"
+      - "[Manual/DB] Inspect AttendancePunches for the in-flight batch => zero partial punches exist - the transaction either fully committed or fully rolled back"
+      - "[Manual] Start a new worker process and let it run one cycle => the orphaned Running SyncRun is reconciled to Failed, the device becomes reclaimable, and the next successful cycle produces the correct punch with no duplication"
+    auto: DB-assisted
+
+  - id: ATT-DEV-033
+    func: [F-ATT-258]
+    sc: A disabled worker never starts a polling loop
+    t: AttendanceDeviceWorkerOptions.Enabled=false results in zero polling activity
+    src: ["AttendanceDevicePullWorker"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/Config] Deploy with AttendanceDeviceWorkerOptions.Enabled=false => confirm via logs/health that the worker logs a disabled message and returns immediately, no PeriodicTimer is ever created"
+    auto: DB-assisted
+
+  - id: ATT-DEV-034
+    func: [F-ATT-258]
+    sc: A single tenant's failure does not abort the worker cycle for other tenants
+    t: Isolation across tenant iteration
+    src: ["AttendanceDevicePullWorker.ProcessTenantsAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Force an unhandled exception while processing Tenant A's devices mid-cycle => forced condition established"
+      - "[Manual] The worker's full cycle completes => Tenant B's devices were still processed normally in the same cycle; only Tenant A's exception is caught and logged"
+    auto: DB-assisted
+
+  - id: ATT-DEV-035
+    func: [F-ATT-259]
+    sc: Push/FileImport/ManualApi devices are never picked up by the worker
+    t: The worker's device query is hard-filtered to ConnectionMode=Pull
+    src: ["AttendanceDevicePullWorker.ProcessTenantAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Device D-PUSH has ConnectionMode=Push, Status=Active; device D-PULL has ConnectionMode=Pull, Status=Active => precondition established for the steps below"
+      - "[Manual] One worker cycle runs => D-PULL is processed (a sync attempt is made), D-PUSH is NEVER touched by the worker at all, regardless of eligibility otherwise"
+    auto: DB-assisted
+
+  - id: ATT-DEV-036
+    func: [F-ATT-260]
+    sc: Devices are processed strictly sequentially within a tenant cycle
+    t: No two devices are ever mid-sync simultaneously for the same tenant cycle
+    src: ["AttendanceDevicePullWorker.ProcessTenantAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] A tenant with several eligible Pull devices, one of which ('poison') always fails => precondition established for the steps below"
+      - "[Manual] One worker cycle runs => devices are processed one at a time (MaxConcurrent==1); the poison device's failure does not prevent the healthy devices in the same cycle from being processed successfully"
+    auto: DB-assisted
+
+  - id: ATT-DEV-037
+    func: [F-ATT-261]
+    sc: A large tenant does not starve a small tenant within one polling pass
+    t: Fairness across tenant iteration
+    src: ["AttendanceDevicePullWorker.ProcessTenantsAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Tenant A has 1000 eligible Pull devices; Tenants B and C each have 1 eligible Pull device => precondition established for the steps below"
+      - "[Manual] One polling cycle runs => Tenant B's and Tenant C's single devices are BOTH processed in this same cycle, not starved by Tenant A exhausting its MaxDevicesPerCycle cap"
+    auto: DB-assisted
+
+  - id: ATT-DEV-038
+    func: [F-ATT-262]
+    sc: Cancellation mid-cycle stops starting further devices
+    t: No new device begins syncing after the cancellation signal
+    src: ["AttendanceDevicePullWorker"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual] Trigger cancellation while device 1 of 3 is mid-sync => the cycle exits after device 1 completes/is cancelled; devices 2 and 3 are never started"
+    auto: DB-assisted
+
+  - id: ATT-DEV-039
+    func: [F-ATT-263]
+    sc: Replay across two consecutive worker cycles for the same event is idempotent
+    t: Cycle 2 correctly recognizes cycle 1's event as a duplicate
+    src: ["AttendanceDevicePullWorker"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual] Run worker cycle 1 against a device with one new event => [200] 1 punch created, checkpoint advances"
+      - "[Manual] Run worker cycle 2 with the provider still returning the SAME event (simulating a checkpoint-unaware provider) => [200] the event is reported Duplicate, still exactly 1 total punch, lease fully released after both cycles"
+    auto: DB-assisted
+
+  - id: ATT-DEV-040
+    func: [F-ATT-264, F-ATT-265]
+    sc: Concurrent races (mapping create, duplicate ingestion) resolve to exactly one winner on real MySQL and SQL Server, not just SQLite
+    t: Provider-acceptance parity proof
+    src: ["AttendanceDeviceIntegrationProviderAcceptance / AttendanceDeviceSyncRecoveryProviderAcceptance"]
+    type: Integration-Concurrency
+    pri: P1
+    tags: [Environment]
+    steps:
+      - "[Environment: HRMS_MYSQL_TEST_CONNECTION set] Run the shared device provider-acceptance scenario against real MySQL, including the concurrent mapping-create and duplicate-ingest races => all scenarios pass, exactly one winner per race"
+      - "[Environment: HRMS_SQLSERVER_TEST_CONNECTION set] Same scenario suite against real SQL Server => same guarantee"
+      - "[Environment: neither var set] => NOT EXECUTED - environment unavailable; a routine green CI run without these vars proves nothing about real-provider serializable-transaction behavior for this module"
+    auto: DB-assisted
+
+  - id: ATT-DEV-041
+    func: [F-ATT-266]
+    sc: Every device route requires the exact permission a token lacking it is denied 403 over real HTTP
+    t: Explicit HTTP-level permission verification, filling the identified coverage gap
+    src: ["AttendanceDevicesController"]
+    type: Authorization
+    pri: P0
+    role: EMPLOYEE
+    perm: "n/a"
+    steps:
+      - "[GET /api/attendance/devices] As a caller with zero Attendance.Device.* permissions => [403] Forbidden"
+      - "[POST /api/attendance/devices] As TimeManager (holds View/Sync/Mapping/Import/ViewHistory but NOT Manage) => [403] Forbidden - confirm the seeded TimeManager genuinely cannot create/edit/activate/deactivate/disable a device end-to-end over real HTTP, not just via reflection over the attribute"
+      - "[POST /api/attendance/devices/{id}/sync] As TimeManager => [200] succeeds - DeviceSync IS held"
+    auto: API
+    cr: [CR-119]
+
+  - id: ATT-DEV-042
+    func: [F-ATT-267]
+    sc: Employee and Manager roles hold zero device permissions
+    t: A blanket denial for the two most common non-admin personas
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    role: EMPLOYEE
+    perm: "n/a (seeded matrix, no override)"
+    steps:
+      - "[GET /api/attendance/devices] As a seeded Employee => [403] Forbidden"
+      - "[GET /api/attendance/devices] As a seeded Manager => [403] Forbidden - Manager holds no Attendance.Device.* permission at all"
+    auto: API
+
+  - id: ATT-DEV-043
+    func: [F-ATT-268]
+    sc: The full 5-tab device admin UI is reachable and permission-gated
+    t: A view-only user sees the data but no mutating action buttons
+    src: ["AttendanceDevicesPage.tsx"]
+    type: Positive
+    pri: P1
+    perm: "Attendance.Device.View"
+    steps:
+      - "[Manual/UI] Navigate to the Attendance Devices page as a caller holding only Attendance.Device.View => Devices, Employee mappings, Ingestion issues, Sync runs, and Audit history tabs all render data, but Add/Edit/Sync Now/Activate/Deactivate buttons are absent or disabled"
+      - "[Manual/UI] Inspect the Audit history tab content for any device that had a credential configured => the raw credential value never appears, only a 'configured' indicator"
+    auto: UI

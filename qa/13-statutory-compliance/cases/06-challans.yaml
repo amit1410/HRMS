@@ -1,0 +1,57 @@
+sheet: Stat_Challans
+submodule: Statutory Challans (Unused Feature)
+defaults:
+  tenant: "T1 (DEMO01)"
+  role: "n/a"
+  perm: "n/a"
+  reg: true
+
+cases:
+  - id: STAT-CHAL-001
+    func: [F-STAT-081]
+    sc: The challan entity is fully migrated
+    t: PayrollStatutoryChallan exists as a real table with a working Status enum and correct indexing
+    src: "Backend/HRMS.Domain/Entities/PayrollStatutoryCompliance.cs PayrollStatutoryChallan; PayrollStatutoryChallanConfiguration.cs"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    data: none
+    steps:
+      - "[DB] inspect both the SQL Server and MySQL schemas => the PayrollStatutoryChallans table exists with columns ChallanNumber/PaymentDate/Amount/Status/BankReference/ExternalReference and an index on (TenantId, PayrollStatutoryReturnBatchId)"
+    auto: DB-assisted
+
+  - id: STAT-CHAL-002
+    func: [F-STAT-082]
+    sc: The challan feature is completely unreachable
+    t: No controller, service, DTO, or frontend code anywhere ever creates, reads, updates, or lists a challan
+    src: "Full-codebase grep for 'PayrollStatutoryChallan'"
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    sev: High
+    pre: none
+    data: none
+    steps:
+      - "[Manual] full grep of Backend/HRMS.API, Backend/HRMS.Application (excluding the entity file itself), and Frontend/HRMS.Web/src for 'PayrollStatutoryChallan'/'Challan' in a statutory context => zero matches outside the entity definition, its EF configuration, and migration/model-snapshot files"
+      - "[Manual] read IPayrollStatutoryComplianceService.cs and IStatutoryFilingService.cs in full => zero members referencing a challan of any kind"
+    auto: Manual only
+    cr: [CR-221]
+
+  - id: STAT-CHAL-003
+    func: [F-STAT-083]
+    sc: No return ever has an associated challan
+    t: An Approved, Exported, or even Filed statutory return never has a corresponding challan record
+    src: "n/a (feature has no code path)"
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    pre: A statutory return batch progressed all the way to Filed (per STAT-COMP-013)
+    data: none
+    steps:
+      - "[DB] query PayrollStatutoryChallans for the Filed batch's id => zero rows, and no API exists that could ever have populated one"
+    db: "PayrollStatutoryChallans has zero rows for any return batch, regardless of lifecycle stage"
+    auto: DB-assisted
+    cr: [CR-221]

@@ -1,0 +1,397 @@
+sheet: Leave_PeriodEligibility
+submodule: Leave Periods, the eligibility engine (minimum service, probation, notice period)
+defaults:
+  role: TENANT_ADMIN
+  perm: "Leave.PeriodManage"
+  tenant: A
+  pre: "Tenant A signed in; policy/period fixtures set up per case."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LEAVE-PERIOD-001
+    func: [F-LEAVE-057]
+    sc: List Leave Periods, filterable by onDate
+    t: GET /api/leave-periods?onDate returns only periods containing that date
+    src: ["LeaveConfigurationService.GetLeavePeriodsAsync"]
+    type: Positive
+    pri: P1
+    perm: "Leave.PolicyView"
+    steps:
+      - "[GET /api/leave-periods?onDate=2027-06-15] => [200] only the period whose [StartDate,EndDate] contains 2027-06-15"
+    auto: API
+
+  - id: LEAVE-PERIOD-002
+    func: [F-LEAVE-058]
+    sc: Create a Leave Period with a unique Code and valid date range
+    t: POST /api/leave-periods succeeds for a well-formed, non-duplicate period
+    src: ["LeaveConfigurationService.CreateLeavePeriodAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/leave-periods] {code:'FY27', name:'FY 2027', startDate:'2027-01-01', endDate:'2027-12-31', isActive:true} => [201]"
+    auto: API
+
+  - id: LEAVE-PERIOD-003
+    func: [F-LEAVE-058]
+    sc: StartDate after EndDate is rejected
+    t: A period whose StartDate is later than its EndDate fails 400
+    src: ["LeaveConfigurationService.CreateLeavePeriodAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/leave-periods] {code:'BAD', startDate:'2027-12-31', endDate:'2027-01-01'} => [400] 'StartDate must be on or before EndDate'"
+    auto: API
+
+  - id: LEAVE-PERIOD-004
+    func: [F-LEAVE-059]
+    sc: An active period's range must not overlap another active period; an inactive one is exempt
+    t: Creating a second ACTIVE period overlapping an existing active one is Conflict; the same range as an INACTIVE period succeeds
+    src: ["LeaveConfigurationService.HasPeriodOverlapAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/leave-periods] {code:'FY27B', startDate:'2027-06-01', endDate:'2028-05-31', isActive:true} overlapping FY27 => [409] 'overlaps another active period'"
+      - "[POST /api/leave-periods] {code:'FY27C', startDate:'2027-06-01', endDate:'2028-05-31', isActive:false} => [201] inactive periods are exempt from the overlap check"
+    auto: API
+
+  - id: LEAVE-PERIOD-005
+    func: [F-LEAVE-060]
+    sc: Update a Leave Period's fields under ConcurrencyToken
+    t: PUT succeeds with the current token and any StartDate/EndDate span (no distinct 'monthly' type exists)
+    src: ["LeaveConfigurationService.UpdateLeavePeriodAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/leave-periods/{id}] {code:'FY27', name:'FY 2027 (renamed)', startDate:'2027-01-01', endDate:'2027-12-31', isActive:true, concurrencyToken:<current>} => [200]"
+      - "[POST /api/leave-periods] {code:'MON-JAN27', startDate:'2027-01-01', endDate:'2027-01-31', isActive:false} => [201] a 1-month span is just as legal a 'period' as a full year"
+    auto: API
+
+  - id: LEAVE-PERIOD-006
+    func: [F-LEAVE-061]
+    sc: "Deactivating a period is independent of 'closing' it - no automatic close-processing side effect"
+    t: Setting IsActive=false on a period does not itself trigger LeavePeriodCloseProcessor
+    src: ["LeaveConfigurationService.UpdateLeavePeriodAsync", "LeavePeriodCloseProcessor.ProcessAsync"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[PUT /api/leave-periods/{id}] {isActive:false, ...} => [200] period deactivated"
+      - "[Manual/DB] EmployeeLeaveBalances for this period => unchanged; no LeavePeriodCloseOccurrences rows were created by the deactivation alone"
+    auto: DB-assisted
+
+  - id: LEAVE-PERIOD-007
+    func: [F-LEAVE-062]
+    sc: A request date in a gap with no active period is rejected
+    t: A Preview call for a date not covered by any active LeavePeriod fails NotFound, even with a valid policy
+    src: ["LeavePeriodResolver.ResolveAsync", "LeaveRequestValidationService.ResolveContextAsync"]
+    type: Negative
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] {leaveTypeId, startDate: <a date in the FY27/FY28 gap>, endDate: <same>} => [404] 'No active LeavePeriod contains the effective date'"
+    auto: API
+
+  - id: LEAVE-PERIOD-008
+    func: [F-LEAVE-063]
+    sc: Two overlapping active periods (a data anomaly) resolve as ConfigurationAmbiguity
+    t: A direct-DB-created overlap surfaces 409 at request time rather than silently picking one
+    src: ["LeavePeriodResolver.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Force two ACTIVE LeavePeriod rows with overlapping ranges (bypassing the create/update guard) => the forced/simulated state is established for the steps below"
+      - "[POST /api/leave-requests/preview] {leaveTypeId, startDate: <the overlap>, endDate: <same>} => [409] 'Multiple active LeavePeriods contain the effective date'"
+    auto: DB-assisted
+
+  - id: LEAVE-PERIOD-009
+    func: [F-LEAVE-064]
+    sc: Period close is a no-op with no destination period configured
+    t: ProcessAsync returns all-zero counters when no active period starts after the source's EndDate
+    src: ["LeavePeriodCloseProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Invoke ILeavePeriodCloseProcessor.ProcessAsync(sourcePeriodId, asOf) with no subsequent active period configured => Processed=0, Skipped=0, Failed=0, Carried=0, Lapsed=0"
+    auto: DB-assisted
+
+  - id: LEAVE-PERIOD-010
+    func: [F-LEAVE-065]
+    sc: Reopening/re-closing a period is idempotent - a repeat close for the same pairing does nothing further
+    t: A second ProcessAsync call for an already-Processed (source,destination,employee,leaveType) key is skipped
+    src: ["LeavePeriodCloseProcessor.ClaimAsync"]
+    type: Contract
+    tags: [Idempotency]
+    pri: P1
+    steps:
+      - "[Manual/DB] Run ProcessAsync(sourcePeriodId, asOf) once => Processed>=1 for a given employee/leaveType"
+      - "[Manual/DB] Run ProcessAsync(sourcePeriodId, asOf) a second time => the SAME employee/leaveType pairing is not reprocessed (its occurrence row is already 'Processed')"
+    auto: DB-assisted
+
+  - id: LEAVE-PERIOD-011
+    func: [F-LEAVE-066]
+    sc: Leave Periods are tenant-scoped - Code uniqueness/overlap never considers another tenant
+    t: Tenant A and Tenant B may both use Code 'FY27' with overlapping/identical date ranges with no conflict
+    src: ["LeaveConfigurationService.CreateLeavePeriodAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    steps:
+      - "[POST /api/leave-periods] Tenant A: {code:'FY27', startDate:'2027-01-01', endDate:'2027-12-31'} => [201]"
+      - "[POST /api/leave-periods] Tenant B: {code:'FY27', startDate:'2027-01-01', endDate:'2027-12-31'} => [201] no Conflict"
+    auto: API
+
+  - id: LEAVE-ELIGIBILITY-001
+    func: [F-LEAVE-067]
+    sc: An unlinked account cannot preview or submit any leave request
+    t: Identity resolution fails before eligibility is even reached
+    src: ["LeaveRequestValidationService.ValidateAsync"]
+    type: Boundary
+    pri: P0
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] As an authenticated user with NO Account<->Employee link => [401/403] identity resolution failure, before any policy/eligibility check"
+    auto: API
+
+  - id: LEAVE-ELIGIBILITY-002
+    func: [F-LEAVE-068]
+    sc: No resolvable effective-employment snapshot rejects the request
+    t: A date before any EmployeeEmploymentHistory row (or inside a gap) fails at the employment-resolution stage
+    src: ["LeaveRequestValidationService.ResolveContextAsync"]
+    type: Negative
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] {leaveTypeId, startDate: <a date with no EmploymentHistory row>, endDate: <same>} => [404] effective-employment could not be resolved"
+    auto: API
+
+  - id: LEAVE-ELIGIBILITY-003
+    func: [F-LEAVE-069, F-LEAVE-070]
+    sc: A request before DateOfJoining or after DateOfLeaving is rejected
+    t: Both employment-boundary violations return Forbidden ('InactiveEmployment')
+    src: ["LeaveRequestValidationService.ValidateEmploymentContext"]
+    type: Boundary
+    pri: P0
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] {startDate: <DateOfJoining - 1 day>, endDate: <same>} => [403] 'InactiveEmployment: the employee is not actively employed'"
+      - "[POST /api/leave-requests/preview] {startDate: <DateOfLeaving + 1 day>, endDate: <same>} as a separated employee => [403] 'InactiveEmployment'"
+    auto: API
+
+  - id: LEAVE-ELIGIBILITY-004
+    func: [F-LEAVE-071]
+    sc: A non-Active Employee.Status is rejected before any eligibility rule runs
+    t: A Suspended (or similarly non-Active) Employee.Status blocks the request independent of employment-history status
+    src: ["LeaveRequestValidationService.ValidateAsync"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] As an employee with Employee.Status != Active => [403] 'The authenticated Employee is not active'"
+    auto: API
+
+  - id: LEAVE-ELIGIBILITY-005
+    func: [F-LEAVE-072]
+    sc: EligibilityMode=Immediate has no minimum-service wait
+    t: An employee who joined YESTERDAY can request leave TODAY under an Immediate-eligibility policy
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] {startDate: today} for an employee who joined yesterday, EligibilityMode=Immediate => [200] eligible"
+    auto: API
+
+  - id: LEAVE-ELIGIBILITY-006
+    func: [F-LEAVE-073]
+    sc: "MinimumService (Days and Months) - before/at/after the eligible-from date"
+    t: A request one day before DateOfJoining+90 days fails; exactly on/after it succeeds; the Months-unit variant computes AddMonths correctly
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Boundary
+    pri: P0
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Setup] EligibilityMode=MinimumService, MinimumServiceValue=90, MinimumServiceUnit=Days; employee joined 2027-01-01 => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate:'2027-03-30'} (day 88) => [400] 'MinimumServiceNotMet'"
+      - "[POST /api/leave-requests/preview] {startDate:'2027-04-01'} (day 90, exactly eligible) => [200] eligible"
+      - "[Setup] Change MinimumServiceUnit=Months, MinimumServiceValue=3 => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate:'2027-04-01'} => [200] eligible (DateOfJoining.AddMonths(3) = 2027-04-01)"
+    auto: API
+
+  - id: LEAVE-ELIGIBILITY-007
+    func: [F-LEAVE-074]
+    sc: A malformed MinimumService rule (missing value/unit) is UnsupportedConfiguration
+    t: A data-integrity gap in the eligibility rule fails safely rather than defaulting to zero-wait
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Boundary
+    pri: P2
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Manual/DB] Force a LeavePolicyEligibilityRule with EligibilityMode=MinimumService and MinimumServiceValue=null => the forced/simulated state is established for the steps below"
+      - "[POST /api/leave-requests/preview] => [400] 'UnsupportedConfiguration: Eligibility rule MinimumService is incomplete'"
+    auto: DB-assisted
+
+  - id: LEAVE-ELIGIBILITY-008
+    func: [F-LEAVE-075]
+    sc: ProbationMode=NotAllowed blocks a request while JobStatus=Probation
+    t: A probationary employee's request fails Invalid('ProbationNotAllowed'); a missing JobStatus with no ConfirmationDate is UnsupportedConfiguration instead of silently permissive
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Boundary
+    pri: P0
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Setup] Employee.JobStatus='Probation', ProbationMode=NotAllowed => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] => [400] 'ProbationNotAllowed: Leave is not available while the employee is on probation'"
+      - "[Setup] JobStatus=null/blank AND Employment.ConfirmationDate=null => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] => [400] 'UnsupportedConfiguration: ProbationMode.NotAllowed requires an authoritative JobStatus or ConfirmationDate'"
+    auto: API
+
+  - id: LEAVE-ELIGIBILITY-009
+    func: [F-LEAVE-076]
+    sc: ProbationMode=AfterConfirmation gates on ConfirmationDate
+    t: A request before ConfirmationDate fails; on/after it succeeds; a missing ConfirmationDate is UnsupportedConfiguration
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Setup] ProbationMode=AfterConfirmation, Employment.ConfirmationDate='2027-04-01' => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate:'2027-03-31'} => [400] 'ConfirmationNotMet'"
+      - "[POST /api/leave-requests/preview] {startDate:'2027-04-01'} => [200] eligible"
+    auto: API
+
+  - id: LEAVE-ELIGIBILITY-010
+    func: [F-LEAVE-077]
+    sc: ProbationMode=Allowed imposes no restriction regardless of probation state
+    t: A probationary employee under ProbationMode=Allowed can still request leave
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] Employee.JobStatus='Probation', ProbationMode=Allowed => [200] eligible"
+    auto: API
+
+  - id: LEAVE-ELIGIBILITY-011
+    func: [F-LEAVE-078]
+    sc: Eligibility checks run in a fixed order and stop at the first failure
+    t: An employee who fails BOTH MinimumService and Probation sees only the FIRST rule's error
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Contract
+    pri: P2
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Setup] Employee fails MinimumService (joined 5 days ago, 90-day requirement) AND is on Probation (NotAllowed) => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] => [400] 'MinimumServiceNotMet' only - no aggregate/combined error listing both violations"
+    auto: API
+
+  - id: LEAVE-ELIGIBILITY-012
+    func: [F-LEAVE-079]
+    sc: Gender-scoped applicability is enforced via resolution, not a distinct eligibility field
+    t: A Maternity-only policy (Gender=Female applicability) fails to resolve ANY policy for a male employee (NoPolicy), not a distinct 'ineligible' status
+    src: ["LeavePolicyResolver.Matches"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] {leaveTypeId: maternityLeaveTypeId} as a male employee, only a Gender=Female-scoped version published => [404] NoPolicy - not a distinct gender-mismatch error"
+    auto: API
+
+  - id: LEAVE-NOTICE-001
+    func: [F-LEAVE-080]
+    sc: NoticePeriodMode=Allowed imposes no restriction
+    t: An employee with an Active notice period can still request leave under NoticePeriodMode=Allowed
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] NoticeStatus=Active, NoticePeriodMode=Allowed => [200] eligible"
+    auto: API
+
+  - id: LEAVE-NOTICE-002
+    func: [F-LEAVE-081, F-LEAVE-085]
+    sc: NoticePeriodMode=NotAllowed blocks a request inside the notice window, inclusive of both boundary dates
+    t: A request on/inside [NoticeStartDate, NoticeEndDate] fails; the day before/after is unaffected
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Boundary
+    pri: P0
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Setup] NoticeStatus=Active, NoticeStartDate='2027-06-01', NoticeEndDate='2027-06-30', NoticePeriodMode=NotAllowed => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate:'2027-05-31'} => [200] eligible - one day BEFORE the notice window"
+      - "[POST /api/leave-requests/preview] {startDate:'2027-06-01'} => [400] 'NoticePeriodNotAllowed' - exactly on NoticeStartDate"
+      - "[POST /api/leave-requests/preview] {startDate:'2027-06-30'} => [400] 'NoticePeriodNotAllowed' - exactly on NoticeEndDate"
+      - "[POST /api/leave-requests/preview] {startDate:'2027-07-01'} => [200] eligible - one day AFTER the notice window"
+    auto: API
+
+  - id: LEAVE-NOTICE-003
+    func: [F-LEAVE-082]
+    sc: AllowedWithApproval behaves identically to NotAllowed in the current runtime
+    t: Both modes reject an in-notice-period request the same way - there is no separate 'approval override' path
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] NoticeStatus=Active, request date inside the notice window, NoticePeriodMode=AllowedWithApproval => [400] 'NoticePeriodNotAllowed' - identical outcome to NotAllowed, no approval-request path exists"
+    auto: API
+    cr: [CR-77]
+
+  - id: LEAVE-NOTICE-004
+    func: [F-LEAVE-083]
+    sc: NoticeStatus=Completed or Cancelled never blocks a request
+    t: Only Active notice status is evaluated against the date window
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] NoticeStatus=Completed, request date inside what WOULD have been the notice window, NoticePeriodMode=NotAllowed => [200] eligible - Completed status is never checked against the window"
+      - "[POST /api/leave-requests/preview] NoticeStatus=Cancelled, same date => [200] eligible"
+    auto: API
+
+  - id: LEAVE-NOTICE-005
+    func: [F-LEAVE-084]
+    sc: NoticeStatus=Active with a missing NoticeStartDate is UnsupportedConfiguration
+    t: Malformed notice data fails safely rather than silently allowing or blocking
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Boundary
+    pri: P2
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Manual/DB] Force NoticeStatus=Active with NoticeStartDate=null => the forced/simulated state is established for the steps below"
+      - "[POST /api/leave-requests/preview] NoticePeriodMode=NotAllowed => [400] 'UnsupportedConfiguration: NoticeStatus.Active requires an authoritative NoticeStartDate'"
+    auto: DB-assisted
+
+  - id: LEAVE-NOTICE-006
+    func: [F-LEAVE-086]
+    sc: An undefined NoticeStatus enum value fails safely (defensive, not reachable via normal product flows)
+    t: A direct-data out-of-range NoticeStatus value is rejected UnsupportedConfiguration rather than crashing
+    src: ["LeaveRequestValidationService.ValidateEligibility"]
+    type: Boundary
+    pri: P3
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Manual/DB] Force an out-of-range NoticeStatus integer value on the employment-history row => the forced/simulated state is established for the steps below"
+      - "[POST /api/leave-requests/preview] NoticePeriodMode=NotAllowed => [400] 'UnsupportedConfiguration' - no unhandled exception"
+    auto: DB-assisted

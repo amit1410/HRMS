@@ -1,0 +1,150 @@
+sheet: Leave_WorkingDays
+submodule: Holidays, Weekly-Off configuration, and calendar-rule day-classification during requests
+defaults:
+  role: TENANT_ADMIN
+  perm: "Leave.PolicyManage"
+  tenant: A
+  pre: "Tenant A signed in unless stated."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: LEAVE-WD-001
+    func: [F-LEAVE-164]
+    sc: Manage Holidays with optional Country/WorkLocation scoping
+    t: A tenant-wide holiday (no scope) and a WorkLocation-scoped holiday both create successfully
+    src: ["LeaveWorkingDayConfigurationService.CreateHolidayAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/holidays] {name:'Republic Day', date:'2027-01-26', isActive:true} (no scope) => [201] tenant-wide holiday"
+      - "[POST /api/holidays] {name:'Local Festival', date:'2027-03-10', workLocationId: mumbaiId, isActive:true} => [201] scoped to Mumbai only"
+    auto: API
+
+  - id: LEAVE-WD-002
+    func: [F-LEAVE-165]
+    sc: Deleting a Holiday soft-deactivates it rather than removing the row
+    t: DELETE sets IsActive=false; the row remains queryable for history/reporting
+    src: ["LeaveWorkingDayConfigurationService.DeactivateHolidayAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[DELETE /api/holidays/{id}] => [200] IsActive=false returned"
+      - "[GET /api/holidays?isActive=false] => [200] the deactivated holiday is still listed"
+    auto: API
+
+  - id: LEAVE-WD-003
+    func: [F-LEAVE-166]
+    sc: Weekly-Off configurations are effective-dated and scope-overlap-checked
+    t: Two active configurations for the SAME Country+WorkLocation scope with overlapping effective dates are rejected Conflict
+    src: ["LeaveWorkingDayConfigurationService.SaveWeeklyOffAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/weekly-off-configurations] {effectiveFrom:'2027-01-01', workLocationId: mumbaiId, days:[0,6], isActive:true} => [201]"
+      - "[POST /api/weekly-off-configurations] {effectiveFrom:'2027-06-01', workLocationId: mumbaiId, days:[0], isActive:true} overlapping (no EffectiveTo on the first) => [409] 'An overlapping weekly-off configuration already exists for this applicability scope'"
+    auto: API
+
+  - id: LEAVE-WD-004
+    func: [F-LEAVE-167]
+    sc: An empty Days set or an undefined DayOfWeek value is rejected
+    t: Both malformed inputs fail 400
+    src: ["LeaveWorkingDayConfigurationService.SaveWeeklyOffAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/weekly-off-configurations] {effectiveFrom:'2027-01-01', days:[], isActive:true} => [400] 'At least one valid weekly-off day is required'"
+      - "[POST /api/weekly-off-configurations] {effectiveFrom:'2027-01-01', days:[9], isActive:true} (9 is not a valid DayOfWeek) => [400]"
+    auto: API
+
+  - id: LEAVE-WD-005
+    func: [F-LEAVE-168]
+    sc: "Alternate/rotating weekly-off patterns are not supported - only a fixed day-of-week SET"
+    t: There is no field anywhere to configure 'every 2nd Saturday' - Days is a plain set of DayOfWeek values applied to every week
+    src: ["WeeklyOffConfigurationRequest"]
+    type: Contract
+    tags: [Configuration]
+    pri: P2
+    steps:
+      - "[GET /api/weekly-off-configurations] => [200] confirm the response shape has no rotation/alternate-week field of any kind - Days is applied identically every single week within [EffectiveFrom,EffectiveTo]"
+    auto: API
+
+  - id: LEAVE-WD-006
+    func: [F-LEAVE-169]
+    sc: HolidayTreatment/WeekOffTreatment=Include makes a holiday/weekly-off day chargeable
+    t: A request over a holiday under an Include-configured policy charges 1.000 for that day, with reason 'Included by Leave policy'
+    src: ["LeaveRequestValidationService.BuildDayResults"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Setup] CalendarRule.HolidayTreatment=Include for LeaveType CL => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate: <a configured holiday>, endDate: <same>} => [200] that day's chargeableQuantity=1.000, calculationReason='Included by Leave policy'"
+    auto: API
+
+  - id: LEAVE-WD-007
+    func: [F-LEAVE-170]
+    sc: Exclude (default) zeroes a holiday/weekly-off day with a distinct reason string
+    t: A holiday day and a weekly-off day report different CalculationReason text, both chargeableQuantity=0
+    src: ["LeaveRequestValidationService.BuildDayResults"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] A 3-day span including one named Holiday and one weekly-off day, both Exclude => [200] the holiday day: chargeableQuantity=0, dayClassification='Holiday', calculationReason='Holiday: <name>'; the weekly-off day: chargeableQuantity=0, dayClassification='WeeklyOff', calculationReason='Weekly off'"
+    auto: API
+
+  - id: LEAVE-WD-008
+    func: [F-LEAVE-171]
+    sc: A request starting/ending exactly on a weekly-off/holiday day still submits if at least one other day is chargeable
+    t: A Friday-to-Monday range (Sat/Sun excluded) still succeeds via Friday+Monday's chargeable days
+    src: ["LeaveRequestValidationService.ValidateAsync"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[POST /api/leave-requests/preview] {startDate: Friday, endDate: Monday} => [200] chargeableQuantity=2 (Fri+Mon), Sat/Sun each 0"
+    auto: API
+
+  - id: LEAVE-WD-009
+    func: [F-LEAVE-172]
+    sc: "Sandwich rules are configurable but entirely unreachable - Preview fails before any day-by-day sandwich logic runs (CR-81)"
+    t: A policy with SandwichMode='HolidayAndWeekOff' rejects EVERY request against it, including one that would never actually trigger a sandwich (e.g. a single weekday)
+    src: ["LeaveRequestValidationService.ValidateSupportedPolicy"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Setup] CalendarRule.SandwichMode='HolidayAndWeekOff' for LeaveType CL => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate: <an ordinary single Tuesday>, endDate: <same>} => [400] 'UnsupportedConfiguration: The resolved Calendar configuration requires an unavailable calendar or Sandwich source' - fails even for a request that never touches a weekend/holiday"
+    auto: API
+    cr: [CR-81]
+
+  - id: LEAVE-WD-010
+    func: [F-LEAVE-173]
+    sc: A calendar configuration change applies only to future resolutions, never retroactively
+    t: Adding Sunday as a working day (removing it from Weekly-Off) does not change an already-Approved request's recorded LeaveRequestDay rows
+    src: ["IWorkingDayCalendarResolver.CalculateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] An Approved request whose LeaveRequestDay for a Sunday shows chargeableQuantity=0 (weekly-off) => test preconditions are established for the steps below"
+      - "[PUT /api/weekly-off-configurations/{id}] Remove Sunday from the Days set, effective before that Sunday => [200]"
+      - "[GET /api/leave-requests/{id}] => [200] the already-persisted LeaveRequestDay for that Sunday STILL shows chargeableQuantity=0 - unchanged by the later configuration edit"
+    auto: API
+
+  - id: LEAVE-WD-011
+    func: [F-LEAVE-174]
+    sc: Working-day resolution is date-only with no timezone ambiguity
+    t: A holiday/weekly-off match is a plain calendar-date equality regardless of the caller's own timezone offset
+    src: ["IWorkingDayCalendarResolver/LeaveRequestValidationService"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/leave-requests/preview] {startDate: <a configured Holiday's own date, sent as a DateOnly>, endDate: <same>} => [200] correctly classified as Holiday regardless of the client's local time zone at the moment of the call"
+    auto: API

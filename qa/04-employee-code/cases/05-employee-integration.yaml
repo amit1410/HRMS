@@ -1,0 +1,291 @@
+sheet: EmployeeCode_Integration
+submodule: Employee Creation and Employment Integration
+defaults:
+  role: HR_ADMIN
+  perm: EmploymentHistory.Change
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (Employee.Create, EmploymentHistory.Change)."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: CODE-INTEG-001
+    func: [F-CODE-33]
+    sc: Creating an employee's Personal Details never sets an Employee Code - it starts null/pending
+    t: The employee-create step deliberately leaves EmployeeCode unset regardless of the active configuration
+    src: ["EmployeeService.CreatePersonalDetailsCoreAsync ('EmployeeCode = null')"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employees] Personal Details for a new hire, no employeeCode field in the request => [201] employee created, employeeCode=null in the response"
+      - "[GET /api/employees/{id}] Call => [200] employeeCode is still null before any Initial Employment record exists"
+    auto: API
+
+  - id: CODE-INTEG-002
+    func: [F-CODE-49]
+    sc: The Personal Details/employee-list screen shows a 'new hire' placeholder, never a blank string, before a code is assigned
+    t: The UI's employee-code banner renders NEW_HIRE_LABEL when employeeCode is null/empty
+    src: ["Frontend PersonalDetailsForm.tsx (employee-code-banner, displayedCode fallback)"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Open the Personal Details form for a freshly-created employee with no code yet => the employee-code banner shows the new-hire placeholder text and the hint 'Assigned by the system when this employee is saved.'"
+    auto: UI
+
+  - id: CODE-INTEG-003
+    func: [F-CODE-33]
+    sc: The employee code is assigned atomically as part of the FIRST employment-history record, and is immediately visible afterward
+    t: Before Initial Employment, GET /api/employees/{id} shows employeeCode=null; immediately after, it shows the generated code
+    src: ["EmployeeEmploymentService.CreateChangeAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[GET /api/employees/{id}] Before Initial Employment => [200] employeeCode=null"
+      - "[POST /api/employees/{id}/employment-history] Initial Employment, ChangeReason=NewJoining => [200] EmployeeEmploymentHistoryDto includes the resolved employeeCode"
+      - "[GET /api/employees/{id}] After Initial Employment => [200] employeeCode now matches what the employment call returned"
+    auto: API
+
+  - id: CODE-INTEG-004
+    func: [F-CODE-33]
+    sc: The first employment record MUST use the New Hire/Initial Position change reason
+    t: Attempting to record any other ChangeReason as an employee's first-ever employment record is rejected before code assignment is even attempted
+    src: ["EmployeeEmploymentService.CreateChangeAsync ('The first employment record must use the New Hire/Initial Position reason.')"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Body {changeReason:'Promotion', ...} as the employee's FIRST employment record => [400] 'changeReason' / 'The first employment record must use the New Hire/Initial Position reason.'"
+      - "[GET /api/employees/{id}] Call => [200] employeeCode is still null (no partial assignment)"
+    auto: API
+
+  - id: CODE-INTEG-005
+    func: [F-CODE-34]
+    sc: A later employment change (Promotion) keeps the exact same Employee Code
+    t: Promoting an already-coded employee does not alter, re-render, or re-derive their code even though the promotion changes their PositionChangeReason
+    src: ["EmployeeEmploymentService.CreateChangeAsync (employee.EmployeeCode is null gate is false on the second call)"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment, Designation=SE => [200] EmployeeCode='EMP-001' (example)"
+      - "[POST /api/employees/{id}/employment-history] Promotion, effective 30 days later, PositionChangeReasonId=PROMO => [200] EmployeeCode is still 'EMP-001'"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Promotion_keeps_the_existing_employee_code"]
+
+  - id: CODE-INTEG-006
+    func: [F-CODE-34]
+    sc: A Department change under a Department-segmented Rule-Based configuration does NOT regenerate the code to reflect the new Department
+    t: Transferring an employee whose code embeds a DepartmentCode segment to a different Department leaves the OLD department's code segment in place
+    src: ["EmployeeEmploymentService.CreateChangeAsync"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    pre: "Employee was hired into Department=IT under a Rule-Based rule whose segments include DepartmentCode, receiving a code like 'IT/00001'."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] DepartmentChange, effective later, DepartmentId=<Finance> => [200] recorded"
+      - "[GET /api/employees/{id}] Call => [200] employeeCode is STILL 'IT/00001' - it does not become a 'FIN/...' code despite the employee now being in Finance"
+    auto: API
+    cr: [CR-41]
+
+  - id: CODE-INTEG-007
+    func: [F-CODE-34]
+    sc: A Manager, Grade, Work Location or other rule-driving master change likewise never regenerates the code
+    t: Consolidated sweep confirming CODE-INTEG-006's finding generalizes to every other ChangeReason that could plausibly re-derive a Rule-Based segment
+    src: ["EmployeeEmploymentService.CreateChangeAsync"]
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[POST /api/employees/{id}/employment-history] ManagerChange => [200] employeeCode unchanged"
+      - "[POST /api/employees/{id}/employment-history] GradeChange => [200] employeeCode unchanged"
+      - "[POST /api/employees/{id}/employment-history] LocationChange (WorkLocationId changed) => [200] employeeCode unchanged"
+      - "[POST /api/employees/{id}/employment-history] OrganizationalRestructure => [200] employeeCode unchanged"
+    auto: API
+    cr: [CR-41]
+
+  - id: CODE-INTEG-008
+    func: [F-CODE-11, F-CODE-48]
+    sc: Manual mode requires the client-supplied code only on the FIRST employment record; a later change never asks for or accepts a new one
+    t: Attempting to change the employeeCode via a later CreateChangeAsync call under Manual mode is silently ignored (the field is documented as 'ignored once a code is assigned')
+    src: ["EmploymentChangeRequest.EmployeeCode XML doc ('ignored once a code is assigned'); EmployeeEmploymentService.CreateChangeAsync (assignment gated on null)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P1
+    pre: "Employee already has EmployeeCode='MAN-001' under Manual mode."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Promotion, body includes employeeCode:'MAN-999' => [200] recorded, but employeeCode remains 'MAN-001' - the supplied 'MAN-999' is ignored, not applied and not rejected"
+    auto: API
+
+  - id: CODE-INTEG-009
+    func: [F-CODE-11]
+    sc: Manual mode rejects a blank/missing code on the first employment record
+    t: The very first CreateChangeAsync call under Manual mode requires a non-blank employeeCode
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync ('Employee code is required for manual assignment.')"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment, employeeCode omitted, Manual mode active => [400] 'employeeCode' / 'Employee code is required for manual assignment.'"
+    auto: API
+
+  - id: CODE-INTEG-010
+    func: [F-CODE-11]
+    sc: Manual mode rejects a duplicate code case-insensitively, across different employees
+    t: "'man-00001' collides with an existing 'MAN-00001' even with different casing"
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync ('e.EmployeeCode.ToLower() == code.ToLower()')"]
+    type: Negative
+    pri: P0
+    pre: "Employee X already holds EmployeeCode='MAN-00001'."
+    steps:
+      - "[POST /api/employees/{idY}/employment-history] Initial Employment, employeeCode='man-00001' (different case) => [409] 'This employee code is already in use.'"
+      - "[GET /api/employees/{idY}] Call => [200] employeeCode is still null (no partial assignment on the rejected attempt)"
+    auto: API
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Manual_assignment_rejects_duplicate_codes_without_creating_history"]
+
+  - id: CODE-INTEG-011
+    func: [F-CODE-38]
+    sc: A rejected Manual duplicate leaves NO employment history row for the rejected employee
+    t: The uniqueness check runs before the new EmployeeEmploymentHistory row is ever constructed
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync/CreateChangeAsync"]
+    type: Negative
+    tags: [Integration-Concurrency]
+    pri: P1
+    steps:
+      - "[DB check] After CODE-INTEG-010's rejected attempt, query EmployeeEmploymentHistory for idY => zero rows exist"
+    auto: DB-assisted
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Manual_assignment_rejects_duplicate_codes_without_creating_history"]
+
+  - id: CODE-INTEG-012
+    func: [F-CODE-37]
+    sc: A failed Rule-Based generation (no matching rule) rolls back cleanly - no employment history row, no sequence row
+    t: The whole unit of work is transactional; a code-generation failure leaves the database exactly as it was before the call
+    src: ["EmployeeEmploymentService.CreateChangeAsync (transaction wraps history insert + code assignment)"]
+    type: Negative
+    tags: [Integration-Concurrency]
+    pri: P0
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment with no rule matching and no default rule configured => [400] 'employeeCode' error"
+      - "[DB check] EmployeeEmploymentHistory for this employee => zero rows"
+      - "[DB check] EmployeeCodeSequences for this tenant => zero rows (no sequence was ever allocated/created for the failed attempt)"
+    auto: DB-assisted
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Failed_rule_generation_rolls_back_code_sequence_and_history"]
+
+  - id: CODE-INTEG-013
+    func: [F-CODE-36]
+    sc: A generated Rule-Based code that races into a duplicate at the very last moment is caught with a handled Conflict
+    t: The post-render re-check against Employees.EmployeeCode catches a race the sequence allocator itself did not prevent
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync ('Generated Employee Code is already in use; please retry.')"]
+    type: Negative
+    tags: [Integration-Concurrency]
+    pri: P1
+    pre: "Contrived via direct data manipulation: an employee already holds the exact code the sequence/renderer is about to produce next."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment that would render the already-taken code => [409] 'Generated Employee Code is already in use; please retry.'"
+    auto: DB-assisted
+
+  - id: CODE-INTEG-014
+    func: [F-CODE-36]
+    sc: "'Employee Code generation services are unavailable' is returned when Rule-Based generation is selected but the renderer/sequence services are not registered"
+    t: A configuration/DI edge - Rule-Based selected with the optional _codeRuleMatcher/_codeRenderer/_codeSequence dependencies null
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync ('_codeSequence is null || _codeRenderer is null')"]
+    type: Negative
+    tags: [Contract]
+    pri: P3
+    sev: Low
+    steps:
+      - "[Unit/DI test] Construct EmployeeEmploymentService with codeRenderer/codeSequence left as null and attempt a Rule-Based Initial Employment => [409] 'Employee Code generation services are unavailable.'"
+    auto: Manual only
+    cm: "Not reachable through the normal DI-configured API; only exercisable directly against the service with its optional constructor parameters left unset."
+
+  - id: CODE-INTEG-015
+    func: [F-CODE-40]
+    sc: The legacy dead-code Employee Code path in EmployeeService.cs has no reachable trigger through any current API
+    t: Confirms ResolveEmployeeCodeAsync/PersistEmployeeCodeCounterAsync never execute, regardless of AutoGenerate/Prefix/Padding values on EmployeeCodeConfig
+    src: ["EmployeeService.cs (ResolveEmployeeCodeAsync, PersistEmployeeCodeCounterAsync - zero call sites)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P3
+    sev: Low
+    steps:
+      - "[Code inspection] Run 'Find Usages'/grep for ResolveEmployeeCodeAsync and PersistEmployeeCodeCounterAsync across the solution => zero call sites found outside their own declaration"
+      - "[POST /api/employees] Create Personal Details with EmployeeCodeConfig.AutoGenerate=false and no client employeeCode field accepted anywhere on the DTO => [201] created with employeeCode=null regardless (proves the legacy Manual-code-required-at-creation behavior these methods implement is not in effect)"
+    auto: Manual only
+    cr: [CR-37]
+
+  - id: CODE-INTEG-016
+    func: [F-CODE-39]
+    sc: A tenant with an Auto configuration but literally zero EmployeeCodeConfigVersion rows (only the mirrored EmployeeCodeConfig fields exist) fails Initial Employment cleanly
+    t: The version-based resolution query returns zero matches when no version has ever been saved, even if EmployeeCodeConfig.AutoGenerate=true
+    src: ["EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (queries EmployeeCodeConfigVersions only, never falls back to EmployeeCodeConfig's own mirrored fields)"]
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    pre: "Contrived via direct data manipulation: an EmployeeCodeConfig row exists with AutoGenerate=true, but its EmployeeCodeConfigVersions collection is empty."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment => [400] 'No active Employee Code configuration is effective for the selected date.' - NOT auto-generated from the EmployeeCodeConfig row's own Prefix/NextNumber fields"
+    auto: DB-assisted
+    cr: [CR-37]
+
+  - id: CODE-INTEG-017
+    func: [F-CODE-08, F-CODE-33]
+    sc: Rejecting Initial Employment for an unrelated validation reason (e.g. an inactive Designation) never touches the code counter
+    t: Any employment-detail validation failure that occurs BEFORE the code-assignment gate leaves the Simple sequence counter untouched
+    src: ["EmployeeEmploymentService.CreateChangeAsync (code assignment happens only after every organizational-reference validation has already passed)"]
+    type: Negative
+    tags: [Integration-Concurrency]
+    pri: P1
+    pre: "Simple/Auto configuration with NextNumber currently at 5."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment with an inactive/nonexistent DesignationId => [400] rejected on the designation field"
+      - "[GET /api/employee-code-configuration] Call => [200] NextNumber is still 5 (unchanged by the failed attempt)"
+    auto: API
+
+  - id: CODE-INTEG-018
+    func: [F-CODE-04]
+    sc: EffectiveFrom is required on every employment change, including the first
+    t: A missing/default EffectiveFrom is rejected before code generation is attempted
+    src: ["EmployeeEmploymentService (request.EffectiveFrom == default -> Invalid 'effectiveFrom' 'Effective date is required.')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Body omits effectiveFrom => [400] 'effectiveFrom' / 'Effective date is required.'"
+    auto: API
+
+  - id: CODE-INTEG-019
+    func: [F-CODE-11]
+    sc: A supplied Manual-mode employeeCode longer than 100 characters is rejected
+    t: The 100-character ceiling matches the Employees.EmployeeCode column's own HasMaxLength(100)
+    src: ["EmployeeEmploymentService ('Employee code must not exceed 100 characters.')"]
+    type: Boundary
+    tags: [Validation]
+    pri: P2
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Initial Employment, employeeCode = a 101-character string => [400] 'employeeCode' / 'Employee code must not exceed 100 characters.'"
+      - "[POST /api/employees/{id}/employment-history] Initial Employment, employeeCode = a 100-character string => [200] accepted (boundary)"
+    auto: API
+
+  - id: CODE-INTEG-020
+    func: [F-CODE-48]
+    sc: The frontend's manual-code input is required only for the first employment record, and disappears once a code exists
+    t: EmploymentSectionForm renders the TextField when manualCode && !employeeCode, and omits it otherwise
+    src: ["Frontend EmploymentSectionForm.tsx"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Open 'Add Employment Change' for a pending employee under Manual mode, no code yet => the 'Employee code' text field is visible and marked required"
+      - "[UI] Save that first record, then reopen 'Add Employment Change' for the same employee (now carrying a code) => the 'Employee code' text field is no longer rendered"
+    auto: UI
+
+  - id: CODE-INTEG-021
+    func: [F-CODE-45]
+    sc: Employee Code assignment is fully tenant-isolated end to end - a Tenant B employment call can never consume Tenant A's sequence or configuration
+    t: Two tenants hiring concurrently under identical Rule-Based configurations each get their own independent sequence starting at 1
+    src: ["EmployeeCodeSequence unique index includes TenantId; EmployeeCodeConfigVersion/Rule queries are all tenant-scoped"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A and B, identical configurations
+    steps:
+      - "[POST /api/employees/{tenantA-id}/employment-history] As Tenant A, matching a Rule-Based rule => [200] EmployeeCode's sequence portion = 1"
+      - "[POST /api/employees/{tenantB-id}/employment-history] As Tenant B, identically-configured rule => [200] EmployeeCode's sequence portion is ALSO 1, independent of Tenant A's counter"
+    auto: API

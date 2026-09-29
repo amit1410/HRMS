@@ -241,19 +241,19 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
         EmployeeSupervisorRequest request,
         CancellationToken cancellationToken)
     {
-        var references = new (string Field, Guid? Id)[]
+        var references = new (string Field, Guid? Id, Action<Employee> Populate)[]
         {
-            ("l1ManagerId", request.L1ManagerId),
-            ("l2ManagerId", request.L2ManagerId),
-            ("l3ManagerId", request.L3ManagerId),
-            ("l4ManagerId", request.L4ManagerId),
-            ("l5ManagerId", request.L5ManagerId),
-            ("timeManagerId", request.TimeManagerId),
-            ("eroId", request.EroId),
-            ("chroManagerId", request.ChroManagerId)
+            ("l1ManagerId", request.L1ManagerId, e => { /* L1 is handled separately */ }),
+            ("l2ManagerId", request.L2ManagerId, e => { request.L2ManagerCode = e.EmployeeCode; request.L2ManagerName = (e.FirstName + " " + (e.MiddleName != null ? e.MiddleName + " " : "") + e.LastName).Trim(); }),
+            ("l3ManagerId", request.L3ManagerId, e => { request.L3ManagerCode = e.EmployeeCode; request.L3ManagerName = (e.FirstName + " " + (e.MiddleName != null ? e.MiddleName + " " : "") + e.LastName).Trim(); }),
+            ("l4ManagerId", request.L4ManagerId, e => { request.L4ManagerCode = e.EmployeeCode; request.L4ManagerName = (e.FirstName + " " + (e.MiddleName != null ? e.MiddleName + " " : "") + e.LastName).Trim(); }),
+            ("l5ManagerId", request.L5ManagerId, e => { request.L5ManagerCode = e.EmployeeCode; request.L5ManagerName = (e.FirstName + " " + (e.MiddleName != null ? e.MiddleName + " " : "") + e.LastName).Trim(); }),
+            ("timeManagerId", request.TimeManagerId, e => { request.TimeManagerCode = e.EmployeeCode; request.TimeManagerName = (e.FirstName + " " + (e.MiddleName != null ? e.MiddleName + " " : "") + e.LastName).Trim(); }),
+            ("eroId", request.EroId, e => { request.EroCode = e.EmployeeCode; request.EroName = (e.FirstName + " " + (e.MiddleName != null ? e.MiddleName + " " : "") + e.LastName).Trim(); }),
+            ("chroManagerId", request.ChroManagerId, e => { request.ChroManagerCode = e.EmployeeCode; request.ChroManagerName = (e.FirstName + " " + (e.MiddleName != null ? e.MiddleName + " " : "") + e.LastName).Trim(); })
         };
 
-        foreach (var (field, id) in references)
+        foreach (var (field, id, populate) in references)
         {
             if (id == employeeId)
             {
@@ -263,13 +263,20 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
 
             if (id is Guid supervisorId)
             {
-                var valid = await _db.Employees.AsNoTracking().AnyAsync(
-                    e => e.Id == supervisorId && e.TenantId == tenantId && e.Status == EmployeeStatus.Active,
-                    cancellationToken);
-                if (!valid)
+                var manager = await _db.Employees.AsNoTracking()
+                    .FirstOrDefaultAsync(
+                        e => e.Id == supervisorId && e.TenantId == tenantId && e.Status == EmployeeStatus.Active,
+                        cancellationToken);
+                if (manager is null)
                 {
                     return Result<EmployeeSupervisorDto>.Invalid(
                         field, "Supervisor employee does not exist, is inactive, or belongs to another tenant.");
+                }
+
+                // Resolve code and name from the manager record if they weren't provided in the request
+                if (field != "l1ManagerId")
+                {
+                    populate(manager);
                 }
             }
         }

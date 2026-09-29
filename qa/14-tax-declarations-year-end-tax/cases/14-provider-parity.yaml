@@ -1,0 +1,80 @@
+sheet: TaxDcl_Provider_Parity
+submodule: SQL Server/MySQL Provider Parity
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-PROV-001
+    func: [F-TAXDCL-139]
+    sc: Migration pairing exists in both provider chains
+    t: AddPayrollTaxDeclarationsPhase7U and AddYearEndTaxProcessingPhase7W are present in both the SQL Server and MySQL tenant chains
+    src: "Backend/HRMS.Infrastructure/Persistence/Migrations; Backend/HRMS.Infrastructure.MySqlMigrations/Migrations"
+    type: Contract
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] directory listing of both migration chains for '*TaxDeclarationsPhase7U*' and '*YearEndTaxProcessingPhase7W*' => both migrations present in both chains, confirmed by filename"
+    auto: Manual only
+
+  - id: TAXDCL-PROV-002
+    func: [F-TAXDCL-140]
+    sc: TaxDeclarations has a dedicated SqlServer/MySql test pair plus a provider-agnostic acceptance fixture
+    t: SqlServerPayrollTaxDeclarationsIntegrationTests and MySqlPayrollTaxDeclarationsIntegrationTests each exist as separate classes
+    src: "Backend/HRMS.Tests/SqlServerPayrollTaxDeclarationsIntegrationTests.cs, MySqlPayrollTaxDeclarationsIntegrationTests.cs, PayrollTaxDeclarationsProviderAcceptance.cs"
+    type: Contract
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] file inventory of Backend/HRMS.Tests => confirms 2 dedicated provider classes plus 1 provider-agnostic acceptance class exist for the TaxDeclarations area"
+    auto: Manual only
+
+  - id: TAXDCL-PROV-003
+    func: [F-TAXDCL-141]
+    sc: YearEndTax's provider coverage is organized as one shared class, unlike TaxDeclarations
+    t: PayrollYearEndProviderAcceptance.cs contains both MySql_ and SqlServer_ test methods on the same class
+    src: "Backend/HRMS.Tests/PayrollYearEndProviderAcceptance.cs"
+    type: Contract
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] read PayrollYearEndProviderAcceptance.cs => confirms both MySql_payroll_year_end_provider_acceptance and SqlServer_payroll_year_end_provider_acceptance are methods on the same class, an organizational inconsistency worth flagging but not itself a coverage gap"
+    auto: Manual only
+    cr: [CR-258]
+
+  - id: TAXDCL-PROV-004
+    func: [F-TAXDCL-142]
+    sc: Provider fixtures skip silently without env vars
+    t: A default-suite run with HRMS_SQLSERVER_TEST_CONNECTION/HRMS_MYSQL_TEST_CONNECTION absent is not evidence of provider parity
+    src: "Backend/HRMS.Tests (env-var-gated provider fixtures, repository-wide convention per CLAUDE.md)"
+    type: Contract
+    tags: [Environment]
+    pri: P2
+    sev: Low
+    pre: "HRMS_SQLSERVER_TEST_CONNECTION / HRMS_MYSQL_TEST_CONNECTION not set"
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] run the default Backend/HRMS.Tests suite with no provider env vars set => the provider-specific fixtures report Skipped, not Passed; report execution Status as 'NOT EXECUTED - environment unavailable', never as a pass, when these env vars are absent"
+    auto: Manual only
+    cm: "Requires HRMS_SQLSERVER_TEST_CONNECTION and HRMS_MYSQL_TEST_CONNECTION (+ _SERVER/_AUTH) pointed at disposable databases to actually execute; report Status='NOT EXECUTED - environment unavailable' when absent, per CLAUDE.md testing notes."

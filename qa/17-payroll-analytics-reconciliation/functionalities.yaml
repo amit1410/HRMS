@@ -1,0 +1,1339 @@
+# Functionality registry for Module 17 - Payroll Analytics / Reconciliation / Variance / Anomaly
+# Controls (phase "Payroll Analytics, Reconciliation & Operational Controls", docs/phase-7s-payroll-
+# analytics-reconciliation-controls.md). This is a READ/EVIDENCE layer over already-persisted
+# PayrollRun/PayrollResult/PayrollResultComponent/BankAdvice/PayrollJournal/Statutory/Reimbursement/
+# Loan/VariablePay/PayrollAdjustment/FinalSettlement records. It never recalculates payroll, never
+# rewrites a PayrollResult, payslip, bank advice, accounting journal, or statutory register, and
+# never performs an automatic correction. Every test case references one or more of these ids; the
+# builder fails the build if a functionality has zero cases or a case references an unknown id. IDs
+# are allocated in one global sequence (F-PYA-001...) in the order the groups below were authored -
+# group boundaries are noted with a comment banner.
+#
+# SCOPE NOTE (read before extending this module): this module covers exactly
+# Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (interface IPayrollAnalyticsService,
+# ~30 public/private methods, read in full across two passes) and its four controllers, all in
+# Backend/HRMS.API/Controllers/PayrollAnalyticsController.cs: PayrollAnalyticsController (route
+# api/payroll/analytics - overview/summary/control-totals/department/cost-center/variance/
+# components/findings + 4 CSV exports), PayrollExceptionsController (route api/payroll/exceptions -
+# list + export.csv), PayrollReconciliationController (route api/payroll/reconciliation - pre/post
+# generate, get, acknowledge/resolve/accept-exception), and PayrollAnalyticsControlsController
+# (route api/payroll/analytics-controls - list/create/update of PayrollVarianceControl rows). This
+# module explicitly does NOT cover: payroll-run creation/calculation/approval itself (qa/10-payroll's
+# own surface - Analytics only reads a run's Status/PayrollPeriod and persisted PayrollResults),
+# bank advice generation/approval/export itself (qa/15's own surface - Analytics only reads
+# BankAdviceBatches/BankAdvicePayments as source evidence), GL journal generation/lifecycle itself
+# (qa/16's own surface - Analytics only reads PayrollJournalBatches/Lines/LineSources as source
+# evidence, mirroring qa/16's own reconciliation-integration-boundary scope note), statutory return
+# generation itself (qa/13's own surface - Analytics only reads PayrollStatutoryResults/
+# PayrollStatutoryReturnSources as source evidence), reimbursement/loan/variable-pay/adjustment/
+# final-settlement CALCULATION itself (qa/11, qa/12, and the not-yet-numbered
+# reimbursement/gratuity/leave-encashment/notice-settlement/final-settlement modules - Analytics only
+# reads their already-persisted, already-finalized rows as source evidence).
+#
+# Discovered implementation (authoritative source, read directly - not assumed from any design doc):
+#   Backend/HRMS.API/Controllers/PayrollAnalyticsController.cs (all 4 controllers, every action read)
+#   Backend/HRMS.Application/Abstractions/IPayrollAnalyticsService.cs (read in full, 21 methods)
+#   Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (read in full, all ~400 lines,
+#     across two passes)
+#   Backend/HRMS.Application/DTOs/Payroll/PayrollAnalyticsDtos.cs (read in full, 11 DTOs)
+#   Backend/HRMS.Domain/Entities/PayrollAnalytics.cs (PayrollVarianceControl/
+#     PayrollAnalyticsSnapshot/PayrollReconciliation/PayrollReconciliationFinding/
+#     PayrollAnomalyFlag - 5 entities, read in full)
+#   Backend/HRMS.Domain/Enums/PayrollEnums.cs (PayrollAnalyticsSnapshotType, PayrollControlScope [8
+#     members], PayrollControlMetric [9 members], PayrollFindingSeverity, PayrollControlAction [4
+#     members], PayrollReconciliationType, PayrollReconciliationStatus [3 members],
+#     PayrollFindingStatus, PayrollAnomalyType [14 members] - every enum member cross-checked against
+#     actual service code for live vs. dead usage)
+#   Backend/HRMS.Infrastructure/Persistence/Configurations/PayrollAnalyticsConfiguration.cs (all 4
+#     EF configurations, every index/FK, read in full - explicitly checked for .IsConcurrencyToken()
+#     on the ConcurrencyVersion properties, see CR-290)
+#   Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll.Analytics*/Reconciliation*/Exceptions*
+#     block, 8 permissions, read in full)
+#   Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (full-file grep for all 8 permission
+#     constants - matches only in the permission-id-assignment dictionary, ids 190-197; every role's
+#     RolePermissionMap array grepped, see CR-291)
+#   Migration pair AddPayrollAnalyticsPhase7S confirmed present in both
+#     Backend/HRMS.Infrastructure/Persistence/Migrations (SQL Server, 20260922050332) and
+#     Backend/HRMS.Infrastructure.MySqlMigrations/Migrations (MySQL, 20260922050406); the follow-up
+#     AddHistoricalPayrollDimensionsPhase7S migration pair confirmed present in both chains (SQL
+#     Server 20260922081107, MySQL 20260922081130)
+#   docs/phase-7s-payroll-analytics-reconciliation-controls.md (read in full - the only phase doc
+#     whose body ends with contradictory "NOT COMPLETE" / "COMPLETE" verification-log entries; the
+#     final entry claims SQL Server operator reverification passed and status COMPLETE, so this
+#     module treats the feature as shipped and tests the code as found)
+#   Frontend/HRMS.Web/src/pages/payroll/PayrollAnalyticsPage.tsx (+ its .test.tsx, read in full - a
+#     single summary-tile page, no route params beyond a raw ?runId= query string, no drill-down UI)
+#   Frontend/HRMS.Web/src/api/payrollAnalytics.ts (read in full - wraps only 2 of the 22 backend
+#     endpoints: overview and employee variance; see CR-296)
+#   Frontend/HRMS.Web/src/App.tsx (route registration grepped - /payroll/analytics is registered and
+#     permission-gated), Frontend/HRMS.Web/src/layout/navigation.ts (grepped for
+#     "Analytics"/"Reconciliation"/"Exceptions" - zero matches, see CR-296), full-repo grep for
+#     "payroll/analytics" confirms no other page links to the route
+#   Frontend/HRMS.Web/src/auth/permissions.ts (mirror confirmed present and complete for all 8
+#     permission constants) and permissions.mirror.test.ts (confirmed it parses Permissions.cs
+#     directly, so the mirror cannot silently drift)
+#   Existing xUnit inventory read in full: PayrollAnalyticsTests.cs, PayrollAnalyticsConcurrencyTests.cs
+#     (188 lines), PayrollAnalyticsLargeDataTests.cs (102 lines), PayrollAnalyticsProviderAcceptance.cs
+#     (shared SQL Server/MySQL helper), PayrollAnalyticsReportingTests.cs, PayrollAnalyticsSourceReconciliationTests.cs
+#     (536 lines, the full 8-source matrix), MySqlPayrollAnalyticsIntegrationTests.cs,
+#     SqlServerPayrollAnalyticsIntegrationTests.cs (referenced narratively per the qa/8-16 precedent,
+#     not individually classified via `ex:` - no ex: references are used in this module, matching
+#     qa/10-16's own precedent for the Payroll phase)
+#
+# -- Headline findings that shape this whole module's cases (full detail in clarifications.yaml) --
+# CR-290: CONFIRMED - PayrollVarianceControl.ConcurrencyVersion and PayrollReconciliation.
+# ConcurrencyVersion are both declared as if they were optimistic-concurrency tokens (matching the
+# ConcurrencyVersion-as-IsConcurrencyToken() convention used by AttendanceMonthly/AttendanceWorkflow/
+# BankAdvice/CompOff/etc. elsewhere in this codebase) but PayrollAnalyticsConfiguration.cs never calls
+# .IsConcurrencyToken() on either property - both are plain, unenforced integers that are also never
+# incremented by application code. Two concurrent writers silently last-write-wins with no conflict
+# ever raised.
+# CR-291: a full grep of SeedData.cs's RolePermissionMap for all 8 Payroll.Analytics*/Reconciliation*/
+# Exceptions* constants returns zero matches in any role array except the blanket
+# DomainPermissions.All grant to SuperAdmin/TenantAdmin - identical shape to qa/15's CR-263 and
+# qa/16's CR-274.
+# CR-292: CONFIRMED - Payroll.Exceptions.Manage is declared and seeded (permission id 197) but no
+# controller action anywhere requires it; PayrollExceptionsController's only two actions (List,
+# Export) both require Payroll.Exceptions.View, and no code path ever mutates a PayrollAnomalyFlag
+# (acknowledge/resolve) at all - Exceptions.Manage has zero corresponding functionality.
+# CR-293: CONFIRMED - PayrollControlScope has 8 members (PayrollRun/Employee/Component/Department/
+# CostCenter/Statutory/BankAdvice/Accounting) and CreateControlAsync/UpdateControlAsync accept any of
+# them without validation, but GenerateReconciliationAsync's control-evaluation loop only ever reads
+# `controls.Where(x => x.Scope == PayrollControlScope.PayrollRun)` - the other 7 scopes can be saved
+# and listed but are never evaluated against anything, ever.
+# CR-294: CONFIRMED - PayrollControlMetric has 9 members; a PayrollRun-scoped control's `actual` value
+# is computed by a switch that implements exactly 6 (GrossPay/NetPay/TotalDeduction/EmployeeCount/Tax/
+# EmployerContribution) with `_ => 0m` for the remaining 3 (ComponentAmount/BankAdviceTotal/GLTotal) -
+# a control configured with one of those 3 metrics always compares its threshold against a hard-coded
+# zero, not the real value its name implies.
+# CR-295: CONFIRMED - PayrollControlAction has 4 members (Informational/RequireAcknowledgement/
+# BlockApproval/BlockFinalization); a full-repo grep of PayrollRunService.cs and PayrollApprovalGuard.cs
+# for "PayrollVarianceControl"/"PayrollControlAction"/"BlockApproval"/"BlockFinalization" returns zero
+# matches - BlockApproval and BlockFinalization are stored, returned in the DTO, and never enforced by
+# the payroll lifecycle anywhere in this codebase; a Critical, BlockApproval-tagged finding cannot
+# actually block anything.
+# CR-296: the frontend PayrollAnalyticsPage.tsx wires only 2 of this module's 22 backend endpoints
+# (overview via a summary-tile grid, and employee variance via payrollAnalytics.ts's
+# getPayrollVariance - which the page itself never calls). Control totals, department/cost-center
+# summaries, component variance, findings list, all 4 CSV exports, reconciliation generate/get/
+# acknowledge/resolve/accept-exception, the exceptions register, and analytics-control CRUD have zero
+# UI. The one page that exists takes its payroll run only from a raw `?runId=` query-string parameter
+# with no run picker, and layout/navigation.ts has no sidebar entry linking to it from anywhere -
+# grepping the whole frontend for the literal route path confirms no other page ever links to it.
+# CR-297: CONFIRMED - PayrollReconciliation.Status is declared with 3 members (Generated/Acknowledged/
+# Superseded) and defaults to Generated, but a full grep of PayrollAnalyticsService.cs for
+# "ReconciliationStatus." finds zero assignments anywhere - Acknowledged and Superseded can never be
+# reached; every reconciliation row, including one whose every finding has since been Resolved, or one
+# superseded by a newer version, reports Status=Generated forever.
+# CR-298: CONFIRMED - PayrollAnomalyType has 14 members; PayrollAnalyticsService only ever constructs
+# an Anomaly() with AnomalyType.NegativeNetPay or AnomalyType.ZeroNetPay (both inside
+# GenerateReconciliationAsync's post-payroll branch) - the other 12 (HighGrossVariance/
+# HighNetVariance/HighDeductionVariance/PopulationMismatch/BankMismatch/AccountingMismatch/
+# StatutoryMismatch/DuplicateSettlement/MissingConfiguration/MissingSource/UnexpectedEmployee/
+# MissingEmployee) are declared but never constructed anywhere, despite several having an
+# obvious literal match to an already-implemented PayrollReconciliationFinding control code (e.g.
+# "BankMismatch" vs. the finding codes "MissingBankAdvice"/"BankAdviceAmountMismatch") - findings and
+# the exceptions register are two structurally similar but functionally disjoint mechanisms.
+# CR-299: CONFIRMED - PayrollVarianceRowDto.Flags is typed IReadOnlyList<string> and
+# PayrollVarianceRowDto.Classification suggests a real variance-severity classification, but the
+# private Variance() helper hard-codes Flags to `[]` on every row (never populated from any threshold
+# or anomaly) and Classification to exactly one of 2 literal strings ("NewValue" for a zero/absent
+# prior value, "NormalComparable" otherwise) - regardless of how large the gross/net/deduction delta
+# actually is. A 1000% gross-pay increase and a 0.01% increase both classify as "NormalComparable".
+# CR-300: CONFIRMED - every list endpoint on IPayrollAnalyticsService binds the shared PagedQuery,
+# whose SortBy/SortDescending fields are documented as "must be one of the endpoint's supported
+# fields", but Variance/Findings/Exceptions/ListControls never read query.SortBy or
+# query.SortDescending anywhere - each hard-codes its own fixed ordering and silently ignores any
+# sortBy/sortDescending value a caller sends, valid or not (no 400, no error, no visible effect).
+functionalities:
+  # =========================== A. RUN OVERVIEW ===========================
+  - id: F-PYA-001
+    name: GetOverviewAsync requires an authenticated tenant context and a run that exists in that tenant, else Unauthorized/NotFound
+    group: Run Overview
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/overview"
+    service: "PayrollAnalyticsService.GetOverviewAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollRuns (TenantId+Id filter)"
+
+  - id: F-PYA-002
+    name: Overview aggregates persisted employee count and gross/deduction/net/employer-contribution/tax totals from current, Calculated PayrollResults only
+    group: Run Overview
+    status: Implemented
+    service: "PayrollAnalyticsService.GetOverviewAsync -> Results/Totals"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollResults (IsCurrent && Status=Calculated filter)"
+
+  - id: F-PYA-003
+    name: Overview separately sums active (non-Cancelled) BankAdviceBatches.TotalAmount and active (non-Cancelled) PayrollJournalBatches debit/credit totals for the same run
+    group: Run Overview
+    status: Implemented
+    service: "PayrollAnalyticsService.GetOverviewAsync"
+    permission: "Payroll.Analytics.View"
+    db: "BankAdviceBatches, PayrollJournalBatches"
+
+  - id: F-PYA-004
+    name: Overview reports OpenFindings/CriticalFindings counts from PayrollReconciliationFindings with Status=Open (Critical additionally filtered by Severity=Critical)
+    group: Run Overview
+    status: Implemented
+    service: "PayrollAnalyticsService.GetOverviewAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollReconciliationFindings"
+
+  - id: F-PYA-005
+    name: Overview reports AnomalyCount from PayrollAnomalyFlags with Status=Open, scoped to the run
+    group: Run Overview
+    status: Implemented
+    service: "PayrollAnalyticsService.GetOverviewAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollAnomalyFlags"
+
+  # =========================== B. RUN SUMMARY & CONTROL TOTALS ===========================
+  - id: F-PYA-006
+    name: GetRunSummaryAsync returns run type/status plus the full PayrollControlTotalsDto and, when present, bank-advice/accounting debit/credit totals as nullable (null, not zero, when no active batch/journal exists)
+    group: Run Summary & Control Totals
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/summary"
+    service: "PayrollAnalyticsService.GetRunSummaryAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollRuns, BankAdviceBatches, PayrollJournalBatches"
+
+  - id: F-PYA-007
+    name: GetControlTotalsAsync computes distinct-employee count, result count, and Earnings/Deduction/Gross/Net/EmployerContribution/Tax totals from persisted PayrollResults
+    group: Run Summary & Control Totals
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/control-totals"
+    service: "PayrollAnalyticsService.GetControlTotalsAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollResults"
+
+  - id: F-PYA-008
+    name: "Control totals derive Reimbursement/LoanRecovery/VariablePay/Adjustment sub-totals from PayrollResultComponents.CalculationSource via a case-insensitive substring match, not an exact enum/type match"
+    group: Run Summary & Control Totals
+    status: Implemented
+    service: "PayrollAnalyticsService.GetControlTotalsAsync -> Source(name)"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollResultComponents.CalculationSource"
+
+  - id: F-PYA-009
+    name: Control totals' Tax field is always a hard-coded 0m (Totals() returns a fixed 0m for Tax regardless of persisted statutory data)
+    group: Run Summary & Control Totals
+    status: Implemented
+    service: "PayrollAnalyticsService.Totals (static helper)"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-010
+    name: Both GetRunSummaryAsync and GetControlTotalsAsync require the run to resolve for the caller's tenant first, else the same NotFound/Unauthorized propagates
+    group: Run Summary & Control Totals
+    status: Implemented
+    service: "PayrollAnalyticsService.LoadRunAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollRuns"
+
+  - id: F-PYA-011
+    name: SummaryCsv and ControlTotalsCsv export the same computed values as their JSON counterparts as single-data-row CSV files with a UTF-8 BOM and RFC 4180 escaping
+    group: Run Summary & Control Totals
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/summary.csv, /control-totals.csv"
+    service: "PayrollAnalyticsService.ExportRunSummaryAsync, ExportControlTotalsAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  # =========================== C. DIMENSION SUMMARIES (DEPARTMENT / COST CENTER) ===========================
+  - id: F-PYA-012
+    name: GetDepartmentSummaryAsync and GetCostCenterSummaryAsync join PayrollRunEmployees to current Calculated PayrollResults, grouping by the run-employee's own DepartmentId/CostCenterId
+    group: Dimension Summaries
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/departments, /cost-centers"
+    service: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollRunEmployees, PayrollResults"
+
+  - id: F-PYA-013
+    name: Department/CostCenter dimension ids and names are read from PayrollRunEmployee's own historical snapshot columns, never from the employee's current Department/CostCenter assignment
+    group: Dimension Summaries
+    status: Implemented
+    service: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollRunEmployees.DepartmentId/CostCenterId (historical snapshot)"
+
+  - id: F-PYA-014
+    name: "A null historical dimension groups together under a synthetic 'UNCLASSIFIED' code / 'Historical dimension unavailable' name row, rather than being dropped or erroring"
+    group: Dimension Summaries
+    status: Implemented
+    service: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-015
+    name: "A historical dimension id that no longer resolves to a live Department/CostCenter row (deleted/renamed since the run) still falls back to the same UNCLASSIFIED code/name pair rather than the dimension's own stale id"
+    group: Dimension Summaries
+    status: Implemented
+    service: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    permission: "Payroll.Analytics.View"
+    db: "Departments, CostCenters"
+
+  - id: F-PYA-016
+    name: Dimension summary rows are ordered by Code ascending, with UNCLASSIFIED sorting per ordinary string comparison (no special-cased placement)
+    group: Dimension Summaries
+    status: Implemented
+    service: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-017
+    name: Each dimension row reports its own distinct-employee count, result count, and Earnings/Gross/Deduction/Net/EmployerContribution totals; the sum across all dimension rows reconciles exactly to the run's overall control totals
+    group: Dimension Summaries
+    status: Implemented
+    service: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-018
+    name: "PayrollDimensionSummaryDto's EarningsTotal and GrossTotal are always equal for every row (both are populated from the same GrossEarnings sum) - there is no separate earnings-vs-gross distinction at the dimension level"
+    group: Dimension Summaries
+    status: Implemented
+    service: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-019
+    name: Both dimension summary endpoints require the run to resolve for the caller's tenant first, else NotFound/Unauthorized
+    group: Dimension Summaries
+    status: Implemented
+    service: "PayrollAnalyticsService.LoadRunAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  # =========================== D. EMPLOYEE VARIANCE ===========================
+  - id: F-PYA-020
+    name: GetVarianceAsync computes a per-employee row comparing the requested run's current PayrollResult against a comparison run's prior PayrollResult, joined by EmployeeId
+    group: Employee Variance
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/variance"
+    service: "PayrollAnalyticsService.GetVarianceAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollResults"
+
+  - id: F-PYA-021
+    name: "When compareRunId is omitted, the comparison run defaults to the most recent OTHER non-Cancelled run of the SAME RunType for the tenant, ordered by PayrollPeriod.EndDate descending - regardless of that run's own Status (Draft/Prepared/Processing all qualify, not just Calculated+)"
+    group: Employee Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.GetVarianceAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollRuns"
+
+  - id: F-PYA-022
+    name: An explicit compareRunId is used as-is with no validation that it belongs to the same tenant, the same RunType, or resolves to any PayrollResults at all
+    group: Employee Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.GetVarianceAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+    ui: "n/a"
+
+  - id: F-PYA-023
+    name: An employee present in the current run but absent from the comparison run's results is classified Classification=NewValue with null Base* fields; GrossDelta/DeductionDelta/NetDelta are computed against an implicit 0 prior
+    group: Employee Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.Variance (static helper)"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-024
+    name: "Percent() returns null (not an error, not Infinity) when the prior/base value is exactly zero, and rounds to 6 decimal places otherwise"
+    group: Employee Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.Percent (static helper)"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-025
+    name: "Free-text search on the variance list matches EmployeeCode or EmployeeName case-insensitively, applied AFTER the full current-run/comparison-run join is materialized in memory (not pushed to SQL)"
+    group: Employee Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.GetVarianceAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-026
+    name: The variance list is always ordered by EmployeeCode ascending and paged with the shared PagedQuery Page/PageSize (default 20, max 100), independent of any SortBy value supplied
+    group: Employee Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.GetVarianceAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-027
+    name: PayrollVarianceRowDto.Flags is always an empty array and Classification is always exactly one of the two literal strings NewValue/NormalComparable, never reflecting the magnitude of the computed variance percent (see CR-299)
+    group: Employee Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.Variance (static helper)"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-028
+    name: VarianceCsv exports every matching row (PageSize forced to 50000 internally) with the same 15 columns as the JSON shape, RFC 4180 escaped, named payroll-variance-{runId:N}.csv
+    group: Employee Variance
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/variance.csv"
+    service: "PayrollAnalyticsService.ExportVarianceAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-029
+    name: GetVarianceAsync requires the requested run to resolve for the caller's tenant first, else NotFound/Unauthorized (independent of whether compareRunId belongs to that tenant)
+    group: Employee Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.LoadRunAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  # =========================== E. COMPONENT VARIANCE ===========================
+  - id: F-PYA-030
+    name: GetComponentVarianceAsync groups PayrollResultComponents by (CalculationSource, ComponentCode, ComponentName) for both the current and comparison run and sums CalculatedAmount per group
+    group: Component Variance
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/components"
+    service: "PayrollAnalyticsService.GetComponentVarianceAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollResultComponents"
+
+  - id: F-PYA-031
+    name: The result is a union of every distinct grouping key seen in EITHER run; a key present only in one run reports 0 for the other run's amount rather than being omitted
+    group: Component Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.GetComponentVarianceAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-032
+    name: Component variance uses the identical default-comparison-run selection rule as employee variance (most recent other same-RunType non-Cancelled run) when compareRunId is omitted
+    group: Component Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.GetComponentVarianceAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-033
+    name: Component variance is not paged (returns the full IReadOnlyList) and has no dedicated CSV export endpoint, unlike employee variance
+    group: Component Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.GetComponentVarianceAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-034
+    name: GetComponentVarianceAsync requires the requested run to resolve for the caller's tenant first, else NotFound/Unauthorized
+    group: Component Variance
+    status: Implemented
+    service: "PayrollAnalyticsService.LoadRunAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  # =========================== F. RECONCILIATION GENERATION - PRE-PAYROLL ===========================
+  - id: F-PYA-035
+    name: GenerateReconciliationAsync(PrePayroll) creates a new versioned PayrollReconciliation row, version = prior-max-version-for-this-type + 1 (1 if none exists)
+    group: Reconciliation Generation
+    status: Implemented
+    api: "POST /api/payroll/reconciliation/runs/{runId}/pre"
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "PayrollReconciliations (unique TenantId+PayrollRunId+Type+Version)"
+
+  - id: F-PYA-036
+    name: "Pre-payroll with zero persisted PayrollResults raises a single Critical, BlockApproval-tagged NoPayrollResults finding"
+    group: Reconciliation Generation
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-037
+    name: Every reconciliation generation call (pre or post) also inserts exactly one PayrollAnalyticsSnapshot row capturing the persisted totals/employee count/currency at that DataVersion
+    group: Reconciliation Generation
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "PayrollAnalyticsSnapshots (unique TenantId+PayrollRunId+SnapshotType+DataVersion)"
+
+  - id: F-PYA-038
+    name: GenerateReconciliationAsync requires the run to resolve for the caller's tenant first, else NotFound/Unauthorized, before any finding/snapshot is written
+    group: Reconciliation Generation
+    status: Implemented
+    service: "PayrollAnalyticsService.LoadRunAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  # =========================== G. RECONCILIATION GENERATION - POST-PAYROLL CORE CHECKS ===========================
+  - id: F-PYA-039
+    name: "Post-payroll raises a Critical PayrollEquationMismatch finding whenever persisted Gross - Deductions <> Net (the equation is evaluated over already-persisted totals, never recomputed from components)"
+    group: Reconciliation Generation
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-040
+    name: "Post-payroll raises one Critical NegativeNetPay finding PER employee with NetPay < 0, and separately creates a PayrollAnomalyFlag(NegativeNetPay) for that employee if one is not already Open"
+    group: Reconciliation Generation
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "PayrollAnomalyFlags"
+
+  - id: F-PYA-041
+    name: "Post-payroll raises one Warning ZeroNetPay finding (run-level, not per-employee) when the run's total Net = 0 AND at least one result exists, plus a matching PayrollAnomalyFlag(ZeroNetPay) if one is not already Open"
+    group: Reconciliation Generation
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "PayrollAnomalyFlags"
+
+  - id: F-PYA-042
+    name: "Only effective-dated PayrollVarianceControls scoped to PayrollRun, active, whose EffectiveFrom<=period end<=EffectiveTo (or null), and whose AppliesToRunType matches (or is null), are evaluated; an out-of-window or inactive control is silently skipped"
+    group: Reconciliation Generation
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "PayrollVarianceControls"
+
+  - id: F-PYA-043
+    name: "A matching run-level control whose |actual| exceeds either its AbsoluteThreshold or its PercentageThreshold (both checked against the same raw metric value, not scaled to a percent) raises a finding tagged with the control's own Code/Severity/Action/Metric"
+    group: Reconciliation Generation
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  # =========================== H. SOURCE MATRIX - BANK ADVICE ===========================
+  - id: F-PYA-044
+    name: "Post-payroll raises Warning MissingBankAdvice when persisted results exist but no active (non-Cancelled) BankAdviceBatch exists for the run"
+    group: Source Matrix - Bank Advice
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "BankAdviceBatches"
+
+  - id: F-PYA-045
+    name: "Post-payroll raises Critical BankAdviceAmountMismatch when the sum of active BankAdviceBatches.TotalAmount does not equal the run's persisted Net total"
+    group: Source Matrix - Bank Advice
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-046
+    name: "Post-payroll raises Warning BankAdviceCountMismatch when the count of active, non-Cancelled BankAdvicePayments does not equal the run's persisted result count"
+    group: Source Matrix - Bank Advice
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "BankAdvicePayments"
+
+  - id: F-PYA-047
+    name: "Post-payroll raises Critical DuplicateBankPaymentReference when 2+ active BankAdvicePayments for the run's batches share the same non-empty PaymentReference"
+    group: Source Matrix - Bank Advice
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  # =========================== I. SOURCE MATRIX - ACCOUNTING / GL ===========================
+  - id: F-PYA-048
+    name: "Post-payroll raises Warning MissingPayrollJournal when persisted results exist but no active (non-Cancelled) PayrollJournalBatch exists for the run"
+    group: Source Matrix - Accounting/GL
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "PayrollJournalBatches"
+
+  - id: F-PYA-049
+    name: "Post-payroll raises Critical AccountingUnbalanced when any active journal batch for the run has TotalDebit <> TotalCredit"
+    group: Source Matrix - Accounting/GL
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-050
+    name: "Post-payroll raises Critical DuplicatePayrollJournal when more than one active journal batch exists for the same PayrollRunId"
+    group: Source Matrix - Accounting/GL
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-051
+    name: "Post-payroll raises Critical AccountingPayrollTotalMismatch when every active journal IS balanced (debit=credit) but the posted credit total does not equal the run's persisted Net total"
+    group: Source Matrix - Accounting/GL
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-052
+    name: "Post-payroll raises Critical BrokenAccountingReversalLinkage for any PayrollJournalLineSource whose SourceType contains 'Reversal' but whose SourceId does not resolve to a PayrollReversal linked to this run (as OriginalPayrollRunId or ReversalRunId)"
+    group: Source Matrix - Accounting/GL
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "PayrollJournalLineSources, PayrollReversals"
+
+  - id: F-PYA-053
+    name: "Post-payroll raises Critical BrokenAccountingAdjustmentLinkage for any PayrollJournalLineSource whose SourceType contains 'Adjustment' but whose SourceId does not resolve to any PayrollAdjustment row for the tenant"
+    group: Source Matrix - Accounting/GL
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "PayrollAdjustments"
+
+  # =========================== J. SOURCE MATRIX - STATUTORY ===========================
+  - id: F-PYA-054
+    name: "Post-payroll raises Warning MissingStatutorySource when persisted PayrollStatutoryResults exist for the run but zero PayrollStatutoryReturnSources exist, without ever recalculating a statutory rate/basis"
+    group: Source Matrix - Statutory
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "PayrollStatutoryResults, PayrollStatutoryReturnSources"
+
+  - id: F-PYA-055
+    name: "When both statutory results and return sources exist, each StatutoryType (ProvidentFund/Esi/ProfessionalTax/IncomeTax) is compared to its own return-source total independently via a hard-coded alias map (PF/ESI/PT/TDS name fragments); a per-type mismatch raises a Critical {Type}StatutorySourceMismatch finding, and the aggregate StatutorySourceMismatch only fires as a fallback when no per-type finding already covered the discrepancy"
+    group: Source Matrix - Statutory
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync, StatutorySourceMatches"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-056
+    name: An exact persisted PF/ESI/PT/TDS statutory-result-to-return-source match for every type raises zero statutory findings
+    group: Source Matrix - Statutory
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  # =========================== K. SOURCE MATRIX - CROSS-MODULE SETTLEMENTS ===========================
+  - id: F-PYA-057
+    name: "AddSettlementSourceFindingAsync raises a Critical {Source}SourceMismatch (Reimbursement/Loan/VariablePay/Adjustment) whenever the sum of matching PayrollResultComponents.CalculatedAmount (matched by a case-insensitive CalculationSource substring) does not equal the sum of the corresponding settlement/repayment/application table for the run - including the case where persisted components exist but the settlement source is entirely missing"
+    group: Source Matrix - Cross-Module Settlements
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSettlementSourceFindingAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "ReimbursementSettlements, LoanRepayments, VariablePaySettlements, PayrollAdjustmentApplications"
+
+  - id: F-PYA-058
+    name: A component-vs-settlement comparison that nets to exactly zero on both sides (no persisted component AND no persisted settlement for that source) raises no finding - only a genuine non-zero mismatch is reported
+    group: Source Matrix - Cross-Module Settlements
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSettlementSourceFindingAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-059
+    name: "Post-payroll raises Critical DuplicateReimbursementSettlement when 2+ ReimbursementSettlements for the run share the same non-null ReimbursementClaimLineId"
+    group: Source Matrix - Cross-Module Settlements
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-060
+    name: "Post-payroll raises Critical DuplicateVariablePaySettlement when 2+ VariablePaySettlements for the run share the same VariablePayAwardId, and Critical DuplicateLoanRecovery when 2+ LoanRepayments for the run share the same non-null LoanInstallmentId"
+    group: Source Matrix - Cross-Module Settlements
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-061
+    name: "Post-payroll raises Critical DuplicatePayrollAdjustmentApplication when 2+ PayrollAdjustmentApplications for the run share the same PayrollAdjustmentId, and Critical BrokenPayrollAdjustmentReversalLinkage when a PayrollAdjustment sourced from 'PayrollReversal' has no matching, non-Cancelled PayrollReversal linking its OriginalPayrollRunId to this run"
+    group: Source Matrix - Cross-Module Settlements
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "PayrollReversals"
+
+  # =========================== L. FINAL SETTLEMENT MATRIX ===========================
+  - id: F-PYA-062
+    name: "Post-payroll raises Critical FinalSettlementSourceMismatch when the sum of a FinalSettlementCase's own lines (earnings positive, deductions negative) does not equal its persisted NetSettlement value"
+    group: Final Settlement Matrix
+    status: Implemented
+    service: "PayrollAnalyticsService.AddFinalSettlementFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "FinalSettlementCases, FinalSettlementLines"
+
+  - id: F-PYA-063
+    name: "Post-payroll raises Critical DuplicateFinalSettlementSource when 2+ FinalSettlementLines for the same case share the same (SourceType, SourceId) pair"
+    group: Final Settlement Matrix
+    status: Implemented
+    service: "PayrollAnalyticsService.AddFinalSettlementFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-064
+    name: "A persisted GratuityCalculation's FinalGratuityAmount is compared to the matching Gratuity-type/source-tagged FinalSettlementLine(s); a missing line raises Critical MissingFinalSettlementGratuity and an amount mismatch raises Critical FinalSettlementGratuityMismatch"
+    group: Final Settlement Matrix
+    status: Implemented
+    service: "PayrollAnalyticsService.AddFinalSettlementCategoryFindingsAsync, AddCategoryFinding"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "GratuityCalculations"
+
+  - id: F-PYA-065
+    name: "A persisted LeaveEncashmentCalculation's GrossAmount is compared to the matching LeaveEncashment-type/source-tagged line; a missing line raises Critical MissingFinalSettlementLeaveEncashment"
+    group: Final Settlement Matrix
+    status: Implemented
+    service: "PayrollAnalyticsService.AddFinalSettlementCategoryFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "LeaveEncashmentCalculations"
+
+  - id: F-PYA-066
+    name: "A persisted NoticeSettlementCalculation is routed to MissingFinalSettlementNoticePay or MissingFinalSettlementNoticeRecovery depending on its own Type (NoticePay vs. NoticeRecovery), each checked independently against the matching line"
+    group: Final Settlement Matrix
+    status: Implemented
+    service: "PayrollAnalyticsService.AddFinalSettlementCategoryFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "NoticeSettlementCalculations"
+
+  - id: F-PYA-067
+    name: "Reimbursement/Loan/VariablePay/Adjustment Final Settlement lines are cross-checked against their own already-verified persisted source id (ReimbursementSettlements/LoanRepayments/VariablePaySettlements/PayrollAdjustmentApplications); a line whose SourceId does not resolve raises Critical MissingFinalSettlement{Source}, and a resolved-but-unequal amount raises Critical FinalSettlement{Source}Mismatch, sign-adjusted for IsDeduction"
+    group: Final Settlement Matrix
+    status: Implemented
+    service: "PayrollAnalyticsService.AddPersistedSettlementCategoryFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-068
+    name: "A Final Settlement case composed of all 8 categories (gratuity, leave encashment, reimbursement, variable pay/bonus, notice pay, notice recovery, loan recovery, payroll adjustment) in one settlement, each with an exact matching persisted source, raises zero Final-Settlement-category findings"
+    group: Final Settlement Matrix
+    status: Implemented
+    service: "PayrollAnalyticsService.AddFinalSettlementCategoryFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-069
+    name: Final Settlement category matching is keyed by FinalSettlementLine.LineType first and falls back to a SourceType substring match, so a line tagged with an unexpected LineType but a matching SourceType string is still picked up by the persisted-category helper
+    group: Final Settlement Matrix
+    status: Implemented
+    service: "PayrollAnalyticsService.AddPersistedSettlementCategoryFindingsAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  # =========================== M. RECONCILIATION RETRIEVAL, VERSIONING & STATUS ===========================
+  - id: F-PYA-070
+    name: GetReconciliationAsync returns a reconciliation by id together with all of its Findings, scoped to the caller's tenant, else NotFound
+    group: Reconciliation Retrieval & Versioning
+    status: Implemented
+    api: "GET /api/payroll/reconciliation/{id}"
+    service: "PayrollAnalyticsService.GetReconciliationAsync"
+    permission: "Payroll.Reconciliation.View"
+    db: "PayrollReconciliations, PayrollReconciliationFindings"
+
+  - id: F-PYA-071
+    name: "Regenerating the same PayrollRunId+ReconciliationType creates a new, higher-Version row rather than overwriting the prior one; all prior versions' rows and their findings remain queryable by id"
+    group: Reconciliation Retrieval & Versioning
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-072
+    name: "TotalChecks/PassedChecks/WarningChecks/CriticalChecks/FailedChecks on the reconciliation row are derived counts (TotalChecks = max(1, evaluated-controls + 1); FailedChecks = CriticalChecks = count of Critical findings; WarningChecks = count of Warning findings; PassedChecks = TotalChecks - total findings) computed once at generation time, not live-recomputed on read"
+    group: Reconciliation Retrieval & Versioning
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Reconciliation.Generate"
+    db: "n/a"
+
+  - id: F-PYA-073
+    name: PayrollReconciliation.Status is always Generated at creation and is never transitioned to Acknowledged or Superseded by any code path, including after every one of its findings is Resolved or after a newer version is generated (see CR-297)
+    group: Reconciliation Retrieval & Versioning
+    status: Implemented
+    service: "PayrollAnalyticsService (entity default only)"
+    permission: "Payroll.Reconciliation.View"
+    db: "n/a"
+
+  - id: F-PYA-074
+    name: A GetReconciliationAsync call for an id that exists in the database but under a different tenant returns NotFound, not the other tenant's data or a generic error
+    group: Reconciliation Retrieval & Versioning
+    status: Implemented
+    service: "PayrollAnalyticsService.GetReconciliationAsync"
+    permission: "Payroll.Reconciliation.View"
+    db: "n/a"
+
+  # =========================== N. FINDINGS LIFECYCLE ===========================
+  - id: F-PYA-075
+    name: GetFindingsAsync lists a run's PayrollReconciliationFindings across ALL of its reconciliation versions (joined via Reconciliation.PayrollRunId, not filtered to the latest version), paged and free-text searchable on ControlCode/Message
+    group: Findings Lifecycle
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/findings"
+    service: "PayrollAnalyticsService.GetFindingsAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollReconciliationFindings"
+
+  - id: F-PYA-076
+    name: Findings are ordered by GeneratedAtUtc descending then Id ascending as a stable tiebreaker, independent of any SortBy value supplied
+    group: Findings Lifecycle
+    status: Implemented
+    service: "PayrollAnalyticsService.GetFindingsAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-077
+    name: "ActOnFindingAsync('acknowledge') transitions an Open finding to Acknowledged, stamping AcknowledgedAtUtc/AcknowledgedByUserId from the current clock/caller"
+    group: Findings Lifecycle
+    status: Implemented
+    api: "POST /api/payroll/reconciliation/findings/{id}/acknowledge"
+    service: "PayrollAnalyticsService.ActOnFindingAsync"
+    permission: "Payroll.Reconciliation.Acknowledge"
+    db: "PayrollReconciliationFindings"
+
+  - id: F-PYA-078
+    name: "ActOnFindingAsync('resolve') transitions a finding to Resolved, stamping ResolvedAtUtc/ResolvedByUserId and persisting the caller-supplied Note/Reference as ResolutionNote/ResolutionReference"
+    group: Findings Lifecycle
+    status: Implemented
+    api: "POST /api/payroll/reconciliation/findings/{id}/resolve"
+    service: "PayrollAnalyticsService.ActOnFindingAsync"
+    permission: "Payroll.Reconciliation.Resolve"
+    db: "n/a"
+
+  - id: F-PYA-079
+    name: "ActOnFindingAsync('accept-exception') transitions a finding to AcceptedException with the same Note/Reference capture as resolve, but is gated by the SAME Payroll.Reconciliation.Resolve permission - there is no separate accept-exception permission"
+    group: Findings Lifecycle
+    status: Implemented
+    api: "POST /api/payroll/reconciliation/findings/{id}/accept-exception"
+    service: "PayrollAnalyticsService.ActOnFindingAsync"
+    permission: "Payroll.Reconciliation.Resolve"
+    db: "n/a"
+
+  - id: F-PYA-080
+    name: "A finding already in a terminal state (Resolved or AcceptedException) rejects any further acknowledge/resolve/accept-exception call with Conflict; Acknowledged is NOT terminal - it can still be resolved or accepted-as-exception afterward"
+    group: Findings Lifecycle
+    status: Implemented
+    service: "PayrollAnalyticsService.ActOnFindingAsync"
+    permission: "n/a (checked before the permission-gated action runs)"
+    db: "n/a"
+
+  - id: F-PYA-081
+    name: "An unrecognized action string (anything other than the exact literals 'acknowledge'/'resolve'/'accept-exception', case-insensitive) returns Invalid, without touching the finding row"
+    group: Findings Lifecycle
+    status: Implemented
+    service: "PayrollAnalyticsService.ActOnFindingAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-082
+    name: "ActOnFindingAsync requires the finding to resolve for the caller's tenant, else NotFound; there is no separate check that the finding's parent run itself still exists or is not Cancelled"
+    group: Findings Lifecycle
+    status: Implemented
+    service: "PayrollAnalyticsService.ActOnFindingAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== O. ANOMALY & EXCEPTIONS REGISTER ===========================
+  - id: F-PYA-083
+    name: "PayrollAnomalyFlag rows are created ONLY as a side effect of GenerateReconciliationAsync(PostPayroll) finding NegativeNetPay or ZeroNetPay - there is no standalone anomaly-detection endpoint or background job"
+    group: Anomaly & Exceptions Register
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync -> Anomaly()"
+    permission: "n/a"
+    db: "PayrollAnomalyFlags"
+
+  - id: F-PYA-084
+    name: A duplicate NegativeNetPay/ZeroNetPay condition on a later regeneration does not create a second Open anomaly flag for the same employee/run - only when no Open flag of that type already exists is a new one added
+    group: Anomaly & Exceptions Register
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-085
+    name: "GetExceptionsAsync lists PayrollAnomalyFlags TENANT-WIDE across every payroll run, joined to Employees for EmployeeCode - there is no payrollRunId query parameter to scope the register to one run"
+    group: Anomaly & Exceptions Register
+    status: Implemented
+    api: "GET /api/payroll/exceptions"
+    service: "PayrollAnalyticsService.GetExceptionsAsync"
+    permission: "Payroll.Exceptions.View"
+    db: "PayrollAnomalyFlags, Employees"
+
+  - id: F-PYA-086
+    name: "Free-text search on the exceptions register matches EmployeeCode or the anomaly's own Message only - there is no filter by AnomalyType, Severity, Status, or a date/period range anywhere on this endpoint"
+    group: Anomaly & Exceptions Register
+    status: Implemented
+    service: "PayrollAnalyticsService.GetExceptionsAsync"
+    permission: "Payroll.Exceptions.View"
+    db: "n/a"
+
+  - id: F-PYA-087
+    name: Exceptions are ordered by CreatedAtUtc descending then Id ascending, independent of any SortBy value supplied
+    group: Anomaly & Exceptions Register
+    status: Implemented
+    service: "PayrollAnalyticsService.GetExceptionsAsync"
+    permission: "Payroll.Exceptions.View"
+    db: "n/a"
+
+  - id: F-PYA-088
+    name: An anomaly flag whose EmployeeId no longer resolves to any Employee row (or was never set, run-level anomalies) reports an empty EmployeeCode rather than erroring the whole list
+    group: Anomaly & Exceptions Register
+    status: Implemented
+    service: "PayrollAnalyticsService.GetExceptionsAsync"
+    permission: "Payroll.Exceptions.View"
+    db: "n/a"
+
+  - id: F-PYA-089
+    name: ExportExceptionsAsync exports the same tenant-wide, Search-filterable set as a CSV (payroll-exceptions.csv, no run/date scoping), forcing PageSize to 50000 internally
+    group: Anomaly & Exceptions Register
+    status: Implemented
+    api: "GET /api/payroll/exceptions/export.csv"
+    service: "PayrollAnalyticsService.ExportExceptionsAsync"
+    permission: "Payroll.Exceptions.View"
+    db: "n/a"
+
+  - id: F-PYA-090
+    name: 12 of PayrollAnomalyType's 14 members (everything except NegativeNetPay/ZeroNetPay) are declared but have zero code path that ever constructs one - the exceptions register can never show them (see CR-298)
+    group: Anomaly & Exceptions Register
+    status: Implemented
+    service: "PayrollAnalyticsService (entity/enum only)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-091
+    name: "There is no exposed action anywhere to acknowledge, resolve, or otherwise change the Status of a PayrollAnomalyFlag row directly - AcknowledgedAtUtc/AcknowledgedByUserId/ResolutionNote are declared entity fields with no service method that ever sets them (Payroll.Exceptions.Manage is unused, see CR-292)"
+    group: Anomaly & Exceptions Register
+    status: Implemented
+    service: "n/a"
+    permission: "Payroll.Exceptions.Manage (declared, unreachable)"
+    db: "n/a"
+
+  # =========================== P. CONTROLS ADMINISTRATION ===========================
+  - id: F-PYA-092
+    name: ListControlsAsync lists a tenant's PayrollVarianceControls, free-text searchable on Code/Name, ordered by Code ascending, paged
+    group: Controls Administration
+    status: Implemented
+    api: "GET /api/payroll/analytics-controls"
+    service: "PayrollAnalyticsService.ListControlsAsync"
+    permission: "Payroll.Analytics.View"
+    db: "PayrollVarianceControls"
+
+  - id: F-PYA-093
+    name: "CreateControlAsync requires a non-blank Code and at least one of AbsoluteThreshold/PercentageThreshold, else Invalid"
+    group: Controls Administration
+    status: Implemented
+    api: "POST /api/payroll/analytics-controls"
+    service: "PayrollAnalyticsService.CreateControlAsync"
+    permission: "Payroll.Analytics.Configure"
+    db: "n/a"
+
+  - id: F-PYA-094
+    name: "A duplicate (TenantId, Code, EffectiveFrom) triple is rejected with Conflict before insert, backed by a unique index of the same shape; the identical Code with a DIFFERENT EffectiveFrom is allowed (multiple effective-dated versions of the same control code)"
+    group: Controls Administration
+    status: Implemented
+    service: "PayrollAnalyticsService.CreateControlAsync"
+    permission: "Payroll.Analytics.Configure"
+    db: "PayrollVarianceControls unique (TenantId, Code, EffectiveFrom)"
+
+  - id: F-PYA-095
+    name: UpdateControlAsync requires the control to exist in the tenant, else NotFound, and otherwise overwrites every field (Code/Name/Scope/Metric/thresholds/Severity/Action/AppliesToRunType/IsActive/EffectiveFrom/EffectiveTo) unconditionally - there is no partial/PATCH semantic
+    group: Controls Administration
+    status: Implemented
+    api: "PUT /api/payroll/analytics-controls/{id}"
+    service: "PayrollAnalyticsService.UpdateControlAsync"
+    permission: "Payroll.Analytics.Configure"
+    db: "n/a"
+
+  - id: F-PYA-096
+    name: UpdateControlAsync does not increment or otherwise touch ConcurrencyVersion when applying changes, and does not re-check code/EffectiveFrom uniqueness against other rows, so a code collision can be introduced via update that CreateControlAsync itself would have rejected
+    group: Controls Administration
+    status: Implemented
+    service: "PayrollAnalyticsService.UpdateControlAsync, Apply"
+    permission: "Payroll.Analytics.Configure"
+    db: "n/a"
+
+  - id: F-PYA-097
+    name: "A control may be created with any of the 8 PayrollControlScope values and any of the 9 PayrollControlMetric values with no server-side validation that the combination is ever actually evaluated by GenerateReconciliationAsync (see CR-293/CR-294)"
+    group: Controls Administration
+    status: Implemented
+    service: "PayrollAnalyticsService.CreateControlAsync"
+    permission: "Payroll.Analytics.Configure"
+    db: "n/a"
+
+  - id: F-PYA-098
+    name: IsActive=false and an EffectiveTo in the past both independently exclude a control from evaluation without deleting the row, and both can be flipped back via UpdateControlAsync
+    group: Controls Administration
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Analytics.Configure"
+    db: "n/a"
+
+  - id: F-PYA-099
+    name: AppliesToRunType=null makes a control apply to every RunType (Regular/Supplementary/OffCycle); a non-null value restricts it to exactly that RunType
+    group: Controls Administration
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "Payroll.Analytics.Configure"
+    db: "n/a"
+
+  - id: F-PYA-100
+    name: "PayrollAnalyticsControlDto surfaces the control's own ConcurrencyVersion field to callers even though it is never enforced as an EF concurrency token and never incremented (see CR-290)"
+    group: Controls Administration
+    status: Implemented
+    service: "PayrollAnalyticsService (DTO shape only)"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-101
+    name: List/Create/Update of controls each independently require the caller's tenant context; a control created in one tenant is never visible or updatable from another tenant's context (including by direct id guess)
+    group: Controls Administration
+    status: Implemented
+    service: "PayrollAnalyticsService.ListControlsAsync, CreateControlAsync, UpdateControlAsync"
+    permission: "Payroll.Analytics.View / Payroll.Analytics.Configure"
+    db: "n/a"
+
+  - id: F-PYA-102
+    name: There is no delete/deactivate-only endpoint distinct from Update - the only way to stop a control from being evaluated is to Update it with IsActive=false or an EffectiveTo in the past
+    group: Controls Administration
+    status: Implemented
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== Q. AUTHORIZATION & SCOPE ===========================
+  - id: F-PYA-103
+    name: "Every read endpoint under api/payroll/analytics (overview/summary/control-totals/departments/cost-centers/variance/components/findings + 4 CSV exports) requires Payroll.Analytics.View"
+    group: Authorization & Scope
+    status: Implemented
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-104
+    name: analytics-controls List requires Payroll.Analytics.View while Create/Update require the separate Payroll.Analytics.Configure permission
+    group: Authorization & Scope
+    status: Implemented
+    permission: "Payroll.Analytics.View / Payroll.Analytics.Configure"
+    db: "n/a"
+
+  - id: F-PYA-105
+    name: Both pre- and post-payroll reconciliation generation require Payroll.Reconciliation.Generate; reading a reconciliation by id requires the separate Payroll.Reconciliation.View
+    group: Authorization & Scope
+    status: Implemented
+    permission: "Payroll.Reconciliation.Generate / Payroll.Reconciliation.View"
+    db: "n/a"
+
+  - id: F-PYA-106
+    name: acknowledge requires Payroll.Reconciliation.Acknowledge while resolve AND accept-exception both require Payroll.Reconciliation.Resolve (see F-PYA-079/CR pattern)
+    group: Authorization & Scope
+    status: Implemented
+    permission: "Payroll.Reconciliation.Acknowledge / Payroll.Reconciliation.Resolve"
+    db: "n/a"
+
+  - id: F-PYA-107
+    name: Both exceptions endpoints (list, export.csv) require Payroll.Exceptions.View; Payroll.Exceptions.Manage is granted by the seed data but gates no endpoint at all
+    group: Authorization & Scope
+    status: Implemented
+    permission: "Payroll.Exceptions.View"
+    db: "n/a"
+
+  - id: F-PYA-108
+    name: A caller holding Payroll.Analytics.View but not Payroll.Analytics.Configure can list controls but receives Forbidden on Create/Update
+    group: Authorization & Scope
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-109
+    name: A caller holding Payroll.Reconciliation.Acknowledge but not Payroll.Reconciliation.Resolve can acknowledge a finding but receives Forbidden on resolve/accept-exception for the same finding
+    group: Authorization & Scope
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-110
+    name: A request with a well-formed but expired/absent bearer token receives Unauthorized (401) uniformly across all 22 endpoints in this module, before any permission or tenant check runs
+    group: Authorization & Scope
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-111
+    name: "A full grep of SeedData.cs's RolePermissionMap for all 8 Payroll.Analytics*/Reconciliation*/Exceptions* constants matches only the blanket DomainPermissions.All grant to SuperAdmin/TenantAdmin - no seeded HRAdmin/HRManager/SuperHR/Accounts/IT/Manager/Employee role holds any of them out of the box (see CR-291)"
+    group: Authorization & Scope
+    status: Implemented
+    service: "n/a (seed data)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-112
+    name: A custom role assembled with exactly one of the 8 Payroll.Analytics*/Reconciliation*/Exceptions* permissions can access exactly the endpoint(s) gated by that permission and no others in this module
+    group: Authorization & Scope
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-113
+    name: The fallback authorization policy denies every endpoint in this module if its [HasPermission] attribute were ever removed - confirmed structurally (every action carries an explicit attribute; none are [AllowAnonymous])
+    group: Authorization & Scope
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-114
+    name: Platform-admin bearer tokens (PlatformBearer/PlatformPermission) are a separate identity domain and cannot authorize any endpoint in this module, including a Platform SuperAdmin acting without a resolved tenant-scoped JWT
+    group: Authorization & Scope
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== R. TENANT ISOLATION ===========================
+  - id: F-PYA-115
+    name: Every read/write in this module filters by the server-resolved TenantId from the caller's JWT/ShardContext, never from a client-supplied value
+    group: Tenant Isolation
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-116
+    name: A payroll run id belonging to Tenant B, requested by a caller authenticated to Tenant A, returns NotFound/Unauthorized from EVERY overview/summary/control-totals/dimension/variance/component/findings/CSV-export endpoint - never Tenant B's data
+    group: Tenant Isolation
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-117
+    name: A reconciliation id or finding id belonging to Tenant B, requested by Tenant A, returns NotFound from Get/Acknowledge/Resolve/Accept-exception - never Tenant B's row
+    group: Tenant Isolation
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-118
+    name: A PayrollVarianceControl created under Tenant A is invisible to List/Update under Tenant B, and Tenant B may create its own control with the identical Code/EffectiveFrom Tenant A already used (the unique index is TenantId-scoped)
+    group: Tenant Isolation
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-119
+    name: The exceptions register is tenant-scoped even though it is run-unscoped - Tenant A never sees Tenant B's PayrollAnomalyFlags rows regardless of search text
+    group: Tenant Isolation
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-120
+    name: GetVarianceAsync/GetComponentVarianceAsync's default comparison-run lookup is itself tenant-filtered - a same-RunType run belonging to another tenant is never selected as the implicit comparison baseline
+    group: Tenant Isolation
+    status: Implemented
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== S. CONCURRENCY & IDEMPOTENCY ===========================
+  - id: F-PYA-121
+    name: "The unique (TenantId, PayrollRunId, ReconciliationType, Version) index guarantees that two concurrent GenerateReconciliationAsync calls for the same run/type cannot both persist the same version - the DB, not application logic, is the sole race guard, and the losing caller surfaces an unhandled DbUpdateException rather than a graceful Conflict"
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "n/a"
+    db: "PayrollReconciliations unique index"
+
+
+  - id: F-PYA-122
+    name: "Every successful GenerateReconciliationAsync call inserts exactly one matching PayrollAnalyticsSnapshot row at the same DataVersion, so the reconciliation-row count and snapshot-row count for a run+type always stay equal even under a race"
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-123
+    name: "PayrollReconciliationFinding rows carry no concurrency token at all (not even the unenforced ConcurrencyVersion int that PayrollReconciliation/PayrollVarianceControl declare) - two concurrent ActOnFindingAsync calls against the SAME finding (e.g. acknowledge vs. resolve) never raise a conflict; the later SaveChangesAsync call silently overwrites the earlier one's Status/timestamps (see CR-290)"
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAnalyticsService.ActOnFindingAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-124
+    name: Two concurrent acknowledge calls against the same finding both report Succeeded=true (the terminal-state guard only rejects a call arriving after Resolved/AcceptedException, not after another Acknowledged) and leave one final, auditable Acknowledged state with the last writer's actor/timestamp
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAnalyticsService.ActOnFindingAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-125
+    name: "A PayrollVarianceControl Update racing a reconciliation Generate for the same tenant does not corrupt either row - exactly one control row and the expected reconciliation row(s) exist afterward, though which control values (pre- or post-update) the race's Generate actually evaluated is not guaranteed"
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAnalyticsService.UpdateControlAsync, GenerateReconciliationAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-126
+    name: A finding Resolve racing a same-run-type reconciliation regeneration preserves the resolution's Note/Reference/terminal status on the original finding row while the new version's own (separate) findings are generated independently - resolving version N never mutates version N+1's findings
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAnalyticsService.ActOnFindingAsync, GenerateReconciliationAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-127
+    name: A PayrollJournalBatch insert (accounting posting) racing a post-payroll reconciliation Generate for the same run leaves exactly one journal batch row and a reconciliation row reflecting a consistent (not partially-committed) read of whichever state actually committed first
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== T. LARGE DATA & PAGING ===========================
+  - id: F-PYA-128
+    name: "Employee variance pages correctly over 500 employees across 2 payroll runs (page 1 and page 10 of 50 both return exactly 50 rows with TotalCount=500), with every row's GrossDelta reflecting the correct per-employee prior-vs-current difference"
+    group: Large Data & Paging
+    status: Implemented
+    service: "PayrollAnalyticsService.GetVarianceAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-129
+    name: "Department/CostCenter summaries over 500 employees split across 2 Departments/2 CostCenters each sum back exactly to the run's overall Gross/Deduction/Net control totals - no employee is double-counted or dropped across dimension groups"
+    group: Large Data & Paging
+    status: Implemented
+    service: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-130
+    name: Component variance over 500 employees' components correctly sums a shared ComponentCode into one aggregate row rather than one row per employee
+    group: Large Data & Paging
+    status: Implemented
+    service: "PayrollAnalyticsService.GetComponentVarianceAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-131
+    name: A requested PageSize above PagedQuery.MaxPageSize (100) is clamped/rejected consistently by the shared binding layer for every list endpoint in this module (Variance/Findings/Exceptions/ListControls), not by each service individually
+    group: Large Data & Paging
+    status: Implemented
+    service: "n/a (shared PagedQuery binding)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-132
+    name: A Page number beyond the last available page returns an empty Items array with the correct (unchanged) TotalCount, not an error
+    group: Large Data & Paging
+    status: Implemented
+    service: "PayrollAnalyticsService.GetVarianceAsync, GetFindingsAsync, GetExceptionsAsync, ListControlsAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== U. PROVIDER PARITY (SQL SERVER / MYSQL) ===========================
+  - id: F-PYA-133
+    name: "PayrollAnalyticsProviderAcceptance.RunAsync is the single shared helper both SqlServerPayrollAnalyticsIntegrationTests and MySqlPayrollAnalyticsIntegrationTests call - there is no provider-specific business-logic branch anywhere in PayrollAnalyticsService"
+    group: Provider Parity
+    status: Implemented
+    service: "PayrollAnalyticsProviderAcceptance.RunAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-134
+    name: "The shared acceptance helper exercises control create, pre- and post-payroll generation, version-2 regeneration, finding list, acknowledge, resolve, run summary, control totals, department/cost-center summary, and all 4 CSV exports against a real disposable SQL Server and MySQL database in one pass, each run twice for same-database repeatability"
+    group: Provider Parity
+    status: Implemented
+    service: "PayrollAnalyticsProviderAcceptance.RunAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-135
+    name: Both provider migration chains (SQL Server 20260922050332 + 20260922081107; MySQL 20260922050406 + 20260922081130) create equivalent schemas for the 5 Analytics entities, and EF reports no pending model changes for either provider at authoring time
+    group: Provider Parity
+    status: Implemented
+    service: "n/a (migrations)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-136
+    name: MySQL's app-managed binary(16) concurrency-token convention does not apply to this module's entities at all, since none of PayrollVarianceControl/PayrollReconciliation/PayrollReconciliationFinding/PayrollAnomalyFlag/PayrollAnalyticsSnapshot declare an EF concurrency token on either provider (reinforces CR-290 - the gap is provider-independent, not a MySQL-specific omission)
+    group: Provider Parity
+    status: Implemented
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== V. FRONTEND ===========================
+  - id: F-PYA-137
+    name: "/payroll/analytics is registered in App.tsx behind RequirePermission(Permissions.payroll.analyticsView), rendering PayrollAnalyticsPage"
+    group: Frontend
+    status: Implemented
+    ui: "/payroll/analytics"
+    service: "n/a"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-138
+    name: "PayrollAnalyticsPage reads its target run exclusively from a raw window.location ?runId= query-string parameter (not a route param, not a picker UI); with no runId present it renders a plain instructional paragraph instead of erroring"
+    group: Frontend
+    status: Implemented
+    ui: "PayrollAnalyticsPage.tsx"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-139
+    name: "With a runId, the page renders a 7-tile summary grid (Employees/Gross/Deductions/Net pay/Open findings/Critical findings/Anomalies) sourced from getPayrollAnalyticsOverview - there is no variance table, no findings list, no reconciliation-generate button, and no export link on this page"
+    group: Frontend
+    status: Implemented
+    ui: "PayrollAnalyticsPage.tsx"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-140
+    name: "A query failure (e.g. an invalid runId, or a 401/403/404 from the overview call) renders the raw error message via role=alert, with no retry action and no distinction drawn between 401/403/404/500"
+    group: Frontend
+    status: Implemented
+    ui: "PayrollAnalyticsPage.tsx"
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-141
+    name: "src/api/payrollAnalytics.ts wraps exactly 2 of the module's 22 backend endpoints (overview, employee variance) - getPayrollVariance is exported but never called from PayrollAnalyticsPage or any other page in this repository"
+    group: Frontend
+    status: Implemented
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-142
+    name: "generatePayrollReconciliation(runId, 'pre'|'post') is implemented in the API client but is never invoked by any page - there is no UI button anywhere that triggers pre/post reconciliation generation (see CR-296)"
+    group: Frontend
+    status: Implemented
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-PYA-143
+    name: "layout/navigation.ts has no entry linking to /payroll/analytics from any sidebar group; a permission-holding user can reach the page only by typing the URL (with a valid ?runId=) directly, since no other page in the frontend links to it either"
+    group: Frontend
+    status: Implemented
+    service: "n/a"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== W. FINDINGS CSV EXPORT (added after initial authoring pass) ===========================
+  - id: F-PYA-144
+    name: FindingsCsv exports a run's findings (across all reconciliation versions, same source set as the JSON findings list) as a CSV with the documented 15-column shape, forcing PageSize to 50000 internally
+    group: Findings Lifecycle
+    status: Implemented
+    api: "GET /api/payroll/analytics/runs/{runId}/findings.csv"
+    service: "PayrollAnalyticsService.ExportFindingsAsync"
+    permission: "Payroll.Analytics.View"
+    db: "n/a"
+
+  - id: F-PYA-145
+    name: "All 5 CSV export actions (variance.csv/findings.csv/summary.csv/control-totals.csv/exceptions export.csv) return 400 BadRequest for ANY underlying failure - including NotFound and Unauthorized - rather than the status code the identical failure would map to on the JSON counterpart (404/401)"
+    group: CSV Export Error Handling
+    status: Implemented
+    service: "PayrollAnalyticsController, PayrollExceptionsController (if (!result.Succeeded) return BadRequest(result.Message) - all 5 actions)"
+    permission: "n/a"
+    db: "n/a"

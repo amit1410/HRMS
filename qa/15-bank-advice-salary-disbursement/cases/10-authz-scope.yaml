@@ -1,0 +1,167 @@
+sheet: BankAdv_Authz_Scope
+submodule: Authorization & Scope
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-AUTHZ-001
+    func: [F-BANKADV-080]
+    sc: All 7 permissions independently gate their own action
+    t: Each of View/Generate/Validate/Approve/Export/Cancel is required for its own action and insufficient for the others
+    src: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController, per-route [HasPermission])"
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Custom role R1 holds ONLY Payroll.BankAdvice.View"
+    role: Custom role R1
+    perm: Payroll.BankAdvice.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice] as R1 => [200] OK"
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] as R1 => [403] Forbidden"
+      - "[POST /api/payroll/bank-advice/{id}/approve] as R1 => [403] Forbidden"
+      - "[POST /api/payroll/bank-advice/{id}/cancel] as R1 => [403] Forbidden"
+      - "[GET /api/payroll/bank-advice/{id}/export] as R1 => [403] Forbidden"
+    auto: API
+
+  - id: BANKADV-AUTHZ-002
+    func: [F-BANKADV-081]
+    sc: "CONFIRMED HEADLINE - no seeded operational role holds any BankAdvice permission"
+    t: A freshly-seeded HRAdmin, HRManager, SuperHR, or Accounts user cannot access any BankAdvice route at all, out of the box
+    src: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, full-file grep)"
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    sev: High
+    pre: "Freshly seeded tenant with the standard role set, no custom permission grants"
+    role: HRAdmin, HRManager, SuperHR, Accounts (freshly seeded, no custom grants)
+    perm: "any of the 7 Payroll.BankAdvice* permissions"
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice] as freshly-seeded HRAdmin => [403] Forbidden"
+      - "[GET /api/payroll/bank-advice] as freshly-seeded SuperHR => [403] Forbidden"
+      - "[GET /api/payroll/bank-advice] as freshly-seeded Accounts => [403] Forbidden"
+      - "[Manual] full grep of SeedData.cs's RolePermissionMap for BankAdviceView/Generate/Validate/Approve/Export/Cancel/ViewHistory => zero matches in any role array except the blanket Permissions.All grant to SuperAdmin/TenantAdmin"
+    secc: true
+    auto: API
+    cr: [CR-263]
+
+  - id: BANKADV-AUTHZ-003
+    func: [F-BANKADV-081]
+    sc: SuperAdmin/TenantAdmin DO have full access via the blanket grant
+    t: SuperAdmin and TenantAdmin can reach every BankAdvice route purely through Permissions.All
+    src: "SeedData.cs RolePermissionMap[RoleNames.SuperAdmin/TenantAdmin]"
+    type: Positive
+    tags: [Authorization]
+    pri: P1
+    sev: Medium
+    pre: "Freshly seeded tenant, TenantAdmin role"
+    role: TenantAdmin (freshly seeded)
+    perm: "all 7 Payroll.BankAdvice* permissions (via Permissions.All)"
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice] as freshly-seeded TenantAdmin => [200] OK"
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] as freshly-seeded TenantAdmin => [200] OK"
+    auto: API
+
+  - id: BANKADV-AUTHZ-004
+    func: [F-BANKADV-082]
+    sc: No self-service route exists
+    t: There is no /api/me/... surface for bank advice - every route lives under /api/payroll/bank-advice and requires an explicit permission
+    src: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (full file - one BankAdviceController, no self-service variant)"
+    type: Contract
+    tags: [Security]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of Backend/HRMS.API/Controllers for a BankAdvice route under api/me => zero matches"
+    auto: Manual only
+
+  - id: BANKADV-AUTHZ-005
+    func: [F-BANKADV-083]
+    sc: Validate and Prepare are permission-equivalent
+    t: A role holding BankAdvice.Validate can call BOTH the validate and prepare routes - there is no separate permission to grant one without the other
+    src: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController.Validate, .Prepare - identical attribute)"
+    type: Authorization
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: "Custom role R2 holds ONLY Payroll.BankAdvice.Validate; BATCH1 is Draft"
+    role: Custom role R2
+    perm: Payroll.BankAdvice.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/validate] as R2 => [200] OK"
+      - "[POST /api/payroll/bank-advice/{BATCH1}/prepare] as R2 => [200] OK (same permission grants both routes)"
+    auto: API
+    cr: [CR-273]
+
+  - id: BANKADV-AUTHZ-006
+    func: [F-BANKADV-084]
+    sc: Approve is a distinct, separately-grantable permission
+    t: A role holding Validate but not Approve cannot approve
+    src: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController.Approve)"
+    type: Authorization
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Custom role R2 holds ONLY Payroll.BankAdvice.Validate; BATCH1 is Prepared"
+    role: Custom role R2
+    perm: Payroll.BankAdvice.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/approve] as R2 (no Approve grant) => [403] Forbidden"
+    auto: API
+
+  - id: BANKADV-AUTHZ-007
+    func: [F-BANKADV-085]
+    sc: Cross-tenant batch id is NotFound
+    t: Every id-scoped action returns NotFound, not Forbidden, for a batch belonging to another tenant
+    src: "BankAdviceService.Load (TenantId filter)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "BATCH_T2 belongs to tenant T2 (DEMO02)"
+    role: HRAdmin (T1, custom role holding all BankAdvice permissions)
+    perm: Payroll.BankAdvice.View, Validate, Approve, Export, Cancel
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{BATCH_T2}] as a T1 user => [404] NotFound"
+      - "[POST /api/payroll/bank-advice/{BATCH_T2}/approve] as a T1 user => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: BANKADV-AUTHZ-008
+    func: [F-BANKADV-086]
+    sc: No anonymous route exists
+    t: Every route on BankAdviceController requires authentication
+    src: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (BankAdviceController, full grep for [AllowAnonymous])"
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: none
+    role: n/a (unauthenticated)
+    perm: "n/a"
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice] with no Authorization header => [401] Unauthorized"
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] with no Authorization header => [401] Unauthorized"
+      - "[Manual] full grep of BankAdviceController for [AllowAnonymous] => zero matches"
+    secc: true
+    auto: API

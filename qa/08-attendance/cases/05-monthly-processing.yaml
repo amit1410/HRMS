@@ -1,0 +1,505 @@
+sheet: Attendance_Monthly
+submodule: Monthly Attendance Period Lifecycle - Create, Process, Close/Reopen, Period Lock, Payroll Snapshot
+defaults:
+  role: HRADMIN
+  perm: "Attendance.Monthly.Process"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin holding Attendance.Monthly.Process/Close/Reopen/ViewAll, unless stated."
+  data: "n/a unless stated."
+  sev: Critical
+  reg: true
+
+cases:
+  - id: ATT-MONTHLY-001
+    func: [F-ATT-096]
+    sc: Create an Attendance Period for a given Year/Month
+    t: Valid period creation sets calendar boundaries and Status=Open
+    src: ["AttendanceMonthlyProcessor.CreatePeriodAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/periods] Year=2026, Month=7 => [200/201] Status=Open, StartDate=2026-07-01, EndDate=2026-07-31, DataVersion=1, one Created event recorded"
+    auto: API
+
+  - id: ATT-MONTHLY-002
+    func: [F-ATT-096]
+    sc: Duplicate (Year, Month) period is rejected
+    t: A second period for the same year/month Conflicts, both via pre-check and the DB unique index
+    src: ["AttendanceMonthlyProcessor.CreatePeriodAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/attendance/periods] Year=2026, Month=7 (first) => [200/201] created"
+      - "[POST /api/attendance/periods] Year=2026, Month=7 (second, same tenant) => [409] Conflict"
+    auto: API
+
+  - id: ATT-MONTHLY-003
+    func: [F-ATT-097]
+    sc: List and get periods
+    t: GET periods/list and detail return correctly, filterable by year/month/status
+    src: ["AttendanceMonthlyProcessor"]
+    type: Positive
+    pri: P1
+    perm: "Attendance.Monthly.ViewAll"
+    steps:
+      - "[GET /api/attendance/periods?year=2026&status=Open] => [200] the created Open period appears"
+      - "[GET /api/attendance/periods/{id}] => [200] full period detail"
+    auto: API
+
+  - id: ATT-MONTHLY-004
+    func: [F-ATT-098]
+    sc: Run monthly processing on an Open period
+    t: A valid process call aggregates daily statuses into summaries and moves the period to ReadyToClose
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/periods/{id}/process] => [200] Status=ReadyToClose, one EmployeeAttendanceMonthlySummaries row per in-scope employee, ProcessingStarted+ProcessingCompleted events recorded"
+    auto: API
+
+  - id: ATT-MONTHLY-005
+    func: [F-ATT-098]
+    sc: Processing an already-Processing or a Closed period is rejected
+    t: Concurrent re-entrant processing, and processing a Closed period, both fail
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] Close the period (via process then close) => [200] Status=Closed"
+      - "[POST /api/attendance/periods/{id}/process] on the now-Closed period => [409] Conflict, must Reopen first"
+    auto: API
+
+  - id: ATT-MONTHLY-006
+    func: [F-ATT-099]
+    sc: Re-running processing is idempotent on the data but not on the audit trail
+    t: A second process run replaces the summary set 1-for-1 but appends a second ProcessingCompleted event
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/periods/{id}/process] first run => [200] N summary rows"
+      - "[POST /api/attendance/periods/{id}/process] second run, same data => [200] still exactly N summary rows (fully replaced, not doubled)"
+      - "[GET /api/attendance/periods/{id}/events] => [200] TWO ProcessingCompleted events now exist - events are append-only, not deduplicated"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-007
+    func: [F-ATT-100]
+    sc: A processing failure rolls back the whole attempt and a retry succeeds cleanly
+    t: An injected save failure during aggregation leaves the prior ReadyToClose state and summaries fully intact
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Setup] Period already ReadyToClose from a prior successful process run => precondition established for the steps below"
+      - "[Manual/DB] Force the second SaveChangesAsync of a subsequent process attempt to throw (e.g. via a SaveChangesInterceptor) => the forced failure is injected"
+      - "[POST /api/attendance/periods/{id}/process] => [409/503] the whole transaction rolls back; the prior summary set is unchanged"
+      - "[POST /api/attendance/periods/{id}/process] retry without the injected failure => [200] succeeds cleanly"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-008
+    func: [F-ATT-101]
+    sc: A failed processing attempt leaves no ProcessingFailed event and even discards the ProcessingStarted event from the same transaction
+    t: The period's event history shows a gap with zero trace of the failed attempt
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Note the current count of AttendancePeriodEvents for the period => precondition established for the steps below"
+      - "[Manual/DB] Force a processing failure as in ATT-MONTHLY-007 => forced condition established"
+      - "[GET /api/attendance/periods/{id}/events] => [200] the event count is UNCHANGED from before the failed attempt - no ProcessingFailed event exists anywhere, despite AttendancePeriodEventType defining one"
+    auto: DB-assisted
+    cr: [CR-103]
+
+  - id: ATT-MONTHLY-009
+    func: [F-ATT-102]
+    sc: A future-dated joiner is excluded entirely from the period's summaries
+    t: An employee whose DateOfJoining is after the period's EndDate has no summary row
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee E1 DateOfJoining=2026-10-01, process the September 2026 period => precondition established"
+      - "[GET /api/attendance/periods/{id}/summaries] => [200] E1 is entirely absent from the summary list"
+    auto: API
+
+  - id: ATT-MONTHLY-010
+    func: [F-ATT-102]
+    sc: An employee whose employment fully ended before the period start is excluded
+    t: DateOfLeaving before the period's StartDate excludes the employee
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee E2 DateOfLeaving=2026-08-31, process the September 2026 period => precondition established"
+      - "[GET /api/attendance/periods/{id}/summaries] => [200] E2 is absent from the summary list"
+    auto: API
+
+  - id: ATT-MONTHLY-011
+    func: [F-ATT-103]
+    sc: A mid-month joiner's EmploymentDays reflects only the overlapping days
+    t: An employee joining 2026-09-11 has EmploymentDays=20 in a 30-day September period
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee E3 DateOfJoining=2026-09-11, process September 2026 => precondition established"
+      - "[GET /api/attendance/periods/{id}/summaries?employeeId=E3] => [200] EmploymentDays=20"
+    auto: API
+
+  - id: ATT-MONTHLY-012
+    func: [F-ATT-103]
+    sc: A mid-month leaver's EmploymentDays reflects only the overlapping days
+    t: An employee leaving 2026-09-20 has EmploymentDays=20 in a 30-day September period
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee E4 DateOfLeaving=2026-09-20, process September 2026 => precondition established"
+      - "[GET /api/attendance/periods/{id}/summaries?employeeId=E4] => [200] EmploymentDays=20"
+    auto: API
+
+  - id: ATT-MONTHLY-013
+    func: [F-ATT-104]
+    sc: Totals formula - PresentDayQuantity mirrors PresentDays, PaidLeaveDays/LopDays/PayableDays computed correctly
+    t: A worked example - 20 Present, 3 OnLeave, 2 Absent, 5 non-working over a 30-EmploymentDay month
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] EmployeeAttendanceDays for the period: 20 Present, 3 OnLeave, 2 Absent, 5 Holiday/WeeklyOff => precondition established"
+      - "[POST /api/attendance/periods/{id}/process] => [200]"
+      - "[GET /api/attendance/periods/{id}/summaries?employeeId=<this employee>] => [200] PresentDayQuantity=20, PaidLeaveDays=3, LopDays=2, PayableDays=max(0, 30-2)=28"
+    auto: API
+
+  - id: ATT-MONTHLY-014
+    func: [F-ATT-104]
+    sc: PayableDays never goes negative
+    t: An extreme scenario with LopDays exceeding EmploymentDays still floors PayableDays at 0
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] A mid-month joiner with EmploymentDays=5 but 8 Absent-derived LopDays across the whole calendar period (via a data anomaly/backfilled correction) => precondition established"
+      - "[GET /api/attendance/periods/{id}/summaries?employeeId=<this employee>] => [200] PayableDays=0, never negative"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-015
+    func: [F-ATT-105]
+    sc: A date with no EmployeeAttendanceDay row raises a blocking NotProcessed exception that prevents close
+    t: An unprocessed date inside the period blocks CanClose
+    src: ["AttendanceMonthlyProcessor.BuildClosePreviewAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] Process the period, then delete/leave one date's EmployeeAttendanceDay row unprocessed for an in-scope employee => precondition established"
+      - "[GET /api/attendance/periods/{id}/close-preview] => [200] CanClose=false, Blockers include a NotProcessed exception for that date/employee"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-016
+    func: [F-ATT-106]
+    sc: A pending Regularization overlapping the period blocks close
+    t: An unresolved pending regularization request produces a blocking exception
+    src: ["AttendanceMonthlyProcessor.BuildClosePreviewAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] A PENDING (not approved/rejected) Regularization request exists for a date inside the period => precondition established"
+      - "[GET /api/attendance/periods/{id}/close-preview] => [200] CanClose=false, PendingRegularizationCount>=1"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-017
+    func: [F-ATT-107]
+    sc: Concurrent processing from two contexts leaves exactly one consistent summary set
+    t: Firing two ProcessAsync calls simultaneously never leaves duplicated/inconsistent summaries
+    src: ["AttendanceMonthlyProcessor.ProcessAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire two POST /api/attendance/periods/{id}/process calls CONCURRENTLY from independent DbContexts => one succeeds [200], the other returns [409]/[503]; exactly one consistent summary set persists afterward, never a partial/duplicated set"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-018
+    func: [F-ATT-108]
+    sc: Close-preview correctly reports CanClose=true only when ReadyToClose, summaries current, and zero blocking exceptions
+    t: The happy-path preview after a clean process run
+    src: ["AttendanceMonthlyProcessor.BuildClosePreviewAsync"]
+    type: Positive
+    pri: P0
+    perm: "Attendance.Monthly.ViewAll"
+    steps:
+      - "[GET /api/attendance/periods/{id}/close-preview] After a clean, fully-processed period with no pending requests/unprocessed dates => [200] CanClose=true, Blockers=[]"
+    auto: API
+
+  - id: ATT-MONTHLY-019
+    func: [F-ATT-109]
+    sc: Close a ReadyToClose period
+    t: Closing succeeds and creates a payroll snapshot per employee
+    src: ["AttendanceMonthlyProcessor.CloseAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Attendance.Monthly.Close"
+    steps:
+      - "[POST /api/attendance/periods/{id}/close] Comment='Month-end close' => [200] Status=Closed, one PayrollAttendanceSnapshot created per summarized employee, one Closed event recorded"
+    auto: API
+
+  - id: ATT-MONTHLY-020
+    func: [F-ATT-109]
+    sc: Close is blocked when a Finalized PayrollRun already exists for the same period dates
+    t: A pre-existing finalized payroll run prevents closing Attendance for that month
+    src: ["AttendanceMonthlyProcessor.CloseAsync"]
+    type: Negative
+    pri: P1
+    perm: "Attendance.Monthly.Close"
+    steps:
+      - "[Setup] A PayrollRun with Status=Finalized already exists matching this period's start/end dates => precondition established"
+      - "[POST /api/attendance/periods/{id}/close] => [409] 'PayrollAlreadyFinalized: Attendance correction requires a controlled payroll correction path.'"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-021
+    func: [F-ATT-110]
+    sc: Closing an already-Closed period is rejected
+    t: A second close call fails
+    src: ["AttendanceMonthlyProcessor.CloseAsync"]
+    type: Negative
+    pri: P1
+    perm: "Attendance.Monthly.Close"
+    steps:
+      - "[POST /api/attendance/periods/{id}/close] first call, ReadyToClose => [200] Closed"
+      - "[POST /api/attendance/periods/{id}/close] second call, same period => [409] Conflict"
+    auto: API
+
+  - id: ATT-MONTHLY-022
+    func: [F-ATT-111]
+    sc: Reopen requires a non-empty reason
+    t: A blank/whitespace Reason is rejected
+    src: ["AttendanceMonthlyProcessor.ReopenAsync"]
+    type: Negative
+    pri: P1
+    perm: "Attendance.Monthly.Reopen"
+    steps:
+      - "[POST /api/attendance/periods/{id}/reopen] Reason='' on a Closed period => [400] Reason is required"
+      - "[POST /api/attendance/periods/{id}/reopen] Reason=<2001 chars> => [400] Reason exceeds 2000 characters"
+    auto: API
+
+  - id: ATT-MONTHLY-023
+    func: [F-ATT-111]
+    sc: Reopen a Closed period, bumping DataVersion and returning to Open (not ReadyToClose)
+    t: Reopening invalidates existing summaries via DataVersion and requires a fresh Process before Close is possible again
+    src: ["AttendanceMonthlyProcessor.ReopenAsync"]
+    type: Positive
+    pri: P0
+    perm: "Attendance.Monthly.Reopen"
+    steps:
+      - "[POST /api/attendance/periods/{id}/reopen] Reason='Correction needed' => [200] Status=Open (not ReadyToClose), DataVersion incremented, one Reopened event with Details=Reason"
+      - "[GET /api/attendance/periods/{id}/close-preview] => [200] SummariesCurrent=false (existing summaries are now stale relative to the bumped DataVersion)"
+    auto: API
+
+  - id: ATT-MONTHLY-024
+    func: [F-ATT-111]
+    sc: Reopen is blocked when a Finalized PayrollRun already exists for the period
+    t: The same finalized-payroll guard applies to Reopen as to Close
+    src: ["AttendanceMonthlyProcessor.ReopenAsync"]
+    type: Negative
+    pri: P1
+    perm: "Attendance.Monthly.Reopen"
+    steps:
+      - "[Setup] A Finalized PayrollRun exists for this period's dates => precondition established"
+      - "[POST /api/attendance/periods/{id}/reopen] Reason='Fix' => [409] 'PayrollAlreadyFinalized: Attendance correction requires a controlled payroll correction path.'"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-025
+    func: [F-ATT-112]
+    sc: Concurrent close-vs-close and reopen-vs-reopen each resolve to exactly one winner and one audit event
+    t: A double-close race and a double-reopen race are both safe
+    src: ["AttendanceMonthlyProcessor.CloseAsync/ReopenAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire two POST /api/attendance/periods/{id}/close calls CONCURRENTLY on the same ReadyToClose period => exactly one [200], exactly one [409]; exactly ONE Closed event is recorded"
+      - "[Manual/DB] Repeat with two concurrent /reopen calls on the resulting Closed period => same one-winner-one-event guarantee for Reopened"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-026
+    func: [F-ATT-113]
+    sc: The period events audit trail is append-only and readable in order
+    t: A full create->process->close->reopen->process->close cycle produces the expected ordered event sequence
+    src: ["AttendanceMonthlyProcessor.GetEventsAsync"]
+    type: Positive
+    pri: P1
+    perm: "Attendance.Monthly.ViewAll"
+    steps:
+      - "[GET /api/attendance/periods/{id}/events] After Created, ProcessingStarted, ProcessingCompleted, Closed, Reopened, ProcessingStarted, ProcessingCompleted, Closed => [200] all 8 events present, in chronological order, none overwritten or removed"
+    auto: API
+
+  - id: ATT-MONTHLY-027
+    func: [F-ATT-114, F-ATT-116]
+    sc: Period lock is a pure read-only guard with no dedicated lock entity or pessimistic row lock
+    t: "'Locking' a period is entirely equivalent to it being Status=Closed - there is no separate lock/unlock API"
+    src: ["AttendancePeriodLockService"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[GET /api/attendance/periods/{id}] Status=Open => precondition, no independent 'lock' state exists beyond this Status field"
+      - "[POST /api/attendance/periods/{id}/close] => [200] Status=Closed - this single write IS the lock; there is no separate lock-service endpoint anywhere in the API"
+    auto: API
+
+  - id: ATT-MONTHLY-028
+    func: [F-ATT-115]
+    sc: A closed period blocks day processing, regularization/on-duty submission, admin corrections, and shift/roster config changes for dates inside it - reads are unaffected
+    t: A single closed period demonstrates the full blast radius of the lock
+    src: ["AttendancePeriodLockService (multiple call sites)"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Setup] Close the period covering date D => [200] Closed"
+      - "[Manual/DB] Trigger day reprocessing for D (e.g. a late device punch) => [409] period-lock Conflict"
+      - "[POST /api/attendance/me/regularizations] date=D => [409] period-lock Conflict"
+      - "[POST /api/attendance/admin-corrections] businessDate=D => [409] period-lock Conflict"
+      - "[POST /api/attendance/shifts] EffectiveFrom=D => [409] period-lock Conflict"
+      - "[GET /api/attendance/me/days/{D}] => [200] reads still succeed normally, unaffected by the lock"
+    auto: API
+
+  - id: ATT-MONTHLY-029
+    func: [F-ATT-117]
+    sc: A concurrent Close-vs-AdminCorrection race never leaves a Closed period with an orphaned correction
+    t: Either the period closes with zero new corrections for that date, or it stays ReadyToClose with exactly one correction
+    src: ["AttendancePeriodLockService / AttendanceAdminCorrectionService"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire POST /api/attendance/periods/{id}/close and POST /api/attendance/admin-corrections (for a date inside the period) CONCURRENTLY => the final state is EITHER (period Closed, zero corrections for that date) OR (period ReadyToClose, exactly one correction persisted) - never both a Closed period AND a persisted correction for that date"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-030
+    func: [F-ATT-118]
+    sc: AttendancePeriod's concurrency token is a plain int counter, not a rowversion/binary(16) token
+    t: Confirm the concurrency mechanism diverges from the repo-documented provider pattern, and still resolves races correctly on every provider
+    src: ["AttendanceMonthlyProcessor"]
+    type: Contract
+    pri: P3
+    steps:
+      - "[Manual/DB] Inspect the AttendancePeriods table schema on SQL Server/MySQL/SQLite => ConcurrencyVersion is an int column with no rowversion/binary(16) counterpart, unlike other Attendance concurrency-sensitive tables that follow CLAUDE.md's documented per-provider pattern"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-031
+    func: [F-ATT-119]
+    sc: A caller holding only Attendance.Monthly.ViewTeam is denied by every Monthly controller route
+    t: ViewTeam alone never satisfies any [HasPermission] gate on AttendanceMonthlyController
+    src: ["AttendanceMonthlyController"]
+    type: Authorization
+    pri: P2
+    role: MANAGER
+    perm: "Attendance.Monthly.ViewTeam"
+    steps:
+      - "[GET /api/attendance/periods] As a caller holding ONLY Attendance.Monthly.ViewTeam (no ViewAll/ViewSelf/Process/Close/Reopen) => [403] Forbidden - confirm with product whether ViewTeam is intended to be usable anywhere at all"
+    auto: API
+
+  - id: ATT-MONTHLY-032
+    func: [F-ATT-120]
+    sc: A caller holding Attendance.Exception.View but not Attendance.Monthly.ViewAll passes the controller gate but gets mis-scoped internally
+    t: The exceptions endpoint's controller permission and its internal scope-resolution permission are mismatched
+    src: ["AttendanceMonthlyProcessor.GetExceptionsAsync"]
+    type: Security
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Exception.View"
+    steps:
+      - "[Setup] Grant a test role Attendance.Exception.View ONLY, no MonthlyViewAll/ViewTeam/ViewSelf => precondition established"
+      - "[GET /api/attendance/periods/{id}/exceptions] => [200 with empty/Failure-shaped scope, or an unexpected error] - passes the controller's [HasPermission(ExceptionView)] gate, but the internal BuildEmployeePredicateAsync call is scoped under MonthlyViewAll's rules, which this role does not hold; document the actual observed behavior against the intended design"
+    auto: API
+    cr: [CR-102]
+
+  - id: ATT-MONTHLY-033
+    func: [F-ATT-121]
+    sc: An employee views their own finalized monthly summary
+    t: my/monthly-summary returns the caller's own summary for a closed period
+    src: ["AttendanceMonthlyProcessor"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Attendance.Monthly.ViewSelf"
+    steps:
+      - "[GET /api/attendance/my/monthly-summary?year=2026&month=7] => [200] the caller's own present/leave/holiday/week-off/on-duty/absent/LOP/payable-days figures, server-computed"
+    auto: API
+
+  - id: ATT-MONTHLY-034
+    func: [F-ATT-122, F-ATT-123]
+    sc: Closing creates one current PayrollAttendanceSnapshot per employee; at most one current snapshot per employee per period even under a race
+    t: A double-close race still leaves exactly one IsCurrent=true snapshot per employee
+    src: ["AttendanceMonthlyProcessor.CloseAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[POST /api/attendance/periods/{id}/close] => [200] one PayrollAttendanceSnapshot (Version=1, IsCurrent=true) per summarized employee"
+      - "[Manual/DB] Fire two concurrent close attempts on the same ReadyToClose period (before the first has committed) => afterward, exactly ONE IsCurrent=true snapshot exists per employee, enforced by the (TenantId, PeriodId, EmployeeId, IsCurrent) unique index"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-035
+    func: [F-ATT-124]
+    sc: Reopening does not touch existing snapshots; a new version appears only after reprocess+reclose
+    t: Reopen alone leaves the v1 snapshot IsCurrent=false only once v2 is actually created at the next close
+    src: ["AttendanceMonthlyProcessor.ReopenAsync/CloseAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Period Closed with a v1 snapshot per employee => precondition established for the steps below"
+      - "[POST /api/attendance/periods/{id}/reopen] Reason='Correction' => [200] Open - v1 snapshot rows are UNCHANGED (still IsCurrent=true, same id)"
+      - "[Setup] Submit an admin correction, then re-process and re-close the period => [200]"
+      - "[Manual/DB] Inspect PayrollAttendanceSnapshots => v1 is now IsCurrent=false (unchanged otherwise), a NEW v2 row is IsCurrent=true; any pre-existing PayrollResult referencing v1 is NOT retroactively mutated"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-036
+    func: [F-ATT-125]
+    sc: Payroll snapshot resolution - no matching period, not-yet-closed period, and missing-snapshot cases each resolve distinctly
+    t: The three non-success resolution outcomes for AttendancePayrollSnapshotResolver
+    src: ["AttendancePayrollSnapshotResolver.ResolveAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Manual/DB] Resolve for a (employeeId, periodStart, periodEnd) with no matching AttendancePeriod at all => Success(null) - the legacy-compatibility escape hatch, not an error"
+      - "[Manual/DB] Resolve for a period that exists but is still Open/ReadyToClose (not Closed) => Conflict 'AttendanceNotFinalized: ...'"
+      - "[Manual/DB] Resolve for a Closed period where this employee has no current snapshot row (e.g. hired after close) => Conflict 'AttendanceSnapshotMissing: ...'"
+    auto: DB-assisted
+
+  - id: ATT-MONTHLY-037
+    func: [F-ATT-098]
+    sc: Only Monthly.Process can trigger processing; other roles are denied
+    t: A caller with ViewAll but not Process is forbidden from POST process
+    src: ["AttendanceMonthlyController"]
+    type: Authorization
+    pri: P0
+    role: EMPLOYEE
+    perm: "Attendance.Monthly.ViewAll"
+    steps:
+      - "[POST /api/attendance/periods/{id}/process] As a caller holding only Attendance.Monthly.ViewAll => [403] Forbidden"
+    auto: API
+
+  - id: ATT-MONTHLY-038
+    func: [F-ATT-109]
+    sc: Monthly Close requires its own dedicated permission, distinct from Process
+    t: A caller with Process but not Close is forbidden from closing
+    src: ["AttendanceMonthlyController"]
+    type: Authorization
+    pri: P0
+    role: HRADMIN
+    perm: "Attendance.Monthly.Process"
+    steps:
+      - "[POST /api/attendance/periods/{id}/close] As a caller holding only Attendance.Monthly.Process (not Close) => [403] Forbidden"
+    auto: API
+
+  - id: ATT-MONTHLY-039
+    func: [F-ATT-097]
+    sc: Tenant isolation for period reads
+    t: A Tenant B caller cannot read Tenant A's period
+    src: ["AttendanceMonthlyProcessor"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    perm: "Attendance.Monthly.ViewAll"
+    steps:
+      - "[GET /api/attendance/periods/{tenantAPeriodId}] As Tenant B => [404] NotFound"
+      - "[GET /api/attendance/periods] As Tenant B => [200] Tenant A's period never appears in the list"
+    auto: API

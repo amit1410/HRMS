@@ -1,0 +1,120 @@
+sheet: TaxDcl_Tenant_Isolation
+submodule: Tenant Isolation
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-TENANT-001
+    func: [F-TAXDCL-125]
+    sc: Full TenantId-filter audit across both services
+    t: Every query in TaxDeclarationService.cs/YearEndTaxService.cs is scoped by the server-resolved TenantId
+    src: "TaxDeclarationService.cs, YearEndTaxService.cs (full audit)"
+    type: Tenant-Isolation
+    tags: [Positive]
+    pri: P0
+    sev: High
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full read of both service files, grep for every db.<TaxDeclaration*/YearEndTax*> query => each is filtered by x.TenantId == tenantId (tenantId derived from ITenantContext, never a client-supplied value)"
+    auto: Manual only
+
+  - id: TAXDCL-TENANT-002
+    func: [F-TAXDCL-126]
+    sc: Cross-tenant category/item ids are NotFound on line/item creation
+    t: A T2 category or item id cannot be used by a T1 CreateItemAsync/AddLineOwnAsync call
+    src: "TaxDeclarationService.cs CreateItemAsync, AddLineOwnAsync (composite TenantId+Id principal key)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "TaxDeclarationCategory exists in tenant T2 (DEMO02)"
+    role: HRAdmin (T1)
+    perm: Payroll.TaxDeclaration.Configure
+    tenant: "T1 (DEMO01)"
+    data: "categoryId belonging to T2"
+    steps:
+      - "[POST /api/payroll/tax-declarations/items] CategoryId=<T2's category id> as T1 HRAdmin => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: TAXDCL-TENANT-003
+    func: [F-TAXDCL-127]
+    sc: Cross-tenant employeeId on previous-employer input is NotFound, and cannot leak data between tenants
+    t: An employeeId from T2 used on a T1 run is rejected by the Employees existence check
+    src: "YearEndTaxService.cs AddPreviousEmployerAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Employee exists only in tenant T2"
+    role: HRAdmin (T1)
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "employeeId belonging to T2"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/previous-employer] EmployeeId=<T2's employee id> as T1 HRAdmin => [404] NotFound, 'Employee was not found in the current tenant.'"
+    auto: API
+    secc: true
+
+  - id: TAXDCL-TENANT-004
+    func: [F-TAXDCL-128]
+    sc: CalculateAsync sourcing is independently tenant-scoped across every joined table
+    t: A T1 run's calculation can never aggregate T2's PayrollResults/PayrollStatutoryResults/EmployeeStatutoryProfiles/StatutoryConfigurations even transitively
+    src: "YearEndTaxService.cs CalculateAsync (independent TenantId filter on every source query)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "T2 has finalized payroll and statutory data for the identical date window as a T1 run"
+    role: HRAdmin (T1)
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: "T1 run with zero T1 finalized payroll in scope; T2 has data in the identical window"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{T1 run id}/calculate] as T1 HRAdmin => [200] EmployeeCount=0 - T2's data is never aggregated despite the overlapping date window"
+    auto: API
+    secc: true
+
+  - id: TAXDCL-TENANT-005
+    func: [F-TAXDCL-129]
+    sc: No self-service method accepts a client-supplied employeeId
+    t: A full signature review of MyTaxDeclarationsController confirms every action derives identity server-side
+    src: "MyTaxDeclarationsController.cs; TaxDeclarationService.Subject"
+    type: Tenant-Isolation
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full route-signature review of MyTaxDeclarationsController.cs's 10 actions => zero employeeId parameters anywhere"
+    auto: Manual only
+
+  - id: TAXDCL-TENANT-006
+    func: [F-TAXDCL-130]
+    sc: Export/History/Audit re-verify tenant scope on every read
+    t: A cross-tenant run/declaration id is NotFound on Export/GetHistory/GetAudit, not merely on the initial fetch
+    src: "YearEndTaxService.cs ExportAsync, GetHistoryAsync; TaxDeclarationService.cs GetAuditAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Run and declaration both exist in tenant T2"
+    role: HRAdmin (T1)
+    perm: Payroll.YearEndTax.Export, ViewHistory; Payroll.TaxDeclaration.ViewAudit
+    tenant: "T1 (DEMO01)"
+    data: "runId/declarationId belonging to T2"
+    steps:
+      - "[GET /api/payroll/year-end-tax/runs/{T2 runId}/export/summary] as T1 HRAdmin => [404] NotFound"
+      - "[GET /api/payroll/year-end-tax/runs/{T2 runId}/history] as T1 HRAdmin => [404] NotFound"
+      - "[GET /api/payroll/tax-declarations/{T2 declarationId}/audit] as T1 HRAdmin => [404] NotFound"
+    auto: API
+    secc: true

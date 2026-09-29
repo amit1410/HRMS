@@ -1,0 +1,3319 @@
+# Functionality registry for Module 7 - Leave Management (Types, Policies, Periods, Eligibility,
+# Entitlement/Accrual, Balances, Requests, Working Days, Approval, Comp Off, Calendar, Dashboard,
+# Reports, Reminder Worker, Authorization/Scope, Tenant Isolation, Frontend).
+# Every test case references one or more of these ids; the builder fails if a functionality has zero
+# cases or a case references an unknown id.
+#
+# Discovered implementation (authoritative source, read directly - not assumed from docs/ or the
+# brief's example list; docs/phase-4*.md were read but current code wins wherever they diverge):
+#   Backend/HRMS.API/Controllers/LeaveTypesController.cs, LeavePoliciesController.cs,
+#     LeavePeriodsController.cs, LeaveRequestsController.cs, LeaveApprovalsController.cs,
+#     LeaveRequestOptionsController.cs, LeaveBalanceSummaryController.cs,
+#     LeaveBalanceImportsController.cs, LeaveCalendarController.cs, HrLeaveDashboardController.cs,
+#     LeaveReportsController.cs, LeaveWorkingDayConfigurationController.cs, CompOffController.cs
+#   Backend/HRMS.Application/Services/LeaveConfigurationService.cs, LeavePolicyFoundationService.cs,
+#     LeavePolicyResolver.cs, LeavePeriodResolver.cs, LeaveRequestValidationService.cs,
+#     LeaveRequestSubmissionService.cs, LeaveRequestSubmissionRetryPolicy.cs,
+#     LeaveRequestApprovalService.cs, LeaveApprovalReadService.cs, LeaveRequestCancellationService.cs,
+#     LeaveRequestWithdrawalService.cs, LeaveBalanceAccountingService.cs, LeaveAccrualProcessor.cs,
+#     LeaveEntitlementExpiryProcessor.cs, LeavePeriodCloseProcessor.cs, LeaveApprovalReminderProcessor.cs,
+#     LeaveNotificationService.cs, LeaveWorkingDayConfigurationService.cs, LeaveCalendarService.cs,
+#     HrLeaveDashboardService.cs, LeaveReportService.cs, LeaveBalanceImportService.cs,
+#     LeaveBalanceSummaryReader.cs, LeaveRequestReadService.cs, LeaveAuthorizationService.cs,
+#     CompOffService.cs
+#   Backend/HRMS.Infrastructure/Accrual/LeaveAccrualWorker.cs, Reminders/LeaveApprovalReminderWorker.cs
+#   Backend/HRMS.Infrastructure/Persistence/MySqlLeaveRequestSubmissionLock.cs,
+#     SqlServerLeaveRequestSubmissionLock.cs, SqlServerLeaveRequestSubmissionDeadlockClassifier.cs
+#   Backend/HRMS.Domain/Entities/LeavePolicyFoundation.cs, LeaveRequestFoundation.cs,
+#     LeaveBalanceFoundation.cs, LeaveEntitlementGrant.cs, LeaveBalanceReservationAllocation.cs,
+#     LeaveAccrualOccurrence.cs, LeavePeriodCloseOccurrence.cs, LeaveReminderDelivery.cs,
+#     LeaveWorkingDayCalendar.cs, CompOff.cs
+#   Backend/HRMS.Domain/Enums/LeaveRequestEnums.cs, LeavePolicyEnums.cs, LeaveBalanceEnums.cs,
+#     CompOffEnums.cs
+#   Backend/HRMS.Domain/Authorization/Permissions.cs (Leave.*, Attendance.CompOff*)
+#   Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap - see CR-78, CR-79, CR-80)
+#   Frontend/HRMS.Web/src/api/leaveConfiguration.ts, leaveRequests.ts, leaveBalances.ts,
+#     leaveBalanceImport.ts, leaveCalendar.ts, leaveDashboard.ts, leaveReports.ts,
+#     leaveWorkingDayCalendar.ts, compOff.ts
+#   Frontend/HRMS.Web/src/pages/leave/*.tsx, pages/attendance/CompOffPage.tsx,
+#     pages/attendance/CompOffOperationsPage.tsx
+#   Existing xUnit (58 classes touching this surface) and Vitest (test files alongside every page/
+#     api client above) - see README.md's Existing Test Mapping section; none are cited per-case via
+#     `ex:` in this module because exact method-name verification against every referenced file was not
+#     completed with the same certainty as Module 6's per-case links - see clarifications.yaml note.
+#
+# ── The real implementation is a deliberately restricted MVP wearing a much larger configuration UI ──
+# LeaveRequestValidationService.ValidateSupportedPolicy (the single gate every preview/submit passes
+# through) HARD-REJECTS any resolved policy rule where: RequestRule.PartialDayMode is HalfDayAllowed
+# (not FullDayOnly); CalendarRule.SandwichMode is anything but Disabled, or ApplyToPrefix/Suffix/Between
+# is true; AttachmentRule.AttachmentRequirement is anything but None; or a Clubbing rule of type
+# NotAllowed references the resolved rule (either side). Every one of these is fully configurable,
+# without warning, through the Policy Editor UI (LeavePolicyRequestRulesSection.tsx,
+# LeavePolicyCalendarSection.tsx, LeavePolicyAttachmentSection.tsx, LeavePolicyClubbingSection.tsx) and
+# through LeavePolicyFoundationService.ValidateForPublishAsync (which never checks any of this before
+# allowing Publish). A policy published with any of these settings becomes entirely unusable for real
+# leave requests - see CR-81.
+#
+# ── The second-highest-impact finding: three independent, non-communicating manager/scope mechanisms ──
+# carried forward from CR-57 (Module 5/6) plus a NEW one specific to Leave: LeaveAuthorizationService
+# .BuildCurrentManagerPredicate/CanAccessEmployeeAsync resolves "is the caller this employee's manager"
+# directly off EmployeeEmploymentHistory.ManagerId - a THIRD mechanism distinct from both
+# RoleScopeResolver (Module 6) and EmployeeAccessScopeService's Attendance-permission-keyed narrowing
+# (Module 5/6, CR-57). Several Leave services (LeaveRequestApprovalService, LeaveApprovalReadService,
+# LeaveCalendarService) additionally carry a parallel "legacy" code path used when ILeaveAuthorizationService
+# is not registered in DI, with DIFFERENT visible behavior from the "new" path - see CR-77, CR-83, CR-84.
+
+functionalities:
+  # ── A. Leave Type ─────────────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-001
+    name: List Leave Types, paged, filterable by search/isActive, ordered by Code
+    group: Leave Type
+    status: Implemented
+    ui: "LeaveTypesPage list"
+    api: "GET /api/leave-types"
+    service: "LeaveConfigurationService.GetLeaveTypesAsync"
+    permission: "Leave.PolicyView"
+    db: "LeaveTypes"
+
+  - id: F-LEAVE-002
+    name: Get a single Leave Type by id
+    group: Leave Type
+    status: Implemented
+    ui: "LeaveTypesPage edit drawer"
+    api: "GET /api/leave-types/{id}"
+    service: "LeaveConfigurationService.GetLeaveTypeAsync"
+    permission: "Leave.PolicyView"
+    db: "LeaveTypes"
+
+  - id: F-LEAVE-003
+    name: "Create a Leave Type (Code, Name, Description, DefaultUnit, IsPaid, IsCompOff, IsActive); Code is case-insensitively unique per tenant"
+    group: Leave Type
+    status: Implemented
+    ui: "LeaveTypesPage create dialog"
+    api: "POST /api/leave-types"
+    service: "LeaveConfigurationService.CreateLeaveTypeAsync"
+    permission: "Leave.TypeManage"
+    db: "LeaveTypes"
+
+  - id: F-LEAVE-004
+    name: Duplicate Leave Type code (case-insensitive) is rejected as Conflict, both at pre-check and at the DB unique-constraint fallback
+    group: Leave Type
+    status: Implemented
+    ui: "LeaveTypesPage create dialog error banner"
+    api: "POST /api/leave-types"
+    service: "LeaveConfigurationService.CreateLeaveTypeAsync"
+    permission: "Leave.TypeManage"
+    db: "LeaveTypes"
+
+  - id: F-LEAVE-005
+    name: Update a Leave Type's fields, gated by an optimistic ConcurrencyToken (stale token => Conflict)
+    group: Leave Type
+    status: Implemented
+    ui: "LeaveTypesPage edit dialog"
+    api: "PUT /api/leave-types/{id}"
+    service: "LeaveConfigurationService.UpdateLeaveTypeAsync"
+    permission: "Leave.TypeManage"
+    db: "LeaveTypes"
+
+  - id: F-LEAVE-006
+    name: "A LeaveType's Code becomes IMMUTABLE once any LeavePolicyRule referencing it belongs to a Published policy version - an attempted rename is rejected 400, independent of the new code's own uniqueness"
+    group: Leave Type
+    status: Implemented
+    ui: "LeaveTypesPage edit dialog error"
+    api: "PUT /api/leave-types/{id}"
+    service: "LeaveConfigurationService.UpdateLeaveTypeAsync"
+    permission: "Leave.TypeManage"
+    db: "LeaveTypes, LeavePolicyRules, LeavePolicyVersions"
+
+  - id: F-LEAVE-007
+    name: Deactivating a Leave Type (IsActive=false) does not retroactively affect existing LeaveRequests, balances, or Published policy rules referencing it - it only removes it from future request-option/availability lists
+    group: Leave Type
+    status: Implemented
+    ui: "LeaveTypesPage IsActive toggle"
+    api: "PUT /api/leave-types/{id}"
+    service: "LeaveConfigurationService.UpdateLeaveTypeAsync; LeaveRequestOptionsController (IsActive=true filter)"
+    permission: "Leave.TypeManage"
+    db: "LeaveTypes"
+
+  - id: F-LEAVE-008
+    name: An inactive Leave Type is rejected (400) if referenced by a NEW leave request even if a Published policy rule still names it
+    group: Leave Type
+    status: Implemented
+    ui: "n/a (server-side only; the request-options list already excludes it)"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateAsync (leaveType.IsActive check)"
+    permission: "Leave.RequestCreate"
+    db: "LeaveTypes"
+
+  - id: F-LEAVE-009
+    name: "Only LeaveUnit=Day is supported by the request runtime - an Hour-unit LeaveType (a legal, creatable configuration) is rejected as Unsupported at preview/submit, not at Leave Type create/update time"
+    group: Leave Type
+    status: Needs clarification
+    ui: "LeaveTypesPage DefaultUnit dropdown offers Day and Hour with no runtime-support warning"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateAsync (leaveType.DefaultUnit != LeaveUnit.Day => Unsupported)"
+    permission: "Leave.RequestCreate"
+    db: "LeaveTypes"
+
+  - id: F-LEAVE-010
+    name: "IsCompOff flags a LeaveType as the Comp-Off consumption type - submission/approval/cancellation route its balance accounting through CompOffService instead of LeaveBalanceAccountingService"
+    group: Leave Type
+    status: Implemented
+    ui: "LeaveTypesPage IsCompOff checkbox"
+    api: "POST /api/leave-requests (IsCompOff leave type)"
+    service: "LeaveRequestSubmissionService.SubmitAttemptAsync (isCompOff branch)"
+    permission: "Leave.RequestCreate"
+    db: "LeaveTypes, CompOffLeaveAllocations, CompOffLedgerEntries"
+
+  - id: F-LEAVE-011
+    name: Leave Type list/detail/create/update all require an authenticated tenant; unauthenticated calls are rejected
+    group: Leave Type
+    status: Implemented
+    ui: "n/a"
+    api: "GET/POST/PUT /api/leave-types*"
+    service: "LeaveConfigurationService (HasTenant/_tenant.TenantId checks)"
+    permission: "Leave.PolicyView / Leave.TypeManage"
+    db: "n/a"
+
+  - id: F-LEAVE-012
+    name: Leave Type reads are implicitly tenant-scoped via the tenant's own shard database (no cross-tenant Code collision is possible; two tenants may both use code 'CL')
+    group: Leave Type
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-types"
+    service: "LeaveConfigurationService.GetLeaveTypesAsync"
+    permission: "Leave.PolicyView"
+    db: "LeaveTypes"
+
+  # ── B. Leave Policy (master, versions, and every per-LeaveType rule sub-resource) ───────────────────
+  - id: F-LEAVE-013
+    name: List Leave Policies, paged/searchable, each row reporting versionCount, currentVersionNumber, and overlapCount (informational only)
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePoliciesPage list"
+    api: "GET /api/leave-policies"
+    service: "LeaveConfigurationService.GetPoliciesAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicies, LeavePolicyVersions, LeavePolicyRules"
+
+  - id: F-LEAVE-014
+    name: "overlapCount counts OTHER policies with a Published version sharing a LeaveType and an overlapping effective-date range - it is a passive badge, never a blocking check at Publish time"
+    group: Leave Policy
+    status: Needs clarification
+    ui: "LeavePoliciesPage 'Overlaps' column"
+    api: "GET /api/leave-policies"
+    service: "LeaveConfigurationService.GetPoliciesAsync (overlapPolicyIds computation)"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions, LeavePolicyRules"
+    cr: [CR-87]
+
+  - id: F-LEAVE-015
+    name: Create a Leave Policy (Code, Name, Description, IsActive); Code is case-insensitively unique per tenant
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePoliciesPage create dialog"
+    api: "POST /api/leave-policies"
+    service: "LeaveConfigurationService.CreatePolicyAsync"
+    permission: "Leave.PolicyManage"
+    db: "LeavePolicies"
+
+  - id: F-LEAVE-016
+    name: Update a Leave Policy's Code/Name/Description/IsActive, gated by ConcurrencyToken
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePoliciesPage edit dialog"
+    api: "PUT /api/leave-policies/{policyId}"
+    service: "LeaveConfigurationService.UpdatePolicyAsync"
+    permission: "Leave.PolicyManage"
+    db: "LeavePolicies"
+
+  - id: F-LEAVE-017
+    name: "A LeavePolicy's Code becomes IMMUTABLE once ANY of its versions has ever been Published (even a later Retired version still counts)"
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePoliciesPage edit dialog error"
+    api: "PUT /api/leave-policies/{policyId}"
+    service: "LeaveConfigurationService.UpdatePolicyAsync"
+    permission: "Leave.PolicyManage"
+    db: "LeavePolicies, LeavePolicyVersions"
+
+  - id: F-LEAVE-018
+    name: Deactivating a LeavePolicy (IsActive=false) removes it from LeavePolicyResolver's candidate set for all future resolutions, even if a version remains Published
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePoliciesPage IsActive toggle"
+    api: "PUT /api/leave-policies/{policyId}"
+    service: "LeavePolicyResolver.ResolveAsync (x.LeavePolicy.IsActive filter)"
+    permission: "Leave.PolicyManage"
+    db: "LeavePolicies"
+
+  - id: F-LEAVE-019
+    name: Create a Draft version of a policy with EffectiveFrom (required), EffectiveTo (optional/open-ended), and Priority; VersionNumber auto-increments per policy
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEditorPage 'New version'"
+    api: "POST /api/leave-policies/{policyId}/versions"
+    service: "LeavePolicyFoundationService.CreateDraftVersionAsync"
+    permission: "Leave.PolicyManage"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-020
+    name: A draft version can optionally be created by copying rules/applicability from an existing version (copyFromVersionId)
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEditorPage 'New version' copy-from picker"
+    api: "POST /api/leave-policies/{policyId}/versions"
+    service: "LeavePolicyFoundationService / LeaveConfigurationService.CreateVersionAsync"
+    permission: "Leave.PolicyManage"
+    db: "LeavePolicyVersions, LeavePolicyRules, LeavePolicyApplicabilitySets"
+
+  - id: F-LEAVE-021
+    name: EffectiveTo before EffectiveFrom is rejected 400 on both draft creation and update
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEditorPage version dialog"
+    api: "POST/PUT /api/leave-policies/{policyId}/versions[/{versionId}]"
+    service: "LeavePolicyFoundationService.CreateDraftVersionAsync; LeavePolicyVersionRequestValidator"
+    permission: "Leave.PolicyManage"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-022
+    name: A Draft version's EffectiveFrom/EffectiveTo/Priority can be edited freely (Draft is mutable); a Published or Retired version's dates/priority cannot
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEditorPage version dialog (fields disabled once not Draft)"
+    api: "PUT /api/leave-policies/{policyId}/versions/{versionId}"
+    service: "LeaveConfigurationService.UpdateVersionAsync"
+    permission: "Leave.PolicyManage"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-023
+    name: "allowedActions (canEdit/canValidate/canPublish/canRetire/canCreateVersion) on the version DTO are computed server-side from its Status, so the UI cannot show an action the API would reject"
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEditorPage version action buttons"
+    api: "GET /api/leave-policies/{policyId}/versions[/{versionId}]"
+    service: "LeaveConfigurationService (ToDto allowedActions projection)"
+    permission: "Leave.PolicyView"
+    db: "n/a"
+
+  - id: F-LEAVE-024
+    name: "BeginEdit (POST .../edit) is the entry point the UI uses to get an editable snapshot - it does not itself mutate a Published version; edits to a Published version's rules are only possible by creating a new Draft version"
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEditorPage load"
+    api: "POST /api/leave-policies/{policyId}/edit"
+    service: "LeaveConfigurationService.BeginEditAsync"
+    permission: "Leave.PolicyManage"
+    db: "n/a"
+
+  - id: F-LEAVE-025
+    name: Assign the set of Leave Types a policy version's rules apply to (SetVersionLeaveTypes); duplicate ids in one request are rejected 400
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEditorPage LeaveTypes tab"
+    api: "PUT /api/leave-policies/{policyId}/versions/{versionId}/leave-types"
+    service: "LeaveConfigurationService.SetVersionLeaveTypesAsync; LeaveTypeSelectionRequestValidator"
+    permission: "Leave.PolicyManage"
+    db: "LeavePolicyRules"
+
+  - id: F-LEAVE-026
+    name: A LeaveType may appear at most once as an ACTIVE rule within one policy version - Publish is blocked if this invariant is violated
+    group: Leave Policy
+    status: Implemented
+    ui: "n/a (server-enforced at Publish, not at LeaveTypes-tab save time)"
+    api: "POST /api/leave-policies/{policyId}/versions/{versionId}/publish"
+    service: "LeavePolicyFoundationService.ValidateForPublishAsync"
+    permission: "Leave.PolicyPublish"
+    db: "LeavePolicyRules"
+
+  - id: F-LEAVE-027
+    name: "Applicability groups (Gender + 15 org/master dimensions) scope a version to a subset of the tenant - zero groups means the version is tenant-wide for every LeaveType it covers"
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEditorPage Applicability tab"
+    api: "GET/PUT /api/leave-policies/{policyId}/versions/{versionId}/applicability"
+    service: "LeaveConfigurationService.GetApplicabilityAsync/SetApplicabilityAsync"
+    permission: "Leave.PolicyView / Leave.PolicyManage"
+    db: "LeavePolicyApplicabilitySets"
+
+  - id: F-LEAVE-028
+    name: Every applicability master-reference (Department, Grade, WorkLocation, etc.) must belong to the tenant, checked in bulk at Publish time - an id from another tenant or a nonexistent id blocks publication
+    group: Leave Policy
+    status: Implemented
+    ui: "n/a (surfaces as a Publish validation error)"
+    api: "POST /api/leave-policies/{policyId}/versions/{versionId}/publish"
+    service: "LeavePolicyFoundationService.MissingMasterErrorsAsync"
+    permission: "Leave.PolicyPublish"
+    db: "LeavePolicyApplicabilitySets, Departments/Grades/WorkLocations/etc."
+
+  - id: F-LEAVE-029
+    name: Configure per-LeaveType Eligibility rule (EligibilityMode Immediate/MinimumService, MinimumServiceValue+Unit, ProbationMode, NoticePeriodMode)
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEligibilitySection"
+    api: "GET/PUT .../leave-types/{leaveTypeId}/eligibility"
+    service: "LeaveConfigurationService.GetEligibilityAsync/SaveEligibilityAsync"
+    permission: "Leave.PolicyView / Leave.PolicyManage"
+    db: "LeavePolicyEligibilityRules"
+
+  - id: F-LEAVE-030
+    name: Configure per-LeaveType Entitlement rule (EntitlementMode Allocated/Unlimited/NoBalanceRequired, EntitlementSource, quantity, AccrualFrequency/Timing, proration, MaximumAccumulation, CarryForward fields)
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEntitlementSection"
+    api: "GET/PUT .../leave-types/{leaveTypeId}/entitlement"
+    service: "LeaveConfigurationService.GetEntitlementAsync/SaveEntitlementAsync"
+    permission: "Leave.PolicyView / Leave.PolicyManage"
+    db: "LeavePolicyEntitlementRules"
+
+  - id: F-LEAVE-031
+    name: Configure per-LeaveType Request rule (min/max quantity, max consecutive, minimum advance notice, backdating mode+limit, per-period request/quantity caps, PartialDayMode)
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyRequestRulesSection"
+    api: "GET/PUT .../leave-types/{leaveTypeId}/request-rules"
+    service: "LeaveConfigurationService.GetRequestRuleAsync/SaveRequestRuleAsync"
+    permission: "Leave.PolicyView / Leave.PolicyManage"
+    db: "LeavePolicyRequestRules"
+
+  - id: F-LEAVE-032
+    name: "Configure per-LeaveType Calendar rule (HolidayTreatment, WeekOffTreatment, SandwichMode + prefix/suffix/between flags) - the UI allows every SandwichMode value even though only Disabled is runtime-supported (CR-81)"
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyCalendarSection"
+    api: "GET/PUT .../leave-types/{leaveTypeId}/calendar"
+    service: "LeaveConfigurationService.GetCalendarRuleAsync/SaveCalendarRuleAsync"
+    permission: "Leave.PolicyView / Leave.PolicyManage"
+    db: "LeavePolicyCalendarRules"
+    cr: [CR-81]
+
+  - id: F-LEAVE-033
+    name: "Configure per-LeaveType Attachment rule (None/Optional/Required/RequiredAboveQuantity + threshold + document label) - the UI allows every value even though only None is runtime-supported (CR-81)"
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyAttachmentSection"
+    api: "GET/PUT .../leave-types/{leaveTypeId}/attachments"
+    service: "LeaveConfigurationService.GetAttachmentRuleAsync/SaveAttachmentRuleAsync"
+    permission: "Leave.PolicyView / Leave.PolicyManage"
+    db: "LeavePolicyAttachmentRules"
+    cr: [CR-81]
+
+  - id: F-LEAVE-034
+    name: "Configure Clubbing rules (NotAllowed relation between two LeaveTypes within a version) - the UI allows saving them even though ANY clubbing rule referencing a rule makes it entirely unusable for requests (CR-81)"
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyClubbingSection"
+    api: "GET/PUT .../versions/{versionId}/clubbing"
+    service: "LeaveConfigurationService.GetClubbingAsync/SaveClubbingAsync"
+    permission: "Leave.PolicyView / Leave.PolicyManage"
+    db: "LeavePolicyClubbingRules"
+    cr: [CR-81]
+
+  - id: F-LEAVE-035
+    name: Configure per-LeaveType Cancellation rule (WithdrawAllowed, CancelAllowed, ModifyAllowed)
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyCancellationSection"
+    api: "GET/PUT .../leave-types/{leaveTypeId}/cancellation"
+    service: "LeaveConfigurationService.GetCancellationRuleAsync/SaveCancellationRuleAsync"
+    permission: "Leave.PolicyView / Leave.PolicyManage"
+    db: "LeavePolicyCancellationRules"
+
+  - id: F-LEAVE-036
+    name: Validate a Draft version on demand (isValid/errors/warnings) without publishing it
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEditorPage 'Validate'"
+    api: "POST /api/leave-policies/{policyId}/versions/{versionId}/validate"
+    service: "LeaveConfigurationService.ValidateAsync"
+    permission: "Leave.PolicyManage"
+    db: "n/a"
+
+  - id: F-LEAVE-037
+    name: "Publish a Draft version - requires at least one active rule, no duplicate LeaveType rules, all applicability masters resolvable, and (if acknowledgeOverlap is not set) no OTHER Published version of the SAME policy overlapping in date range"
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEditorPage 'Publish'"
+    api: "POST /api/leave-policies/{policyId}/versions/{versionId}/publish"
+    service: "LeavePolicyFoundationService.PublishAsync/ValidateForPublishAsync"
+    permission: "Leave.PolicyPublish"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-038
+    name: "acknowledgeOverlap=true on Publish is the ONLY override available - it bypasses the same-policy overlapping-Published-version block; there is no equivalent override or warning for a CROSS-policy overlap (see F-LEAVE-014, CR-87)"
+    group: Leave Policy
+    status: Needs clarification
+    ui: "LeavePolicyEditorPage overlap-acknowledgement checkbox"
+    api: "POST /api/leave-policies/{policyId}/versions/{versionId}/publish"
+    service: "LeavePolicyFoundationService.PublishAsync"
+    permission: "Leave.PolicyPublish"
+    db: "LeavePolicyVersions"
+    cr: [CR-87]
+
+  - id: F-LEAVE-039
+    name: Only a Draft version can be Published; Retire moves a Published version to Retired (both are one-way, no un-publish/un-retire)
+    group: Leave Policy
+    status: Implemented
+    ui: "LeavePolicyEditorPage 'Retire'"
+    api: "POST /api/leave-policies/{policyId}/versions/{versionId}/retire"
+    service: "LeavePolicyFoundationService/LeaveConfigurationService.RetireAsync"
+    permission: "Leave.PolicyPublish"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-040
+    name: "Leave Policy administration (Types, Periods, Policies, Publish, Balance Import/Adjust) requires SuperAdmin or TenantAdmin in the seeded matrix - HRAdmin, the operational HR role, holds none of these permissions (CR-78)"
+    group: Leave Policy
+    status: Needs clarification
+    ui: "LeaveTypesPage/LeavePoliciesPage/LeavePeriodsPage/LeaveBalanceImportPage render for HRAdmin but every mutating action is 403"
+    api: "POST/PUT /api/leave-types, /api/leave-policies, /api/leave-periods, /api/leave-balances/import/*"
+    service: "SeedData.RolePermissionMap[HRAdmin]"
+    permission: "Leave.TypeManage / Leave.PolicyManage / Leave.PolicyPublish / Leave.PeriodManage / Leave.BalanceImport"
+    db: "n/a"
+    cr: [CR-78, CR-88]
+
+  # ── C. Policy Effective Dating / Resolution (LeavePolicyResolver) ───────────────────────────────────
+  - id: F-LEAVE-041
+    name: "Resolution considers only Published versions whose own LeavePolicy IsActive=true, whose EffectiveFrom<=date<=EffectiveTo(or open-ended), that carry an active rule for the requested LeaveType, and whose applicability (if any) matches the employee's CURRENT effective-employment snapshot for that date"
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions, LeavePolicyRules, LeavePolicyApplicabilitySets"
+
+  - id: F-LEAVE-042
+    name: A date one day before a version's EffectiveFrom does not resolve to that version (NoPolicy if nothing else matches)
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-043
+    name: A date exactly equal to EffectiveFrom resolves (inclusive lower bound)
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-044
+    name: A date exactly equal to EffectiveTo resolves (inclusive upper bound); the day after does not
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-045
+    name: An open-ended version (EffectiveTo=null) resolves for every date on or after EffectiveFrom, indefinitely
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-046
+    name: A version whose EffectiveFrom is in the future never resolves for today's date (NoPolicy, unless another version covers today)
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-047
+    name: A version whose EffectiveTo has already passed never resolves for today (expired)
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-048
+    name: "Two non-overlapping Published versions of the SAME policy (sequential date ranges) each resolve correctly for dates in their own range - no ambiguity"
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-049
+    name: "A gap between two versions of the same policy (no version covers a date range) resolves as NoPolicy for dates inside the gap, even though earlier/later dates resolve fine"
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-050
+    name: "Two Published versions of the SAME policy overlapping in date range (a data-integrity anomaly Publish should have blocked, or force-created via acknowledgeOverlap) resolve as ConfigurationAmbiguity (409), not a silent pick"
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync (samePolicyVersions check)"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-051
+    name: "Two DIFFERENT policies both applicable on the same date for the same LeaveType are resolved deterministically by Priority (higher wins), then by Specificity (most-populated matching applicability set wins) among equal-priority candidates"
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "LeavePolicyEditorPage 'Test Policy' tab shows competingPolicies with isWinner"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions, LeavePolicyApplicabilitySets"
+
+  - id: F-LEAVE-052
+    name: A tenant-wide version (zero applicability sets, specificity=0) loses to any applicable version with a matching non-empty applicability set at the same priority
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "LeavePolicyEditorPage 'Test Policy' tab"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync (Specificity computation)"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyApplicabilitySets"
+
+  - id: F-LEAVE-053
+    name: Two equally-specific, equal-priority candidates from DIFFERENT policies resolve as ConfigurationAmbiguity (409), surfaced with the full competingPolicies diagnostic list
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "LeavePolicyEditorPage 'Test Policy' tab error state"
+    api: "POST /api/leave-policies/test"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-054
+    name: A backdated Leave request resolves the policy AS OF the request's own StartDate, not today's date - a policy that has since expired/changed is still honored for that historical date
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ResolveContextAsync (date = input.StartDate)"
+    permission: "Leave.RequestCreate"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-055
+    name: A future-dated Leave request resolves the policy that will be effective on that FUTURE date, which may differ from the policy in effect today
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ResolveContextAsync"
+    permission: "Leave.RequestCreate"
+    db: "LeavePolicyVersions"
+
+  - id: F-LEAVE-056
+    name: "A multi-day request that CROSSES a policy-version boundary (different rule/version/period/employment applies on different days within the same request) is rejected 400 - the runtime requires one single context for the whole span"
+    group: Policy Effective Dating
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateSingleContextAsync"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  # ── D. Leave Periods ─────────────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-057
+    name: List Leave Periods, paged/searchable, optionally filtered onDate (periods containing a given date)
+    group: Leave Periods
+    status: Implemented
+    ui: "LeavePeriodsPage list"
+    api: "GET /api/leave-periods"
+    service: "LeaveConfigurationService.GetLeavePeriodsAsync"
+    permission: "Leave.PolicyView"
+    db: "LeavePeriods"
+
+  - id: F-LEAVE-058
+    name: Create a Leave Period (Code, Name, StartDate, EndDate, IsActive); Code is case-insensitively unique per tenant; StartDate must be on/before EndDate
+    group: Leave Periods
+    status: Implemented
+    ui: "LeavePeriodsPage create dialog"
+    api: "POST /api/leave-periods"
+    service: "LeaveConfigurationService.CreateLeavePeriodAsync"
+    permission: "Leave.PeriodManage"
+    db: "LeavePeriods"
+
+  - id: F-LEAVE-059
+    name: "An ACTIVE period's date range must not overlap another ACTIVE period in the tenant (checked on create and update); an INACTIVE period is exempt from the overlap check"
+    group: Leave Periods
+    status: Implemented
+    ui: "LeavePeriodsPage create/edit dialog error"
+    api: "POST/PUT /api/leave-periods[/{id}]"
+    service: "LeaveConfigurationService.HasPeriodOverlapAsync"
+    permission: "Leave.PeriodManage"
+    db: "LeavePeriods"
+
+  - id: F-LEAVE-060
+    name: Update a Leave Period's fields, gated by ConcurrencyToken; only Yearly-style single ranges are modeled - there is no distinct 'monthly period' type, any StartDate/EndDate span is accepted
+    group: Leave Periods
+    status: Implemented
+    ui: "LeavePeriodsPage edit dialog"
+    api: "PUT /api/leave-periods/{id}"
+    service: "LeaveConfigurationService.UpdateLeavePeriodAsync"
+    permission: "Leave.PeriodManage"
+    db: "LeavePeriods"
+
+  - id: F-LEAVE-061
+    name: "'Closing' a period is not a distinct IsActive-style status field - it is modeled entirely by LeavePeriodCloseProcessor's own occurrence ledger; deactivating a LeavePeriod (IsActive=false) is a SEPARATE, purely-configuration action with no automatic close-processing side effect"
+    group: Leave Periods
+    status: Needs clarification
+    ui: "n/a - no 'Close Period' button anywhere in LeavePeriodsPage"
+    api: "n/a"
+    service: "LeavePeriodCloseProcessor.ProcessAsync (source.EndDate <= asOf gate); LeaveConfigurationService.UpdateLeavePeriodAsync (independent IsActive toggle)"
+    permission: "Leave.PeriodManage"
+    db: "LeavePeriods, LeavePeriodCloseOccurrences"
+
+  - id: F-LEAVE-062
+    name: "A request whose date falls in a gap with NO active LeavePeriod containing it is rejected NotFound at preview/submit, even if a valid policy would otherwise apply"
+    group: Leave Periods
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeavePeriodResolver.ResolveAsync (NotConfigured); LeaveRequestValidationService.ResolveContextAsync"
+    permission: "Leave.RequestCreate"
+    db: "LeavePeriods"
+
+  - id: F-LEAVE-063
+    name: Two overlapping ACTIVE LeavePeriods (a data anomaly the create/update overlap guard should prevent, reachable only via a race or direct DB edit) resolve as ConfigurationAmbiguity (409) rather than picking one silently
+    group: Leave Periods
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeavePeriodResolver.ResolveAsync"
+    permission: "Leave.RequestCreate"
+    db: "LeavePeriods"
+
+  - id: F-LEAVE-064
+    name: "LeavePeriodCloseProcessor requires a subsequent active period starting after the source period's EndDate to exist before it will process anything (no destination => no-op, all counters zero)"
+    group: Leave Periods
+    status: Implemented
+    ui: "n/a - operator/worker-invoked, no dedicated UI button"
+    api: "n/a (invoked by ILeavePeriodCloseProcessor, not a public HTTP endpoint)"
+    service: "LeavePeriodCloseProcessor.ProcessAsync (destination lookup)"
+    permission: "n/a"
+    db: "LeavePeriods, EmployeeLeaveBalances"
+
+  - id: F-LEAVE-065
+    name: Reopening a closed period is not supported - LeavePeriodCloseOccurrence rows are append-only per (source,destination,employee,leaveType) key and a repeat close attempt with the same key is idempotent (Processed rows are skipped, not reprocessed)
+    group: Leave Periods
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "LeavePeriodCloseProcessor.ClaimAsync (row.Status == 'Processed' => null/skip)"
+    permission: "n/a"
+    db: "LeavePeriodCloseOccurrences"
+
+  - id: F-LEAVE-066
+    name: Leave Periods are tenant-scoped by construction (own shard database); Code uniqueness and overlap checks never consider another tenant's periods
+    group: Leave Periods
+    status: Implemented
+    ui: "n/a"
+    api: "GET/POST/PUT /api/leave-periods*"
+    service: "LeaveConfigurationService"
+    permission: "Leave.PolicyView / Leave.PeriodManage"
+    db: "LeavePeriods"
+
+  # ── E. Eligibility Engine ────────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-067
+    name: "An employee whose Account<->Employee link is Unlinked cannot preview/submit ANY leave request - identity resolution fails before eligibility is even reached"
+    group: Eligibility
+    status: Implemented
+    ui: "MyLeaveRequestsPage / leave request form is unreachable without a resolvable identity"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateAsync (IEmployeeIdentityResolver failure)"
+    permission: "Leave.RequestCreate"
+    db: "AccountEmployeeCurrentLinks"
+
+  - id: F-LEAVE-068
+    name: "An employee with NO effective-employment snapshot resolvable for the request's start date (e.g. before DateOfJoining, or a gap in EmploymentHistory) is rejected via EffectiveEmploymentResolver's own NotFound/ConfigurationAmbiguity status"
+    group: Eligibility
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ResolveContextAsync (IEffectiveEmploymentResolver)"
+    permission: "Leave.RequestCreate"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-LEAVE-069
+    name: A request start date strictly before the employee's DateOfJoining is rejected Forbidden ('InactiveEmployment'), even if the policy/period/eligibility rule would otherwise allow it
+    group: Eligibility
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEmploymentContext"
+    permission: "Leave.RequestCreate"
+    db: "Employees"
+
+  - id: F-LEAVE-070
+    name: A request start date strictly after the employee's DateOfLeaving (for an already-separated employee) is rejected Forbidden ('InactiveEmployment')
+    group: Eligibility
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEmploymentContext"
+    permission: "Leave.RequestCreate"
+    db: "Employees"
+
+  - id: F-LEAVE-071
+    name: "Employee.Status must be Active at request time (checked independently of the employment-history snapshot) - a non-Active Employee.Status is rejected Forbidden even before eligibility rules run"
+    group: Eligibility
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateAsync (employee.Status != Active)"
+    permission: "Leave.RequestCreate"
+    db: "Employees"
+
+  - id: F-LEAVE-072
+    name: "EligibilityMode=Immediate imposes no minimum-service wait - any request date on/after DateOfJoining is eligible on this dimension"
+    group: Eligibility
+    status: Implemented
+    ui: "LeavePolicyEligibilitySection EligibilityMode=Immediate"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility"
+    permission: "Leave.RequestCreate"
+    db: "LeavePolicyEligibilityRules"
+
+  - id: F-LEAVE-073
+    name: "EligibilityMode=MinimumService (Days or Months unit) computes an eligible-from date = DateOfJoining + value; a request before that date is rejected Invalid ('MinimumServiceNotMet'); on/after is eligible"
+    group: Eligibility
+    status: Implemented
+    ui: "LeavePolicyEligibilitySection EligibilityMode=MinimumService"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility"
+    permission: "Leave.RequestCreate"
+    db: "LeavePolicyEligibilityRules"
+
+  - id: F-LEAVE-074
+    name: "A MinimumService rule missing its MinimumServiceValue/Unit (a data-integrity gap the Policy Editor's own validator should prevent, reachable via a partially-saved or directly-written rule) is rejected as UnsupportedConfiguration rather than silently treated as zero"
+    group: Eligibility
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility"
+    permission: "Leave.RequestCreate"
+    db: "LeavePolicyEligibilityRules"
+
+  - id: F-LEAVE-075
+    name: "ProbationMode=NotAllowed rejects a request Invalid ('ProbationNotAllowed') when the employee's JobStatus (Employee.JobStatus, falling back to Employment.JobStatus) equals 'Probation'; if JobStatus is blank AND there is no ConfirmationDate, the rule is UnsupportedConfiguration rather than silently permissive"
+    group: Eligibility
+    status: Implemented
+    ui: "LeavePolicyEligibilitySection ProbationMode=NotAllowed"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility"
+    permission: "Leave.RequestCreate"
+    db: "Employees, EmployeeEmploymentHistory"
+
+  - id: F-LEAVE-076
+    name: "ProbationMode=AfterConfirmation requires an authoritative Employment.ConfirmationDate; a request before that date is Invalid ('ConfirmationNotMet'); missing ConfirmationDate entirely is UnsupportedConfiguration"
+    group: Eligibility
+    status: Implemented
+    ui: "LeavePolicyEligibilitySection ProbationMode=AfterConfirmation"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility"
+    permission: "Leave.RequestCreate"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-LEAVE-077
+    name: ProbationMode=Allowed imposes no probation-related restriction regardless of JobStatus/ConfirmationDate
+    group: Eligibility
+    status: Implemented
+    ui: "LeavePolicyEligibilitySection ProbationMode=Allowed"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-078
+    name: "Eligibility, notice-period and probation checks run in a fixed order (MinimumService -> Probation -> NoticePeriod) after the base employment/status/policy gates - the FIRST failing rule's error is returned, not an aggregate of all violations"
+    group: Eligibility
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-079
+    name: Gender-scoped applicability (e.g. a Maternity-only policy) is enforced entirely through LeavePolicyResolver's applicability matching, not through a separate eligibility field - a non-matching gender simply fails to resolve any applicable policy (NoPolicy), not a distinct 'ineligible' reason
+    group: Eligibility
+    status: Implemented
+    ui: "LeavePolicyEditorPage Applicability tab Gender selector"
+    api: "POST /api/leave-requests/preview"
+    service: "LeavePolicyResolver.Matches (s.Gender check)"
+    permission: "Leave.RequestCreate"
+    db: "LeavePolicyApplicabilitySets"
+
+  # ── F. Notice Period ────────────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-080
+    name: "NoticePeriodMode=Allowed imposes no restriction regardless of NoticeStatus/NoticeStartDate/NoticeEndDate"
+    group: Notice Period
+    status: Implemented
+    ui: "LeavePolicyEligibilitySection NoticePeriodMode=Allowed"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-081
+    name: "NoticePeriodMode=NotAllowed rejects a request Invalid ('NoticePeriodNotAllowed') only when NoticeStatus=Active AND the request date falls within [NoticeStartDate, NoticeEndDate] (or NoticeEndDate is null, i.e. open-ended notice)"
+    group: Notice Period
+    status: Implemented
+    ui: "LeavePolicyEligibilitySection NoticePeriodMode=NotAllowed"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility"
+    permission: "Leave.RequestCreate"
+    db: "EmployeeEmploymentHistory (NoticeStatus/NoticeStartDate/NoticeEndDate)"
+
+  - id: F-LEAVE-082
+    name: "NoticePeriodMode=AllowedWithApproval does NOT itself change the validation outcome versus NotAllowed in the current runtime - both modes are gated by the same in-notice-period check (Enum.IsDefined only distinguishes an undefined value); there is no separate 'requires extra approval' code path anywhere in submission/approval"
+    group: Notice Period
+    status: Needs clarification
+    ui: "LeavePolicyEligibilitySection NoticePeriodMode=AllowedWithApproval"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility (rule.NoticePeriodMode is NotAllowed or AllowedWithApproval => same in-notice check)"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-083
+    name: "NoticeStatus=Completed or Cancelled never blocks a request under NotAllowed/AllowedWithApproval - only Active status is evaluated against the date window"
+    group: Notice Period
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility"
+    permission: "Leave.RequestCreate"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-LEAVE-084
+    name: "NoticeStatus=Active with a missing NoticeStartDate (malformed data) is rejected UnsupportedConfiguration rather than silently allowed or silently blocked"
+    group: Notice Period
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility"
+    permission: "Leave.RequestCreate"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-LEAVE-085
+    name: "A request exactly ON NoticeStartDate or exactly ON NoticeEndDate is treated as INSIDE the notice period (inclusive both ends); the day before NoticeStartDate and the day after NoticeEndDate are outside it"
+    group: Notice Period
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility (requestStart >= noticeStart && requestStart <= noticeEnd)"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-086
+    name: "An undefined/out-of-range NoticeStatus enum value (unreachable through normal product flows, only via direct data manipulation) is rejected UnsupportedConfiguration defensively rather than crashing"
+    group: Notice Period
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEligibility (Enum.IsDefined guard)"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  # ── G. Entitlement / Accrual ─────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-087
+    name: "EntitlementMode=Allocated + AccrualFrequency=Upfront grants the FULL EntitlementQuantity as an Opening-style credit with no recurring accrual - LeaveAccrualProcessor explicitly SKIPS Upfront (and None) as 'not its job'; upfront crediting is a Balance Import / ExternalGrant concern, not this processor's"
+    group: Entitlement/Accrual
+    status: Needs clarification
+    ui: "LeavePolicyEntitlementSection AccrualFrequency=Upfront"
+    api: "n/a - no dedicated 'grant upfront entitlement' endpoint was found; this is exercised via Balance Import or an as-yet-unbuilt bulk-grant tool"
+    service: "LeaveAccrualProcessor.ProcessAsync (AccrualFrequency.Upfront explicitly excluded)"
+    permission: "n/a"
+    db: "LeaveEntitlementGrants"
+
+  - id: F-LEAVE-088
+    name: "AccrualFrequency=Monthly, AccrualTiming=StartOfPeriod credits on day 1 of each calendar month; EndOfPeriod credits on the LAST calendar day of the month (DateTime.DaysInMonth)"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "LeavePolicyEntitlementSection AccrualFrequency=Monthly"
+    api: "n/a (LeaveAccrualWorker/ILeaveAccrualProcessor, not a public HTTP endpoint)"
+    service: "LeaveAccrualProcessor.IsDue"
+    permission: "n/a"
+    db: "LeaveAccrualOccurrences, LeaveBalanceTransactions"
+
+  - id: F-LEAVE-089
+    name: "AccrualFrequency=Annual/Yearly, AccrualTiming=StartOfPeriod credits exactly on the LeavePeriod's own StartDate; EndOfPeriod credits exactly on the LeavePeriod's own EndDate"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "LeavePolicyEntitlementSection AccrualFrequency=Annual"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.IsDue"
+    permission: "n/a"
+    db: "LeaveAccrualOccurrences"
+
+  - id: F-LEAVE-090
+    name: AccrualFrequency=Daily is due every single day (each day's ProcessAsync pass credits a full daily increment) - the only frequency with no periodic gating
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "LeavePolicyEntitlementSection AccrualFrequency=Daily"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.IsDue"
+    permission: "n/a"
+    db: "LeaveAccrualOccurrences"
+
+  - id: F-LEAVE-091
+    name: "ProratePartialPeriod=true on Monthly proportions the credited quantity by EligibleDays(joining,leaving,monthStart,monthEnd)/DaysInMonth - a mid-month joiner or leaver receives a fractional credit for that month only"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "LeavePolicyEntitlementSection ProratePartialPeriod checkbox"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.Quantity/EligibleDays"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-092
+    name: ProratePartialPeriod=true on Annual/Yearly proportions by EligibleDays(joining,leaving,periodStart,periodEnd)/(total days in the period) - a mid-year joiner receives a proportional annual credit, not the full configured quantity
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "LeavePolicyEntitlementSection ProratePartialPeriod checkbox"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.Quantity/EligibleDays"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-093
+    name: ProratePartialPeriod=false credits the FULL configured EntitlementQuantity on every due occurrence regardless of a mid-period joining/leaving date
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "LeavePolicyEntitlementSection ProratePartialPeriod unchecked"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.Quantity"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-094
+    name: "An end-of-year joiner (DateOfJoining after the period's own accrual occurrence date but before throughDate) never has that occurrence claimed for them - ClaimAsync's own occurrence-key includes the employee, so no partial-period grant is fabricated retroactively for dates before joining"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.ProcessAsync (employee.DateOfJoining <= throughDate gate; the per-day loop bounds start at DateOfJoining)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-095
+    name: "MaximumAccumulation caps a single credit so GrantedQuantity-ConsumedQuantity ('held') never exceeds the cap - a credit that would exceed it is truncated to the remaining headroom, or produces ZERO credit and is marked Skipped if headroom is already exhausted"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "LeavePolicyEntitlementSection MaximumAccumulation"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.CreditAsync"
+    permission: "n/a"
+    db: "EmployeeLeaveBalances, LeaveAccrualOccurrences"
+
+  - id: F-LEAVE-096
+    name: "Balance precision is fixed at 3 decimal places throughout accounting (decimal.Round(...,3) in Balance Import; ChargeableQuantity/RequestedQuantity are plain decimal elsewhere with no explicit rounding beyond that) - verify no silent precision loss across accrual->reservation->consumption chains"
+    group: Entitlement/Accrual
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.Quantity; LeaveBalanceImportService.ValidateAsync (decimal.Round(quantity,3))"
+    permission: "n/a"
+    db: "EmployeeLeaveBalances, LeaveBalanceTransactions"
+
+  - id: F-LEAVE-097
+    name: "Running the accrual processor twice for the SAME throughDate is idempotent - the occurrence key (tenant:employee:leaveType:version:frequency:date) is claimed exactly once; the second run finds the row already Processed/Skipped and does not re-credit"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.ClaimAsync"
+    permission: "n/a"
+    db: "LeaveAccrualOccurrences"
+
+  - id: F-LEAVE-098
+    name: "A previously Failed occurrence is retried on the next processor pass up to MaxAttempts (default 5); once MaxAttempts is reached the occurrence is left Failed permanently (ClaimAsync's own attempt-count gate returns null)"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.ClaimAsync (row.AttemptCount >= _options.MaxAttempts)"
+    permission: "n/a"
+    db: "LeaveAccrualOccurrences"
+
+  - id: F-LEAVE-099
+    name: "A crediting failure inside CreditAsync (e.g. the poster rejects the command) is caught, the occurrence is finalized Failed with a FailureCode, and processing continues to the next employee/leaveType pair rather than aborting the whole run"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.ProcessAsync (try/catch around CreditAsync)"
+    permission: "n/a"
+    db: "LeaveAccrualOccurrences"
+
+  - id: F-LEAVE-100
+    name: "LeaveAccrualWorker and LeaveApprovalReminderWorker are BOTH disabled by default (LeaveAccrualOptions.Enabled=false, LeaveReminderOptions.Enabled=false) - neither runs in a fresh Development environment unless explicitly turned on in configuration"
+    group: Entitlement/Accrual
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveAccrualWorker.ExecuteAsync / LeaveApprovalReminderWorker.ExecuteAsync (_options.Enabled gate)"
+    permission: "n/a"
+    db: "n/a"
+    cr: [CR-86]
+
+  - id: F-LEAVE-101
+    name: "An entitlement configuration change mid-period (e.g. editing EntitlementQuantity on a still-Draft version, or publishing a NEW version with a different quantity effective partway through the current LeavePeriod) affects only FUTURE accrual occurrences - occurrences already claimed/processed under the prior rule are never retroactively adjusted"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.ProcessAsync (resolves the rule fresh per-date via LeavePolicyResolver, but never revisits an already-Processed occurrence)"
+    permission: "n/a"
+    db: "LeaveAccrualOccurrences"
+
+  - id: F-LEAVE-102
+    name: "CarryForwardEnabled + LeavePeriodCloseProcessor carries min(AvailableQuantity, MaximumCarryForwardQuantity) into the destination period as a new LeaveEntitlementGrant with SourceType=CarryForward, and lapses the remainder (AvailableQuantity-carry) as an Expiry debit against the SOURCE period"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "LeavePolicyEntitlementSection CarryForwardEnabled + MaximumCarryForwardQuantity"
+    api: "n/a"
+    service: "LeavePeriodCloseProcessor.ProcessAsync"
+    permission: "n/a"
+    db: "LeaveEntitlementGrants, LeaveBalanceTransactions, LeavePeriodCloseOccurrences"
+
+  - id: F-LEAVE-103
+    name: CarryForwardExpiryDays sets the carried grant's own ExpiresOn = destination period's StartDate + N days; a null value carries forward with no expiry
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "LeavePolicyEntitlementSection CarryForwardExpiryDays"
+    api: "n/a"
+    service: "LeavePeriodCloseProcessor.ProcessAsync"
+    permission: "n/a"
+    db: "LeaveEntitlementGrants"
+
+  - id: F-LEAVE-104
+    name: "LeaveEntitlementExpiryProcessor finds CarryForward-sourced grants whose ExpiresOn<=throughDate and are still Active, debits their remaining AvailableQuantity as an Expiry transaction, and marks the grant Expired (a zero-available grant is marked Expired with no debit posted)"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveEntitlementExpiryProcessor.ProcessAsync"
+    permission: "n/a"
+    db: "LeaveEntitlementGrants, LeaveBalanceTransactions"
+
+  - id: F-LEAVE-105
+    name: "Period-close is itself idempotent per (source,destination,employee,leaveType) occurrence key - a repeat close run for an already-Processed pairing is a no-op (all counters return zero for that pairing)"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeavePeriodCloseProcessor.ClaimAsync"
+    permission: "n/a"
+    db: "LeavePeriodCloseOccurrences"
+
+  - id: F-LEAVE-106
+    name: "Numerical example - a policy granting 1.5 days/month, no proration, Monthly/StartOfPeriod, over a 12-month LeavePeriod for an employee who joined before the period start: 12 monthly credits of 1.5 = 18.000 granted by period end (manually computed expectation for a deterministic test)"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.ProcessAsync"
+    permission: "n/a"
+    db: "EmployeeLeaveBalances"
+
+  - id: F-LEAVE-107
+    name: "Numerical example - a policy granting 12 days/year with proration, Annual/StartOfPeriod, for an employee joining exactly at the period's midpoint (day 183 of a 365-day period): expected prorated credit = 12 * (365-183+1)/365 = 6.016... days, confirming EligibleDays/period-length arithmetic"
+    group: Entitlement/Accrual
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.Quantity/EligibleDays"
+    permission: "n/a"
+    db: "EmployeeLeaveBalances"
+
+  # ── H. Leave Balance ─────────────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-108
+    name: "GET /api/leave-balances/mine returns one row per active LeaveType: Allocated types show Granted/Reserved/Consumed/Available (=Granted-Reserved-Consumed), Unlimited types show only entitlementMode with all quantities null, NoBalanceRequired types are OMITTED from the response entirely"
+    group: Leave Balance
+    status: Implemented
+    ui: "MyLeaveRequestsPage / LeaveRequestPreviewPage balance panel"
+    api: "GET /api/leave-balances/mine"
+    service: "LeaveBalanceSummaryReader.GetMineAsync"
+    permission: "Leave.BalanceViewOwn"
+    db: "EmployeeLeaveBalances, LeavePolicyEntitlementRules"
+
+  - id: F-LEAVE-109
+    name: "Available = Granted - Reserved - Consumed, always projected live from EmployeeLeaveBalances - there is no separate cached 'available' column to drift out of sync"
+    group: Leave Balance
+    status: Implemented
+    ui: "LeaveBalanceSummary panel"
+    api: "GET /api/leave-balances/mine"
+    service: "LeaveBalanceSummaryReader.GetMineAsync"
+    permission: "Leave.BalanceViewOwn"
+    db: "EmployeeLeaveBalances"
+
+  - id: F-LEAVE-110
+    name: "A LeaveType with an Allocated policy but NO EmployeeLeaveBalance row yet (never accrued/imported) is simply absent from GetMineAsync's result for that LeaveType - it is not synthesized as a zero row"
+    group: Leave Balance
+    status: Needs clarification
+    ui: "LeaveBalanceSummary panel (LeaveType silently missing)"
+    api: "GET /api/leave-balances/mine"
+    service: "LeaveBalanceSummaryReader.GetMineAsync"
+    permission: "Leave.BalanceViewOwn"
+    db: "EmployeeLeaveBalances"
+
+  - id: F-LEAVE-111
+    name: "A zero-Available balance (fully reserved/consumed) is reported as Available=0, not omitted or negative - LeaveBalanceAccountingService's own ApplyProjection rejects any operation that would drive Available below zero (Conflict), so a persisted negative balance should never be observable through this API"
+    group: Leave Balance
+    status: Implemented
+    ui: "LeaveBalanceSummary panel zero-state"
+    api: "GET /api/leave-balances/mine"
+    service: "LeaveBalanceAccountingService.ApplyProjection"
+    permission: "Leave.BalanceViewOwn"
+    db: "EmployeeLeaveBalances"
+
+  - id: F-LEAVE-112
+    name: "There is no supported 'negative balance allowed' policy switch anywhere in LeavePolicyEntitlementRule/RequestRule - every reservation/consumption path (LeaveBalanceAccountingService.ApplyProjection) hard-rejects Conflict if it would drive Available/Reserved/Consumed below zero; negative balances are not a configurable business rule in this codebase"
+    group: Leave Balance
+    status: Needs clarification
+    ui: "n/a - no such toggle exists in LeavePolicyEntitlementSection"
+    api: "n/a"
+    service: "LeaveBalanceAccountingService.ApplyProjection"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-113
+    name: Multiple LeaveTypes each carry independent EmployeeLeaveBalance rows (one row per EmployeeId+LeaveTypeId+LeavePeriodId) - a reservation against one LeaveType never touches another's Granted/Reserved/Consumed
+    group: Leave Balance
+    status: Implemented
+    ui: "LeaveBalanceSummary panel (multiple rows)"
+    api: "GET /api/leave-balances/mine"
+    service: "LeaveBalanceSummaryReader.GetMineAsync"
+    permission: "Leave.BalanceViewOwn"
+    db: "EmployeeLeaveBalances"
+
+  - id: F-LEAVE-114
+    name: A balance is scoped to one LeavePeriod - crossing a period boundary requires the LeavePeriodCloseProcessor's own carry-forward mechanism, not a live cross-period read
+    group: Leave Balance
+    status: Implemented
+    ui: "LeaveBalanceSummary panel (LeavePeriodName column)"
+    api: "GET /api/leave-balances/mine"
+    service: "LeaveBalanceSummaryReader.GetMineAsync"
+    permission: "Leave.BalanceViewOwn"
+    db: "EmployeeLeaveBalances"
+
+  - id: F-LEAVE-115
+    name: "GET /api/leave-balances/mine is tenant- and self-scoped by construction (filters on the resolved identity's own TenantId+EmployeeId) - there is no HR-wide 'view any employee's balance' endpoint (Leave.BalanceView exists as a permission but is enforced nowhere - CR-80)"
+    group: Leave Balance
+    status: Needs clarification
+    ui: "n/a - HR views balances only through LeaveReportsController's balances report, gated by Leave.ReportsView, not Leave.BalanceView"
+    api: "GET /api/leave-balances/mine"
+    service: "LeaveBalanceSummaryReader.GetMineAsync"
+    permission: "Leave.BalanceViewOwn"
+    db: "EmployeeLeaveBalances"
+    cr: [CR-80]
+
+  # ── I. Opening Balance / Balance Import ─────────────────────────────────────────────────────────────
+  - id: F-LEAVE-116
+    name: "Download a fixed CSV header template (EmployeeCode,LeaveTypeCode,LeavePeriod,OpeningBalance,EffectiveDate,Remarks)"
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage 'Download template'"
+    api: "GET /api/leave-balances/import/template"
+    service: "LeaveBalanceImportsController.Template (static content, no service call)"
+    permission: "Leave.BalanceImport"
+    db: "n/a"
+
+  - id: F-LEAVE-117
+    name: "Upload+validate a CSV (max 5,000,000 bytes) - parses rows, per-row validates required fields, numeric OpeningBalance (positive, <=3 decimals), yyyy-MM-dd EffectiveDate, and writes a Batch+Row set with per-row Valid/Invalid status; the file itself is never persisted, only its parsed rows"
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage upload dropzone"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ValidateAsync"
+    permission: "Leave.BalanceImport"
+    db: "LeaveBalanceImportBatches, LeaveBalanceImportRows"
+
+  - id: F-LEAVE-118
+    name: A non-.csv file extension is rejected 400 before any parsing occurs
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage upload error"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ValidateAsync"
+    permission: "Leave.BalanceImport"
+    db: "n/a"
+
+  - id: F-LEAVE-119
+    name: An empty file, or a file with only a header row (zero data rows), is rejected 400
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage upload error"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ValidateAsync/ParseAsync"
+    permission: "Leave.BalanceImport"
+    db: "n/a"
+
+  - id: F-LEAVE-120
+    name: A missing required CSV header (any of EmployeeCode/LeaveTypeCode/LeavePeriod/OpeningBalance/EffectiveDate) rejects the whole file 400 before per-row validation
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage upload error"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ParseAsync"
+    permission: "Leave.BalanceImport"
+    db: "n/a"
+
+  - id: F-LEAVE-121
+    name: "A duplicate (EmployeeCode,LeaveTypeCode,LeavePeriod) combination WITHIN the same file is flagged Invalid on the second occurrence, not silently deduplicated or silently overwritten"
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage row-error table"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ValidateAsync (seen HashSet)"
+    permission: "Leave.BalanceImport"
+    db: "LeaveBalanceImportRows"
+
+  - id: F-LEAVE-122
+    name: "An EmployeeCode not found (or found but not Employee.Status=Active) in the tenant is flagged Invalid per-row, with a specific error message distinguishing it from other row errors"
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage row-error table"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ValidateAsync"
+    permission: "Leave.BalanceImport"
+    db: "Employees"
+
+  - id: F-LEAVE-123
+    name: A LeaveTypeCode not found, or found but IsActive=false, is flagged Invalid per-row
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage row-error table"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ValidateAsync"
+    permission: "Leave.BalanceImport"
+    db: "LeaveTypes"
+
+  - id: F-LEAVE-124
+    name: A LeavePeriod code not found, or ambiguous (more than one active period sharing the code - a data anomaly), is flagged Invalid per-row with a distinct message for 'not found' vs 'ambiguous'
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage row-error table"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ValidateAsync"
+    permission: "Leave.BalanceImport"
+    db: "LeavePeriods"
+
+  - id: F-LEAVE-125
+    name: "OpeningBalance must be a positive decimal with AT MOST 3 decimal places (decimal.Round(x,3)==x check) - zero, negative, or a 4th-decimal value is rejected Invalid"
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage row-error table"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ValidateAsync"
+    permission: "Leave.BalanceImport"
+    db: "n/a"
+
+  - id: F-LEAVE-126
+    name: EffectiveDate must be yyyy-MM-dd formatted AND fall within the resolved LeavePeriod's own [StartDate,EndDate] - a date outside the period is Invalid even if every other field is correct
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage row-error table"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ValidateAsync"
+    permission: "Leave.BalanceImport"
+    db: "LeavePeriods"
+
+  - id: F-LEAVE-127
+    name: "A row whose (Employee,LeaveType,Period) opening balance was ALREADY imported previously (idempotency key already exists in LeaveBalanceTransactions) is flagged Invalid on THIS validate pass - re-importing the same opening balance twice is blocked, not silently re-applied"
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage row-error table"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ValidateAsync (IdempotencyKey AnyAsync check)"
+    permission: "Leave.BalanceImport"
+    db: "LeaveBalanceTransactions"
+
+  - id: F-LEAVE-128
+    name: "A mixed valid/invalid-row file is fully persisted as a batch (Status=Invalid) with per-row status, but CANNOT be committed until every row is fixed and re-validated - Commit rejects (Conflict) any batch whose InvalidRows!=0"
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage 'Commit' button disabled while any row is invalid"
+    api: "POST /api/leave-balances/import/{batchId}/commit"
+    service: "LeaveBalanceImportService.CommitAsync"
+    permission: "Leave.BalanceImport"
+    db: "LeaveBalanceImportBatches"
+
+  - id: F-LEAVE-129
+    name: "Commit is ATOMIC per-batch (single transaction) - a mid-commit failure (e.g. the poster rejects one row) rolls back the ENTIRE batch, so a Committed batch is all-or-nothing, never partially imported"
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage commit error banner"
+    api: "POST /api/leave-balances/import/{batchId}/commit"
+    service: "LeaveBalanceImportService.CommitAsync (BeginTransactionAsync/RollbackAsync)"
+    permission: "Leave.BalanceImport"
+    db: "LeaveBalanceImportBatches, LeaveBalanceImportRows, EmployeeLeaveBalances, LeaveBalanceTransactions"
+
+  - id: F-LEAVE-130
+    name: Committing an already-Committed batch a second time is idempotent (returns success with 'already committed', re-posts nothing)
+    group: Balance Import
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-balances/import/{batchId}/commit"
+    service: "LeaveBalanceImportService.CommitAsync"
+    permission: "Leave.BalanceImport"
+    db: "LeaveBalanceImportBatches"
+
+  - id: F-LEAVE-131
+    name: List import history (most recent 100 batches) and fetch a batch's own invalid-row detail list
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage History tab"
+    api: "GET /api/leave-balances/import/history, GET /api/leave-balances/import/{batchId}/errors"
+    service: "LeaveBalanceImportService.HistoryAsync/ErrorsAsync"
+    permission: "Leave.BalanceViewImportHistory / Leave.BalanceImport"
+    db: "LeaveBalanceImportBatches, LeaveBalanceImportRows"
+
+  - id: F-LEAVE-132
+    name: "Every committed row posts an Opening-type LeaveBalanceTransaction with ActorType=User+ActorUserId=the uploader and SourceType=BalanceImport - a full, attributable audit trail exists per credited row"
+    group: Balance Import
+    status: Implemented
+    ui: "LeaveBalanceImportPage batch detail"
+    api: "POST /api/leave-balances/import/{batchId}/commit"
+    service: "LeaveBalanceImportService.CommitAsync"
+    permission: "Leave.BalanceImport"
+    db: "LeaveBalanceTransactions"
+
+  - id: F-LEAVE-133
+    name: "Balance Import mutation (Validate/Commit) and History require SuperAdmin/TenantAdmin in the seeded matrix - no other role holds Leave.BalanceImport or Leave.BalanceViewImportHistory (mirrors CR-78)"
+    group: Balance Import
+    status: Needs clarification
+    ui: "LeaveBalanceImportPage renders for any authenticated user with the nav item visible, but every action 403s for non-SuperAdmin/TenantAdmin"
+    api: "POST /api/leave-balances/import/validate, /commit; GET /history"
+    service: "SeedData.RolePermissionMap"
+    permission: "Leave.BalanceImport / Leave.BalanceViewImportHistory"
+    db: "n/a"
+    cr: [CR-78]
+
+  - id: F-LEAVE-134
+    name: "Employee/LeaveType/Period lookups inside ValidateAsync query by Code alone (no explicit x.TenantId==tenantId clause on the Employees/LeaveTypes/LeavePeriods queries) - correctness currently depends entirely on the per-tenant shard database boundary, not a belt-and-suspenders tenant filter"
+    group: Balance Import
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/leave-balances/import/validate"
+    service: "LeaveBalanceImportService.ValidateAsync"
+    permission: "Leave.BalanceImport"
+    db: "Employees, LeaveTypes, LeavePeriods"
+    cr: [CR-85]
+
+  # ── J. Leave Request Options ────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-135
+    name: "GET /api/leave-types/available returns only IsActive=true LeaveTypes (page=1,pageSize=100 fixed), for the CURRENTLY authenticated employee identity - it is a static Active-type list, not itself filtered by policy applicability, balance, or notice status for that employee"
+    group: Request Options
+    status: Needs clarification
+    ui: "LeaveRequestPreviewPage LeaveType dropdown"
+    api: "GET /api/leave-types/available"
+    service: "LeaveRequestOptionsController.GetLeaveTypes -> LeaveConfigurationService.GetLeaveTypesAsync"
+    permission: "Leave.TypeViewAvailable"
+    db: "LeaveTypes"
+
+  - id: F-LEAVE-136
+    name: "An inactive LeaveType never appears in the available-options list, even if a Published policy still names it - the real per-employee eligibility (policy resolved, balance sufficient, notice/probation clear) is only discovered later, at Preview time, not filtered out of this options list up front"
+    group: Request Options
+    status: Needs clarification
+    ui: "LeaveRequestPreviewPage LeaveType dropdown"
+    api: "GET /api/leave-types/available"
+    service: "LeaveConfigurationService.GetLeaveTypesAsync (IsActive=true filter only)"
+    permission: "Leave.TypeViewAvailable"
+    db: "LeaveTypes"
+
+  - id: F-LEAVE-137
+    name: "A LeaveType with NO applicable Published policy for this employee/date still appears in the available-options list (it is Active) - selecting it and requesting leave fails later at Preview with NoPolicy, rather than being pre-filtered out"
+    group: Request Options
+    status: Needs clarification
+    ui: "LeaveRequestPreviewPage selecting an unavailable LeaveType then Preview error"
+    api: "GET /api/leave-types/available then POST /api/leave-requests/preview"
+    service: "LeaveConfigurationService.GetLeaveTypesAsync; LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.TypeViewAvailable / Leave.RequestCreate"
+    db: "LeaveTypes, LeavePolicyVersions"
+
+  - id: F-LEAVE-138
+    name: The options endpoint requires a resolvable employee identity - an unlinked account's call fails with the identity-resolution error, not an empty list
+    group: Request Options
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-types/available"
+    service: "LeaveRequestOptionsController.GetLeaveTypes (identityResolver.ResolveCurrentAsync failure branch)"
+    permission: "Leave.TypeViewAvailable"
+    db: "n/a"
+
+  - id: F-LEAVE-139
+    name: "There is no dedicated 'request options' endpoint that pre-computes balance/period/notice availability per LeaveType before submission - Preview (POST /api/leave-requests/preview) IS the de facto options/availability check, performed one LeaveType+date-range at a time"
+    group: Request Options
+    status: Needs clarification
+    ui: "LeaveRequestPreviewPage 'Preview' step"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateAsync"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  # ── K. Leave Request Creation ───────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-140
+    name: "Preview (POST .../preview) runs the FULL validation pipeline (identity, employment, policy, eligibility, notice, calendar, limits) side-effect-free - it creates no request/event/balance row, and can be called repeatedly with no idempotency concern"
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage 'Preview' step"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateAsync"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-141
+    name: "Submit (POST /api/leave-requests) re-runs the SAME validation TWICE (once before, once again after acquiring the per-employee serialization lock) - a change that invalidates the request between the two checks (e.g. a concurrent policy retirement) fails the SECOND check inside the transaction, which is rolled back cleanly"
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage 'Submit' step"
+    api: "POST /api/leave-requests"
+    service: "LeaveRequestSubmissionService.SubmitAttemptAsync"
+    permission: "Leave.RequestCreate"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-142
+    name: "Only FullDayOnly requests are supported end-to-end - every requested day is chargeable at exactly 1.000 (or 0 if excluded by calendar); a policy configured for HalfDayAllowed makes EVERY request against it fail Preview/Submit with UnsupportedConfiguration (CR-81) - there is no single-half-day or multi-day-with-a-half-day-edge submission path anywhere in the runtime"
+    group: Request Creation
+    status: Needs clarification
+    ui: "LeaveRequestPreviewPage has no half-day selector at all"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateSupportedPolicy"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+    cr: [CR-81]
+
+  - id: F-LEAVE-143
+    name: A single-day request (StartDate==EndDate) is valid and charges exactly the one day (or zero if it is a holiday/weekly-off and the policy excludes it, in which case quantity=0 is rejected as 'no working days')
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage single-day picker"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateAsync (BuildDayResults)"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-144
+    name: A multi-day request spans StartDate..EndDate inclusive, one LeaveRequestDay row per calendar day (chargeable per-day per the resolved calendar rule)
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage date-range picker"
+    api: "POST /api/leave-requests"
+    service: "LeaveRequestSubmissionService.SubmitAttemptAsync"
+    permission: "Leave.RequestCreate"
+    db: "LeaveRequests, LeaveRequestDays"
+
+  - id: F-LEAVE-145
+    name: "Allocated entitlement with sufficient Available balance reserves the exact ChargeableQuantity atomically alongside request creation (same transaction) - Reserved increases, Available decreases by the same amount immediately on submit, before any approval"
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage submit success -> balance panel updates"
+    api: "POST /api/leave-requests"
+    service: "LeaveRequestSubmissionService.SubmitAttemptAsync; LeaveBalanceAccountingService.ReserveAsync"
+    permission: "Leave.RequestCreate"
+    db: "EmployeeLeaveBalances, LeaveBalanceTransactions, LeaveEntitlementGrants"
+
+  - id: F-LEAVE-146
+    name: Insufficient Available balance for an Allocated LeaveType rejects the WHOLE submission Conflict ('InsufficientLeaveBalance') - no partial reservation, no request row is persisted (transaction rolled back)
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage submit error banner"
+    api: "POST /api/leave-requests"
+    service: "LeaveBalanceAccountingService.ApplyGrantAllocationsAsync/ApplyProjection"
+    permission: "Leave.RequestCreate"
+    db: "EmployeeLeaveBalances"
+
+  - id: F-LEAVE-147
+    name: "A new request whose date range overlaps ANY day of the employee's own existing PendingApproval or Approved request is rejected Conflict ('Overlap') - checked at the LeaveRequestDay grain, so even a one-day overlap within a longer range blocks the whole new request"
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage submit error banner"
+    api: "POST /api/leave-requests"
+    service: "LeaveRequestSubmissionService.HasBlockingOverlapAsync"
+    permission: "Leave.RequestCreate"
+    db: "LeaveRequestDays"
+
+  - id: F-LEAVE-148
+    name: "A duplicate submission (SAME idempotencyKey, employee) replays the ORIGINAL result (200, not 201) if the payload fingerprint matches exactly - a resubmission with the same key but a DIFFERENT payload (different dates/leaveType) is rejected Conflict ('IdempotencyConflict')"
+    group: Request Creation
+    status: Implemented
+    ui: "n/a (client-generated idempotency key, e.g. a UUID per form-submit click)"
+    api: "POST /api/leave-requests"
+    service: "LeaveRequestSubmissionService.FindExistingAsync/ReplayOrConflictAsync"
+    permission: "Leave.RequestCreate"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-149
+    name: A past date (before today) is accepted only if the resolved RequestRule's BackdatedRequestMode allows it (Allowed unconditionally, or AllowedUpToDays within the configured day limit) - otherwise Invalid ('BackdatedRequestNotAllowed'/'BackdateLimitExceeded')
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage date picker allows past dates; server enforces the real rule"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateRequestTiming"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-150
+    name: "Today's date is accepted subject to MinimumAdvanceNoticeDays (0 imposes no restriction on same-day requests; >0 rejects a same-day or near-term request as 'AdvanceNoticeNotMet')"
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage date picker"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateRequestTiming"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-151
+    name: A future date beyond MinimumAdvanceNoticeDays is always accepted on the timing dimension regardless of how far in the future (no maximum-advance-booking limit exists in the runtime)
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage date picker"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateRequestTiming"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-152
+    name: EndDate before StartDate is rejected 400 at the shape-validation stage, before any identity/policy lookup occurs
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage date-range picker validation"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateShape"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-153
+    name: "A date range whose every day is excluded (all weekly-off/holiday, chargeable quantity sums to zero) is rejected Invalid ('no working days') even though the shape and policy resolution otherwise succeed"
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage submit error"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateAsync (quantity==0 check)"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-154
+    name: "MinimumRequestQuantity/MaximumRequestQuantity bound the request's total ChargeableQuantity (not RequestedQuantity) - a request whose chargeable total (after excluding holidays/weekly-offs) falls outside the configured range is Invalid, even if the RAW calendar span would have been in range"
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage submit error"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateAsync"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-155
+    name: "MaximumConsecutiveQuantity bounds the LONGEST unbroken run of consecutive chargeable days within the request (a weekly-off/holiday in the middle resets the run) - exceeding it is Invalid ('MaximumConsecutiveLeaveExceeded')"
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage submit error"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.MaximumConsecutiveQuantity"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-156
+    name: "MaximumRequestsPerPeriod/MaximumQuantityPerPeriod, scoped to RequestLimitPeriod=Month, aggregate the CANDIDATE request together with the employee's OTHER PendingApproval/Approved requests whose days fall in the SAME calendar month(s) the candidate touches - a candidate spanning 2 months is checked against each month's own cap independently"
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage submit error"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidatePeriodLimitsAsync"
+    permission: "Leave.RequestCreate"
+    db: "LeaveRequestDays"
+
+  - id: F-LEAVE-157
+    name: "MaximumRequestsPerPeriod/MaximumQuantityPerPeriod scoped to RequestLimitPeriod=LeavePeriod aggregate across the WHOLE resolved LeavePeriod instead of per-month"
+    group: Request Creation
+    status: Implemented
+    ui: "LeaveRequestPreviewPage submit error"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidatePeriodLimitsAsync"
+    permission: "Leave.RequestCreate"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-158
+    name: A request under revalidation for its OWN idempotency key excludes its own prior (if any) rows from the period-limit aggregation, so retrying/replaying the identical key never double-counts itself
+    group: Request Creation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidatePeriodLimitsAsync (IdempotencyKey != this key filter)"
+    permission: "Leave.RequestCreate"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-159
+    name: "'Reason' / free-text remarks and file attachments have NO field anywhere in LeaveRequestSubmissionRequest/LeaveRequest - the submission payload is exactly {leaveTypeId, startDate, endDate, idempotencyKey}; there is no reason/comment/attachment capability in the current runtime at all (long-reason, special-character, and attachment test intents from the brief have no surface to exercise)"
+    group: Request Creation
+    status: Needs clarification
+    ui: "LeaveRequestPreviewPage has no reason/comment/attachment field"
+    api: "POST /api/leave-requests"
+    service: "LeaveRequestSubmissionInput/LeaveRequestSubmissionRequest"
+    permission: "Leave.RequestCreate"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-160
+    name: "A request against a policy in a CLOSED (i.e. already period-closed) LeavePeriod is not specially detected as 'closed' - LeavePeriod itself has no IsClosed flag; only IsActive and date containment gate resolution, so a request whose date falls within an inactive/expired period's range simply fails LeavePeriodResolver's own NotConfigured/date-window checks like any other unmatched date"
+    group: Request Creation
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeavePeriodResolver.ResolveAsync"
+    permission: "Leave.RequestCreate"
+    db: "LeavePeriods"
+
+  - id: F-LEAVE-161
+    name: A request against an INACTIVE LeavePolicy or a Draft/Retired-only version resolves NoPolicy and is rejected, identically to having no policy configured at all
+    group: Request Creation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeavePolicyResolver.ResolveAsync"
+    permission: "Leave.RequestCreate"
+    db: "LeavePolicies, LeavePolicyVersions"
+
+  - id: F-LEAVE-162
+    name: A request for an employee whose EMPLOYMENT status resolves to non-Active at the request date is rejected Forbidden regardless of every other check passing
+    group: Request Creation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateEmploymentContext"
+    permission: "Leave.RequestCreate"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-LEAVE-163
+    name: "There is no 'manager unavailable' concept in submission itself - submission never resolves or requires a manager; manager resolution happens only later, at Approval-inbox read time (F-LEAVE-186+) - a request submits successfully even for an employee who currently has NO resolvable manager, and simply never appears in anyone's approval inbox until one is assigned"
+    group: Request Creation
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/leave-requests"
+    service: "LeaveRequestSubmissionService.SubmitAttemptAsync (no manager resolution call)"
+    permission: "Leave.RequestCreate"
+    db: "LeaveRequests"
+
+  # ── L. Working Day Calculation ──────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-164
+    name: "Manage Holidays (Name, Date, optional CountryLocationId/WorkLocationId scoping, IsActive) - a holiday with neither Country nor WorkLocation is tenant-wide"
+    group: Working Days
+    status: Implemented
+    ui: "LeaveWorkingDayCalendarPage Holidays tab"
+    api: "GET/POST/PUT/DELETE /api/holidays[/{id}]"
+    service: "LeaveWorkingDayConfigurationService.*HolidayAsync"
+    permission: "Leave.PolicyView / Leave.PolicyManage"
+    db: "Holidays"
+
+  - id: F-LEAVE-165
+    name: "DELETE /api/holidays/{id} is a soft-deactivate (IsActive=false), not a row delete - history/reporting continue to reference the holiday"
+    group: Working Days
+    status: Implemented
+    ui: "LeaveWorkingDayCalendarPage Holidays tab delete action"
+    api: "DELETE /api/holidays/{id}"
+    service: "LeaveWorkingDayConfigurationService.DeactivateHolidayAsync"
+    permission: "Leave.PolicyManage"
+    db: "Holidays"
+
+  - id: F-LEAVE-166
+    name: "Manage Weekly-Off configurations (effective-dated, optional Country/WorkLocation scope, a SET of DayOfWeek values) - overlapping active configurations for the SAME scope (Country+WorkLocation) are rejected Conflict"
+    group: Working Days
+    status: Implemented
+    ui: "LeaveWorkingDayCalendarPage Weekly Off tab"
+    api: "GET/POST/PUT /api/weekly-off-configurations[/{id}]"
+    service: "LeaveWorkingDayConfigurationService.SaveWeeklyOffAsync"
+    permission: "Leave.PolicyView / Leave.PolicyManage"
+    db: "WeeklyOffConfigurations, WeeklyOffDays"
+
+  - id: F-LEAVE-167
+    name: An empty Days set, or any undefined DayOfWeek value, is rejected 400 on Weekly-Off create/update
+    group: Working Days
+    status: Implemented
+    ui: "LeaveWorkingDayCalendarPage Weekly Off tab validation"
+    api: "POST/PUT /api/weekly-off-configurations[/{id}]"
+    service: "LeaveWorkingDayConfigurationService.SaveWeeklyOffAsync"
+    permission: "Leave.PolicyManage"
+    db: "n/a"
+
+  - id: F-LEAVE-168
+    name: "Alternate/rotating weekly-off patterns (e.g. every 2nd/4th Saturday) are NOT supported - Weekly-Off is a fixed SET of DayOfWeek values effective over a date range; there is no rotation/rule-based weekend model in this codebase"
+    group: Working Days
+    status: Needs clarification
+    ui: "LeaveWorkingDayCalendarPage Weekly Off tab (fixed day checkboxes only)"
+    api: "POST /api/weekly-off-configurations"
+    service: "WeeklyOffConfigurationRequest (Days: number[] only)"
+    permission: "Leave.PolicyManage"
+    db: "WeeklyOffDays"
+
+  - id: F-LEAVE-169
+    name: "A request whose CalendarRule.HolidayTreatment/WeekOffTreatment=Include (the day counts as chargeable leave even though it is a holiday/weekly-off) is honored per-day in BuildDayResults - the day's own ChargeableQuantity is 1.000 instead of 0, with CalculationReason recorded as 'Included by Leave policy'"
+    group: Working Days
+    status: Implemented
+    ui: "LeavePolicyCalendarSection HolidayTreatment/WeekOffTreatment=Include"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.BuildDayResults"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-170
+    name: "Exclude (the default) zeroes ChargeableQuantity for a holiday/weekly-off day, with a distinct CalculationReason ('Holiday: {name}' vs 'Weekly off')"
+    group: Working Days
+    status: Implemented
+    ui: "LeaveRequestPreviewPage per-day breakdown"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.BuildDayResults"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-171
+    name: A request starting or ending exactly on a weekly-off/holiday day still submits successfully as long as at least one other day in the range is chargeable
+    group: Working Days
+    status: Implemented
+    ui: "LeaveRequestPreviewPage per-day breakdown"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateAsync"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  - id: F-LEAVE-172
+    name: "Sandwich rules (treating a weekly-off/holiday BETWEEN two leave days, or a prefix/suffix day adjacent to leave, as chargeable) are a fully modeled configuration (SandwichMode, ApplyToPrefix/Suffix/Between) but are UNREACHABLE at runtime - ValidateSupportedPolicy rejects any non-Disabled sandwich configuration outright (CR-81); a request spanning a weekend/holiday under such a policy never reaches day-by-day sandwich logic because Preview fails first with UnsupportedConfiguration"
+    group: Working Days
+    status: Needs clarification
+    ui: "LeavePolicyCalendarSection Sandwich fields"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService.ValidateSupportedPolicy"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+    cr: [CR-81]
+
+  - id: F-LEAVE-173
+    name: "A change to the Weekly-Off configuration (e.g. adding Sunday as a working day) or a newly added Holiday applies only to FUTURE Preview/Submit calls that resolve the calendar for an affected date - it has no retroactive effect on already-persisted LeaveRequestDay rows for approved/past requests"
+    group: Working Days
+    status: Implemented
+    ui: "LeaveWorkingDayCalendarPage save"
+    api: "POST /api/leave-requests/preview (after a config change)"
+    service: "IWorkingDayCalendarResolver.CalculateAsync (resolved fresh per call)"
+    permission: "Leave.RequestCreate"
+    db: "Holidays, WeeklyOffConfigurations"
+
+  - id: F-LEAVE-174
+    name: "Working-day resolution is DATE-only (DateOnly) throughout the Leave runtime - there is no timezone-aware calculation; a Holiday/WeeklyOff date match is a plain calendar-date equality, with no client-timezone-vs-server-timezone ambiguity to test beyond date-boundary correctness"
+    group: Working Days
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/preview"
+    service: "LeaveRequestValidationService/IWorkingDayCalendarResolver"
+    permission: "Leave.RequestCreate"
+    db: "n/a"
+
+  # ── M. Balance Reservation / Concurrency ────────────────────────────────────────────────────────────
+  - id: F-LEAVE-175
+    name: "Submission reserves balance against the OLDEST-expiring LeaveEntitlementGrant(s) first (grants ordered by ExpiresOn nulls-last, then GrantedOn, then Id) - a single request may span MULTIPLE grants if the first grant's own AvailableQuantity is insufficient alone"
+    group: Reservation/Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests"
+    service: "LeaveBalanceAccountingService.ApplyGrantAllocationsAsync (Reservation branch)"
+    permission: "Leave.RequestCreate"
+    db: "LeaveEntitlementGrants, LeaveBalanceReservationAllocations"
+
+  - id: F-LEAVE-176
+    name: "Approval CONSUMES the existing reservation (Reserved->Consumed transfer on both the aggregate balance and each underlying grant/allocation) - it never creates a fresh reservation; approving a request with no matching reservation (an inconsistent state) is rejected Conflict ('AllocatedReservationNotFound')"
+    group: Reservation/Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/approve"
+    service: "LeaveRequestApprovalService.ApplyAllocatedAccountingAsync; LeaveBalanceAccountingService.ConsumeReservationAsync"
+    permission: "Leave.Approve"
+    db: "EmployeeLeaveBalances, LeaveEntitlementGrants, LeaveBalanceReservationAllocations"
+
+  - id: F-LEAVE-177
+    name: Rejection RELEASES the reservation (Reserved decreases, Available increases back) via the same grant-allocation rows, distinct from Approval's Consume path
+    group: Reservation/Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/reject"
+    service: "LeaveRequestApprovalService.ApplyAllocatedAccountingAsync; LeaveBalanceAccountingService.ReleaseReservationAsync"
+    permission: "Leave.Approve"
+    db: "EmployeeLeaveBalances, LeaveEntitlementGrants"
+
+  - id: F-LEAVE-178
+    name: Withdrawal (of a still-PendingApproval request) releases the reservation identically to Rejection
+    group: Reservation/Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/withdraw"
+    service: "LeaveRequestWithdrawalService.AttemptAsync; LeaveBalanceAccountingService.ReleaseReservationAsync"
+    permission: "Leave.RequestWithdrawOwn"
+    db: "EmployeeLeaveBalances"
+
+  - id: F-LEAVE-179
+    name: Cancellation (of an Approved request) RESTORES the consumed quantity back to Available (Consumed decreases) via RestoreConsumptionAsync - the inverse of Approval's Consume, not a second Release
+    group: Reservation/Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/cancel"
+    service: "LeaveRequestCancellationService.AttemptAsync; LeaveBalanceAccountingService.RestoreConsumptionAsync"
+    permission: "Leave.RequestCancelOwn"
+    db: "EmployeeLeaveBalances, LeaveEntitlementGrants"
+
+  - id: F-LEAVE-180
+    name: "Two concurrent submissions for the SAME employee are serialized by IEmployeeSerializationLock (an Employee-scoped advisory lock acquired before the balance read) - only one can observe/consume the Available balance at a time; the second either succeeds against the now-reduced balance or fails Conflict if insufficient"
+    group: Reservation/Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests (concurrent)"
+    service: "LeaveRequestSubmissionService.AttemptAsync (_submissionLock.AcquireAsync)"
+    permission: "Leave.RequestCreate"
+    db: "EmployeeLeaveBalances"
+
+  - id: F-LEAVE-181
+    name: "Two concurrent requests whose COMBINED chargeable quantity exceeds Available balance: only the first to acquire the lock and pass the balance check succeeds; the second sees the now-reduced Available and is rejected Conflict ('InsufficientLeaveBalance') - no over-reservation is possible under the employee lock"
+    group: Reservation/Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests (concurrent, same employee)"
+    service: "LeaveBalanceAccountingService.ApplyProjection"
+    permission: "Leave.RequestCreate"
+    db: "EmployeeLeaveBalances"
+
+  - id: F-LEAVE-182
+    name: "A transient deadlock (classified via IDatabaseTransientErrorClassifier) during submission/approval/withdrawal/cancellation is retried up to LeaveRequestSubmissionRetryPolicy.MaximumAttempts (3) with a short fixed delay; exhausting retries returns Conflict ('ConcurrencyConflict'), never an unhandled 500"
+    group: Reservation/Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests, /approve, /reject, /withdraw, /cancel"
+    service: "LeaveRequestSubmissionRetryPolicy.ExecuteAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-183
+    name: "MySQL's submission/approval/withdrawal/cancellation locking uses MySqlLeaveRequestSubmissionLock (an application-level lock, e.g. GET_LOCK/advisory row); deadlock 1213 is retried, lock-wait-timeout 1205 is deliberately NOT retried (surfaces as a conflict immediately) - per CLAUDE.md's documented provider divergence"
+    group: Reservation/Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests (MySQL provider)"
+    service: "MySqlLeaveRequestSubmissionLock"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-184
+    name: "SQL Server's equivalent locking uses SqlServerLeaveRequestSubmissionLock (UPDLOCK, HOLDLOCK semantics) with SqlServerLeaveRequestSubmissionDeadlockClassifier recognizing SQL Server's own deadlock error number for the retry policy - a SEPARATE code path from the MySQL lock, exercised only when HRMS_SQLSERVER_TEST_CONNECTION is set"
+    group: Reservation/Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests (SQL Server provider)"
+    service: "SqlServerLeaveRequestSubmissionLock; SqlServerLeaveRequestSubmissionDeadlockClassifier"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-185
+    name: A worker/process restart mid-accrual or mid-reminder-run is safe by construction - occurrence/delivery claim rows use a lease (ClaimToken+LeaseExpiresAtUtc) that expires and becomes reclaimable, so an abandoned in-flight item is eventually retried rather than stuck forever
+    group: Reservation/Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveAccrualProcessor.ClaimAsync; LeaveApprovalReminderProcessor.TryClaimAsync"
+    permission: "n/a"
+    db: "LeaveAccrualOccurrences, LeaveReminderDeliveries"
+
+  # ── N. Leave Approval Workflow ───────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-186
+    name: "An employee cannot approve/reject their OWN request under any circumstance - AuthorizeAsync's first check is an unconditional identity.EmployeeId==request.EmployeeId => Forbidden, evaluated before any permission/manager/scope lookup"
+    group: Approval
+    status: Implemented
+    ui: "LeaveApprovalsPage never lists the caller's own requests (query itself excludes self)"
+    api: "POST /api/leave-requests/{requestId}/approve"
+    service: "LeaveRequestApprovalService.AuthorizeAsync"
+    permission: "Leave.Approve"
+    db: "n/a"
+
+  - id: F-LEAVE-187
+    name: "The CURRENT direct manager (resolved as-of TODAY via IEmployeeManagerResolver against EmployeeEmploymentHistory.ManagerId, non-superseded, effective-dated) may approve/reject, provided they also hold Leave.Approve"
+    group: Approval
+    status: Implemented
+    ui: "LeaveApprovalsPage inbox"
+    api: "POST /api/leave-requests/{requestId}/approve"
+    service: "LeaveRequestApprovalService.AuthorizeAsync (legacy path) / LeaveAuthorizationService.CanAccessEmployeeAsync (new path, includeManager)"
+    permission: "Leave.Approve"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-LEAVE-188
+    name: An UNRELATED manager (holds Leave.Approve but is not this employee's current manager and has no matching role-scope) cannot approve/reject - Forbidden ('ApproverNotAuthorized')
+    group: Approval
+    status: Implemented
+    ui: "LeaveApprovalsPage inbox excludes the request entirely"
+    api: "POST /api/leave-requests/{requestId}/approve"
+    service: "LeaveRequestApprovalService.AuthorizeAsync"
+    permission: "Leave.Approve"
+    db: "n/a"
+
+  - id: F-LEAVE-189
+    name: Approving/rejecting a request that is no longer PendingApproval (already Approved/Rejected/Withdrawn/Cancelled) is rejected Conflict ('InvalidStatusTransition') - repeated approval/rejection is NOT idempotent, unlike some other Leave transitions
+    group: Approval
+    status: Implemented
+    ui: "LeaveApprovalsPage action buttons disabled once status changes"
+    api: "POST /api/leave-requests/{requestId}/approve (second call)"
+    service: "LeaveRequestApprovalService.AttemptAsync"
+    permission: "Leave.Approve"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-190
+    name: Approval after the employee has since Cancelled/Withdrawn their own request (a race between the two actors) fails Conflict for whichever caller loses the race, under the shared per-employee lock
+    group: Approval
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/approve (concurrent with /cancel or /withdraw)"
+    service: "LeaveRequestApprovalService.AttemptAsync (_employeeLock.AcquireAsync)"
+    permission: "Leave.Approve"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-191
+    name: "Approval after the EMPLOYEE'S OWN status has since changed (e.g. separated) is NOT specially blocked by the approval service itself - AuthorizeAsync checks the APPROVER's identity/permission/manager relationship, never the request-owning employee's current Employee.Status; approval succeeds as long as the request is still PendingApproval and the approver is authorized (see CR-53 cross-reference)"
+    group: Approval
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/approve"
+    service: "LeaveRequestApprovalService.AttemptAsync"
+    permission: "Leave.Approve"
+    db: "Employees"
+    cr: [CR-53]
+
+  - id: F-LEAVE-192
+    name: "If the employee's manager CHANGES after a request is already submitted, approval authority is resolved against the CURRENT (today's) manager relationship at the moment Approve/Reject is called - the OLD manager (who was the manager at submission time) loses approval rights, the NEW manager gains them, for the SAME still-pending request"
+    group: Approval
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/approve"
+    service: "LeaveRequestApprovalService.AuthorizeAsync (asOfDate = today, not request.SubmittedAtUtc)"
+    permission: "Leave.Approve"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-LEAVE-193
+    name: "A FUTURE-dated manager change (EffectiveFrom in the future) does NOT yet grant the new manager approval rights - IEmployeeManagerResolver's own current-manager resolution requires the assignment to be effective as of TODAY, unlike the Module-6 CR-70 Manager-ROLE-grant gap which fires early; here the LEAVE approval-scope check is correctly bounded by EffectiveFrom"
+    group: Approval
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/approve"
+    service: "LeaveRequestApprovalService.AuthorizeAsync; IEmployeeManagerResolver.ResolveAsync"
+    permission: "Leave.Approve"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-LEAVE-194
+    name: "An employee with NO current manager (ManagerId null on the effective employment row) can never have their request approved via the manager path - only a role-scoped approver (HRBP/SuperHR/etc. holding Leave.Approve with a matching scope) can act on it; if neither exists, the request is permanently stuck PendingApproval with no supported escalation"
+    group: Approval
+    status: Needs clarification
+    ui: "LeaveApprovalsPage - request never appears in ANY inbox"
+    api: "GET /api/leave-approvals"
+    service: "LeaveApprovalReadService.GetInboxAsync"
+    permission: "Leave.Approve"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-LEAVE-195
+    name: "There is no HR-blanket-approval or multi-level/escalation approval path anywhere in the Leave module - exactly one Approve/Reject action by one authorized actor resolves the request; HRBP/SuperHR act as an ALTERNATIVE authorized approver via role-scope, not a second required approval step"
+    group: Approval
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/approve"
+    service: "LeaveRequestApprovalService.TransitionAsync"
+    permission: "Leave.Approve"
+    db: "n/a"
+
+  - id: F-LEAVE-196
+    name: "Approving Allocated-entitlement leave, when the entitlement mode/reservation is somehow inconsistent (e.g. the balance-accounting service is unavailable), fails Conflict ('AllocatedReservationNotFound') rather than silently approving without accounting"
+    group: Approval
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/approve"
+    service: "LeaveRequestApprovalService.ApplyAllocatedAccountingAsync"
+    permission: "Leave.Approve"
+    db: "n/a"
+
+  - id: F-LEAVE-197
+    name: "Approving a request whose LeaveType.IsCompOff=true routes through CompOffService.ConsumeAsync instead of LeaveBalanceAccountingService - a mismatched/unavailable Comp-Off service fails the approval Conflict rather than silently falling back to standard Leave accounting"
+    group: Approval
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/approve (Comp-Off leave type)"
+    service: "LeaveRequestApprovalService.ApplyAllocatedAccountingAsync"
+    permission: "Leave.Approve"
+    db: "CompOffLeaveAllocations, CompOffLedgerEntries"
+
+  - id: F-LEAVE-198
+    name: "Approval of a request that has attendance integration wired (IAttendanceDayProcessor present) re-processes the Attendance day for every date in the approved range AFTER the DB save but BEFORE commit - a processing failure rolls back the ENTIRE approval transaction (the leave stays PendingApproval)"
+    group: Approval
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/approve"
+    service: "LeaveRequestApprovalService.AttemptAsync (attendance processing loop)"
+    permission: "Leave.Approve"
+    db: "EmployeeAttendanceDays"
+
+  # ── O. Manager Inbox ─────────────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-199
+    name: "The inbox (GET /api/leave-approvals) lists ONLY PendingApproval requests whose employee is within the caller's authorized scope (current direct reports via includeManager, plus any role-scope match via includeRoleScope) - it is a live, always-current query, not a stored assignment"
+    group: Manager Inbox
+    status: Implemented
+    ui: "LeaveApprovalsPage inbox list"
+    api: "GET /api/leave-approvals"
+    service: "LeaveApprovalReadService.GetInboxAsync"
+    permission: "Leave.Approve"
+    db: "LeaveRequests, Employees"
+
+  - id: F-LEAVE-200
+    name: An unrelated employee's PendingApproval request NEVER appears in a manager's inbox, even if that manager holds Leave.Approve broadly
+    group: Manager Inbox
+    status: Implemented
+    ui: "LeaveApprovalsPage inbox"
+    api: "GET /api/leave-approvals"
+    service: "LeaveApprovalReadService.GetInboxAsync"
+    permission: "Leave.Approve"
+    db: "n/a"
+
+  - id: F-LEAVE-201
+    name: "Inbox rows carry the employee's code/name (joined from Employee) and the request's own fields - paged (page/pageSize, 1-100 bounds validated) and sorted by SubmittedAtUtc desc then Id desc"
+    group: Manager Inbox
+    status: Implemented
+    ui: "LeaveApprovalsPage inbox columns/pagination"
+    api: "GET /api/leave-approvals"
+    service: "LeaveApprovalReadService.GetInboxAsync"
+    permission: "Leave.Approve"
+    db: "Employees"
+
+  - id: F-LEAVE-202
+    name: "A page/pageSize outside [1,∞)/[1,100] is rejected Invalid before any query executes"
+    group: Manager Inbox
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-approvals?page=0"
+    service: "LeaveApprovalReadService.GetInboxAsync"
+    permission: "Leave.Approve"
+    db: "n/a"
+
+  - id: F-LEAVE-203
+    name: "A large inbox (many pending requests across many direct/scoped reports) is served through the same paged query with no separate large-data code path - correctness under volume is a matter of index/query-plan efficiency, not application logic branching"
+    group: Manager Inbox
+    status: Implemented
+    ui: "LeaveApprovalsPage pagination controls"
+    api: "GET /api/leave-approvals?pageSize=100"
+    service: "LeaveApprovalReadService.GetInboxAsync"
+    permission: "Leave.Approve"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-204
+    name: "GetById (single-request detail read) applies the SAME scope check as the inbox list - a request outside the caller's scope 404s (NotFound), not 403, to avoid confirming the request's existence to an unauthorized caller"
+    group: Manager Inbox
+    status: Implemented
+    ui: "LeaveApprovalsPage detail drawer"
+    api: "GET /api/leave-approvals/{requestId}"
+    service: "LeaveApprovalReadService.GetByIdAsync"
+    permission: "Leave.Approve"
+    db: "n/a"
+
+  - id: F-LEAVE-205
+    name: "A HISTORICAL (already Approved/Rejected) request is visible via GetById as long as the caller is still in scope TODAY - scope is re-evaluated at read time, not frozen at the time the request was actioned"
+    group: Manager Inbox
+    status: Implemented
+    ui: "LeaveApprovalsPage detail drawer, historical tab"
+    api: "GET /api/leave-approvals/{requestId}"
+    service: "LeaveApprovalReadService.GetByIdAsync"
+    permission: "Leave.Approve"
+    db: "n/a"
+
+  - id: F-LEAVE-206
+    name: "Tenant A's approver never sees Tenant B's pending requests in the inbox - enforced by the same tenant-shard database boundary as every other Leave query (no explicit belt-and-suspenders TenantId filter was found missing here)"
+    group: Manager Inbox
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-approvals"
+    service: "LeaveApprovalReadService.GetInboxAsync"
+    permission: "Leave.Approve"
+    db: "LeaveRequests"
+
+  # ── P. Cancellation / Withdrawal ─────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-207
+    name: "Withdraw is the employee's OWN action on a still-PendingApproval request (before any manager has acted) - it releases the reservation and sets Status=Withdrawn; only the OWNING employee may withdraw (a mismatched EmployeeId is NotFound, not Forbidden)"
+    group: Cancellation
+    status: Implemented
+    ui: "MyLeaveRequestsPage 'Withdraw' action"
+    api: "POST /api/leave-requests/{requestId}/withdraw"
+    service: "LeaveRequestWithdrawalService.AttemptAsync"
+    permission: "Leave.RequestWithdrawOwn"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-208
+    name: "Withdrawing a request that is no longer PendingApproval (already Approved/Rejected/Withdrawn/Cancelled) is rejected Conflict ('InvalidStatusTransition')"
+    group: Cancellation
+    status: Implemented
+    ui: "MyLeaveRequestsPage 'Withdraw' button disabled once status changes"
+    api: "POST /api/leave-requests/{requestId}/withdraw"
+    service: "LeaveRequestWithdrawalService.AttemptAsync"
+    permission: "Leave.RequestWithdrawOwn"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-209
+    name: "Cancel is the employee's OWN action on an ALREADY-Approved request - it is gated by the resolved policy rule's own CancellationRule.CancelAllowed (false blocks it Conflict, 'CancellationNotAllowed'), and restores the CONSUMED quantity (not a reservation release, since Approval already consumed it)"
+    group: Cancellation
+    status: Implemented
+    ui: "MyLeaveRequestsPage 'Cancel' action (visible only when CancelAllowed)"
+    api: "POST /api/leave-requests/{requestId}/cancel"
+    service: "LeaveRequestCancellationService.AttemptAsync"
+    permission: "Leave.RequestCancelOwn"
+    db: "LeaveRequests, EmployeeLeaveBalances"
+
+  - id: F-LEAVE-210
+    name: Cancelling a request that is not currently Approved (e.g. already Cancelled, still Pending, or Rejected) is rejected Conflict ('InvalidStatusTransition') - only Approved->Cancelled is a legal transition for this action
+    group: Cancellation
+    status: Implemented
+    ui: "MyLeaveRequestsPage 'Cancel' button hidden/disabled otherwise"
+    api: "POST /api/leave-requests/{requestId}/cancel"
+    service: "LeaveRequestCancellationService.AttemptAsync"
+    permission: "Leave.RequestCancelOwn"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-211
+    name: "There is no MANAGER-initiated cancellation anywhere in the API surface - LeaveRequestsController's Cancel action is gated by Leave.RequestCancelOwn only, and the service itself hard-requires request.EmployeeId==identity.EmployeeId; a manager cannot cancel a direct report's approved leave on their behalf"
+    group: Cancellation
+    status: Needs clarification
+    ui: "LeaveApprovalsPage has no Cancel action for a historical Approved request"
+    api: "POST /api/leave-requests/{requestId}/cancel (as the request's manager)"
+    service: "LeaveRequestCancellationService.AttemptAsync (request.EmployeeId != identity.EmployeeId check)"
+    permission: "Leave.RequestCancelOwn"
+    db: "n/a"
+
+  - id: F-LEAVE-212
+    name: "Cancellation after the LeavePeriod containing the request has since closed (LeavePeriodCloseProcessor has already run and lapsed/carried the balance) is NOT specially detected - RestoreConsumptionAsync restores into the SAME EmployeeLeaveBalance row the original consumption came from, which may already be zeroed out by period close; verify whether this can drive Consumed negative or silently succeed against a stale balance"
+    group: Cancellation
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/cancel (after period close)"
+    service: "LeaveBalanceAccountingService.ApplyProjection (CancellationRestore branch)"
+    permission: "Leave.RequestCancelOwn"
+    db: "EmployeeLeaveBalances, LeavePeriodCloseOccurrences"
+
+  - id: F-LEAVE-213
+    name: A repeated Cancel/Withdraw call on an already-Cancelled/Withdrawn request is rejected Conflict, not idempotently accepted - unlike SuperHR-revocation-style idempotency seen elsewhere in the product, Leave's own lifecycle transitions are strictly single-shot
+    group: Cancellation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/cancel (second call)"
+    service: "LeaveRequestCancellationService.AttemptAsync"
+    permission: "Leave.RequestCancelOwn"
+    db: "n/a"
+
+  - id: F-LEAVE-214
+    name: Another employee attempting to cancel/withdraw a request that is not their own is rejected NotFound (the query itself filters by identity.EmployeeId, so the row is invisible rather than producing a 403)
+    group: Cancellation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{otherEmployeesRequestId}/cancel"
+    service: "LeaveRequestCancellationService.AttemptAsync"
+    permission: "Leave.RequestCancelOwn"
+    db: "n/a"
+
+  # ── Q. Comp Off ──────────────────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-215
+    name: "Comp-Off is minute-based and policy-driven (CompOffPolicy: AllowWeekOff/AllowHoliday/AllowOvertimeSource, MinimumWorkedMinutes, CreditRatio, RoundingMode/Minutes, per-day/per-month credit caps, ExpiryDays/Months, RequireCreditApproval, BenefitMode) - configured via CompOffController's admin endpoints, no dedicated policy-editor page was found in the frontend inventory (verify against CompOffPage/CompOffOperationsPage)"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a - policy management appears API-only; CompOffPage/CompOffOperationsPage are self-service and operational views only"
+    api: "POST /api/attendance/comp-off/policies"
+    service: "CompOffService.CreatePolicyAsync"
+    permission: "Attendance.CompOff.Manage"
+    db: "CompOffPolicies"
+
+  - id: F-LEAVE-216
+    name: "Earning a Comp-Off credit requires a RESOLVED (not Incomplete/NotProcessed) authoritative Attendance day, an effective policy for the work date, and the correct source-type gate (WeekOff requires AllowWeekOff+RosterDayType.WeeklyOff; Holiday requires AllowHoliday+RosterDayType.Holiday; Overtime requires AllowOvertimeSource)"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a - system/attendance-triggered, not a self-service action"
+    api: "POST /api/attendance/comp-off/earnings"
+    service: "CompOffService.EarnAsync"
+    permission: "Attendance.CompOff.Manage"
+    db: "CompOffEarnings, EmployeeAttendanceDays"
+
+  - id: F-LEAVE-217
+    name: "BenefitMode governs monetary-Overtime vs Comp-Off exclusivity - OvertimeOnly always denies a Comp-Off credit; any source already tied to an Overtime snapshot is denied UNLESS BenefitMode=DualBenefit ('DoubleBenefitDenied')"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/comp-off/earnings"
+    service: "CompOffService.EarnAsync"
+    permission: "Attendance.CompOff.Manage"
+    db: "CompOffPolicies"
+
+  - id: F-LEAVE-218
+    name: "Credited minutes = Round(eligibleMinutes*CreditRatio, RoundingMode/Minutes), capped by MaximumCreditMinutesPerDay then by the REMAINING MaximumCreditMinutesPerMonth headroom (prior same-month non-Rejected credits are summed first)"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/comp-off/earnings"
+    service: "CompOffService.EarnAsync/Round"
+    permission: "Attendance.CompOff.Manage"
+    db: "CompOffEarnings"
+
+  - id: F-LEAVE-219
+    name: "A duplicate Earn call for the SAME (AttendanceDayId, AttendanceVersion) source key is idempotent - it returns the EXISTING earning ('The source credit already exists') rather than double-crediting"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/comp-off/earnings (repeated)"
+    service: "CompOffService.EarnAsync (sourceKey SingleOrDefaultAsync)"
+    permission: "Attendance.CompOff.Manage"
+    db: "CompOffEarnings"
+
+  - id: F-LEAVE-220
+    name: "RequireCreditApproval=true credits enter PendingApproval and post NO ledger credit until Approved; false credits immediately as Approved with an immediate ledger Credit entry"
+    group: Comp Off
+    status: Implemented
+    ui: "CompOffOperationsPage pending-approval filter"
+    api: "POST /api/attendance/comp-off/earnings/{earningId}/approve"
+    service: "CompOffService.DecideAsync"
+    permission: "Attendance.CompOff.Approve"
+    db: "CompOffEarnings, CompOffLedgerEntries"
+
+  - id: F-LEAVE-221
+    name: A Rejected earning posts no ledger credit and never becomes available balance; deciding an already-decided (non-PendingApproval) earning is rejected Conflict
+    group: Comp Off
+    status: Implemented
+    ui: "CompOffOperationsPage"
+    api: "POST /api/attendance/comp-off/earnings/{earningId}/reject"
+    service: "CompOffService.DecideAsync"
+    permission: "Attendance.CompOff.Approve"
+    db: "CompOffEarnings"
+
+  - id: F-LEAVE-222
+    name: "GET .../balance/.../earnings/.../ledger are SELF-service-only (CurrentEmployee() resolved from the caller's own identity) - there is no {employeeId} route parameter, so a caller cannot view another employee's Comp-Off through these three endpoints regardless of permission"
+    group: Comp Off
+    status: Implemented
+    ui: "CompOffPage self-service balance/earnings/ledger tabs"
+    api: "GET /api/attendance/comp-off/balance, /earnings, /ledger"
+    service: "CompOffController.Balance/Earnings/Ledger (CurrentEmployee helper)"
+    permission: "Attendance.CompOff.ViewSelf"
+    db: "CompOffLedgerEntries, CompOffEarnings"
+
+  - id: F-LEAVE-223
+    name: "A withdrawn/deleted employee identity (CurrentEmployee() resolves null) is rejected Unauthorized rather than defaulting to an empty balance"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/attendance/comp-off/balance"
+    service: "CompOffController.Balance"
+    permission: "Attendance.CompOff.ViewSelf"
+    db: "n/a"
+
+  - id: F-LEAVE-224
+    name: "The Operations query (manager/HR-facing, multi-employee) has NO [HasPermission] attribute on its controller action at all - only the controller-level [Authorize] gates it; authorization is enforced entirely INSIDE CompOffService.BuildOperationalScopeAsync, which itself tries CompOffViewAll -> CompOffViewTeam -> CompOffManage -> CompOffApprove -> CompOffViewHistory in turn and uses whichever first succeeds"
+    group: Comp Off
+    status: Needs clarification
+    ui: "CompOffOperationsPage"
+    api: "GET /api/attendance/comp-off/operations"
+    service: "CompOffController.Operations; CompOffService.BuildOperationalScopeAsync"
+    permission: "n/a (no declarative HasPermission - see CR-82)"
+    db: "n/a"
+    cr: [CR-82]
+
+  - id: F-LEAVE-225
+    name: "An Employee-role caller (holds only CompOffViewSelf, none of the 5 operational permissions) is rejected Forbidden by BuildOperationalScopeAsync's own fallback when calling Operations directly"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/attendance/comp-off/operations (as plain Employee)"
+    service: "CompOffService.BuildOperationalScopeAsync"
+    permission: "n/a"
+    db: "n/a"
+    cr: [CR-82]
+
+  - id: F-LEAVE-226
+    name: A Manager's Operations query is narrowed to self+direct-reports (CompOffViewTeam, includeManager=true); an unrelated employee's Comp-Off rows are excluded even though the endpoint itself has no HasPermission gate
+    group: Comp Off
+    status: Implemented
+    ui: "CompOffOperationsPage (Manager view)"
+    api: "GET /api/attendance/comp-off/operations"
+    service: "CompOffService.BuildOperationalScopeAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-227
+    name: An HRBP's Operations query respects their own role-scope (e.g. Department) exactly as RoleScopeResolver/IAttendanceAuthorizationService defines it for Attendance-family permissions
+    group: Comp Off
+    status: Implemented
+    ui: "CompOffOperationsPage (HRBP view)"
+    api: "GET /api/attendance/comp-off/operations"
+    service: "CompOffService.BuildOperationalScopeAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-228
+    name: "Comp-Off leave reservation (a request against an IsCompOff LeaveType) allocates against the OLDEST-expiring APPROVED earning(s) first - insufficient total available Comp-Off across all earnings rejects the whole reservation Conflict ('InsufficientCompOffBalance')"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a (transparent to the employee submitting a Comp-Off-type leave request)"
+    api: "POST /api/leave-requests (Comp-Off leave type)"
+    service: "CompOffService.ApplyLeaveAsync"
+    permission: "Leave.RequestCreate"
+    db: "CompOffLeaveAllocations, CompOffLedgerEntries"
+
+  - id: F-LEAVE-229
+    name: "Approving Comp-Off leave Consumes the reservation; Rejecting/Withdrawing Releases it; Cancelling an approved Comp-Off leave Restores it - the same 4-state ledger lifecycle as standard Allocated leave, mirrored through CompOffLedgerEntryType instead of LeaveBalanceTransactionType"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/approve|reject|withdraw|cancel (Comp-Off leave type)"
+    service: "CompOffService.TransitionLeaveAsync"
+    permission: "Leave.Approve / Leave.RequestWithdrawOwn / Leave.RequestCancelOwn"
+    db: "CompOffLeaveAllocations, CompOffLedgerEntries"
+
+  - id: F-LEAVE-230
+    name: "A repeated Reserve call for the same LeaveRequestId that already has a 'Reserved' allocation is idempotent (returns success with 'Reservation already exists', no double-reservation)"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/attendance/comp-off/leave/{leaveRequestId}/reserve"
+    service: "CompOffService.ApplyLeaveAsync"
+    permission: "Attendance.CompOff.Manage"
+    db: "CompOffLeaveAllocations"
+
+  - id: F-LEAVE-231
+    name: "Comp-Off earnings expire per-earning ExpiresOn (ExpiryDays or ExpiryMonths from the source work date) - ExpireAsync posts an Expire ledger entry for each earning's remaining available minutes as of a given date, and marks the earning Expired only if nothing is still Reserved against it"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a - operator/worker-invoked"
+    api: "POST /api/attendance/comp-off/expiry"
+    service: "CompOffService.ExpireAsync"
+    permission: "Attendance.CompOff.Manage"
+    db: "CompOffEarnings, CompOffLedgerEntries"
+
+  - id: F-LEAVE-232
+    name: "A source Attendance-day correction (CorrectSourceAsync) supersedes the OLD earning (Status=Superseded) and creates a REPLACEMENT earning with an incremented SourceAttendanceVersion - consumed history on the old earning is preserved via a ledger Reversal/extra-Credit entry; a correction that would reduce credited minutes BELOW already-consumed minutes is rejected Conflict ('CorrectionRequiresAdjustment')"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a - operator/HR-invoked correction tool, not found in the frontend page inventory"
+    api: "n/a (ICompOffService.CorrectSourceAsync - verify whether any controller route exposes this)"
+    service: "CompOffService.CorrectSourceAsync"
+    permission: "Attendance.CompOff.Manage"
+    db: "CompOffEarnings, CompOffLedgerEntries"
+
+  - id: F-LEAVE-233
+    name: "Comp-Off's Attendance.CompOff.* permissions are tenant-scoped by the same shard-database boundary as every other Leave/Attendance table - Tenant B never sees Tenant A's Comp-Off earnings/ledger/policies"
+    group: Comp Off
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/attendance/comp-off/balance"
+    service: "CompOffService"
+    permission: "Attendance.CompOff.ViewSelf"
+    db: "CompOffEarnings, CompOffLedgerEntries"
+
+  # ── R. Leave Calendar / Team Calendar ───────────────────────────────────────────────────────────────
+  - id: F-LEAVE-234
+    name: "GET /api/leave-calendar?from&to always includes the caller's OWN Approved and PendingApproval requests, plus other employees' events depending on which code path is wired (see CR-83)"
+    group: Calendar
+    status: Implemented
+    ui: "MyLeaveRequestsPage / TeamLeaveCalendarPage"
+    api: "GET /api/leave-calendar"
+    service: "LeaveCalendarService.GetAsync"
+    permission: "Leave.RequestViewOwn"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-235
+    name: "from/to must satisfy from<=to and span at most 366 days - otherwise Invalid, before any query executes"
+    group: Calendar
+    status: Implemented
+    ui: "TeamLeaveCalendarPage date-range picker"
+    api: "GET /api/leave-calendar"
+    service: "LeaveCalendarService.GetAsync"
+    permission: "Leave.RequestViewOwn"
+    db: "n/a"
+
+  - id: F-LEAVE-236
+    name: "WITH ILeaveAuthorizationService wired (the 'new' path): a direct-report's or role-scoped employee's PendingApproval requests are ALSO visible to the authorized viewer, not just Approved ones - see F-LEAVE-234/CR-83"
+    group: Calendar
+    status: Needs clarification
+    ui: "TeamLeaveCalendarPage"
+    api: "GET /api/leave-calendar"
+    service: "LeaveCalendarService.GetAsync (authorizationEnabled branch)"
+    permission: "Leave.RequestViewOwn"
+    db: "n/a"
+    cr: [CR-83]
+
+  - id: F-LEAVE-237
+    name: "WITHOUT ILeaveAuthorizationService wired (the 'legacy' fallback): a non-self viewer sees only Approved events UNLESS they hold Leave.Approve, in which case PendingApproval events also show - but ONLY for employees who resolve as their CURRENT direct report (no role-scope fallback at all in this path)"
+    group: Calendar
+    status: Needs clarification
+    ui: "n/a - exercised only by whichever test/DI configuration omits the authorization service"
+    api: "GET /api/leave-calendar"
+    service: "LeaveCalendarService.GetAsync (legacy branch)"
+    permission: "Leave.RequestViewOwn"
+    db: "n/a"
+    cr: [CR-83]
+
+  - id: F-LEAVE-238
+    name: An unrelated employee's calendar events (any status) are never visible to a caller with no manager/role-scope relationship to them, under either code path
+    group: Calendar
+    status: Implemented
+    ui: "TeamLeaveCalendarPage"
+    api: "GET /api/leave-calendar"
+    service: "LeaveCalendarService.GetAsync"
+    permission: "Leave.RequestViewOwn"
+    db: "n/a"
+
+  - id: F-LEAVE-239
+    name: "Calendar events carry no privacy-sensitive fields beyond employee code/name/leaveType/date-range/quantity/status - there is no 'reason' field to leak (F-LEAVE-159) and no distinct private/public visibility flag per request"
+    group: Calendar
+    status: Implemented
+    ui: "TeamLeaveCalendarPage event tooltip"
+    api: "GET /api/leave-calendar"
+    service: "LeaveCalendarService.GetAsync"
+    permission: "Leave.RequestViewOwn"
+    db: "n/a"
+
+  - id: F-LEAVE-240
+    name: Tenant A's calendar never includes Tenant B's employees or requests (identity.Value.TenantId scoping plus the shard boundary)
+    group: Calendar
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-calendar"
+    service: "LeaveCalendarService.GetAsync"
+    permission: "Leave.RequestViewOwn"
+    db: "LeaveRequests"
+
+  # ── S. HR Leave Dashboard ────────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-241
+    name: "GET /api/leave-dashboard/hr-summary defaults its date window to the CURRENT LeavePeriod's own StartDate/EndDate if resolvable, else [today-30, today+30]; from/to are otherwise explicit query overrides bounded to 366 days"
+    group: Dashboard
+    status: Implemented
+    ui: "LeaveDashboardPage"
+    api: "GET /api/leave-dashboard/hr-summary"
+    service: "HrLeaveDashboardService.GetSummaryAsync"
+    permission: "Leave.DashboardViewAll"
+    db: "LeaveRequests, LeavePeriods"
+
+  - id: F-LEAVE-242
+    name: "KPIs (employeesOnLeaveToday, activeEmployeeCount, upcomingApprovedRequests, pendingApprovalRequests, approvedRequests, rejectedRequests, cancelledOrWithdrawnRequests), status breakdown, leave-type usage, balances-by-type, approval-aging buckets, top-10 pending, top-20 upcoming absences, department/location groupings, and a monthly trend are all computed from ONE date-bounded LeaveRequests query plus a separate EmployeeLeaveBalances query"
+    group: Dashboard
+    status: Implemented
+    ui: "LeaveDashboardPage widgets"
+    api: "GET /api/leave-dashboard/hr-summary"
+    service: "HrLeaveDashboardService.GetSummaryAsync"
+    permission: "Leave.DashboardViewAll"
+    db: "LeaveRequests, EmployeeLeaveBalances"
+
+  - id: F-LEAVE-243
+    name: leaveTypeId/departmentId/workLocationId filters narrow the underlying LeaveRequests query (and the balances query for leaveTypeId) before every widget is computed from the same filtered set
+    group: Dashboard
+    status: Implemented
+    ui: "LeaveDashboardPage filter bar"
+    api: "GET /api/leave-dashboard/hr-summary?leaveTypeId=...&departmentId=...&workLocationId=..."
+    service: "HrLeaveDashboardService.GetSummaryAsync"
+    permission: "Leave.DashboardViewAll"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-244
+    name: "WITH ILeaveAuthorizationService wired, the dashboard is scoped to the caller's authorized employees (role-scope only, includeManager=false) - an HRBP scoped to one Department sees dashboard numbers computed ONLY from that department's requests, not the whole tenant"
+    group: Dashboard
+    status: Implemented
+    ui: "LeaveDashboardPage (HRBP session)"
+    api: "GET /api/leave-dashboard/hr-summary"
+    service: "HrLeaveDashboardService.GetSummaryAsync (BuildEmployeePredicateAsync)"
+    permission: "Leave.DashboardViewAll"
+    db: "n/a"
+
+  - id: F-LEAVE-245
+    name: "HRAdmin, who DOES hold Leave.DashboardViewAll (F-LEAVE-040 notwithstanding), sees the FULL tenant-wide dashboard (no role-scope narrows a tenant-wide role) - contrast with HRManager, who holds NO Leave.DashboardViewAll at all and cannot open the dashboard"
+    group: Dashboard
+    status: Needs clarification
+    ui: "LeaveDashboardPage nav item absent for HRManager"
+    api: "GET /api/leave-dashboard/hr-summary"
+    service: "SeedData.RolePermissionMap[HRAdmin]/[HRManager]"
+    permission: "Leave.DashboardViewAll"
+    db: "n/a"
+    cr: [CR-79]
+
+  - id: F-LEAVE-246
+    name: "An empty tenant/date-window (zero matching requests) returns a well-formed summary with all counts at 0 and empty arrays, not an error"
+    group: Dashboard
+    status: Implemented
+    ui: "LeaveDashboardPage empty state"
+    api: "GET /api/leave-dashboard/hr-summary?from=<far future>&to=<far future+1>"
+    service: "HrLeaveDashboardService.GetSummaryAsync"
+    permission: "Leave.DashboardViewAll"
+    db: "n/a"
+
+  - id: F-LEAVE-247
+    name: "The dashboard's own from/to bound (366-day cap) is the only guard against a pathologically large query - there is no separate 'large tenant' pagination; correctness under high request volume depends on the query's own aggregate efficiency"
+    group: Dashboard
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-dashboard/hr-summary?from=...&to=... (366-day span, large tenant)"
+    service: "HrLeaveDashboardService.GetSummaryAsync"
+    permission: "Leave.DashboardViewAll"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-248
+    name: Tenant B's HRAdmin never sees Tenant A's dashboard numbers (shard boundary plus the identical query pattern used elsewhere)
+    group: Dashboard
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-dashboard/hr-summary"
+    service: "HrLeaveDashboardService.GetSummaryAsync"
+    permission: "Leave.DashboardViewAll"
+    db: "n/a"
+
+  # ── T. Leave Reports ─────────────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-249
+    name: "Seven report kinds exist: requests, employees/{id}/history (a filtered requests view), balances, usage, accounting, pending, organization, calendar - each with its own row shape and independent filter/sort/paging support"
+    group: Reports
+    status: Implemented
+    ui: "LeaveReportsPage report-type tabs"
+    api: "GET /api/leave-reports/{requests|balances|usage|accounting|pending|organization|calendar}"
+    service: "LeaveReportService.Get*Async"
+    permission: "Leave.ReportsView"
+    db: "LeaveRequests, EmployeeLeaveBalances, LeaveBalanceTransactions, LeaveAccrualOccurrences, LeavePeriodCloseOccurrences, Holidays, WeeklyOffConfigurations"
+
+  - id: F-LEAVE-250
+    name: "The Requests/Pending/Usage/Organization reports share the SAME date-bounded, scope-filtered LeaveRequests source (RequestSource+ApplyRequestFilters) - a filter or scope change to one conceptually affects all four consistently"
+    group: Reports
+    status: Implemented
+    ui: "LeaveReportsPage"
+    api: "GET /api/leave-reports/requests, /pending, /usage, /organization"
+    service: "LeaveReportService.RequestSource/ApplyRequestFilters"
+    permission: "Leave.ReportsView"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-251
+    name: "Sorting (SortBy: employeeCode/employee/leaveType/status/startDate, Descending) is supported only on the Requests report; other reports use a fixed server-side order"
+    group: Reports
+    status: Implemented
+    ui: "LeaveReportsPage Requests tab column sort"
+    api: "GET /api/leave-reports/requests?sortBy=startDate&descending=true"
+    service: "LeaveReportService.ApplyRequestSort"
+    permission: "Leave.ReportsView"
+    db: "n/a"
+
+  - id: F-LEAVE-252
+    name: "Every paged report validates page>=1 and 1<=pageSize<=100 up front, Invalid otherwise"
+    group: Reports
+    status: Implemented
+    ui: "LeaveReportsPage pagination controls"
+    api: "GET /api/leave-reports/requests?page=0"
+    service: "LeaveReportService.ValidatePaging"
+    permission: "Leave.ReportsView"
+    db: "n/a"
+
+  - id: F-LEAVE-253
+    name: "The Balances report additionally synthesizes a row per Unlimited-mode LeaveType that has NO EmployeeLeaveBalance row yet (so Unlimited types still appear, with null quantities) - Allocated types with no balance row are simply absent, mirroring F-LEAVE-110"
+    group: Reports
+    status: Implemented
+    ui: "LeaveReportsPage Balances tab"
+    api: "GET /api/leave-reports/balances"
+    service: "LeaveReportService.GetBalancesAsync"
+    permission: "Leave.ReportsView"
+    db: "EmployeeLeaveBalances, LeaveTypes"
+
+  - id: F-LEAVE-254
+    name: "The Accounting report merges THREE independent sources (LeaveBalanceTransactions for Accrual/CarryForward/Expiry, LeaveAccrualOccurrences for the raw calculated-vs-credited numbers, and LeavePeriodCloseOccurrences for carry/lapse pairs) into one unified, date-filtered, employee/leaveType-filtered timeline"
+    group: Reports
+    status: Implemented
+    ui: "LeaveReportsPage Accounting tab"
+    api: "GET /api/leave-reports/accounting"
+    service: "LeaveReportService.GetAccountingAsync"
+    permission: "Leave.ReportsView"
+    db: "LeaveBalanceTransactions, LeaveAccrualOccurrences, LeavePeriodCloseOccurrences"
+
+  - id: F-LEAVE-255
+    name: "The Pending report's agingBucket (0-1/2-3/4-7/8+ days) is computed from SubmittedAtUtc.Date vs. today's date - identical bucket boundaries to the HR Dashboard's own aging computation"
+    group: Reports
+    status: Implemented
+    ui: "LeaveReportsPage Pending tab aging column"
+    api: "GET /api/leave-reports/pending"
+    service: "LeaveReportService.GetPendingAsync"
+    permission: "Leave.ReportsView"
+    db: "n/a"
+
+  - id: F-LEAVE-256
+    name: "The Organization report groups by Department or WorkLocation (organizationDimension query param), each group reporting distinct approved-employee count, total request count, pending count, and approved quantity"
+    group: Reports
+    status: Implemented
+    ui: "LeaveReportsPage Organization tab dimension toggle"
+    api: "GET /api/leave-reports/organization?organizationDimension=workLocation"
+    service: "LeaveReportService.GetOrganizationAsync"
+    permission: "Leave.ReportsView"
+    db: "n/a"
+
+  - id: F-LEAVE-257
+    name: "The Calendar report is UNSCOPED by employee authorization (ResolveScopeAsync is called for its date bounds only; EnsureEmployeeAccessAsync/_authorizedEmployeeIds is never consulted) - it lists tenant-wide Holidays and WeeklyOffConfigurations regardless of the caller's Leave role-scope, since neither entity carries an EmployeeId to scope by"
+    group: Reports
+    status: Implemented
+    ui: "LeaveReportsPage Calendar tab"
+    api: "GET /api/leave-reports/calendar"
+    service: "LeaveReportService.GetCalendarAsync"
+    permission: "Leave.ReportsView"
+    db: "Holidays, WeeklyOffConfigurations"
+
+  - id: F-LEAVE-258
+    name: "CSV export (GET .../{report}/export.csv) reuses the SAME filtered query as the interactive report, paging through internally up to MaxExportRows (50,000); exceeding that cap rejects the export Invalid rather than silently truncating the file"
+    group: Reports
+    status: Implemented
+    ui: "LeaveReportsPage 'Export CSV' button"
+    api: "GET /api/leave-reports/{report}/export.csv"
+    service: "LeaveReportService.ExportCsvAsync"
+    permission: "Leave.ReportsExport"
+    db: "n/a"
+
+  - id: F-LEAVE-259
+    name: An unsupported report name in the export route is rejected Invalid ('report') rather than 404 or 500
+    group: Reports
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-reports/not-a-real-report/export.csv"
+    service: "LeaveReportService.ExportCsvAsync"
+    permission: "Leave.ReportsExport"
+    db: "n/a"
+
+  - id: F-LEAVE-260
+    name: "Self/Manager/HR scope on Reports is entirely determined by whichever employee-predicate ILeaveAuthorizationService.BuildEmployeePredicateAsync(Leave.ReportsView, includeManager:false, includeRoleScope:true) returns - a Manager with only Leave.Approve (not Leave.ReportsView) cannot open Reports at all; a Manager who ALSO happens to hold Leave.ReportsView (e.g. via a custom role) sees a role-scope-only view with NO automatic direct-report inclusion (includeManager is explicitly false here, unlike Approval/Calendar)"
+    group: Reports
+    status: Needs clarification
+    ui: "LeaveReportsPage"
+    api: "GET /api/leave-reports/requests"
+    service: "LeaveReportService.EnsureEmployeeAccessAsync (includeManager: false)"
+    permission: "Leave.ReportsView"
+    db: "n/a"
+
+  - id: F-LEAVE-261
+    name: An out-of-range date filter (ToDate before FromDate, or a span exceeding 366 days) is rejected Invalid on every interactive report
+    group: Reports
+    status: Implemented
+    ui: "LeaveReportsPage date-range picker"
+    api: "GET /api/leave-reports/requests?fromDate=2026-06-01&toDate=2026-01-01"
+    service: "LeaveReportService.ResolveScopeAsync"
+    permission: "Leave.ReportsView"
+    db: "n/a"
+
+  - id: F-LEAVE-262
+    name: Tenant B's reports never include Tenant A's requests/balances/transactions/occurrences/holidays (shard boundary; RequestSource/GetBalancesAsync/etc. all filter on the resolved _tenant.TenantId)
+    group: Reports
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-reports/*"
+    service: "LeaveReportService"
+    permission: "Leave.ReportsView"
+    db: "n/a"
+
+  # ── U. Leave Approval Reminder Worker ────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-263
+    name: "A PendingApproval request becomes reminder-eligible once now >= SubmittedAtUtc + InitialDelayHours (default 24h) - a request submitted less than InitialDelayHours ago is NOT yet due and is excluded from the candidate query entirely"
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderProcessor.ProcessAsync"
+    permission: "n/a"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-264
+    name: "A request with NO resolvable current manager is skipped (skipped++, warning logged) rather than failing the whole batch"
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderProcessor.ProcessAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-265
+    name: "The FIRST reminder for a request fires at occurrence 0 (elapsed just past InitialDelayHours); each subsequent occurrence key increments by RepeatIntervalHours (default 24h) - a distinct LeaveReminderDelivery row per occurrence, keyed 'requestId:occurrenceNumber'"
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderProcessor.ProcessAsync (occurrence computation)"
+    permission: "n/a"
+    db: "LeaveReminderDeliveries"
+
+  - id: F-LEAVE-266
+    name: "MaxAttempts (default 3) bounds how many times ONE occurrence's delivery is retried after a failure - once reached, TryClaimAsync's own guard refuses to claim it again, and it is never sent (permanently Failed for that occurrence, though the NEXT occurrence, one RepeatIntervalHours later, is a fresh row and gets its own attempt budget)"
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderProcessor.TryClaimAsync"
+    permission: "n/a"
+    db: "LeaveReminderDeliveries"
+
+  - id: F-LEAVE-267
+    name: "A delivery failure (notification provider returns Failed, or an exception is thrown) sets Status=Failed with NextAttemptAtUtc=now+RepeatIntervalHours and records LastError=exception type name; the SAME occurrence key is retried once NextAttemptAtUtc has passed, up to MaxAttempts"
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderProcessor.FailAsync"
+    permission: "n/a"
+    db: "LeaveReminderDeliveries"
+
+  - id: F-LEAVE-268
+    name: "A Claimed row whose LeaseExpiresAtUtc has not yet passed cannot be re-claimed by a second concurrent worker (TryClaimAsync's own WHERE clause is the claim itself, an atomic conditional UPDATE) - two workers racing on the same occurrence never both send the reminder"
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderProcessor.TryClaimAsync"
+    permission: "n/a"
+    db: "LeaveReminderDeliveries"
+
+  - id: F-LEAVE-269
+    name: A Claimed row whose lease HAS expired (the original claimant crashed/hung) becomes reclaimable by any worker's next pass - the predicate-as-claim pattern prevents two workers both observing the expired lease from both winning
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderProcessor.TryClaimAsync"
+    permission: "n/a"
+    db: "LeaveReminderDeliveries"
+
+  - id: F-LEAVE-270
+    name: "A restarted worker process picks up exactly where the durable delivery ledger left off - Claimed/Failed/Sent/Skipped states all persist across a process restart, so no reminder is lost or silently duplicated by a restart alone"
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderWorker.ExecuteAsync; LeaveApprovalReminderProcessor"
+    permission: "n/a"
+    db: "LeaveReminderDeliveries"
+
+  - id: F-LEAVE-271
+    name: "A request that is Approved or Rejected before its next reminder occurrence is due is no longer selected by the candidate query at all (the query filters Status==PendingApproval) - no further reminder is ever sent for it, and no explicit 'cancel pending reminder' action is needed"
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderProcessor.ProcessAsync (candidate query)"
+    permission: "n/a"
+    db: "LeaveRequests"
+
+  - id: F-LEAVE-272
+    name: "A manager change between two reminder occurrences re-resolves the CURRENT manager at send time for each occurrence - the new manager receives the next reminder, not the old one, even though earlier occurrences' RecipientEmployeeId rows still show the old manager"
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderProcessor.ProcessAsync/TryClaimAsync"
+    permission: "n/a"
+    db: "EmployeeEmploymentHistory, LeaveReminderDeliveries"
+
+  - id: F-LEAVE-273
+    name: "The worker is a per-tenant loop (LeaveApprovalReminderWorker enumerates ACTIVE tenants from the catalog each tick and processes each in its OWN shard/tenant scope) - one tenant's failure is caught and logged, never aborting the sweep for other tenants"
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderWorker.ProcessTenantsAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-274
+    name: "Reminder deliveries are tenant-isolated by construction (LeaveReminderDeliveries carries TenantId, and the worker sets ShardContext/ITenantExecutionContext per tenant before invoking the processor) - Tenant A's reminder run never touches Tenant B's rows"
+    group: Reminder Worker
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderWorker.ProcessTenantsAsync"
+    permission: "n/a"
+    db: "LeaveReminderDeliveries"
+
+  # ── V/W/X. Authorization, Self/Manager/Scoped/Tenant-wide Matrix, and the CR-77 Scope Mechanism ─────
+  - id: F-LEAVE-275
+    name: "17 distinct Leave.* permissions plus 6 Attendance.CompOff.* permissions gate this module's endpoints - every controller action declares [HasPermission] EXCEPT CompOffController.Operations (CR-82)"
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "Domain/Authorization/Permissions.cs (Leave, Attendance.CompOff nested classes)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-276
+    name: "A request with no bearer token against ANY Leave/CompOff endpoint is rejected 401 (the fallback deny-all policy plus each controller's own [Authorize]/[HasPermission])"
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-requests (no token)"
+    service: "HasPermissionAttribute / [Authorize]"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-277
+    name: "A role holding the WRONG permission for an endpoint (e.g. Employee calling a Leave.PolicyManage-gated route) is rejected 403, not 404 - existence of the endpoint is never hidden by a permission failure (except LeaveApprovalReadService.GetByIdAsync's deliberate 404-for-out-of-scope, F-LEAVE-204)"
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-types (as Employee)"
+    service: "HasPermissionAttribute"
+    permission: "Leave.TypeManage"
+    db: "n/a"
+
+  - id: F-LEAVE-278
+    name: "Direct API invocation of every mutating Leave endpoint (bypassing the UI, e.g. a hand-crafted admin request as HRAdmin) is rejected identically to what the UI would show, since permission enforcement lives entirely server-side in [HasPermission] - the UI's own hidden/disabled controls are cosmetic only (mirrors Module 1-6's convention)"
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-policies (as HRAdmin, direct API call)"
+    service: "HasPermissionAttribute"
+    permission: "Leave.PolicyManage"
+    db: "n/a"
+
+  - id: F-LEAVE-279
+    name: "Employee self scope: Leave.RequestCreate/RequestViewOwn/RequestWithdrawOwn/RequestCancelOwn/BalanceViewOwn/TypeViewAvailable never reach beyond the caller's OWN EmployeeId anywhere in the implementation - there is no {employeeId} route parameter on any of these actions to even attempt a cross-employee call"
+    group: Scope Matrix
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-requests, /api/leave-balances/mine"
+    service: "LeaveRequestReadService/LeaveBalanceSummaryReader (identity-scoped queries)"
+    permission: "Leave.RequestViewOwn / Leave.BalanceViewOwn"
+    db: "n/a"
+
+  - id: F-LEAVE-280
+    name: "Manager scope: Leave.Approve narrowed by CURRENT-direct-report resolution (CR-77) applies identically across Approvals inbox/detail, Calendar (new path), and (via includeManager=false exclusion) NEVER on Reports/Dashboard"
+    group: Scope Matrix
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-approvals, /api/leave-calendar, /api/leave-dashboard/hr-summary, /api/leave-reports/requests"
+    service: "LeaveAuthorizationService.BuildEmployeePredicateAsync (includeManager flag per call site)"
+    permission: "Leave.Approve"
+    db: "n/a"
+    cr: [CR-77]
+
+  - id: F-LEAVE-281
+    name: "HRBP-scoped: Leave.Approve + a Department/Grade/etc. UserRoleAssignmentScope (Module 6's RoleScopeResolver mechanism, reused here via IEmployeeAccessScopeService.BuildRoleScopePredicateAsync) applies identically across Approvals, Calendar, Dashboard, and Reports - the ONE mechanism common to every Leave read surface"
+    group: Scope Matrix
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-approvals, /api/leave-calendar, /api/leave-dashboard/hr-summary, /api/leave-reports/*"
+    service: "LeaveAuthorizationService.BuildEmployeePredicateAsync (includeRoleScope: true everywhere)"
+    permission: "Leave.Approve / Leave.DashboardViewAll / Leave.ReportsView"
+    db: "n/a"
+
+  - id: F-LEAVE-282
+    name: "ERO-scoped: EmployeeRelationshipOfficer holds neither Leave.Approve, Leave.DashboardViewAll, nor Leave.ReportsView in the seeded matrix at all - an ERO cannot reach ANY Leave read/approval surface regardless of their RoleScopeResolver scope"
+    group: Scope Matrix
+    status: Needs clarification
+    ui: "n/a - no Leave nav item for ERO"
+    api: "GET /api/leave-approvals (as ERO)"
+    service: "SeedData.RolePermissionMap[EmployeeRelationshipOfficer]"
+    permission: "Leave.Approve"
+    db: "n/a"
+
+  - id: F-LEAVE-283
+    name: "Tenant-wide HR: HRAdmin (DashboardViewAll+ReportsView+ReportsExport, no Approve/PolicyManage/BalanceImport) sees the full unscoped tenant on Dashboard/Reports but cannot approve leave, configure policies, or import balances - a partial tenant-wide role, not a superset of every other Leave capability"
+    group: Scope Matrix
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/leave-dashboard/hr-summary (as HRAdmin)"
+    service: "SeedData.RolePermissionMap[HRAdmin]"
+    permission: "Leave.DashboardViewAll"
+    db: "n/a"
+    cr: [CR-78]
+
+  - id: F-LEAVE-284
+    name: "TenantAdmin (like SuperAdmin) holds EVERY Leave.* and Attendance.CompOff.* permission via the AccountEmployeeLink-only carve-out (Module 6) - the only two roles that can do everything in Leave end-to-end (configure, approve, import, report) without any scope narrowing"
+    group: Scope Matrix
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "SeedData.RolePermissionMap[SuperAdmin]/[TenantAdmin]"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-285
+    name: "CR-77 mechanism proof: a Leave.Approve assignment with ZERO UserRoleAssignmentScope rows AND zero role-scope-dimension match still authorizes approval for the caller's CURRENT direct reports - confirming the manager-relationship path is resolved directly off EmployeeEmploymentHistory.ManagerId, completely independent of RoleScopeResolver/UserRoleAssignmentScope (Module 6) and of EmployeeAccessScopeService's Attendance-permission-keyed narrowing (Module 5/6, CR-57)"
+    group: CR-77 Scope Mechanism
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/role-assignments/users/{managerUserId} (scopes=[]) then GET /api/leave-approvals"
+    service: "LeaveAuthorizationService.CanAccessEmployeeAsync (includeManager branch); RoleScopeResolver (for contrast)"
+    permission: "Leave.Approve"
+    db: "UserRoleAssignmentScopes (empty), EmployeeEmploymentHistory"
+    cr: [CR-77, CR-57]
+
+  - id: F-LEAVE-286
+    name: "CR-77 mechanism proof continued: revoking the Manager ROLE (RBAC module) does NOT itself remove Leave.Approve if the account separately holds it via another role (e.g. HRBP) - and conversely, a Leave.Approve grant through ANY role authorizes the SAME manager-relationship check, since LeaveAuthorizationService never inspects RoleNames.Manager specifically, only the permission name and the employment-history ManagerId column"
+    group: CR-77 Scope Mechanism
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/leave-approvals"
+    service: "LeaveAuthorizationService.CanAccessEmployeeAsync"
+    permission: "Leave.Approve"
+    db: "n/a"
+    cr: [CR-77]
+
+  - id: F-LEAVE-287
+    name: "A THIRD-mechanism combination case: a user holding Manager (CR-77's employment-history path) PLUS HRBP (RoleScopeResolver's dimension path) is authorized under the UNION of both - approving a direct report via the manager path, and approving an unrelated but in-scope HRBP-department employee via the role-scope path, in the SAME BuildEmployeePredicateAsync call (an OR of the two sub-expressions)"
+    group: CR-77 Scope Mechanism
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-approvals (Manager+HRBP combination)"
+    service: "LeaveAuthorizationService.BuildEmployeePredicateAsync"
+    permission: "Leave.Approve"
+    db: "n/a"
+    cr: [CR-77]
+
+  - id: F-LEAVE-288
+    name: "When ILeaveAuthorizationService is NOT registered (the 'legacy' fallback used by some direct-construction test harnesses), LeaveRequestApprovalService/LeaveApprovalReadService/LeaveCalendarService instead resolve the manager relationship via IEmployeeManagerResolver directly and require Leave.Approve via a raw UserRoles/RolePermissions/Permissions join - functionally similar for the Manager case, but with NO role-scope (HRBP/SuperHR) fallback at all in this code path"
+    group: CR-77 Scope Mechanism
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/leave-approvals (DI configuration without ILeaveAuthorizationService)"
+    service: "LeaveApprovalReadService.GetInboxAsync (legacy else-branch)"
+    permission: "Leave.Approve"
+    db: "n/a"
+    cr: [CR-77]
+
+  # ── Y. CR-53 Separated Employee (Leave-side confirmation) ───────────────────────────────────────────
+  - id: F-LEAVE-289
+    name: "A separated (Terminated/Resigned) employee's account, per CR-53, keeps an active portal login and its auto-granted Employee role - GET /api/auth/me still reports EmployeeIdentity.Status='Linked' with EmploymentEligibility='Separated', but the account's own Leave.RequestCreate permission remains present"
+    group: CR-53 Separated Employee
+    status: Needs clarification
+    ui: "MyLeaveRequestsPage still renders and is navigable post-separation"
+    api: "GET /api/auth/me (as a separated employee)"
+    service: "AuthService.GetCurrentUserAsync"
+    permission: "n/a"
+    db: "Users, Employees"
+    cr: [CR-53]
+
+  - id: F-LEAVE-290
+    name: "A separated employee's Leave REQUEST attempt is blocked by the Leave module's OWN employment-eligibility gate (ValidateEmploymentContext: requestStart > DateOfLeaving => Forbidden) - this is genuine, independent business-rule enforcement, not merely a side effect of CR-53's login-retention gap"
+    group: CR-53 Separated Employee
+    status: Implemented
+    ui: "LeaveRequestPreviewPage submit error for a date after separation"
+    api: "POST /api/leave-requests/preview (as a separated employee, date after DateOfLeaving)"
+    service: "LeaveRequestValidationService.ValidateEmploymentContext"
+    permission: "Leave.RequestCreate"
+    db: "Employees"
+    cr: [CR-53]
+
+  - id: F-LEAVE-291
+    name: "A separated employee's Leave BALANCE remains fully visible via GET /api/leave-balances/mine (self-service, identity-scoped only - no employment-eligibility gate exists on this read path at all)"
+    group: CR-53 Separated Employee
+    status: Needs clarification
+    ui: "MyLeaveRequestsPage balance panel, still populated post-separation"
+    api: "GET /api/leave-balances/mine (as a separated employee)"
+    service: "LeaveBalanceSummaryReader.GetMineAsync"
+    permission: "Leave.BalanceViewOwn"
+    db: "EmployeeLeaveBalances"
+    cr: [CR-53]
+
+  - id: F-LEAVE-292
+    name: "A separated employee's PRE-EXISTING Approved/PendingApproval requests remain visible on the Calendar and to their (former) manager's inbox exactly as before separation - nothing in Leave re-evaluates visibility against EmploymentEligibility"
+    group: CR-53 Separated Employee
+    status: Needs clarification
+    ui: "TeamLeaveCalendarPage / LeaveApprovalsPage still show the separated employee's requests"
+    api: "GET /api/leave-calendar, GET /api/leave-approvals"
+    service: "LeaveCalendarService.GetAsync; LeaveApprovalReadService.GetInboxAsync"
+    permission: "n/a"
+    db: "n/a"
+    cr: [CR-53]
+
+  - id: F-LEAVE-293
+    name: "A manager CAN still approve/reject a separated (former direct report) employee's still-PendingApproval request - LeaveRequestApprovalService.AuthorizeAsync never checks the TARGET employee's own status/eligibility, only the APPROVER's authorization (F-LEAVE-191); this distinguishes authentication/RBAC-retention (CR-53's own finding) from Leave's genuine, separate business-eligibility gate at submission time (F-LEAVE-290)"
+    group: CR-53 Separated Employee
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/leave-requests/{requestId}/approve (target employee since separated)"
+    service: "LeaveRequestApprovalService.AuthorizeAsync"
+    permission: "Leave.Approve"
+    db: "n/a"
+    cr: [CR-53]
+
+  # ── Z. Privilege-Impact Cross-Reference (Module 6 CR-66) ────────────────────────────────────────────
+  - id: F-LEAVE-294
+    name: "Module 6's CR-66 (PageAccess.Manage lets HRAdmin/SuperHR self-grant any permission) applies directly to Leave: an HRAdmin or SuperHR session can, in ONE PUT /api/page-access/roles/{roleId} call, grant their own role Leave.PolicyManage/Leave.PolicyPublish/Leave.TypeManage/Leave.PeriodManage/Leave.BalanceImport/Leave.Approve - permissions the seeded matrix deliberately withholds from both roles (CR-78/CR-79) - defeating the module's own least-privilege design in one authenticated call"
+    group: Privilege Escalation Cross-Reference
+    status: Needs clarification
+    ui: "PageAccessManagementPage (HRAdmin/SuperHR granting their own role Leave.* permissions)"
+    api: "PUT /api/page-access/roles/{roleId} (HRAdmin or SuperHR's own role, adding every Leave.* permission)"
+    service: "PageAccessService.UpdateAsync (Module 6); then GET/POST /api/leave-policies, /api/leave-types, /api/leave-requests/{id}/approve"
+    permission: "PageAccess.Manage"
+    db: "RolePermissions"
+    cr: [CR-66, CR-78, CR-79]
+
+  # ── AA. Tenant Isolation (consolidated matrix; per-area cases already cover most of this) ──────────
+  - id: F-LEAVE-295
+    name: "Leave Types/Policies/Periods/Rules are tenant-scoped ONLY by the shard-database boundary (no TenantId column is redundantly re-checked in most read queries, e.g. LeaveConfigurationService.GetLeaveTypeAsync's FirstOrDefaultAsync(x => x.Id == id) has no explicit x.TenantId filter) - correctness for a same-id-different-tenant lookup depends entirely on the connection already pointing at the right shard, not a defense-in-depth predicate"
+    group: Tenant Isolation
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/leave-types/{id}, /api/leave-policies/{policyId}, /api/leave-periods/{id}"
+    service: "LeaveConfigurationService.GetLeaveTypeAsync/GetPolicyAsync/GetLeavePeriodAsync"
+    permission: "Leave.PolicyView"
+    db: "LeaveTypes, LeavePolicies, LeavePeriods"
+
+  - id: F-LEAVE-296
+    name: Leave balances, requests, approvals, and Comp-Off data all carry an explicit TenantId column that IS filtered on every write path and on most read paths (LeaveRequests, EmployeeLeaveBalances, CompOffEarnings) - a belt-and-suspenders check on top of the shard boundary
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/leave-requests, /api/leave-balances/mine, /api/attendance/comp-off/balance"
+    service: "LeaveRequestReadService/LeaveBalanceSummaryReader/CompOffService"
+    permission: "n/a"
+    db: "LeaveRequests, EmployeeLeaveBalances, CompOffEarnings"
+
+  - id: F-LEAVE-297
+    name: "The Reminder Worker, Accrual Worker, and Period-Close Processor all iterate ACTIVE tenants from the catalog and switch ShardContext/ITenantExecutionContext per tenant BEFORE invoking any Leave service - a bug in this switch would be the single highest-impact tenant-isolation risk in the module (verify no residual per-request DbContext state leaks between tenant iterations)"
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveApprovalReminderWorker.ProcessTenantsAsync; LeaveAccrualWorker.ProcessTenantsAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-298
+    name: "Tenant A's balance-import upload can NEVER credit Tenant B's employee, even with an identical EmployeeCode in both tenants - CR-85's finding is about the ABSENCE of an explicit filter, not a proven cross-tenant leak; this case exists to actually attempt it and confirm the shard boundary holds"
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/leave-balances/import/validate (as Tenant A, referencing Tenant B's own EmployeeCode)"
+    service: "LeaveBalanceImportService.ValidateAsync"
+    permission: "Leave.BalanceImport"
+    db: "Employees"
+    cr: [CR-85]
+
+  - id: F-LEAVE-299
+    name: Tenant A's Comp-Off policy configuration, earnings, and ledger are never visible or mutable from a Tenant B session, including through the Operations query's own scope-building (CompOffService.BuildOperationalScopeAsync)
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/attendance/comp-off/operations (Tenant B session)"
+    service: "CompOffService.GetOperationalAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  # ── AB. Frontend ─────────────────────────────────────────────────────────────────────────────────────
+  - id: F-LEAVE-300
+    name: "MyLeaveRequestsPage lists the employee's own requests (paged), each linking to a detail view with day-by-day breakdown and event history; loading/empty/error states are handled with dedicated UI"
+    group: Frontend
+    status: Implemented
+    ui: "MyLeaveRequestsPage.tsx"
+    api: "GET /api/leave-requests, GET /api/leave-requests/{id}"
+    permission: "Leave.RequestViewOwn"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-301
+    name: "LeaveRequestPreviewPage drives the Preview->Submit two-step flow, surfacing every LeaveRequestValidationErrorCodes message returned by the API as an inline error, and disabling Submit until a successful Preview with a matching payload fingerprint"
+    group: Frontend
+    status: Implemented
+    ui: "LeaveRequestPreviewPage.tsx"
+    api: "POST /api/leave-requests/preview, POST /api/leave-requests"
+    permission: "Leave.RequestCreate"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-302
+    name: LeaveApprovalsPage renders the inbox with per-row Approve/Reject actions, permission-gated (only visible with Leave.Approve), and reflects a 409 InvalidStatusTransition (someone else already acted) as a clear error rather than a generic failure
+    group: Frontend
+    status: Implemented
+    ui: "LeaveApprovalsPage.tsx"
+    api: "GET /api/leave-approvals, POST /api/leave-requests/{id}/approve|reject"
+    permission: "Leave.Approve"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-303
+    name: TeamLeaveCalendarPage renders a date-range calendar of team/self events with status-based styling (Approved vs PendingApproval)
+    group: Frontend
+    status: Implemented
+    ui: "TeamLeaveCalendarPage.tsx"
+    api: "GET /api/leave-calendar"
+    permission: "Leave.RequestViewOwn"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-304
+    name: "LeaveDashboardPage renders KPIs/charts/tables from the HR summary, permission-gated behind Leave.DashboardViewAll, with filter controls for date/leaveType/department/workLocation"
+    group: Frontend
+    status: Implemented
+    ui: "LeaveDashboardPage.tsx"
+    api: "GET /api/leave-dashboard/hr-summary"
+    permission: "Leave.DashboardViewAll"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-305
+    name: "LeaveReportsPage exposes each report kind as a tab with its own filter/sort/paging controls and an Export CSV action, downloading via the shared saveFile/ExportedFile blob helper"
+    group: Frontend
+    status: Implemented
+    ui: "LeaveReportsPage.tsx"
+    api: "GET /api/leave-reports/*, GET /api/leave-reports/{kind}/export.csv"
+    permission: "Leave.ReportsView / Leave.ReportsExport"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-306
+    name: "LeaveBalanceImportPage drives Upload->Validate->(fix errors)->Commit, showing the per-row error table and import History tab; every action is permission-gated and renders a 403 state distinctly from a validation error"
+    group: Frontend
+    status: Implemented
+    ui: "LeaveBalanceImportPage.tsx"
+    api: "POST /api/leave-balances/import/validate, /commit; GET /history, /errors"
+    permission: "Leave.BalanceImport / Leave.BalanceViewImportHistory"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-307
+    name: "LeaveTypesPage/LeavePeriodsPage/LeavePoliciesPage render list+create+edit dialogs, each permission-gated (Manage vs View) and surfacing 409 Conflict (duplicate code / overlap / concurrency) distinctly from 400 validation errors"
+    group: Frontend
+    status: Implemented
+    ui: "LeaveTypesPage.tsx, LeavePeriodsPage.tsx, LeavePoliciesPage.tsx"
+    api: "GET/POST/PUT /api/leave-types, /api/leave-periods, /api/leave-policies"
+    permission: "Leave.PolicyView / Leave.TypeManage / Leave.PeriodManage / Leave.PolicyManage"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-308
+    name: "LeavePolicyEditorPage composes every rule sub-section (Eligibility, Entitlement, Request Rules, Calendar, Attachment, Clubbing, Cancellation) plus Applicability/LeaveTypes/Versions tabs and the Validate/Publish/Retire actions, each tab independently loading/saving and reflecting allowedActions from the server"
+    group: Frontend
+    status: Implemented
+    ui: "LeavePolicyEditorPage.tsx + LeavePolicy*Section.tsx"
+    api: "GET/PUT .../versions/{versionId}/* (every rule sub-resource)"
+    permission: "Leave.PolicyView / Leave.PolicyManage / Leave.PolicyPublish"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-309
+    name: "LeaveWorkingDayCalendarPage manages Holidays and Weekly-Off configurations in two tabs, each with its own create/edit/deactivate flow"
+    group: Frontend
+    status: Implemented
+    ui: "LeaveWorkingDayCalendarPage.tsx"
+    api: "GET/POST/PUT/DELETE /api/holidays, GET/POST/PUT /api/weekly-off-configurations"
+    permission: "Leave.PolicyView / Leave.PolicyManage"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-310
+    name: "CompOffPage (self-service balance/earnings/ledger) and CompOffOperationsPage (manager/HR operational query with filters) are SEPARATE pages under the Attendance area, not the Leave area - reflecting Comp-Off's Attendance.CompOff.* permission family rather than Leave.*"
+    group: Frontend
+    status: Implemented
+    ui: "CompOffPage.tsx, CompOffOperationsPage.tsx"
+    api: "GET /api/attendance/comp-off/balance, /earnings, /ledger, /operations"
+    permission: "Attendance.CompOff.ViewSelf / CompOffViewTeam / CompOffViewAll"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-311
+    name: "Direct navigation to a permission-gated Leave route (typed URL, no nav-item click) without the required permission renders the SAME route-guard-denied state as every other module - verify this holds for every Leave/CompOff page, not just the ones reachable from the sidebar"
+    group: Frontend
+    status: Implemented
+    ui: "any LeaveXxxPage direct URL as an unauthorized role"
+    api: "n/a"
+    permission: "n/a"
+    service: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-312
+    name: A page refresh (F5) on any Leave page re-fetches its data from the API rather than relying on stale client state, and re-applies the same permission gate on reload
+    group: Frontend
+    status: Implemented
+    ui: "any LeaveXxxPage"
+    api: "n/a"
+    permission: "n/a"
+    service: "n/a"
+    db: "n/a"
+
+  # ── AC. Provider Parity (SQLite vs MySQL vs SQL Server) ─────────────────────────────────────────────
+  - id: F-LEAVE-313
+    name: "The default xUnit suite runs entirely against SQLite in-memory - passing there is NOT evidence of MySQL/SQL Server locking, concurrency-token, or deadlock-retry behavior, per CLAUDE.md's own documented convention"
+    group: Provider Parity
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "TestSupport/SqliteInMemoryDatabase"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-314
+    name: "MySQL-specific submission/approval/withdrawal/cancellation/request-limit concurrency (MySqlLeaveRequestSubmissionLock, deadlock code 1213 retried, lock-wait-timeout 1205 NOT retried) is exercised ONLY by the MySqlLeave*Tests classes, which skip SILENTLY without HRMS_MYSQL_TEST_CONNECTION - a green default run proves nothing about this path"
+    group: Provider Parity
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "MySqlLeaveHttpIntegrationTests, MySqlLeaveLifecycleIntegrationTests, MySqlLeaveRequestValidationIntegrationTests, MySqlLeaveAccrualIntegrationTests, MySqlLeaveReminderConcurrencyTests, MySqlLeaveReportsIntegrationTests, MySqlHrLeaveDashboardIntegrationTests, MySqlLeaveScopeAuthorizationIntegrationTests"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-315
+    name: "SQL Server-specific concurrency (UPDLOCK/HOLDLOCK via SqlServerLeaveRequestSubmissionLock, SqlServerLeaveRequestSubmissionDeadlockClassifier) is exercised ONLY by the SqlServerLeaveRequest*ConcurrencyTests/DeadlockTests classes via SqlServerLeaveRequestConcurrencyFixture, gated on HRMS_SQLSERVER_TEST_CONNECTION(+_SERVER/_AUTH) - same silent-skip caveat applies"
+    group: Provider Parity
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "SqlServerLeaveRequestSubmissionConcurrencyTests, SqlServerLeaveRequestApprovalConcurrencyTests, SqlServerLeaveRequestCancellationConcurrencyTests, SqlServerLeaveRequestWithdrawalConcurrencyTests, SqlServerLeaveRequestRequestLimitConcurrencyTests, SqlServerLeaveRequestSubmissionDeadlockTests, SqlServerAllocatedLeaveAccountingConcurrencyTests"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-316
+    name: "Period-close carry-forward/lapse and accrual-replay idempotency must be independently confirmed on MySQL and SQL Server, not assumed from the SQLite-backed foundation tests - the ExecuteUpdateAsync-based claim pattern (LeaveAccrualProcessor.ClaimAsync, LeavePeriodCloseProcessor.ClaimAsync) translates to different underlying SQL per provider"
+    group: Provider Parity
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "MySqlLeaveAccrualIntegrationTests (opt-in); no equivalent SqlServer accrual/period-close provider-acceptance class was found in the inventory - a coverage gap in its own right"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-LEAVE-317
+    name: "Unique-constraint behavior (LeaveType/LeavePolicy/LeavePeriod Code uniqueness, the LeaveRequests idempotency index, LeaveBalanceImportRows duplicate-row detection) must be confirmed to raise the SAME classified Conflict on MySQL (duplicate-key 1062) and SQL Server (2601/2627) as it does on SQLite - IsIdempotencyViolation's own number check (2601/2627) is explicitly SQL-Server-shaped and untested against MySQL's own error surface in this file"
+    group: Provider Parity
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "LeaveRequestSubmissionService.IsIdempotencyViolation"
+    permission: "n/a"
+    db: "n/a"
+
+  # ── Addendum: two independently-verified functional gaps in Cancellation/Withdrawal and Comp Off ────
+  # (source-verified in a second research pass over LeaveRequestWithdrawalService.cs and the
+  # Submission/Approval/Cancellation vs. Withdrawal CompOff-branching asymmetry; not originally captured
+  # above - added here rather than renumbering the sections, and cross-referenced from CR-89/CR-90.)
+  - id: F-LEAVE-318
+    name: "LeavePolicyCancellationRule.WithdrawAllowed is a real, saved, API-visible policy field (LeavePolicyCancellationSection.tsx renders it as a toggle) but LeaveRequestWithdrawalService.AttemptAsync never reads CancellationRule or WithdrawAllowed anywhere - withdrawal of a PendingApproval request is UNCONDITIONALLY allowed regardless of how this flag is configured, unlike Cancellation's own CancelAllowed which IS enforced"
+    group: Cancellation
+    status: Needs clarification
+    ui: "LeavePolicyCancellationSection.tsx 'Allow Withdraw' toggle has no effect on runtime behavior"
+    api: "POST /api/leave-requests/{requestId}/withdraw (WithdrawAllowed=false configured)"
+    service: "LeaveRequestWithdrawalService.AttemptAsync (no CancellationRule/WithdrawAllowed reference anywhere in the file)"
+    permission: "Leave.RequestWithdrawOwn"
+    db: "LeavePolicyCancellationRules"
+    cr: [CR-89]
+
+  - id: F-LEAVE-319
+    name: "Withdrawing a PendingApproval Comp-Off-type leave request has NO CompOff-specific branch in LeaveRequestWithdrawalService (contrast: Submission/Approval/Cancellation all explicitly check LeaveType.IsCompOff and delegate to ICompOffService) - only the generic Allocated-mode ReleaseReservationAsync path runs, which is gated on EntitlementMode==Allocated and may not correspond to how a Comp-Off LeaveType's own rule is classified, risking an un-released CompOffLeaveAllocation row after a PendingApproval Comp-Off request is withdrawn"
+    group: Comp Off
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/leave-requests/{compOffRequestId}/withdraw"
+    service: "LeaveRequestWithdrawalService.AttemptAsync (no IsCompOff branch, contrast LeaveRequestSubmissionService/LeaveRequestApprovalService/LeaveRequestCancellationService which all have one)"
+    permission: "Leave.RequestWithdrawOwn"
+    db: "CompOffLeaveAllocations"
+    cr: [CR-90]

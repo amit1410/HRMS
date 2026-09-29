@@ -1,0 +1,116 @@
+sheet: GLAcc_Reports_LargeData_Paging
+submodule: Reports, Listing & Large Data/Paging
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-RPT-001
+    func: [F-GLACC-122]
+    sc: Journal list has no filter beyond paging
+    t: There is no Status/PayrollRunId/FinalSettlementCaseId/date-range filter on the journal list endpoint - the full tenant history must be paged through client-side
+    src: "PayrollAccountingService.ListAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "T1 has 10 journals across various statuses and both payroll-run and final-settlement sources"
+    role: HRAdmin (custom role holding Accounting.View)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting?status=Posted] (attempting a status filter) => [200] the status query parameter is silently ignored - the full unfiltered page is returned"
+    auto: API
+
+  - id: GLACC-RPT-002
+    func: [F-GLACC-123]
+    sc: Paging clamp applies to accounts, configurations, and journals alike
+    t: An oversized pageSize is clamped to 100 on all 3 list endpoints
+    src: "PayrollAccountingService.ListAccountsAsync, ListConfigurationsAsync, ListAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: HRAdmin (custom role holding Accounting.View)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/accounts?pageSize=500] => [200] at most 100 items returned"
+      - "[GET /api/payroll/accounting/configurations?pageSize=500] => [200] at most 100 items returned"
+      - "[GET /api/payroll/accounting?pageSize=500] => [200] at most 100 items returned"
+    auto: API
+
+  - id: GLACC-RPT-003
+    func: [F-GLACC-124]
+    sc: Journal list ordering
+    t: The journal list is ordered by CreatedDate descending with no alternate sort
+    src: "PayrollAccountingService.ListAsync"
+    type: Contract
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: "T1 has 3 journals created at distinct times"
+    role: HRAdmin (custom role holding Accounting.View)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting] => [200] items ordered most-recently-created first"
+    auto: API
+
+  - id: GLACC-RPT-004
+    func: [F-GLACC-125]
+    sc: List eagerly loads every page row's full Lines collection
+    t: Requesting a page of journals pulls each journal's complete Lines set, not just a summary count
+    src: "PayrollAccountingService.ListAsync (Include Lines)"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "T1 has one journal with 500 lines and 24 others with a handful of lines each"
+    role: HRAdmin (custom role holding Accounting.View)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting?page=1&pageSize=25] => [200] every one of the 25 returned journals, including the 500-line one, carries its FULL Lines array inline"
+    auto: API
+
+  - id: GLACC-RPT-005
+    func: [F-GLACC-126]
+    sc: No paging within a single journal's own lines
+    t: GetAsync always returns every line for a journal, regardless of count
+    src: "PayrollAccountingService.GetAsync, ToDto"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "J27 (from a large payroll run) has 3,000 lines"
+    role: HRAdmin (custom role holding Accounting.View)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: "3,000 PayrollJournalLine rows"
+    steps:
+      - "[GET /api/payroll/accounting/{J27}] => [200] all 3,000 lines returned in one response, with no page/limit parameter accepted"
+    auto: API
+
+  - id: GLACC-RPT-006
+    func: [F-GLACC-127]
+    sc: Configuration list eagerly loads every version with no cap
+    t: A configuration with many versions returns all of them inline on every page of the configuration list
+    src: "PayrollAccountingService.ListConfigurationsAsync (Include Versions)"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "CFG3 has 40 historical versions"
+    role: HRAdmin (custom role holding Accounting.View)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: "40 PayrollAccountingConfigurationVersion rows"
+    steps:
+      - "[GET /api/payroll/accounting/configurations] => [200] CFG3's entry carries all 40 versions inline, ordered newest EffectiveFrom first"
+    auto: API

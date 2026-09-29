@@ -1,0 +1,280 @@
+# HRMS QA automation (qa/automation: Python + Playwright + pytest + Allure).
+#
+# Manual trigger only for now. The suites run on a self-hosted runner on the machine that hosts the
+# HRMS stack, because the automation talks to the API at localhost with a tenant Host header and the
+# payroll sandbox refuses any non-local API (preflight G2). Setup, secrets and variables:
+# docs/qa/automation-ci.md.
+#
+# Blocking:     collect, smoke (not known_defect and not e2e), e2e (e2e and not known_defect).
+# Non-blocking: known-defects (known_defect), report. Both use continue-on-error.
+# Jobs run one after another (needs + one concurrency group): every sign-in shares the API's
+# per-tenant, per-IP auth rate limit, and the E2E suites share one sandbox manifest.
+
+name: QA automation
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: "Run the payroll sandbox E2E suites (each run uses 2 of the 120 reserved 1950s sandbox months)"
+        type: boolean
+        default: true
+      run_known_defects:
+        description: "Run the non-blocking known-defect report"
+        type: boolean
+        default: true
+      pytest_args:
+        description: "Extra pytest arguments for every suite, e.g. -k login (optional)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-automation
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  collect:
+    name: Collection check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: qa/automation
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ vars.QA_PYTHON_VERSION || '3.14' }}
+          cache: pip
+          cache-dependency-path: qa/automation/requirements.txt
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: CI tooling unit tests
+        run: python -m pytest ci -o addopts="" -q -p no:cacheprovider
+      - name: Verify pytest collection and the suite partition
+        run: python ci/run_ci.py collect
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-collect
+          path: qa/automation/reports/ci/collect/summary.md
+          if-no-files-found: ignore
+          retention-days: 7
+
+  smoke:
+    name: Smoke (blocking)
+    needs: collect
+    runs-on: ${{ fromJSON(vars.QA_RUNNER_LABELS || '["self-hosted","hrms-qa"]') }}
+    environment: qa
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: qa/automation
+    env:
+      QA_SCHEME: ${{ vars.QA_SCHEME || 'http' }}
+      QA_API_PORT: ${{ vars.QA_API_PORT || '5080' }}
+      QA_UI_PORT: ${{ vars.QA_UI_PORT || '5173' }}
+      QA_TENANT_A_HOST: ${{ vars.QA_TENANT_A_HOST || 'anevra01.localhost' }}
+      QA_A_ADMIN_USERNAME: ${{ secrets.QA_A_ADMIN_USERNAME }}
+      QA_A_ADMIN_PASSWORD: ${{ secrets.QA_A_ADMIN_PASSWORD }}
+      QA_A_EMPLOYEE_USERNAME: ${{ secrets.QA_A_EMPLOYEE_USERNAME }}
+      QA_A_EMPLOYEE_PASSWORD: ${{ secrets.QA_A_EMPLOYEE_PASSWORD }}
+      QA_A_MANAGER_USERNAME: ${{ secrets.QA_A_MANAGER_USERNAME }}
+      QA_A_MANAGER_PASSWORD: ${{ secrets.QA_A_MANAGER_PASSWORD }}
+      QA_HEADLESS: "true"
+      QA_AUTH_RATE_BUDGET: ${{ vars.QA_AUTH_RATE_BUDGET || '18' }}
+      QA_REUSE_API_SESSIONS: "1"
+      QA_CI_EXTRA_PYTEST_ARGS: ${{ inputs.pytest_args }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ vars.QA_PYTHON_VERSION || '3.14' }}
+          cache: pip
+          cache-dependency-path: qa/automation/requirements.txt
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Install Chromium
+        run: python -m playwright install chromium
+      - name: Preflight (variables, API, UI)
+        run: python ci/run_ci.py preflight --suite smoke
+      - name: Run smoke suite
+        run: python ci/run_ci.py run --suite smoke
+      - name: Redact secrets and tokens from reports
+        id: scrub
+        if: always()
+        run: python ci/run_ci.py scrub
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scrub.outcome == 'success'
+        with:
+          name: qa-smoke-results
+          path: |
+            qa/automation/reports/ci/smoke
+            qa/automation/test-results/smoke
+          if-no-files-found: warn
+          retention-days: 7
+
+  e2e:
+    name: Payroll sandbox E2E (blocking)
+    needs: [collect, smoke]
+    if: ${{ !cancelled() && needs.collect.result == 'success' && inputs.run_e2e }}
+    runs-on: ${{ fromJSON(vars.QA_RUNNER_LABELS || '["self-hosted","hrms-qa"]') }}
+    environment: qa
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: qa/automation
+    env:
+      QA_SCHEME: ${{ vars.QA_SCHEME || 'http' }}
+      QA_API_PORT: ${{ vars.QA_API_PORT || '5080' }}
+      QA_UI_PORT: ${{ vars.QA_UI_PORT || '5173' }}
+      QA_TENANT_A_HOST: ${{ vars.QA_TENANT_A_HOST || 'anevra01.localhost' }}
+      QA_A_ADMIN_USERNAME: ${{ secrets.QA_A_ADMIN_USERNAME }}
+      QA_A_ADMIN_PASSWORD: ${{ secrets.QA_A_ADMIN_PASSWORD }}
+      QA_PAYROLL_SANDBOX: "1"
+      QA_PAYROLL_SANDBOX_TENANT: ANEVRA01
+      QA_PAYROLL_SANDBOX_TENANT_ID: ${{ vars.QA_PAYROLL_SANDBOX_TENANT_ID }}
+      QA_SANDBOX_STATE_DIR: ${{ vars.QA_SANDBOX_STATE_DIR }}
+      QA_HEADLESS: "true"
+      QA_AUTH_RATE_BUDGET: ${{ vars.QA_AUTH_RATE_BUDGET || '18' }}
+      QA_REUSE_API_SESSIONS: "1"
+      QA_CI_EXTRA_PYTEST_ARGS: ${{ inputs.pytest_args }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ vars.QA_PYTHON_VERSION || '3.14' }}
+          cache: pip
+          cache-dependency-path: qa/automation/requirements.txt
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Preflight (variables, sandbox manifest, API)
+        run: python ci/run_ci.py preflight --suite e2e
+      - name: Run E2E suites
+        run: python ci/run_ci.py run --suite e2e
+      - name: Redact secrets and tokens from reports
+        id: scrub
+        if: always()
+        run: python ci/run_ci.py scrub
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scrub.outcome == 'success'
+        with:
+          name: qa-e2e-results
+          path: |
+            qa/automation/reports/ci/e2e
+            qa/automation/test-results/e2e
+          if-no-files-found: warn
+          retention-days: 7
+
+  known-defects:
+    name: Known defects (non-blocking)
+    needs: [collect, smoke, e2e]
+    if: ${{ !cancelled() && needs.collect.result == 'success' && inputs.run_known_defects }}
+    continue-on-error: true
+    runs-on: ${{ fromJSON(vars.QA_RUNNER_LABELS || '["self-hosted","hrms-qa"]') }}
+    environment: qa
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: qa/automation
+    env:
+      QA_SCHEME: ${{ vars.QA_SCHEME || 'http' }}
+      QA_API_PORT: ${{ vars.QA_API_PORT || '5080' }}
+      QA_UI_PORT: ${{ vars.QA_UI_PORT || '5173' }}
+      QA_TENANT_A_HOST: ${{ vars.QA_TENANT_A_HOST || 'anevra01.localhost' }}
+      QA_A_ADMIN_USERNAME: ${{ secrets.QA_A_ADMIN_USERNAME }}
+      QA_A_ADMIN_PASSWORD: ${{ secrets.QA_A_ADMIN_PASSWORD }}
+      QA_SANDBOX_STATE_DIR: ${{ vars.QA_SANDBOX_STATE_DIR }}
+      QA_HEADLESS: "true"
+      QA_AUTH_RATE_BUDGET: ${{ vars.QA_AUTH_RATE_BUDGET || '18' }}
+      QA_REUSE_API_SESSIONS: "1"
+      QA_CI_EXTRA_PYTEST_ARGS: ${{ inputs.pytest_args }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ vars.QA_PYTHON_VERSION || '3.14' }}
+          cache: pip
+          cache-dependency-path: qa/automation/requirements.txt
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Preflight (variables, API)
+        run: python ci/run_ci.py preflight --suite known-defects
+      - name: Run known-defect checks (report only)
+        run: python ci/run_ci.py run --suite known-defects
+      - name: Redact secrets and tokens from reports
+        id: scrub
+        if: always()
+        run: python ci/run_ci.py scrub
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scrub.outcome == 'success'
+        with:
+          name: qa-known-defects-results
+          path: |
+            qa/automation/reports/ci/known-defects
+            qa/automation/test-results/known-defects
+          if-no-files-found: warn
+          retention-days: 7
+
+  report:
+    name: Allure report
+    needs: [smoke, e2e, known-defects]
+    if: ${{ !cancelled() }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: qa-*-results
+          path: artifacts
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Generate Allure reports (blocking and known-defect, kept separate)
+        shell: bash
+        env:
+          ALLURE_VERSION: "2.46.1"
+        run: |
+          set -euo pipefail
+          merge() {
+            local target="$1"; shift
+            mkdir -p "$target"
+            for suite in "$@"; do
+              [ -d "artifacts/qa-${suite}-results" ] || continue
+              find "artifacts/qa-${suite}-results" -type d -name allure-results -exec cp -r {}/. "$target"/ \;
+            done
+          }
+          merge merged/blocking smoke e2e
+          merge merged/known-defects known-defects
+          if [ -z "$(ls -A merged/blocking merged/known-defects 2>/dev/null)" ]; then
+            echo "No Allure results to report."; exit 0
+          fi
+          curl -fsSL -o allure.zip "https://github.com/allure-framework/allure2/releases/download/${ALLURE_VERSION}/allure-${ALLURE_VERSION}.zip"
+          unzip -q allure.zip
+          for name in blocking known-defects; do
+            if [ -n "$(ls -A "merged/$name")" ]; then
+              "./allure-${ALLURE_VERSION}/bin/allure" generate "merged/$name" -o "allure-report/$name" --clean --single-file
+            fi
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qa-allure-report
+          path: allure-report
+          if-no-files-found: ignore
+          retention-days: 7

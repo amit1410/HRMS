@@ -1,0 +1,137 @@
+sheet: VPay_Frontend
+submodule: VariablePayPage/MyVariablePayPage - missing version/lifecycle UI, the MyVariablePayPage crash, and navigation gaps
+defaults:
+  role: HRADMIN
+  perm: "Payroll.VariablePay.View"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.VariablePay.View/ManagePlans granted, browsing payroll/variable-pay, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: VPAY-FE-001
+    func: [F-VPAY-123]
+    sc: VariablePayPage renders a Plans create form and a read-only award register
+    t: The page shows a plan-create form and a register table with Award/Period/Calculated/Approved/Paid/Outstanding/Status columns
+    src: ["Frontend/HRMS.Web/src/pages/payroll/VariablePayPage.tsx (VariablePayPage component)"]
+    type: Positive
+    pri: P1
+    ui: "VariablePayPage"
+    steps:
+      - "[UI] Navigate to /payroll/variable-pay => Plans card with a create form is visible; Award register card shows a table with the 7 documented columns"
+    auto: UI
+
+  - id: VPAY-FE-002
+    func: [F-VPAY-124]
+    sc: CONFIRMED - no Add-version control exists anywhere on the page
+    t: A plan created through the UI can never have a version added through the UI
+    src: ["Frontend/HRMS.Web/src/pages/payroll/VariablePayPage.tsx (full component read)"]
+    type: Negative
+    pri: P0
+    sev: Critical
+    ui: "VariablePayPage"
+    cr: [CR-206]
+    steps:
+      - "[UI] Create a plan via the Plans form (Code=UITEST, Name=UI Test, PlanType=FixedBonus) => plan UITEST appears in the plan list"
+      - "[UI] Inspect the page for any 'Add version'/'New version' button or form tied to the UITEST plan => none exists anywhere on the page"
+    auto: UI
+
+  - id: VPAY-FE-003
+    func: [F-VPAY-125]
+    sc: CONFIRMED - zero award-lifecycle action controls exist on the admin page
+    t: No Generate/Preview/Submit/Approve/Reject/Override/Cancel/Settle button exists anywhere in VariablePayPage
+    src: ["Frontend/HRMS.Web/src/pages/payroll/VariablePayPage.tsx (full component read - zero action buttons)"]
+    type: Negative
+    pri: P0
+    sev: Critical
+    ui: "VariablePayPage"
+    cr: [CR-207]
+    steps:
+      - "[UI] With an award visible in the Award register table, inspect each row for any actionable control => the table has no action column; no button on the page performs Generate/Submit/Approve/Reject/Override/Cancel/Settle for any award"
+    auto: UI
+
+  - id: VPAY-FE-004
+    func: [F-VPAY-126]
+    sc: HEADLINE CONFIRMED - MyVariablePayPage crashes against the real backend response
+    t: awards.data?.map(...) throws because the real /api/me/variable-pay response is a PagedResult object, not an array
+    src: ["Frontend/HRMS.Web/src/api/variablePay.ts (listMyVariablePay); VariablePayPage.tsx (MyVariablePayPage)"]
+    type: Negative
+    pri: P0
+    sev: Critical
+    ui: "MyVariablePayPage"
+    role: EMPLOYEE
+    perm: "Payroll.VariablePay.View"
+    secc: true
+    cr: [CR-203]
+    steps:
+      - "[UI] Sign in as a linked Employee with at least one variable-pay award and Payroll.VariablePay.View granted; navigate to /payroll/my-variable-pay => the page throws a runtime error ('awards.data.map is not a function' or an uncaught exception) instead of rendering the award list, because the real API returns {items,page,pageSize,totalCount}, not a bare array"
+    auto: UI
+
+  - id: VPAY-FE-005
+    func: [F-VPAY-127]
+    sc: The existing Vitest coverage masks the MyVariablePayPage crash with an incorrect mock
+    t: VariablePayPage.test.tsx mocks listMyVariablePay to resolve a raw array, not the true paged envelope
+    src: ["Frontend/HRMS.Web/src/pages/payroll/VariablePayPage.test.tsx (full file read)"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    cr: [CR-203]
+    steps:
+      - "[Manual/Code] Read VariablePayPage.test.tsx line 8: api.listMyVariablePay.mockResolvedValue([{...}]) => a bare array, not {items:[...],page,pageSize,totalCount}; the existing 'renders ESS awards' test therefore never exercises the real API shape"
+      - "[Manual/Code] Correct the mock to resolve {items:[{...}],page:1,pageSize:20,totalCount:1} and re-run the test => the test fails with a TypeError, reproducing F-VPAY-126's crash"
+    auto: Manual only
+
+  - id: VPAY-FE-006
+    func: [F-VPAY-128]
+    sc: The page performs zero client-side permission checks
+    t: A full grep for useAuth/usePermission/hasPermission/can() in VariablePayPage.tsx returns zero matches
+    src: ["Frontend/HRMS.Web/src/pages/payroll/VariablePayPage.tsx (full grep)"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    steps:
+      - "[Manual/Code] Grep VariablePayPage.tsx for useAuth|usePermission|hasPermission|can( => zero matches; the Plans create form renders unconditionally regardless of whether the signed-in user actually holds Payroll.VariablePay.ManagePlans"
+    auto: Manual only
+
+  - id: VPAY-FE-007
+    func: [F-VPAY-129]
+    sc: Neither route has a navigation.ts entry
+    t: Both VariablePayPage and MyVariablePayPage are reachable only by typing the URL
+    src: ["Frontend/HRMS.Web/src/layout/navigation.ts (full grep); App.tsx (lines 198-199)"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    cr: [CR-217]
+    steps:
+      - "[Manual/Code] Grep navigation.ts for 'variable'/'bonus' (case-insensitive) => zero matches"
+      - "[UI] Sign in as a fully-permissioned HRAdmin and inspect the sidebar/menu => no link to Variable Pay exists anywhere; the page is reachable only by directly entering /payroll/variable-pay"
+    auto: UI
+
+  - id: VPAY-FE-008
+    func: [F-VPAY-130]
+    sc: Both routes ARE wrapped in RequirePermission/RequireEmployeeIdentity at the route level
+    t: A user lacking variablePayView is redirected/blocked from both routes despite the in-page gap (F-VPAY-128)
+    src: ["Frontend/HRMS.Web/src/App.tsx (lines 198-199)"]
+    type: Positive
+    pri: P1
+    role: HRADMIN
+    perm: "n/a"
+    steps:
+      - "[UI] Sign in as a user with NO Payroll.VariablePay.View permission; navigate directly to /payroll/variable-pay => RequirePermission blocks access (redirected or an access-denied state, not the page content)"
+      - "[UI] Sign in as a linked Employee with View granted but attempt /payroll/my-variable-pay while RequireEmployeeIdentity's precondition is unmet (no link) => blocked by RequireEmployeeIdentity"
+    auto: UI
+
+  - id: VPAY-FE-009
+    func: [F-VPAY-131]
+    sc: The plan-create form cannot set Description, IsActive, or CurrencyCode
+    t: A plan created through the UI always keeps IsActive=true, CurrencyCode=INR, and Description=null
+    src: ["Frontend/HRMS.Web/src/api/variablePay.ts (createVariablePayPlan); VariablePayPage.tsx (form state)"]
+    type: Boundary
+    pri: P2
+    tags: [Configuration]
+    cr: [CR-218]
+    steps:
+      - "[UI] Inspect the Plans create form => only Plan code, Plan name, and Plan type inputs exist; no Description, IsActive, or CurrencyCode field is present"
+      - "[UI] Create a plan via the form => the created plan is IsActive=true and CurrencyCode=INR regardless of intent, since the form provides no way to override either"
+    auto: UI

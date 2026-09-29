@@ -1,0 +1,163 @@
+sheet: GLAcc_Authz_Scope
+submodule: Authorization & Scope
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-AUTHZ-001
+    func: [F-GLACC-107]
+    sc: All 8 permissions individually gate their own route
+    t: A user lacking the specific permission for each of the 8 routes gets 403; holding it grants access
+    src: "Backend/HRMS.Domain/Authorization/Permissions.cs; PayrollOutputsController.cs (PayrollAccountingController)"
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "8 single-permission custom roles exist, one per Accounting.* permission"
+    role: "8 distinct single-permission roles"
+    perm: "Payroll.Accounting.View / Generate / Validate / Approve / Post / Export / ViewHistory / ManageConfiguration"
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] for each of the 8 permissions, call its route holding every OTHER permission but not that one => [403] Forbidden; holding only that one permission => the call is authorized (though may still fail for unrelated business reasons)"
+    auto: Manual only
+
+  - id: GLACC-AUTHZ-002
+    func: [F-GLACC-108]
+    sc: No seeded operational role holds any Accounting permission
+    t: HRAdmin, HRManager, SuperHR, and Accounts all hold zero of the 8 Accounting.* permissions out of the box; only SuperAdmin/TenantAdmin do
+    src: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap)"
+    type: Authorization
+    tags: [Security, Negative]
+    pri: P0
+    sev: High
+    pre: none
+    role: HRAdmin, HRManager, SuperHR, Accounts (seeded, unmodified)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting] as a seeded-HRAdmin user with no custom permission grants => [403] Forbidden"
+      - "[GET /api/payroll/accounting] as a seeded-Accounts user with no custom permission grants => [403] Forbidden"
+      - "[GET /api/payroll/accounting] as SuperAdmin => [200] Success"
+    auto: API
+    cr: [CR-274]
+
+  - id: GLACC-AUTHZ-003
+    func: [F-GLACC-109]
+    sc: ManageConfiguration is one permission across 4 distinct sub-resources
+    t: A role holding ManageConfiguration can create accounts, configurations, versions, AND mappings - there is no narrower grant
+    src: "PayrollOutputsController.cs (PayrollAccountingController)"
+    type: Authorization
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "Role R3 holds only Payroll.Accounting.ManageConfiguration"
+    role: R3 (custom role)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/accounts] as R3 => [200] succeeds"
+      - "[POST /api/payroll/accounting/configurations] as R3 => [200] succeeds"
+      - "[POST /api/payroll/accounting/configurations/{id}/versions] as R3 => [200] succeeds"
+      - "[POST /api/payroll/accounting/versions/{id}/mappings] as R3 => [200] succeeds"
+    auto: API
+
+  - id: GLACC-AUTHZ-004
+    func: [F-GLACC-110]
+    sc: Generate is shared between the payroll-run and final-settlement routes
+    t: A role holding only Accounting.Generate can generate BOTH a payroll-run journal and a final-settlement journal - there is no way to grant one without the other
+    src: "PayrollOutputsController.cs (both /accounting/generate routes)"
+    type: Authorization
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "Role R4 holds only Payroll.Accounting.Generate"
+    role: R4 (custom role)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/accounting/generate] as R4 => [200] succeeds"
+      - "[POST /api/payroll/final-settlements/{FS1}/accounting/generate] as R4 => [200] succeeds"
+    auto: API
+
+  - id: GLACC-AUTHZ-005
+    func: [F-GLACC-111]
+    sc: No self-service surface exists
+    t: There is no /api/me/... route for accounting - every route requires an explicit Accounting permission
+    src: "PayrollOutputsController.cs"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] grep PayrollOutputsController.cs and the whole Controllers directory for any /api/me/... accounting route => zero matches"
+    auto: Manual only
+
+  - id: GLACC-AUTHZ-006
+    func: [F-GLACC-112]
+    sc: Cross-tenant journal id is NotFound not Forbidden
+    t: A journal id belonging to another tenant returns 404 on Get/Validate/Approve/Post/Export
+    src: "PayrollAccountingService (TenantId filter, every method)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "J_T2 belongs to tenant T2 (DEMO02)"
+    role: HRAdmin (T1, custom role holding all Accounting permissions)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/{J_T2}] as a T1 user => [404] NotFound"
+      - "[POST /api/payroll/accounting/{J_T2}/validate] as a T1 user => [404] NotFound"
+      - "[GET /api/payroll/accounting/{J_T2}/export] as a T1 user => [404] NotFound"
+    auto: API
+    secc: true
+
+  - id: GLACC-AUTHZ-007
+    func: [F-GLACC-113]
+    sc: No anonymous route exists
+    t: A full grep of PayrollAccountingController confirms no [AllowAnonymous] attribute anywhere
+    src: "PayrollOutputsController.cs (PayrollAccountingController)"
+    type: Security
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] grep PayrollOutputsController.cs's PayrollAccountingController class for [AllowAnonymous] => zero matches"
+      - "[GET /api/payroll/accounting] with no auth token at all => [401] Unauthorized"
+    auto: API
+
+  - id: GLACC-AUTHZ-008
+    func: [F-GLACC-114]
+    sc: Approve and Post are separate, independently grantable permissions
+    t: A role holding Approve but not Post can approve a journal but cannot post it, and vice versa
+    src: "PayrollOutputsController.cs (PayrollAccountingController.Approve, .Post)"
+    type: Authorization
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Role R5 holds only Approve; Role R6 holds only Post; J26 is Validated"
+    role: R5, R6 (custom roles)
+    perm: Payroll.Accounting.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/{J26}/approve] as R5 => [200] succeeds, Status='Approved'"
+      - "[POST /api/payroll/accounting/{J26}/post] as R5 (still lacking Post) => [403] Forbidden"
+      - "[POST /api/payroll/accounting/{J26}/post] as R6 (holds Post) => [200] succeeds"
+    auto: API

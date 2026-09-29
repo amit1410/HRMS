@@ -1,0 +1,430 @@
+# Functionality registry for Module 3 - Masters / Organization Structure.
+# Every test case references one or more of these ids; the builder fails if a functionality has zero cases
+# or a case references an unknown id.
+#
+# Discovered master kinds (authoritative source: Backend/HRMS.Domain/Entities, MasterManagementService,
+# MasterLookupService, MasterImportService, and the dedicated Department/Designation/Country/State/City
+# controllers+services):
+#
+#   Generic engine (api/masters/{kind}, permission Geography.View/Manage), 15 tenant-owned kinds:
+#     holding-companies, lines-of-business, organisations, departments*, sub-departments, sections,
+#     sub-sections, functions, sub-functions, grades, designations*, employee-types, work-locations,
+#     cost-centers, position-change-reasons
+#     (*departments and designations are ALSO exposed generically even though they have dedicated
+#      controllers below - see F-MST-17/F-MST-19 and CR-29)
+#   countries is registered in the generic engine for READ only; every write (create/update/delete) is
+#     rejected with 409 by MasterManagementService before it reaches the per-kind definition.
+#   Dedicated controller+service (own permission, own validation), not reachable via api/masters:
+#     departments (api/departments, Department.*), designations (api/designations, Designation.*),
+#     countries (api/countries, Geography.*, GLOBAL not tenant-scoped), states (api/states, Geography.*,
+#     GLOBAL, parent Country required), cities (api/cities, Geography.*, GLOBAL, parent State required)
+#   Lookup-only (api/master-data/*, MasterLookupController): the 15 generic kinds above (permission
+#     Department.View, except designations=Designation.View and position-change-reasons=EmploymentHistory.View)
+#     PLUS banks (permission Department.View) - Bank has NO create/update/delete surface anywhere.
+#   Bulk import (api/master-import/{kind}): the same 15 generic kinds. NOT countries/states/cities/banks.
+#
+# Hierarchy discovered: HoldingCompany -[optional]-> Lob; Department -[REQUIRED]-> SubDepartment
+# -[optional]-> Section -[optional]-> SubSection; Function -[optional]-> SubFunction;
+# Country -[REQUIRED]-> State -[REQUIRED]-> City. Organisation, Grade, Designation, EmployeeType,
+# WorkLocation, CostCenter, PositionChangeReason, Bank are flat (no parent).
+
+functionalities:
+  - id: F-MST-01
+    name: Generic master list - paging, search, active filter
+    group: Generic Engine - Read
+    status: Implemented
+    ui: "MasterManagementPage records table (search box, status filter, Previous/Next)"
+    api: "GET /api/masters/{kind}"
+    service: "MasterManagementService.GetAsync -> ListAsync<TEntity> (Page clamped >=1, PageSize clamped 1..200, no SortBy field exists on MasterManagementQuery - always ordered by Code then Id)"
+    permission: "Geography.View"
+    db: "Per-kind table, tenant-filtered (Country excluded from the tenant filter)"
+
+  - id: F-MST-02
+    name: Generic master get-by-id
+    group: Generic Engine - Read
+    status: Implemented
+    ui: "MasterManagementPage edit drawer (opened from a row, or ?edit={id} deep link)"
+    api: "GET /api/masters/{kind}/{id}"
+    service: "MasterManagementService.GetByIdAsync -> Definition.Find"
+    permission: "Geography.View"
+    db: "Per-kind table"
+
+  - id: F-MST-03
+    name: Generic master create - field validation and normalization
+    group: Generic Engine - Write
+    status: Implemented
+    ui: "MasterManagementPage 'Add {singular}' form"
+    api: "POST /api/masters/{kind}"
+    service: "MasterManagementService.WriteAsync (Code 1-20 chars, letters/digits/./_/-// only; Name 1-200 chars; Description trimmed, blank -> null)"
+    permission: "Geography.Manage"
+    db: "Per-kind table (insert)"
+
+  - id: F-MST-04
+    name: Generic master update - full replace
+    group: Generic Engine - Write
+    status: Implemented
+    ui: "MasterManagementPage 'Edit {singular}' form"
+    api: "PUT /api/masters/{kind}/{id}"
+    service: "MasterManagementService.WriteAsync (id supplied)"
+    permission: "Geography.Manage"
+    db: "Per-kind table (update)"
+
+  - id: F-MST-05
+    name: Generic master code/name uniqueness, case-insensitive, per tenant
+    group: Generic Engine - Write
+    status: Implemented
+    ui: "MasterManagementPage form error banner"
+    api: "POST /api/masters/{kind}; PUT /api/masters/{kind}/{id}"
+    service: "MasterManagementService.Definition.HasConflict (ConflictAsync, ToLower comparison, self-excluded on update)"
+    permission: "Geography.Manage"
+    db: "Per-kind table unique index (TenantId, Code) and (TenantId, Name)"
+
+  - id: F-MST-06
+    name: Generic master parent validation - required/optional, active-only, tenant-scoped
+    group: Generic Engine - Write
+    status: Implemented
+    ui: "MasterManagementPage parent <select> (populated from the parent's active lookup list)"
+    api: "POST /api/masters/{kind}; PUT /api/masters/{kind}/{id}"
+    service: "MasterManagementService.WriteAsync (ParentRequired check; ParentExistsAsync requires the parent row to exist AND be IsActive - inactive or foreign-tenant both read as invalid)"
+    permission: "Geography.Manage"
+    db: "Parent table row lookup by Id (tenant-filtered by EF query filter)"
+
+  - id: F-MST-07
+    name: Generic master delete = reference-checked soft deactivation
+    group: Generic Engine - Write
+    status: Implemented
+    ui: "MasterManagementPage row 'Delete' action (confirms, then calls DELETE)"
+    api: "DELETE /api/masters/{kind}/{id}"
+    service: "MasterManagementService.DeleteAsync -> HasReferencesAsync (checked for holding-companies, lines-of-business, organisations, sub-departments, sections, sub-sections, functions, sub-functions, grades, employee-types, work-locations, cost-centers, position-change-reasons)"
+    permission: "Geography.Manage"
+    db: "Per-kind table (IsActive set to false; no row removed)"
+
+  - id: F-MST-08
+    name: Generic master delete for 'departments'/'designations' kinds does not check references
+    group: Generic Engine - Write
+    status: Needs clarification
+    ui: "n/a (reachable only by calling the API directly with the generic route, not through the dedicated Departments/Designations pages)"
+    api: "DELETE /api/masters/departments/{id}; DELETE /api/masters/designations/{id}"
+    service: "MasterManagementService.HasReferencesAsync (switch has no case for 'departments' or 'designations'; falls through to `return false`)"
+    permission: "Geography.Manage"
+    db: "Departments/Designations table (IsActive set to false unconditionally, even with employees or child sub-departments assigned)"
+
+  - id: F-MST-09
+    name: Countries kind is read-only through the generic engine
+    group: Generic Engine - Write
+    status: Implemented
+    ui: "MasterManagementPage countries page: no Add button, no row actions; explicit 'read-only' notice"
+    api: "POST /api/masters/countries; PUT /api/masters/countries/{id}; DELETE /api/masters/countries/{id}"
+    service: "MasterManagementService.WriteAsync/DeleteAsync (kind == 'countries' short-circuits to Conflict before touching the per-kind definition)"
+    permission: "Geography.Manage"
+    db: "none (write rejected before reaching the table)"
+
+  - id: F-MST-10
+    name: Holding Company -> Line of Business hierarchy (optional parent)
+    group: Hierarchy
+    status: Implemented
+    ui: "MasterManagementPage 'LOB' page, parent select 'Holding Company' (not required)"
+    api: "GET/POST/PUT /api/masters/lines-of-business; GET /api/master-data/lines-of-business?parentId="
+    service: "MasterManagementService (ParentProperty=HoldingCompanyId, ParentRequired=false); MasterLookupService.GetLinesOfBusinessAsync"
+    permission: "Geography.View/Manage"
+    db: "LinesOfBusiness.HoldingCompanyId (nullable FK, SetNull on holding company delete... entity level; app never hard-deletes)"
+
+  - id: F-MST-11
+    name: Department -> Sub Department hierarchy (required parent)
+    group: Hierarchy
+    status: Implemented
+    ui: "MasterManagementPage 'Sub Departments' page, parent select 'Department' (required)"
+    api: "GET/POST/PUT /api/masters/sub-departments; GET /api/master-data/sub-departments?parentId="
+    service: "MasterManagementService (ParentProperty=DepartmentId, ParentRequired=true)"
+    permission: "Geography.View/Manage"
+    db: "SubDepartments.DepartmentId (NOT NULL FK to (TenantId, Id) alternate key on Departments)"
+
+  - id: F-MST-12
+    name: Sub Department -> Section -> Sub Section hierarchy (optional parents)
+    group: Hierarchy
+    status: Implemented
+    ui: "MasterManagementPage 'Sections' and 'Sub Sections' pages"
+    api: "GET/POST/PUT /api/masters/sections; /api/masters/sub-sections; GET /api/master-data/sections?parentId=; /sub-sections?parentId="
+    service: "MasterManagementService (Section.SubDepartmentId nullable; SubSection.SectionId nullable)"
+    permission: "Geography.View/Manage"
+    db: "Sections.SubDepartmentId, SubSections.SectionId (nullable FKs, SetNull on parent removal at the DB level)"
+
+  - id: F-MST-13
+    name: Function -> Sub Function hierarchy (optional parent)
+    group: Hierarchy
+    status: Implemented
+    ui: "MasterManagementPage 'Sub Functions' page"
+    api: "GET/POST/PUT /api/masters/sub-functions; GET /api/master-data/sub-functions?parentId="
+    service: "MasterManagementService (SubFunction.FunctionId nullable)"
+    permission: "Geography.View/Manage"
+    db: "SubFunctions.FunctionId (nullable FK)"
+
+  - id: F-MST-14
+    name: Flat masters accept no parent (Organisation, Grade, EmployeeType, WorkLocation, CostCenter, PositionChangeReason, Function, HoldingCompany)
+    group: Hierarchy
+    status: Implemented
+    ui: "MasterManagementPage forms for these kinds render no parent field"
+    api: "POST/PUT /api/masters/{flat-kind}"
+    service: "MasterManagementService.DefinitionFor (ParentProperty = null for these kinds; a ParentId value in the request body is accepted by the DTO but silently ignored - Set() is only called when ParentProperty is not null)"
+    permission: "Geography.Manage"
+    db: "No parent column on these tables"
+
+  - id: F-MST-15
+    name: Grade/EmployeeType/PositionChangeReason carry an explicit SortOrder
+    group: Hierarchy
+    status: Implemented
+    ui: "n/a (SortOrder is not exposed on the generic Master form; defaults to 0 on create through the UI/generic API)"
+    api: "GET /api/master-data/grades; /employee-types; /position-change-reasons"
+    service: "MasterLookupService.GetGradesAsync/GetEmployeeTypesAsync/GetPositionChangeReasonsAsync (QuerySortedAsync: OrderBy SortOrder, ThenBy Code)"
+    permission: "Department.View / EmploymentHistory.View"
+    db: "Grades.SortOrder, EmployeeTypes.SortOrder, PositionChangeReasons.SortOrder (default 0; MasterManagementRequest has no field to set it, so every record created through /api/masters keeps SortOrder=0 and sorts by Code alone until seeded/edited another way)"
+
+  - id: F-MST-16
+    name: Department CRUD via the dedicated /api/departments controller
+    group: Dedicated Department Master
+    status: Implemented
+    ui: "/departments page (DepartmentsController-backed, rendered by the same MasterManagementPage component under a department-specific permission branch)"
+    api: "GET/POST/PUT/DELETE /api/departments[/{id}]"
+    service: "DepartmentService (own uniqueness check, own employee-count projection, own delete guard)"
+    permission: "Department.View/Create/Edit/Delete"
+    db: "Departments table"
+
+  - id: F-MST-17
+    name: Department is reachable through two independent write paths with different permissions and different delete safety
+    group: Dedicated Department Master
+    status: Needs clarification
+    ui: "n/a (the generic route is not linked from the Departments page, but is not blocked either)"
+    api: "PUT/DELETE /api/departments/{id} (Department.Edit/Delete) vs PUT/DELETE /api/masters/departments/{id} (Geography.Manage)"
+    service: "DepartmentService vs MasterManagementService, same Departments table, different validation messages and different delete-reference guard (see F-MST-08)"
+    permission: "Department.* vs Geography.Manage"
+    db: "Departments table"
+
+  - id: F-MST-18
+    name: Designation CRUD via the dedicated /api/designations controller
+    group: Dedicated Designation Master
+    status: Implemented
+    ui: "/designations page"
+    api: "GET/POST/PUT/DELETE /api/designations[/{id}]"
+    service: "DesignationService (mirrors DepartmentService by design, not a shared base class)"
+    permission: "Designation.View/Create/Edit/Delete"
+    db: "Designations table"
+
+  - id: F-MST-19
+    name: Designation is reachable through two independent write paths, mirroring F-MST-17
+    group: Dedicated Designation Master
+    status: Needs clarification
+    ui: "n/a"
+    api: "PUT/DELETE /api/designations/{id} (Designation.Edit/Delete) vs PUT/DELETE /api/masters/designations/{id} (Geography.Manage)"
+    service: "DesignationService vs MasterManagementService"
+    permission: "Designation.* vs Geography.Manage"
+    db: "Designations table"
+
+  - id: F-MST-20
+    name: Country CRUD - global reference data, hard delete
+    group: Country / State / City
+    status: Implemented
+    ui: "MasterManagementPage 'Countries' page (read-only: no add/edit/delete controls rendered)"
+    api: "GET/POST/PUT/DELETE /api/countries[/{id}]"
+    service: "CountryService (no tenant filter at all; DeleteAsync performs _db.Countries.Remove, catching DbUpdateException as a 409 if states still reference it)"
+    permission: "Geography.View/Manage"
+    db: "Countries table (global, shared by every tenant); Code<=10 chars, Name<=100 chars, both globally unique"
+
+  - id: F-MST-21
+    name: State CRUD - global, parent Country required, hard delete
+    group: Country / State / City
+    status: Implemented
+    ui: "No frontend page (see F-MST-39/CR-32); API-only"
+    api: "GET/POST/PUT/DELETE /api/states[/{id}]"
+    service: "StateService (CountryId required and validated to exist; unique Code/Name within CountryId; hard delete blocked by DbUpdateException if cities reference it)"
+    permission: "Geography.View/Manage"
+    db: "States table (global); unique (CountryId, Code) and (CountryId, Name)"
+
+  - id: F-MST-22
+    name: City CRUD - global, parent State required, hard delete
+    group: Country / State / City
+    status: Implemented
+    ui: "No frontend page (see F-MST-39/CR-32); API-only"
+    api: "GET/POST/PUT/DELETE /api/cities[/{id}]"
+    service: "CityService (StateId required and validated to exist; unique Code/Name within StateId; hard delete)"
+    permission: "Geography.View/Manage"
+    db: "Cities table (global); unique (StateId, Code) and (StateId, Name)"
+
+  - id: F-MST-23
+    name: Country/State/City are shared across every tenant (not tenant-owned)
+    group: Country / State / City
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/countries; /api/states; /api/cities (called from Tenant A and Tenant B)"
+    service: "Country/State/City entities do not implement ITenantEntity; HrmsDbContext applies no tenant global query filter to them"
+    permission: "Geography.View"
+    db: "Countries/States/Cities tables (no TenantId column)"
+
+  - id: F-MST-24
+    name: Master lookup endpoints (dropdown population) for the 15 generic kinds plus Banks
+    group: Lookups
+    status: Implemented
+    ui: "MasterDropdown component, used across Department/Designation/Employee/Employment forms"
+    api: "GET /api/master-data/{kind} (holding-companies, lines-of-business, organisations, departments, banks, sub-departments, sections, sub-sections, functions, sub-functions, grades, designations, employee-types, work-locations, cost-centers, position-change-reasons)"
+    service: "MasterLookupService (ActiveOnly defaults true, Search matches Code/Name via Contains, ParentId filters hierarchical kinds)"
+    permission: "Department.View (most kinds); Designation.View (designations); EmploymentHistory.View (position-change-reasons)"
+    db: "Per-kind table, tenant-filtered"
+
+  - id: F-MST-25
+    name: Lookup permission model diverges from the generic-engine CRUD permission model
+    group: Lookups
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/masters/{kind} (Geography.View) vs GET /api/master-data/{kind} (Department.View/Designation.View/EmploymentHistory.View)"
+    service: "MasterManagementController vs MasterLookupController"
+    permission: "Geography.View vs Department.View/Designation.View/EmploymentHistory.View"
+    db: "none"
+
+  - id: F-MST-26
+    name: SortOrder-driven lookups order by SortOrder before Code
+    group: Lookups
+    status: Implemented
+    ui: "Grade/Employee Type/Position Change Reason dropdowns"
+    api: "GET /api/master-data/grades; /employee-types; /position-change-reasons"
+    service: "MasterLookupService.QuerySortedAsync"
+    permission: "Department.View / EmploymentHistory.View"
+    db: "SortOrder column"
+
+  - id: F-MST-27
+    name: Bank has a lookup endpoint but no management CRUD API anywhere
+    group: Lookups
+    status: Needs clarification
+    ui: "No 'Banks' entry in MasterManagementPage definitions; only reachable as a read-only dropdown source inside Employee Bank Details"
+    api: "GET /api/master-data/banks (only). No POST/PUT/DELETE /api/masters/banks (not in DefinitionFor) and no /api/banks controller exists."
+    service: "MasterLookupService.GetBanksAsync only; Bank is absent from MasterManagementService.DefinitionFor and MasterImportService.Supported"
+    permission: "Department.View (read only)"
+    db: "Banks table (seeded per tenant via SeedData.Banks; no application code path inserts a new row)"
+
+  - id: F-MST-28
+    name: Master import CSV template generation
+    group: Import
+    status: Implemented
+    ui: "MasterBulkImport component 'Download template' link"
+    api: "GET /api/master-import/{kind}/template"
+    service: "MasterImportService.Template (header Code,Name,Description,IsActive[,ParentColumn]; one example row)"
+    permission: "Geography.Manage"
+    db: "none"
+
+  - id: F-MST-29
+    name: Master import CSV validation / preview
+    group: Import
+    status: Implemented
+    ui: "MasterBulkImport preview table (per-row Create/Update/Error + messages)"
+    api: "POST /api/master-import/{kind}/validate"
+    service: "MasterImportService.ValidateAsync/BuildPreviewAsync (5MB/5000-row limits, CSV-only, in-file duplicate code detection, parent-code resolution against active tenant records, CreateOnly vs CreateOrUpdate against existing codes)"
+    permission: "Geography.Manage"
+    db: "Per-kind table (read-only during preview)"
+
+  - id: F-MST-30
+    name: Master import confirm is one all-or-nothing transaction per batch
+    group: Import
+    status: Implemented
+    ui: "MasterBulkImport 'Confirm import' result banner"
+    api: "POST /api/master-import/{kind}/confirm"
+    service: "MasterImportService.ConfirmAsync (re-validates, rejects if ErrorRows>0; wraps every row's Create/Update in one DB transaction; any failed row throws and rolls back the whole batch, including the ImportBatch audit row)"
+    permission: "Geography.Manage"
+    db: "Per-kind table (insert/update), ImportBatch (insert, rolled back with everything else on failure)"
+
+  - id: F-MST-31
+    name: Countries/States/Cities/Banks are excluded from bulk import
+    group: Import
+    status: Implemented
+    ui: "MasterBulkImport is not offered for these kinds (bulkKinds set excludes countries; component is not reachable for states/cities/banks since they have no MasterManagementPage entry)"
+    api: "GET/POST /api/master-import/countries/*; /states/*; /cities/*; /banks/*"
+    service: "MasterImportService.Supported (kind not in the list) / Template (throws for unsupported kind via the same switch defaulting to 'ParentCode' header, still 404s at Validate/Confirm)"
+    permission: "Geography.Manage"
+    db: "none"
+
+  - id: F-MST-32
+    name: Generic-engine and Country/State/City master permissions are both named 'Geography', regardless of subject
+    group: Authorization
+    status: Needs clarification
+    ui: "n/a"
+    api: "Every /api/masters/*, /api/countries/*, /api/states/*, /api/cities/*, /api/master-import/* endpoint"
+    service: "[HasPermission(Permissions.Geography.View/Manage)] on MasterManagementController, CountriesController, StatesController, CitiesController, MasterImportController"
+    permission: "Geography.View / Geography.Manage"
+    db: "RolePermissions/UserRoles (seed data: HRAdmin has both; HRManager/Manager/Employee have View only; most other roles have neither)"
+
+  - id: F-MST-33
+    name: No-authentication and wrong-permission requests are refused on every master endpoint
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "All master endpoints listed under F-MST-32 and F-MST-24"
+    service: "[Authorize] + [HasPermission] pipeline; fallback policy denies undeclared endpoints"
+    permission: "n/a"
+    db: "none"
+
+  - id: F-MST-34
+    name: Tenant-owned masters are invisible and unreachable cross-tenant (404, not 403)
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "GET/PUT/DELETE /api/masters/{kind}/{id}; /api/departments/{id}; /api/designations/{id} using another tenant's record id"
+    service: "EF global query filter on TenantId; every Find/GetById reads through the filtered DbSet"
+    permission: "n/a (tenant resolved from the caller's token, never from the request)"
+    db: "Per-kind table TenantId column + EF HasQueryFilter"
+
+  - id: F-MST-35
+    name: A cross-tenant or otherwise invalid parent id is rejected as an invalid parent, not as a distinct error
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a (the parent <select> is only ever populated from the caller's own tenant, so this path requires a direct API call)"
+    api: "POST/PUT /api/masters/{hierarchical-kind}"
+    service: "MasterManagementService.ParentExistsAsync (Find is tenant-filtered, so a foreign-tenant id, a nonexistent id, and an inactive id are indistinguishable - all read as 'not found')"
+    permission: "Geography.Manage"
+    db: "Parent table, tenant-filtered lookup"
+
+  - id: F-MST-36
+    name: MasterManagementPage renders the master catalogue and permission-gates create/edit/delete per kind
+    group: Frontend
+    status: Implemented
+    ui: "/masters/:kind (MasterManagementPage.tsx)"
+    api: "GET /api/masters/{kind} and friends"
+    service: "n/a (frontend-only branching: department/designation kinds check Permissions.department/designation.*, every other kind checks Permissions.geography.*, and countries force canCreate/canEdit/canDelete to false)"
+    permission: "Geography.View/Manage, Department.*, Designation.*"
+    db: "none"
+
+  - id: F-MST-37
+    name: MasterDropdown cascading parent/child behavior
+    group: Frontend
+    status: Implemented
+    ui: "MasterDropdown.tsx, used wherever a hierarchical master is selected"
+    api: "GET /api/master-data/{kind}?parentId="
+    service: "n/a (component clears the child selection when parentId changes after the initial hydration, filters to ActiveOnly unless includeInactive, caps the visible option list at 100 with a 'first 100 of N' notice)"
+    permission: "n/a"
+    db: "none"
+
+  - id: F-MST-38
+    name: Bulk import UI is available only for kinds MasterImportService supports, and only under Geography.Manage
+    group: Frontend
+    status: Implemented
+    ui: "MasterManagementPage 'canBulkImport' gate + MasterBulkImport component"
+    api: "n/a"
+    service: "n/a (canBulkImport = bulkKinds.has(kind) && can(Permissions.geography.manage) - department/designation import therefore needs Geography.Manage even though their own CRUD buttons check Department.Create/Designation.Create)"
+    permission: "Geography.Manage"
+    db: "none"
+
+  - id: F-MST-39
+    name: No frontend management page exists for States, Cities or Banks
+    group: Frontend
+    status: Needs clarification
+    ui: "MasterManagementPage 'definitions' record has no 'states'/'cities'/'banks' entry; the catalogue nav shows a static 'Location management is unavailable' notice"
+    api: "n/a (the underlying State/City APIs are fully implemented - see F-MST-21/F-MST-22)"
+    service: "n/a"
+    permission: "n/a"
+    db: "none"
+
+  - id: F-MST-40
+    name: Generic master Name accepts up to 200 characters at the service layer but every backing column is 100 characters
+    group: Generic Engine - Write
+    status: Needs clarification
+    ui: "MasterManagementPage Name input has maxLength=200"
+    api: "POST/PUT /api/masters/{kind}"
+    service: "MasterManagementService.WriteAsync ('name.Length is 0 or > 200') vs e.g. DepartmentConfiguration.Property(d => d.Name).HasMaxLength(100) (same 100-char limit on every other generic-kind table)"
+    permission: "Geography.Manage"
+    db: "Per-kind table Name column, nvarchar(100)/varchar(100) depending on provider"

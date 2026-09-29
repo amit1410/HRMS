@@ -1,0 +1,204 @@
+sheet: Payroll_SalaryComponents
+submodule: Salary Component Master - CRUD, validation matrix, activation lifecycle, and history
+defaults:
+  role: HRADMIN
+  perm: "Payroll.SalaryComponent.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-SC-001
+    func: [F-PAY-003]
+    sc: Create a valid earning salary component
+    t: A well-formed FixedAmount earning component is created in Draft-equivalent active state
+    src: ["SalaryComponentService.CreateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/salary-components] Code=BASIC, Name=Basic Pay, ComponentType=Earning, CalculationType=FixedAmount, IsActive=true => [200/201] Code=BASIC, IsActive=true"
+    auto: API
+
+  - id: PAY-SC-002
+    func: [F-PAY-001]
+    sc: List salary components with type/active/statutory filters and paging
+    t: GetAll respects ComponentType, CalculationType, IsActive, IsStatutory filters and orders by DisplayOrder then Code
+    src: ["SalaryComponentService.GetAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.SalaryComponent.View"
+    steps:
+      - "[GET /api/payroll/salary-components?componentType=Earning&isActive=true] => [200] only active Earning components returned, ordered by DisplayOrder"
+    auto: API
+
+  - id: PAY-SC-003
+    func: [F-PAY-002]
+    sc: Get a single component by id
+    t: GetById returns the full projection including ConcurrencyVersion
+    src: ["SalaryComponentService.GetByIdAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.SalaryComponent.View"
+    steps:
+      - "[GET /api/payroll/salary-components/{id}] => [200] Id, Code, ConcurrencyVersion present"
+    auto: API
+
+  - id: PAY-SC-004
+    func: [F-PAY-003]
+    sc: Missing Code or Name is rejected
+    t: Blank Code and blank Name each fail validation independently
+    src: ["SalaryComponentService.Validate"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/salary-components] Code='' => [400] Salary Component Code is required."
+      - "[POST /api/payroll/salary-components] Name='' => [400] Salary Component Name is required."
+    auto: API
+
+  - id: PAY-SC-005
+    func: [F-PAY-004]
+    sc: EffectiveTo before EffectiveFrom is rejected
+    t: A component whose EffectiveTo precedes EffectiveFrom fails validation
+    src: ["SalaryComponentService.Validate"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-components] EffectiveFrom=2026-04-01, EffectiveTo=2026-03-01 => [400] Effective To cannot be earlier than Effective From."
+    auto: API
+
+  - id: PAY-SC-006
+    func: [F-PAY-005]
+    sc: IsStatutory must agree with StatutoryType
+    t: IsStatutory=true with StatutoryType=None is rejected, and vice versa
+    src: ["SalaryComponentService.Validate"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-components] IsStatutory=true, StatutoryType=None => [400] Statutory Type must match IsStatutory."
+      - "[POST /api/payroll/salary-components] IsStatutory=false, StatutoryType=ProvidentFund => [400] Statutory Type must match IsStatutory."
+    auto: API
+
+  - id: PAY-SC-007
+    func: [F-PAY-006]
+    sc: EmployerContribution cannot affect net pay
+    t: ComponentType=EmployerContribution with AffectsNetPay=true is rejected
+    src: ["SalaryComponentService.Validate"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-components] ComponentType=EmployerContribution, AffectsNetPay=true => [400] Employer contributions cannot affect employee net pay."
+    auto: API
+
+  - id: PAY-SC-008
+    func: [F-PAY-007]
+    sc: Code is normalized and unique per tenant
+    t: A lowercase/whitespace-padded code is normalized to trimmed uppercase, and a duplicate normalized code is Conflict
+    src: ["SalaryComponentService.CreateAsync -> NormalizeCode"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-components] Code=' hra ' => [200/201] Code=HRA"
+      - "[POST /api/payroll/salary-components] Code=HRA (second attempt) => [409] A salary component with code 'HRA' already exists."
+    auto: API
+
+  - id: PAY-SC-009
+    func: [F-PAY-008]
+    sc: Concurrent duplicate-code create race resolves to exactly one success
+    t: Two parallel creates with the same code never both succeed
+    src: ["SalaryComponentService.CreateAsync (DbUpdateException fallback)"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire two concurrent POST /api/payroll/salary-components with the same Code via Task.WhenAll => exactly ONE succeeds [200/201]; the other fails [409]; exactly 1 row exists afterward"
+    auto: DB-assisted
+
+  - id: PAY-SC-010
+    func: [F-PAY-009]
+    sc: Updating a nonexistent component is NotFound
+    t: PUT against a random guid returns NotFound
+    src: ["SalaryComponentService.UpdateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[PUT /api/payroll/salary-components/{randomGuid}] => [404] Salary component not found."
+    auto: API
+
+  - id: PAY-SC-011
+    func: [F-PAY-010]
+    sc: Update with a stale ExpectedConcurrencyVersion is Conflict
+    t: A concurrent editor's update is rejected once the version has advanced
+    src: ["SalaryComponentService.UpdateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[PUT /api/payroll/salary-components/{id}] first update => [200] ConcurrencyVersion incremented"
+      - "[PUT /api/payroll/salary-components/{id}] ExpectedConcurrencyVersion=<stale value> => [409] The salary component was changed by another user."
+    auto: API
+
+  - id: PAY-SC-012
+    func: [F-PAY-011]
+    sc: Update rejects a code collision with another component
+    t: Renaming a component's code to one already used by a sibling is Conflict
+    src: ["SalaryComponentService.UpdateAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[PUT /api/payroll/salary-components/{id}] Code=<code already used by another component> => [409] A salary component with code '<code>' already exists."
+    auto: API
+
+  - id: PAY-SC-013
+    func: [F-PAY-012]
+    sc: Activate/Deactivate is idempotent - no history row on a no-op
+    t: Deactivating an already-inactive component makes no DB write and appends no history row
+    src: ["SalaryComponentService.SetActiveAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/payroll/salary-components/{id}/deactivate] first call => [200] IsActive=false, history row appended"
+      - "[GET /api/payroll/salary-components/{id}/history] record count before second call => baseline N"
+      - "[POST /api/payroll/salary-components/{id}/deactivate] second call (already inactive) => [200] IsActive=false"
+      - "[GET /api/payroll/salary-components/{id}/history] => [200] history count still N (no duplicate row)"
+    auto: API
+
+  - id: PAY-SC-014
+    func: [F-PAY-013]
+    sc: Activate honors an optional expectedConcurrencyVersion
+    t: A stale expectedConcurrencyVersion on activate is Conflict
+    src: ["SalaryComponentService.SetActiveAsync"]
+    type: Integration-Concurrency
+    pri: P2
+    steps:
+      - "[POST /api/payroll/salary-components/{id}/activate?expectedConcurrencyVersion=<stale>] => [409] The salary component was changed by another user."
+    auto: API
+
+  - id: PAY-SC-015
+    func: [F-PAY-014, F-PAY-015]
+    sc: History is append-only and requires the component to exist
+    t: Created/Updated/Activated/Deactivated each append a distinct history row; history for an unknown id is NotFound
+    src: ["SalaryComponentService.AddHistory", "SalaryComponentService.GetHistoryAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.SalaryComponent.ViewHistory"
+    steps:
+      - "[POST /api/payroll/salary-components] create => history row 1 (Created)"
+      - "[PUT /api/payroll/salary-components/{id}] update => history row 2 (Updated)"
+      - "[GET /api/payroll/salary-components/{id}/history] => [200] 2 rows, newest first"
+      - "[GET /api/payroll/salary-components/{randomGuid}/history] => [404] Salary component not found."
+    auto: API
+
+  - id: PAY-SC-016
+    func: [F-PAY-016]
+    sc: Cross-tenant salary component id is not reachable
+    t: Tenant B's component id is NotFound when accessed as Tenant A
+    src: ["SalaryComponentService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: A
+    steps:
+      - "[GET /api/payroll/salary-components/{tenantBComponentId}] As Tenant A => [404] Salary component not found - no existence leaked"
+    auto: API

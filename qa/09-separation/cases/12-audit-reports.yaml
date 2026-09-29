@@ -1,0 +1,207 @@
+sheet: Separation_Audit_Reports
+submodule: Append-only audit trails across every Separation-family entity, and the pending-work dashboards/inboxes/registers surfaced to HR/managers
+defaults:
+  role: HRADMIN
+  perm: "Separation.ViewHistory"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: SEP-AUD-001
+    func: [F-SEP-294]
+    sc: EmployeeSeparationEventType audit trail is append-only with full actor/timestamp/status/reason/comment
+    t: Every transition (Submit/Approve/Reject/Withdraw/etc.) appends an immutable event row; the trail is never edited or deleted
+    src: ["SeparationService.GetHistoryAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] A case has been Submitted, ManagerApproved, then HrApproved => precondition established"
+      - "[GET /api/separation/{id}/history] => [200] 3 (or more) events returned in chronological order, each with ActorUserId, OccurredAtUtc, FromStatus/ToStatus, and any Reason/Comment supplied at that step"
+      - "[Manual/Code] Grep SeparationService.cs for any UPDATE/DELETE path against EmployeeSeparationEvents => none exists"
+    auto: API
+
+  - id: SEP-AUD-002
+    func: [F-SEP-295]
+    sc: LWD-change and notice-waiver events record old/new values as '{old} -> {new}'
+    t: Revising the LWD or applying a notice waiver produces an event whose Comment/Reason field literally shows the before/after values
+    src: ["SeparationService.ReviseLwdAsync / ApplyNoticeWaiverAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/separation/{id}/revise-lwd] NewLastWorkingDate changes from 2026-03-15 to 2026-03-20 => [200] event recorded"
+      - "[GET /api/separation/{id}/history] => [200] the LWD-revision event's Comment/Reason contains '2026-03-15 -> 2026-03-20' (or equivalent old->new formatting)"
+    auto: API
+
+  - id: SEP-AUD-003
+    func: [F-SEP-296]
+    sc: Clearance history is append-only; Reopen preserves prior events rather than erasing them
+    t: Started/TaskCleared/TaskBlocked/TaskWaived/AssetReturned/Completed/Reopened events all accumulate; Reopen never clears the history to that point
+    src: ["ClearanceService.cs (Events collection)"]
+    type: Positive
+    pri: P1
+    perm: "Separation.Clearance.ViewAll"
+    steps:
+      - "[Setup] Clearance Started, one task Cleared, Completed, then Reopened => precondition established"
+      - "[GET /api/separation/clearance/{id}] => [200] Events collection contains ALL FOUR prior events (Started/TaskCleared/Completed/Reopened) in order - none removed by the Reopen"
+    auto: API
+
+  - id: SEP-AUD-004
+    func: [F-SEP-297]
+    sc: Exit-interview and document event histories are each append-only, immutable, and tenant-scoped
+    t: Both histories accumulate events with no edit path and are filtered by TenantId like every other Separation-family query
+    src: ["ExitInterviewService.cs", "SeparationDocumentService.cs"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/separation/exit-interview/for/{id}] Events collection => [200] AssignedCreated/EmployeeSubmitted/StartedHr/Completed-family events present in order"
+      - "[GET /api/separation/documents/{id}/history] => [200] DocumentGenerated/Approved/Issued-family events present in order"
+      - "[GET /api/separation/documents/{tenantAId}/history] as Tenant B => [404] Document not found."
+    auto: API
+
+  - id: SEP-AUD-005
+    func: [F-SEP-298]
+    sc: Settlement event history omits three declared-but-never-raised event types
+    t: SettlementReadinessEvaluated, FinalSettlementProcessing, and ReadyForFinalExitClosure are declared enum members but no code path ever raises any of them
+    src: ["SeparationSettlementOrchestrationService.GetHistoryAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[Setup] Settlement has been Initiated, Failed once, Retried, then Completed - readiness has also been checked repeatedly via GET .../readiness => precondition established"
+      - "[GET /api/separation/{id}/settlement/history] => [200] events are limited to Initiated/Linked/Failed/Retry/Completed-family types; zero SettlementReadinessEvaluated, FinalSettlementProcessing, or ReadyForFinalExitClosure events appear despite the repeated readiness checks and the full lifecycle having run"
+    auto: API
+
+  - id: SEP-AUD-006
+    func: [F-SEP-299]
+    sc: Exit execution's own audit trail survives repeated Execute/Retry with no duplication
+    t: Exactly one SeparationClosed event exists no matter how many times Execute/Retry is called after the first successful completion
+    src: ["SeparationExitService.cs"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.Manage"
+    steps:
+      - "[POST /api/separation/exit/{id}/execute] first call => [200] Completed, 1 SeparationClosed event"
+      - "[POST /api/separation/exit/{id}/execute] repeated 3 more times => [200] each idempotent success"
+      - "[POST /api/separation/exit/{id}/retry] repeated 2 more times => [200] each idempotent success"
+      - "[Manual/DB] Count SeparationClosed-type events for this separation => exactly 1, regardless of the 5 additional calls"
+    auto: DB-assisted
+
+  - id: SEP-RPT-001
+    func: [F-SEP-300]
+    sc: Manager and HR separation-approval inboxes
+    t: Each inbox returns only pending cases scoped to the caller's authority (team for manager, tenant-wide for HR)
+    src: ["SeparationService.GetManagerInboxAsync / GetHrInboxAsync"]
+    type: Positive
+    pri: P0
+    perm: "Separation.ManagerReview / HrReview"
+    ui: "SeparationInboxPage"
+    steps:
+      - "[GET /api/separation/inbox/manager] as a manager with 2 pending direct-report cases and 1 approved case => [200] returns exactly the 2 pending cases"
+      - "[GET /api/separation/inbox/hr] as HRAdmin => [200] returns every tenant-wide HrReview-pending case"
+    auto: API
+
+  - id: SEP-RPT-002
+    func: [F-SEP-301]
+    sc: No dedicated 'notice-serving employees' report exists
+    t: Upcoming exits are only implicitly visible through the LWD columns of the Exit/Settlement dashboards, not a purpose-built report
+    src: ["SeparationExitService.GetDashboardAsync / SeparationSettlementOrchestrationService.GetDashboardAsync"]
+    type: Contract
+    pri: P2
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Manual/Code] Grep the Separation controllers for a dedicated 'notice-serving'/'upcoming-exits' report route => none exists"
+      - "[GET /api/separation/exit/dashboard] => [200] LWD column is present per row - the only implicit visibility into upcoming exits"
+    auto: API
+
+  - id: SEP-RPT-003
+    func: [F-SEP-302]
+    sc: Clearance pending queues - manager, functional, and HR-wide, each server-paged and tenant-scoped
+    t: Manager sees only their team's tasks; functional (department) sees only that department's tasks; HR dashboard sees all
+    src: ["ClearanceService.GetManagerInboxAsync / GetFunctionalInboxAsync / GetHrDashboardAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.Clearance.ViewTeam / ViewAll"
+    ui: "ClearanceOperationsPage"
+    steps:
+      - "[GET /api/separation/clearance/inbox/manager] as a manager => [200] only tasks owned by/assigned to their team"
+      - "[GET /api/separation/clearance/inbox?department=IT] as an IT-department viewer => [200] only IT-category tasks"
+      - "[GET /api/separation/clearance/hr-dashboard] as HRAdmin => [200] all tenant tasks, server-paged"
+    auto: API
+
+  - id: SEP-RPT-004
+    func: [F-SEP-303]
+    sc: Settlement pending queue - filterable by status/employee/LWD range
+    t: The dashboard correctly narrows by each filter independently
+    src: ["SeparationSettlementOrchestrationService.GetDashboardAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ViewAll"
+    ui: "SettlementDashboardPage"
+    steps:
+      - "[GET /api/separation/settlement/dashboard?status=Initiated&lwdFrom=2026-01-01&lwdTo=2026-03-31] => [200] only Initiated-status rows within the LWD range returned"
+    auto: API
+
+  - id: SEP-RPT-005
+    func: [F-SEP-304]
+    sc: Completed-exit queue/dashboard - isReady/blockerCount columns, server-paged
+    t: The exit dashboard correctly reports IsReady and a blocker count per row
+    src: ["SeparationExitService.GetDashboardAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ViewAll"
+    ui: "SeparationExitClosurePage"
+    steps:
+      - "[GET /api/separation/exit/dashboard?page=1&pageSize=25] => [200] each row shows IsReady and BlockerCount consistent with a direct readiness call for the same separation"
+    auto: API
+
+  - id: SEP-RPT-006
+    func: [F-SEP-305]
+    sc: Exit-interview HR inbox is filterable by status/employee and server-paged
+    t: The inbox correctly narrows results and pages
+    src: ["ExitInterviewService.GetInboxAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.HrReview"
+    ui: "ExitInterviewHrInboxPage"
+    steps:
+      - "[GET /api/separation/exit-interview/inbox?status=EmployeeSubmitted&page=1&pageSize=25] => [200] only EmployeeSubmitted-status interviews returned, correct TotalCount"
+    auto: API
+
+  - id: SEP-RPT-007
+    func: [F-SEP-306]
+    sc: Document dashboard and separation-benefits register are both filterable and server-paged
+    t: Each surface applies its documented filters correctly
+    src: ["SeparationDocumentService.GetDashboardAsync", "SeparationBenefitsService.GetRegisterAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ViewAll / Payroll.SeparationBenefits.View"
+    steps:
+      - "[GET /api/separation/documents/dashboard?documentType=ExperienceLetter&status=Issued] => [200] correctly filtered"
+      - "[GET /api/payroll/separation-benefits/register?page=1&pageSize=25] => [200] correctly paged"
+    auto: API
+
+  - id: SEP-RPT-008
+    func: [F-SEP-307]
+    sc: Authorization/filtering is applied server-side before paging on every dashboard/inbox/register, proven at scale
+    t: A 1000+-row dataset across multiple tenants shows no cross-tenant leakage and correct page-slice math on any listed endpoint
+    src: ["SeparationService.cs / ClearanceService.cs / SeparationSettlementOrchestrationService.cs / SeparationExitService.cs / ExitInterviewService.cs / SeparationDocumentService.cs / SeparationBenefitsService.cs"]
+    type: Tenant-Isolation
+    pri: P1
+    steps:
+      - "[Setup] 1000+ separation cases seeded across Tenant A and Tenant B => precondition established"
+      - "[GET /api/separation?page=5&pageSize=25] as Tenant A HRAdmin => [200] exactly 25 rows, all Tenant A, TotalCount reflects only Tenant A's total, matching the expected page slice"
+    auto: API
+
+  - id: SEP-RPT-009
+    func: [F-SEP-308]
+    sc: No export (CSV/Excel) capability exists on any Separation-family dashboard/inbox/register
+    t: A repo-wide check confirms no export route or client function exists for any of the Separation dashboards
+    src: ["n/a (absence, confirmed by grep)"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Grep all Separation-family controllers for 'export'/'csv'/'.xlsx' => zero matches, confirming no export capability exists anywhere in this module (contrast with Attendance/Leave/Payroll reports, which do have export permissions)"
+    auto: Manual only

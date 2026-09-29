@@ -1,0 +1,324 @@
+# Functionality registry for Module 2 - Platform Administration / Tenant Onboarding.
+# Every test case references one or more of these ids; the builder fails if a functionality has zero cases
+# or a case references an unknown id.
+
+functionalities:
+  - id: F-PLAT-01
+    name: List platform tenants
+    group: Tenant Directory
+    status: Implemented
+    ui: "/platform/tenants (PlatformTenantsPage tenant table, search, status filter)"
+    api: "GET /api/platform/tenants"
+    service: "PlatformTenantService.ListAsync"
+    permission: "PlatformTenant.View"
+    db: "Catalog Tenants (read-only)"
+
+  - id: F-PLAT-02
+    name: Get tenant detail
+    group: Tenant Directory
+    status: Implemented
+    ui: "PlatformTenantsPage Inspect Tenant dialog"
+    api: "GET /api/platform/tenants/{id}"
+    service: "PlatformTenantService.GetAsync"
+    permission: "PlatformTenant.View"
+    db: "Catalog Tenants (read-only)"
+
+  - id: F-PLAT-03
+    name: Create tenant - request validation and normalization
+    group: Tenant Onboarding
+    status: Implemented
+    ui: "PlatformTenantsPage create form"
+    api: "POST /api/platform/tenants"
+    service: "CreatePlatformTenantRequestValidator; PlatformTenantService.CreateAsync (ValidateNormalizedValues)"
+    permission: "PlatformTenant.Create"
+    db: "Catalog Tenants (insert, Inactive)"
+
+  - id: F-PLAT-04
+    name: Create tenant - uniqueness of code, host and shard key
+    group: Tenant Onboarding
+    status: Implemented
+    ui: "PlatformTenantsPage create form error banner"
+    api: "POST /api/platform/tenants"
+    service: "PlatformTenantService.CreateAsync (AnyAsync checks + DbUpdateException fallback)"
+    permission: "PlatformTenant.Create"
+    db: "Catalog Tenants (TenantCode, Host, ShardKey uniqueness)"
+
+  - id: F-PLAT-05
+    name: Create tenant - onboarding gated by invitation/SMTP configuration
+    group: Tenant Onboarding
+    status: Implemented
+    ui: "n/a (server-side gate, generic error surfaces in create form)"
+    api: "POST /api/platform/tenants; POST /api/platform/tenants/{id}/retry-provisioning"
+    service: "PlatformTenantService.InitialAdministratorInvitationsConfigured"
+    permission: "PlatformTenant.Create"
+    db: "none"
+
+  - id: F-PLAT-06
+    name: Create tenant - default branding row creation
+    group: Tenant Onboarding
+    status: Implemented
+    ui: "n/a (feeds public /login branding)"
+    api: "POST /api/platform/tenants"
+    service: "PlatformTenantService.EnsureDefaultBrandingAsync"
+    permission: "PlatformTenant.Create"
+    db: "Catalog TenantBranding (insert)"
+
+  - id: F-PLAT-07
+    name: Create tenant - initial TenantAdmin creation
+    group: Tenant Onboarding
+    status: Implemented
+    ui: "PlatformTenantsPage create form 'Initial Administrator' section"
+    api: "POST /api/platform/tenants"
+    service: "PlatformTenantService.CreateInitialAdminAsync"
+    permission: "PlatformTenant.Create"
+    db: "Tenant shard Users (insert), UserRoles (TenantAdmin)"
+
+  - id: F-PLAT-08
+    name: Tenant database provisioning - SQL Server
+    group: Provisioning
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/platform/tenants (DatabaseProvider=SqlServer)"
+    service: "TenantProvisioningService.ProvisionAsync; SchemaPreparer"
+    permission: "PlatformTenant.Create"
+    db: "SQL Server tenant database (migrate/create schema)"
+
+  - id: F-PLAT-09
+    name: Tenant database provisioning - MySQL (server + database creation)
+    group: Provisioning
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/platform/tenants (DatabaseProvider=MySql)"
+    service: "TenantProvisioningService.PrepareMySqlDatabaseAsync"
+    permission: "PlatformTenant.Create"
+    db: "MySQL server (CREATE DATABASE), tenant database schema"
+
+  - id: F-PLAT-10
+    name: MySQL migration-history validation (fail-closed on unexpected state)
+    group: Provisioning
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/platform/tenants; POST /api/platform/tenants/{id}/retry-provisioning"
+    service: "TenantProvisioningService.ValidateMySqlMigrationHistory / VerifyMySqlDatabaseIsCurrentAsync"
+    permission: "PlatformTenant.Create"
+    db: "MySQL __EFMigrationsHistory"
+
+  - id: F-PLAT-11
+    name: Onboarding failure handling (tenant remains Inactive, safe error logging)
+    group: Provisioning
+    status: Implemented
+    ui: "PlatformTenantsPage error banner; tenant stays 'Inactive' in the list"
+    api: "POST /api/platform/tenants"
+    service: "PlatformTenantService.CreateAsync (catch block, SafeErrorCode)"
+    permission: "PlatformTenant.Create"
+    db: "Catalog Tenants (Status remains Inactive)"
+
+  - id: F-PLAT-12
+    name: Startup provisioning of every catalog tenant, including Inactive/Suspended
+    group: Provisioning
+    status: Implemented
+    ui: "n/a"
+    api: "n/a (API startup, DatabaseInitializer)"
+    service: "DatabaseInitializer.InitializeAsync"
+    permission: "n/a"
+    db: "Every catalog tenant's shard database"
+
+  - id: F-PLAT-13
+    name: Update tenant metadata (name, host, contact) for any non-Suspended tenant
+    group: Tenant Maintenance
+    status: Implemented
+    ui: "PlatformTenantsPage Edit Tenant drawer"
+    api: "PUT /api/platform/tenants/{id}"
+    service: "PlatformTenantService.UpdateInactiveAsync"
+    permission: "PlatformTenant.Create"
+    db: "Catalog Tenants (Host/TenantName/Email/Phone/Address), TenantBranding (DisplayName/SupportEmail sync)"
+
+  - id: F-PLAT-14
+    name: Update tenant metadata - provisioning identity is read-only
+    group: Tenant Maintenance
+    status: Implemented
+    ui: "Edit Tenant drawer (TenantCode/Provider/ShardKey rendered read-only)"
+    api: "PUT /api/platform/tenants/{id}"
+    service: "UpdateInactivePlatformTenantRequest (no TenantCode/DatabaseProvider/ShardKey fields)"
+    permission: "PlatformTenant.Create"
+    db: "none (contract-level guarantee)"
+
+  - id: F-PLAT-15
+    name: Update tenant metadata - reserved platform host protection
+    group: Tenant Maintenance
+    status: Needs clarification
+    ui: "n/a"
+    api: "PUT /api/platform/tenants/{id}"
+    service: "PlatformTenantService.IsReservedPlatformHost"
+    permission: "PlatformTenant.Create"
+    db: "none"
+
+  - id: F-PLAT-16
+    name: Activate tenant
+    group: Tenant Lifecycle
+    status: Implemented
+    ui: "PlatformTenantsPage status-change confirmation dialog"
+    api: "POST /api/platform/tenants/{id}/activate"
+    service: "PlatformTenantService.ActivateAsync / SetStatusAsync"
+    permission: "PlatformTenant.UpdateStatus"
+    db: "Catalog Tenants.Status"
+
+  - id: F-PLAT-17
+    name: Deactivate tenant
+    group: Tenant Lifecycle
+    status: Implemented
+    ui: "PlatformTenantsPage status-change confirmation dialog"
+    api: "POST /api/platform/tenants/{id}/deactivate"
+    service: "PlatformTenantService.DeactivateAsync / SetStatusAsync"
+    permission: "PlatformTenant.UpdateStatus"
+    db: "Catalog Tenants.Status"
+
+  - id: F-PLAT-18
+    name: Suspended tenant status is defined but never reachable through the API
+    group: Tenant Lifecycle
+    status: Needs clarification
+    ui: "PlatformTenantsPage shows a 'Suspended' filter option and status pill style, but no action reaches it"
+    api: "None (no endpoint sets Suspended)"
+    service: "TenantStatus.Suspended enum member; SetStatusAsync guard only"
+    permission: "n/a"
+    db: "Catalog Tenants.Status (Suspended values, if any, are DB-assisted only)"
+
+  - id: F-PLAT-19
+    name: Retry provisioning eligibility and identity re-validation
+    group: Tenant Recovery
+    status: Implemented
+    ui: "PlatformTenantsPage Retry provisioning modal (shown only for Inactive tenants)"
+    api: "POST /api/platform/tenants/{id}/retry-provisioning"
+    service: "PlatformTenantService.RetryProvisioningAsync"
+    permission: "PlatformTenant.Create"
+    db: "Catalog Tenants (status check, uniqueness re-check)"
+
+  - id: F-PLAT-20
+    name: Retry provisioning - idempotent admin creation and identity synchronization
+    group: Tenant Recovery
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/platform/tenants/{id}/retry-provisioning"
+    service: "TenantProvisioningService.SynchronizeTenantIdentityAsync; PlatformTenantService.CreateInitialAdminAsync"
+    permission: "PlatformTenant.Create"
+    db: "Tenant shard Tenants row, Users, UserRoles"
+
+  - id: F-PLAT-21
+    name: Retry provisioning - development host format enforced regardless of environment
+    group: Tenant Recovery
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/platform/tenants/{id}/retry-provisioning"
+    service: "PlatformTenantService.RetryProvisioningAsync (ValidateNormalizedValues(..., true))"
+    permission: "PlatformTenant.Create"
+    db: "none"
+
+  - id: F-PLAT-22
+    name: Reset tenant administrator password (Development only)
+    group: Tenant Recovery
+    status: Implemented
+    ui: "PlatformTenantsPage 'Reset Tenant Admin Password' action (rendered only when import.meta.env.DEV)"
+    api: "POST /api/platform/tenants/{id}/reset-admin-password"
+    service: "PlatformTenantService.ResetTenantAdminPasswordAsync"
+    permission: "PlatformTenant.Create"
+    db: "Tenant shard Users.PasswordHash"
+
+  - id: F-PLAT-23
+    name: Temporary administrator password exposure across environments
+    group: Security
+    status: Needs clarification
+    ui: "PlatformTenantsPage 'created' banner shows developmentTemporaryPassword when present"
+    api: "POST /api/platform/tenants; POST /api/platform/tenants/{id}/retry-provisioning"
+    service: "PlatformTenantService.CreateAsync/RetryProvisioningAsync (temporaryPassword returned unconditionally on new-user creation)"
+    permission: "PlatformTenant.Create"
+    db: "none (response-body concern)"
+
+  - id: F-PLAT-24
+    name: Platform permission enforcement across tenant endpoints
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "All /api/platform/tenants* endpoints"
+    service: "PlatformPermissionAttribute + PlatformPermissionHandler"
+    permission: "PlatformTenant.View / Create / UpdateStatus"
+    db: "Catalog PlatformUserRoles/PlatformRolePermissions"
+
+  - id: F-PLAT-25
+    name: Create tenant does not protect the reserved platform host
+    group: Authorization
+    status: Needs clarification
+    ui: "n/a"
+    api: "POST /api/platform/tenants"
+    service: "PlatformTenantService.CreateAsync (no IsReservedPlatformHost call, unlike UpdateInactiveAsync)"
+    permission: "PlatformTenant.Create"
+    db: "Catalog Tenants (Host)"
+
+  - id: F-PLAT-26
+    name: Platform administrator bootstrap tool
+    group: Bootstrap
+    status: Implemented
+    ui: "n/a (interactive console tool, not an HTTP API)"
+    api: "n/a"
+    service: "tools/PlatformAdminBootstrap (VerifyCatalogIdentityAsync, VerifyCatalogPrerequisitesAsync, VerifyCreatedUserAsync)"
+    permission: "n/a (operator-controlled, requires --confirm-platform-bootstrap)"
+    db: "Catalog PlatformUsers, PlatformUserRoles"
+
+  - id: F-PLAT-27
+    name: Catalog identity schema isolation (no TenantId on platform tables, provider parity)
+    group: Catalog Schema
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "PlatformIdentityConfigurations; HrmsCatalogDbContext.OnModelCreating"
+    permission: "n/a"
+    db: "Catalog PlatformUsers/Roles/Permissions/UserRoles/RolePermissions/RefreshTokens (SQL Server + MySQL)"
+
+  - id: F-PLAT-28
+    name: Frontend platform tenants page - list, search, filter, summary cards
+    group: Frontend
+    status: Implemented
+    ui: "PlatformTenantsPage table + search/status filter + summary cards"
+    api: "GET /api/platform/tenants"
+    service: "n/a"
+    permission: "PlatformTenant.View"
+    db: "none"
+
+  - id: F-PLAT-29
+    name: Frontend platform tenants page - create, edit, inspect, retry, reset, status-change flows
+    group: Frontend
+    status: Implemented
+    ui: "PlatformTenantsPage forms/dialogs/modals"
+    api: "All /api/platform/tenants* endpoints"
+    service: "n/a"
+    permission: "PlatformTenant.Create / UpdateStatus"
+    db: "none"
+
+  - id: F-PLAT-30
+    name: Frontend platform login page
+    group: Frontend
+    status: Implemented
+    ui: "/platform/login (PlatformLoginPage)"
+    api: "POST /api/platform/auth/login"
+    service: "n/a"
+    permission: "Anonymous"
+    db: "none"
+
+  - id: F-PLAT-32
+    name: Platform host boundary applies uniformly to every tenant-management endpoint
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "Every /api/platform/tenants* endpoint, called at a customer host"
+    service: "PlatformRequestRoutingMiddleware (same middleware Module 1's F-TEN-06 documents for auth endpoints)"
+    permission: "n/a (blocked before authentication)"
+    db: "none"
+
+  - id: F-PLAT-31
+    name: Tenant web URL construction from configuration template
+    group: Tenant Directory
+    status: Implemented
+    ui: "PlatformTenantsPage tenant row URL link; created-tenant banner link"
+    api: "Every response carrying webUrl (List/Get/Create/Update/Activate/Deactivate/Retry)"
+    service: "PlatformTenantService.WebUrl (Frontend:TenantWebUrlTemplate)"
+    permission: "PlatformTenant.View"
+    db: "none"

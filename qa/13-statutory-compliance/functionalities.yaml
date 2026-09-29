@@ -1,0 +1,1392 @@
+# Functionality registry for Module 13 - Statutory Compliance (phases 7F "Statutory Calculation
+# Framework", 7K "Payroll Statutory Compliance Returns", and 7X "Statutory Filing External
+# Integrations": tenant-scoped, effective-dated, jurisdiction-aware StatutoryConfiguration/Version
+# rules for PF/ESI/Professional Tax/generic Income Tax, EmployeeStatutoryProfile applicability,
+# ceiling/slab/rounding-driven contribution calculation wired into the payroll calculation engine,
+# PayrollCompliancePeriod/PayrollStatutoryReturnBatch register generation and its
+# Generate->Validate->Approve->Export->MarkFiled lifecycle, the unused PayrollStatutoryChallan
+# entity, StatutoryFilingDefinition/ConnectionProfile/Run/Package/Submission/Acknowledgement
+# external-filing lifecycle and its ManualDownload/Test-only connectors, Authorization/Scope,
+# Tenant Isolation, Audit/History, Concurrency/Idempotency, SQL Server/MySQL Provider Parity,
+# Large Data/Paging, and Frontend).
+# Every test case references one or more of these ids; the builder fails the build if a
+# functionality has zero cases or a case references an unknown id. IDs are allocated in one global
+# sequence (F-STAT-001...) in the order the groups below were authored - group boundaries are noted
+# with a comment banner.
+#
+# SCOPE NOTE (read before extending this module): the full annual income-tax/TDS computation engine
+# - regime selection, investment declarations and proof verification, Form 16, year-end
+# reconciliation (YearEndTaxService.cs, TaxDeclarations.cs, phases 7U/7W) - is OUT of scope, for the
+# identical reason qa/10-payroll excluded Payroll Accounting/GL Posting and qa/12-bonus-variable-pay
+# excluded GL journal generation: it is a separate, self-contained concern with its own design doc
+# and its own future QA module. This module covers only the StatutoryType.IncomeTax slab-based
+# MONTHLY withholding that lives inside the generic StatutoryPayrollService calculation framework
+# alongside PF/ESI/Professional Tax (F-STAT-050 documents that these two income-tax code paths never
+# call each other). Payroll Accounting/GL posting of the StatutoryLiability mapping type (phase 7I)
+# is likewise out of scope - this module verifies that a statutory contribution correctly produces a
+# PayrollStatutoryResult/PayrollStatutoryReturnBatch row and updates payroll deductions (the business
+# outcome), not that a balanced GL journal is subsequently posted from it (the accounting outcome,
+# already out of scope for every payroll sub-module QA'd so far). Gratuity/separation benefit
+# calculation (phase 7P) and full Performance/KPI-linked pay are unrelated modules, not gaps here.
+#
+# Discovered implementation (authoritative source, read directly - not assumed from any design doc;
+# docs/phase-7f-statutory-calculation-framework.md, docs/phase-7k-payroll-statutory-compliance-
+# returns.md and docs/phase-7x-statutory-filing-external-integrations.md were read for scope framing
+# only; current code wins wherever a doc and the code diverge, per CLAUDE.md):
+#   Backend/HRMS.API/Controllers/StatutoryPayrollController.cs (configurations/versions/profile/results)
+#   Backend/HRMS.API/Controllers/PayrollOutputsController.cs (PayrollStatutoryComplianceController
+#     nested in this file - periods/returns/validate/approve/mark-filed/export)
+#   Backend/HRMS.API/Controllers/StatutoryFilingsController.cs (definitions/connections/runs/lifecycle)
+#   Backend/HRMS.Application/Services/StatutoryPayrollService.cs (read in full)
+#   Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs (read in full)
+#   Backend/HRMS.Application/Services/StatutoryFilingService.cs (read in full)
+#   Backend/HRMS.Application/Services/StatutoryFilingConnectors.cs (read in full - only
+#     ManualDownloadStatutoryFilingConnector and TestStatutoryFilingConnector are ever registered)
+#   Backend/HRMS.Application/Services/PayrollApprovalGuard.cs (read in full - the shared, opt-in,
+#     tenant-PayrollControlConfiguration-gated self-approval guard used by both Approve actions)
+#   Backend/HRMS.Application/Services/PayrollCalculationEngine.cs (statutory.CalculateAsync call
+#     sites in both CalculateEmployeeAsync and CalculateAdjustmentOnlyAsync, read in full)
+#   Backend/HRMS.Application/Abstractions/IStatutoryPayrollService.cs,
+#     IPayrollStatutoryComplianceService.cs, IStatutoryFilingService.cs (read in full)
+#   Backend/HRMS.Application/DTOs/Payroll/StatutoryDtos.cs (read in full)
+#   Backend/HRMS.Domain/Entities/PayrollCalculation.cs (StatutoryConfiguration family,
+#     EmployeeStatutoryProfile family, PayrollStatutoryResult - read in full)
+#   Backend/HRMS.Domain/Entities/PayrollStatutoryCompliance.cs (read in full, including the unused
+#     PayrollStatutoryChallan entity)
+#   Backend/HRMS.Domain/Entities/StatutoryFiling.cs (read in full - 12 entities)
+#   Backend/HRMS.Domain/Enums/PayrollEnums.cs (StatutoryType, PayrollComplianceType and every other
+#     statutory-related enum - read in full; StatutoryType has exactly four members, no
+#     LabourWelfareFund member exists here)
+#   Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll.Statutory*/StatutoryCompliance*/
+#     StatutoryFiling* blocks, 29 permissions total, read in full)
+#   Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap for every seeded
+#     role, grep-verified for every one of the 29 permission constants above)
+#   Backend/HRMS.Infrastructure/Persistence/Configurations/StatutoryConfiguration.cs,
+#     PayrollStatutoryComplianceConfiguration.cs, StatutoryFilingConfiguration.cs (all indexes and
+#     concurrency-token configuration read in full)
+#   Migration pairs for AddStatutoryCalculationFramework, AddPayrollStatutoryComplianceReturns,
+#     AddStatutoryFilingPhase7X, AddStatutoryFilingConnectorProfilesPhase7X, and
+#     AdjustStatutoryFilingPackageHashUniquenessPhase7X confirmed present in both
+#     Backend/HRMS.Infrastructure/Persistence/Migrations (SQL Server) and
+#     Backend/HRMS.Infrastructure.MySqlMigrations/Migrations (MySQL)
+#   Frontend/HRMS.Web/src/pages/payroll/StatutoryConfigurationsPage.tsx,
+#     StatutoryCompliancePage.tsx (+ its .test.tsx), StatutoryFilingsPage.tsx, and
+#     src/api/payroll.ts's statutory exports plus src/api/statutoryFilings.ts (all read in full)
+#   Frontend/HRMS.Web/src/pages/employees/PersonalDetailsForm.tsx (the unrelated legacy
+#     "Statutory & Benefits" section, read around lines 380-430)
+#   Frontend/HRMS.Web/src/layout/navigation.ts, App.tsx (route/nav-entry grep)
+#   Existing xUnit inventory (StatutoryCalculationTests, SqlServerStatutoryPayrollIntegrationTests,
+#     MySqlStatutoryPayrollIntegrationTests, PayrollStatutoryComplianceTests,
+#     SqlServerPayrollStatutoryComplianceIntegrationTests,
+#     MySqlPayrollStatutoryComplianceIntegrationTests, PayrollStatutoryComplianceProviderAcceptance,
+#     StatutoryFilingFoundationTests, StatutoryFilingConnectorTests, StatutoryFilingConcurrencyTests,
+#     StatutoryFilingRetrySafetyTests, StatutoryFilingLargeDataTests, StatutoryFilingProviderAcceptance
+#     - 13 files, referenced narratively per the qa/10-11-12 precedent, not individually classified)
+#
+# -- Headline findings that shape this whole module's cases (see clarifications.yaml for full detail) --
+# CR-219: CONFIRMED - PayrollStatutoryResult has no CalculationAttemptId/IsCurrent (unlike
+# PayrollResult/PayrollResultComponent/PayrollCalculationError). Recalculating a payroll run never
+# deletes or supersedes a prior attempt's statutory rows, and GetResultsAsync(runId, employeeId)
+# returns the UNION of every attempt's rows with no way to isolate the current one.
+# CR-220: grep-verified against SeedData.cs's RolePermissionMap - none of the 29
+# Statutory/StatutoryCompliance/StatutoryFiling permissions is held by any seeded role except
+# SuperAdmin/TenantAdmin (via Permissions.All), the identical shape to qa/11-loans-advances CR-183
+# and qa/12-bonus-variable-pay CR-202.
+# CR-221: PayrollStatutoryChallan is a fully migrated entity/table/config that NO service, controller,
+# DTO, or frontend code anywhere ever creates, reads, updates, or lists - a completely dead feature.
+# CR-222: Only ManualDownloadStatutoryFilingConnector and TestStatutoryFilingConnector are ever
+# registered - there is no EPFO/ESIC/GSTN/TRACES/any real government-portal connector anywhere, and
+# ManualDownload's SubmitAsync unconditionally reports Outcome=Pending (mapped to Status=Submitted)
+# regardless of whether anything was actually transmitted.
+# CR-223: CONFIRMED FRONTEND - none of the three statutory pages lets an operator progress a
+# statutory return or filing run past Generate/Validate; EmployeeStatutoryProfile (the record that
+# actually gates calculation) has zero UI surface despite its client API functions existing.
+
+functionalities:
+  # =========================== A. STATUTORY CONFIGURATION AND EFFECTIVE-DATED VERSIONS ===========================
+  - id: F-STAT-001
+    name: List statutory configurations for the tenant, paginated, with search/jurisdiction/type/active filters
+    group: Statutory Configuration and Versions
+    status: Implemented
+    ui: StatutoryConfigurationsPage
+    api: "GET /api/payroll/statutory-configurations"
+    service: "StatutoryPayrollService.GetConfigurationsAsync"
+    permission: "Payroll.Statutory.View"
+    db: StatutoryConfigurations, StatutoryConfigurationVersions
+
+  - id: F-STAT-002
+    name: Get a single configuration by id, NotFound if missing or cross-tenant
+    group: Statutory Configuration and Versions
+    status: Implemented
+    api: "GET /api/payroll/statutory-configurations/{id}"
+    service: "StatutoryPayrollService.GetConfigurationAsync"
+    permission: "Payroll.Statutory.View"
+    db: StatutoryConfigurations (TenantId filter)
+
+  - id: F-STAT-003
+    name: Create requires Code, Name and Jurisdiction, else Invalid
+    group: Statutory Configuration and Versions
+    status: Implemented
+    ui: StatutoryConfigurationsPage
+    api: "POST /api/payroll/statutory-configurations"
+    service: "StatutoryPayrollService.CreateConfigurationAsync"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurations
+
+  - id: F-STAT-004
+    name: Code is trimmed and upper-cased and must be unique per tenant, else Conflict
+    group: Statutory Configuration and Versions
+    status: Implemented
+    service: "StatutoryPayrollService.CreateConfigurationAsync"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurations
+
+  - id: F-STAT-005
+    name: "JurisdictionCode/StateCode are trimmed and upper-cased on create; a null StateCode on a configuration means it matches every state within the jurisdiction at calculation time (CalculateAsync's own predicate: x.StateCode == null || x.StateCode == profile.StateCode)"
+    group: Statutory Configuration and Versions
+    status: Implemented
+    service: "StatutoryPayrollService.CreateConfigurationAsync / CalculateAsync"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurations.StateCode
+
+  - id: F-STAT-006
+    name: CreateConfigurationAsync atomically records a StatutoryConfigurationHistory row of type Created
+    group: Statutory Configuration and Versions
+    status: Implemented
+    service: "StatutoryPayrollService.CreateConfigurationAsync -> History"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurationHistories
+
+  - id: F-STAT-007
+    name: "CONFIRMED GAP - no UpdateConfigurationAsync/DeactivateAsync exists anywhere in IStatutoryPayrollService or the controller - Code/Name/IsActive/JurisdictionCode/StateCode/StatutoryType are all immutable after creation, unlike every other master-data module's own Update method"
+    group: Statutory Configuration and Versions
+    status: Implemented
+    service: "IStatutoryPayrollService.cs (full interface - no update/deactivate member); StatutoryPayrollController.cs (full grep - no PUT/PATCH route)"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurations
+
+  - id: F-STAT-008
+    name: AddVersionAsync requires EffectiveTo>=EffectiveFrom, else Invalid
+    group: Statutory Configuration and Versions
+    status: Implemented
+    api: "POST /api/payroll/statutory-configurations/{id}/versions"
+    service: "StatutoryPayrollService.AddVersionAsync"
+    permission: "Payroll.Statutory.Manage"
+    db: "n/a"
+
+  - id: F-STAT-009
+    name: AddVersionAsync requires the owning configuration to exist in the tenant, else NotFound
+    group: Statutory Configuration and Versions
+    status: Implemented
+    api: "POST /api/payroll/statutory-configurations/{id}/versions"
+    service: "StatutoryPayrollService.AddVersionAsync"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurations (TenantId filter)
+
+  - id: F-STAT-010
+    name: "A new version whose date range overlaps ANY existing version of the same configuration - Draft, Active, or Retired alike - is rejected Conflict; unlike qa/11-loans-advances/qa/12-bonus-variable-pay's Published-only overlap rule, overlap here is not narrowed to a particular Status"
+    group: Statutory Configuration and Versions
+    status: Implemented
+    api: "POST /api/payroll/statutory-configurations/{id}/versions"
+    service: "StatutoryPayrollService.AddVersionAsync -> overlaps query (no Status filter)"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurationVersions
+
+  - id: F-STAT-011
+    name: "The overlap check and the version insert are two separate, non-transactional statements backed by a non-unique index (TenantId, StatutoryConfigurationId, EffectiveFrom, EffectiveTo) - a race between two concurrent AddVersionAsync calls for the same configuration can both pass the AnyAsync check and persist overlapping versions"
+    group: Statutory Configuration and Versions
+    status: Implemented
+    service: "StatutoryPayrollService.AddVersionAsync"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurationVersions (non-unique index only)
+
+  - id: F-STAT-012
+    name: A version persists EffectiveFrom/EffectiveTo/Status/Priority/ConfigurationJson (serialized Rules) plus optional Basis and Slabs collections in the same call
+    group: Statutory Configuration and Versions
+    status: Implemented
+    api: "POST /api/payroll/statutory-configurations/{id}/versions"
+    service: "StatutoryPayrollService.AddVersionAsync"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurationVersions, StatutoryComponentBasis, StatutorySlabs
+
+  - id: F-STAT-013
+    name: "StatutoryConfigurationVersionRequest.Status has no default value (unlike qa/12-bonus-variable-pay's Status-defaults-to-Published shape) - a caller must explicitly choose Draft/Active/Retired on every AddVersionAsync call"
+    group: Statutory Configuration and Versions
+    status: Implemented
+    service: "StatutoryConfigurationVersionRequest (record, no default for Status)"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurationVersions.Status
+
+  - id: F-STAT-014
+    name: "No API path ever transitions a version's Status after creation - a version stays whatever Status it was created with forever; nothing automatically retires an Active version when a newer, overlapping-in-time replacement is added (and F-STAT-010 would in any case reject such an overlapping replacement while the old one is still Active)"
+    group: Statutory Configuration and Versions
+    status: Implemented
+    service: "StatutoryPayrollService.cs (full grep for a Status-transition method on StatutoryConfigurationVersion - none exists)"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurationVersions.Status
+
+  - id: F-STAT-015
+    name: AddVersionAsync stamps CreatedByUserId from the current authenticated user
+    group: Statutory Configuration and Versions
+    status: Implemented
+    service: "StatutoryPayrollService.AddVersionAsync"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurationVersions.CreatedByUserId
+
+  - id: F-STAT-016
+    name: A cross-tenant configuration id on AddVersionAsync is NotFound, not Forbidden
+    group: Statutory Configuration and Versions
+    status: Implemented
+    api: "POST /api/payroll/statutory-configurations/{id}/versions"
+    service: "StatutoryPayrollService.cs (TenantId filter)"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurations (TenantId filter)
+
+  - id: F-STAT-017
+    name: AddVersionAsync records a StatutoryConfigurationHistory row of type VersionAdded on the owning configuration
+    group: Statutory Configuration and Versions
+    status: Implemented
+    service: "StatutoryPayrollService.AddVersionAsync -> History"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurationHistories
+
+  - id: F-STAT-018
+    name: "StatutoryConfigurationRules (EmployeeRate, EmployerRate, WageCeiling, FixedAmount, OptionalMonth, TaxRegime) is accepted with NO range or sign validation whatsoever - a negative rate, a rate above 100, or a negative WageCeiling are all persisted and later applied verbatim by CalculateAsync"
+    group: Statutory Configuration and Versions
+    status: Implemented
+    service: "StatutoryPayrollService.AddVersionAsync (no validation on request.Rules fields)"
+    permission: "Payroll.Statutory.Manage"
+    db: StatutoryConfigurationVersions.ConfigurationJson
+
+  # =========================== B. EMPLOYEE STATUTORY PROFILE ===========================
+  - id: F-STAT-019
+    name: "GetProfileAsync returns the single row with the latest EffectiveFrom for the employee - not necessarily the one that is IsActive or that would actually be selected by CalculateAsync for a specific payroll period"
+    group: Employee Statutory Profile
+    status: Implemented
+    api: "GET /api/payroll/employees/{employeeId}/statutory-profile"
+    service: "StatutoryPayrollService.GetProfileAsync"
+    permission: "Payroll.EmployeeStatutory.View"
+    db: EmployeeStatutoryProfiles
+
+  - id: F-STAT-020
+    name: SaveProfileAsync requires the employee to exist in the tenant, else NotFound
+    group: Employee Statutory Profile
+    status: Implemented
+    api: "PUT /api/payroll/employees/{employeeId}/statutory-profile"
+    service: "StatutoryPayrollService.SaveProfileAsync"
+    permission: "Payroll.EmployeeStatutory.Manage"
+    db: Employees (existence check)
+
+  - id: F-STAT-021
+    name: SaveProfileAsync requires EffectiveTo>=EffectiveFrom, else Invalid
+    group: Employee Statutory Profile
+    status: Implemented
+    api: "PUT /api/payroll/employees/{employeeId}/statutory-profile"
+    service: "StatutoryPayrollService.SaveProfileAsync"
+    permission: "Payroll.EmployeeStatutory.Manage"
+    db: "n/a"
+
+  - id: F-STAT-022
+    name: "SaveProfileAsync always INSERTS a new profile row - there is no update path - and rejects Conflict when the new date range overlaps any existing profile row for the employee regardless of that row's own IsActive flag"
+    group: Employee Statutory Profile
+    status: Implemented
+    api: "PUT /api/payroll/employees/{employeeId}/statutory-profile"
+    service: "StatutoryPayrollService.SaveProfileAsync"
+    permission: "Payroll.EmployeeStatutory.Manage"
+    db: EmployeeStatutoryProfiles
+
+  - id: F-STAT-023
+    name: "The profile overlap check is backed by a non-unique index (TenantId, EmployeeId, EffectiveFrom, EffectiveTo) - the identical app-level-only race window as F-STAT-011, here for two concurrent SaveProfileAsync calls on the same employee"
+    group: Employee Statutory Profile
+    status: Implemented
+    service: "StatutoryPayrollService.SaveProfileAsync"
+    permission: "Payroll.EmployeeStatutory.Manage"
+    db: EmployeeStatutoryProfiles (non-unique index only)
+
+  - id: F-STAT-024
+    name: JurisdictionCode/StateCode are trimmed and upper-cased on save
+    group: Employee Statutory Profile
+    status: Implemented
+    service: "StatutoryPayrollService.SaveProfileAsync"
+    permission: "Payroll.EmployeeStatutory.Manage"
+    db: EmployeeStatutoryProfiles.JurisdictionCode, StateCode
+
+  - id: F-STAT-025
+    name: SaveProfileAsync records an EmployeeStatutoryProfileHistory row (always ChangeType=Created) carrying a full JSON snapshot of the request
+    group: Employee Statutory Profile
+    status: Implemented
+    service: "StatutoryPayrollService.SaveProfileAsync -> EmployeeStatutoryProfileHistories.Add"
+    permission: "Payroll.EmployeeStatutory.Manage"
+    db: EmployeeStatutoryProfileHistories
+
+  - id: F-STAT-026
+    name: "StatutoryProfileChangeType.Updated/Activated/Deactivated are declared enum members that no method anywhere ever assigns - every history row for this entity is permanently ChangeType=Created, the identical dead-enum-state shape as qa/12-bonus-variable-pay's CR-214"
+    group: Employee Statutory Profile
+    status: Implemented
+    service: "StatutoryPayrollService.cs (full grep for StatutoryProfileChangeType.Updated/Activated/Deactivated - zero matches)"
+    permission: "Payroll.EmployeeStatutory.Manage"
+    db: EmployeeStatutoryProfileHistories.ChangeType
+
+  - id: F-STAT-027
+    name: "EmployeeStatutoryProfile.Uan/EsiNumber are independent of, and never read from or written to, Employee.UanNumber/EsicNumber (the legacy Personal Details fields rendered on PersonalDetailsForm's own, unrelated 'Statutory & Benefits' section) - the two identifier pairs can silently diverge for the same employee"
+    group: Employee Statutory Profile
+    status: Implemented
+    service: "StatutoryPayrollService.cs / EmployeeService.cs (full grep - no cross-reference between the two field pairs)"
+    permission: "Payroll.EmployeeStatutory.Manage"
+    db: EmployeeStatutoryProfiles.Uan, EsiNumber vs Employees.UanNumber, EsicNumber
+
+  - id: F-STAT-028
+    name: "CONFIRMED FRONTEND GAP - getEmployeeStatutoryProfile/saveEmployeeStatutoryProfile exist as client functions in src/api/payroll.ts but are never called from any page component anywhere in the frontend (full grep) - the record that actually drives F-STAT-031's calculation eligibility has zero UI surface"
+    group: Employee Statutory Profile
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/api/payroll.ts (functions exist); full grep of src/pages for either function name - zero matches"
+    permission: "Payroll.EmployeeStatutory.View, Payroll.EmployeeStatutory.Manage"
+    db: "n/a"
+
+  - id: F-STAT-029
+    name: A cross-tenant employeeId on profile get/save is NotFound, not Forbidden
+    group: Employee Statutory Profile
+    status: Implemented
+    api: "GET, PUT /api/payroll/employees/{employeeId}/statutory-profile"
+    service: "StatutoryPayrollService.cs (TenantId filter)"
+    permission: "Payroll.EmployeeStatutory.View, Payroll.EmployeeStatutory.Manage"
+    db: EmployeeStatutoryProfiles (TenantId filter)
+
+  - id: F-STAT-030
+    name: "IsActive on the profile IS correctly enforced as a calculation gate - CalculateAsync's own profile lookup filters x.IsActive directly - unlike several other 'declared but never read' flags found elsewhere in this module (a positive-confirmation case, not a gap)"
+    group: Employee Statutory Profile
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync (profile query includes x.IsActive)"
+    permission: "Payroll.EmployeeStatutory.Manage"
+    db: EmployeeStatutoryProfiles.IsActive
+
+  # =========================== C. CONTRIBUTION CALCULATION ENGINE ===========================
+  - id: F-STAT-031
+    name: "CalculateAsync is a documented no-op - Result.Success(new(0,0,[]), 'No statutory profile is configured.') - when no EmployeeStatutoryProfile row is active and effective on the PayrollResult's own PeriodEndDate; the surrounding payroll calculation proceeds to completion with zero statutory deductions and no separate warning surfaced to the caller"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a (invoked internally by PayrollCalculationEngine)"
+    db: EmployeeStatutoryProfiles
+
+  - id: F-STAT-032
+    name: "Profile selection is the single most-recently-effective-from row matching TenantId/EmployeeId/IsActive/EffectiveFrom<=PeriodEndDate/(EffectiveTo==null or >=PeriodEndDate) - OrderByDescending(EffectiveFrom).FirstOrDefault, not an exact-date match"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: EmployeeStatutoryProfiles
+
+  - id: F-STAT-033
+    name: Each of ProvidentFund/Esi/ProfessionalTax/IncomeTax is processed independently, gated solely by its own profile Applicable flag
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-034
+    name: "Configuration matching for an applicable type requires the SAME TenantId, IsActive configuration, matching StatutoryType and JurisdictionCode, and (configuration StateCode is null OR equals the profile's own StateCode)"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: StatutoryConfigurations
+
+  - id: F-STAT-035
+    name: "Among matching configurations, only versions with Status=Active whose date range covers PeriodEndDate are eligible, and the highest-Priority match among them wins"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: StatutoryConfigurationVersions
+
+  - id: F-STAT-036
+    name: "A tie in the highest Priority among eligible versions fails the WHOLE CalculateAsync call Conflict ('Statutory configuration is ambiguous for {type}') - which, via PayrollCalculationErrorCode.StatutoryCalculationFailed, fails the ENTIRE employee's payroll calculation for the run, not just that one statutory type"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-037
+    name: "If zero configurations/versions match an applicable type, that type is silently skipped ('continue') - no PayrollStatutoryResult row, no error, no warning is ever produced; the type simply contributes nothing to the payslip"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-038
+    name: "ResolveBasisAsync sums CalculatedAmount*Weight/100 over the result's own PayrollResultComponents whose SalaryComponentId matches an Included StatutoryComponentBasis row on the selected version - components not listed contribute nothing"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.ResolveBasisAsync"
+    permission: "n/a"
+    db: StatutoryComponentBasis
+
+  - id: F-STAT-039
+    name: "A version with zero StatutoryComponentBasis rows returns a NULL basis, not zero. For ProvidentFund/Esi this forces Invalid('basis', 'No statutory basis is configured for {type}'), aborting the whole employee calculation; for ProfessionalTax/IncomeTax the same null instead silently falls back to result.GrossEarnings - a materially more permissive default for the two slab-based types than for PF/ESI"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync (amountBasis = basis ?? result.GrossEarnings, then the PF/Esi-only null check)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-040
+    name: A configured WageCeiling (when >0) clamps the resolved basis via Math.Min BEFORE any rate or slab lookup, and the clamped value is what is persisted as both the calculation basis and AppliedCeiling context
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: PayrollStatutoryResults.AppliedCeiling
+
+  - id: F-STAT-041
+    name: "For ProvidentFund/Esi, EmployeeAmount and EmployerAmount are computed and rounded INDEPENDENTLY from the (possibly different) EmployeeRate/EmployerRate - neither is derived from the other - each defaulting to 0 when its own rate is null"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: PayrollStatutoryResults.EmployeeAmount, EmployerAmount
+
+  - id: F-STAT-042
+    name: "For ProfessionalTax/IncomeTax, a single StatutorySlab row is matched (FromAmount<=basis<=ToAmount-or-null, optional OptionalMonth==PeriodEndDate.Month gate, ordered by Sequence, first match wins) and EmployeeAmount = round(FixedAmount + basis*Rate/100); EmployerAmount is always 0 for these two types"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: StatutorySlabs
+
+  - id: F-STAT-043
+    name: "OptionalMonth restricts a slab to a single calendar month (e.g. a February-only supplementary PT slab) - a slab with OptionalMonth set is never matched in any other month, independent of any other slab's own configuration"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync (slab query's OptionalMonth predicate)"
+    permission: "n/a"
+    db: StatutorySlabs.OptionalMonth
+
+  - id: F-STAT-044
+    name: "If no StatutorySlab row matches the resolved basis and month for ProfessionalTax/IncomeTax, that type is silently skipped exactly like a missing configuration (F-STAT-037) - no error, no zero-value PayrollStatutoryResult row"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync (slab is null -> continue)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-045
+    name: "All four monetary fields are rounded via PayrollRoundingPolicy.RoundMoney (2-decimal, AwayFromZero) despite being persisted into (18,6)-precision decimal columns - the extra four decimal digits of column precision are never populated with a nonzero fractional value by this service"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: PayrollStatutoryResults (18,6 precision columns)
+
+  - id: F-STAT-046
+    name: "PayrollStatutoryResult.CalculationMetadata is a JSON snapshot of {type, VersionId, StateCode} ONLY - it never captures which basis components/weights contributed, which slab row matched, or which profile id was used, limiting after-the-fact auditability of a specific calculated amount"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: PayrollStatutoryResults.CalculationMetadata
+
+  - id: F-STAT-047
+    name: The unique index on (TenantId, PayrollResultId, StatutoryType) guarantees at most one PayrollStatutoryResult per statutory type per PayrollResult row within a single CalculateAsync call
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "PayrollStatutoryResultConfiguration (unique index)"
+    permission: "n/a"
+    db: PayrollStatutoryResults (unique index)
+
+  - id: F-STAT-048
+    name: "CalculateAsync returns Forbidden (not NotFound) for a cross-tenant PayrollResult - the sole action in this whole module using Forbidden rather than NotFound for a tenant mismatch, an inconsistency worth flagging even though CalculateAsync is never called with attacker-controlled input directly (it is invoked internally by PayrollCalculationEngine, not from a public route)"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-049
+    name: "There is no StatutoryType member for Labour Welfare Fund (LWF) - StatutoryType only declares ProvidentFund/Esi/ProfessionalTax/IncomeTax. A SalaryComponent tagged the separate, purely-descriptive SalaryStatutoryType.LabourWelfareFund is calculated as an ordinary Fixed/Percentage/Formula salary component with NO ceiling, slab, effective-dating, jurisdiction-matching, or employer-contribution support of any kind"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "Backend/HRMS.Domain/Enums/PayrollEnums.cs (StatutoryType - 4 members, no LWF); SalaryComponent.cs (separate SalaryStatutoryType enum with a LabourWelfareFund member, used only as a descriptive tag)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-050
+    name: "StatutoryType.IncomeTax's slab-based path inside CalculateAsync is the ONLY monthly income-tax/TDS withholding wired into PayrollCalculationEngine - it is entirely independent of, and never invoked by, YearEndTaxService/TaxDeclarations' fuller annual regime/investment-declaration-driven tax engine (out of scope per this module's scope note); a tenant relying solely on the annual engine gets no automatic monthly TDS deduction unless a StatutoryConfiguration of type IncomeTax is ALSO separately configured"
+    group: Contribution Calculation Engine
+    status: Implemented
+    service: "PayrollCalculationEngine.cs (statutory.CalculateAsync call sites); YearEndTaxService.cs (full grep for any call INTO StatutoryPayrollService or FROM PayrollCalculationEngine - zero matches either direction)"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== D. PAYROLL INTEGRATION AND RETRO/RECALCULATION IMPACT ===========================
+  - id: F-STAT-051
+    name: PayrollCalculationEngine invokes statutory.CalculateAsync for every successfully-computed regular-run employee, adding EmployeeAmount to TotalDeductions and EmployerAmount to EmployerContributions before the PayrollResult is persisted
+    group: Payroll Integration and Retro/Recalculation Impact
+    status: Implemented
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync"
+    permission: "n/a"
+    db: PayrollResults.TotalDeductions, EmployerContributions
+
+  - id: F-STAT-052
+    name: The identical statutory integration also runs inside CalculateAdjustmentOnlyAsync for OffCycle/Supplementary runs - an off-cycle run's own adjustment components are equally subject to statutory deduction whenever a matching basis component is included
+    group: Payroll Integration and Retro/Recalculation Impact
+    status: Implemented
+    service: "PayrollCalculationEngine.CalculateAdjustmentOnlyAsync"
+    permission: "n/a"
+    db: PayrollResults (OffCycle/Supplementary runs)
+
+  - id: F-STAT-053
+    name: A failed statutory calculation (Invalid basis or Conflict ambiguity) surfaces as PayrollCalculationErrorCode.StatutoryCalculationFailed and fails the employee's ENTIRE payroll calculation for the run - no partial result containing only the non-statutory components is ever produced
+    group: Payroll Integration and Retro/Recalculation Impact
+    status: Implemented
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync/CalculateAdjustmentOnlyAsync"
+    permission: "n/a"
+    db: PayrollCalculationErrors
+
+  - id: F-STAT-054
+    name: Adding the statutory EmployeeAmount can independently push NetPay negative even when the pre-statutory net was non-negative, triggering a second, statutory-specific NegativeNetPay guard distinct from the pre-statutory one
+    group: Payroll Integration and Retro/Recalculation Impact
+    status: Implemented
+    service: "PayrollCalculationEngine.CalculateEmployeeAsync (post-statutory NetPay < 0 check)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-055
+    name: "PayrollStatutoryResult carries no CalculationAttemptId and no IsCurrent flag, unlike PayrollResult/PayrollResultComponent/PayrollCalculationError which all use one or both - every CalculateAsync invocation (including every recalculation attempt) inserts a brand-new, permanent row rather than superseding the prior attempt's row"
+    group: Payroll Integration and Retro/Recalculation Impact
+    status: Implemented
+    service: "Backend/HRMS.Domain/Entities/PayrollCalculation.cs (PayrollStatutoryResult - full field list, no CalculationAttemptId/IsCurrent)"
+    permission: "n/a"
+    db: PayrollStatutoryResults
+
+  - id: F-STAT-056
+    name: "CONFIRMED - recalculating a payroll run (PayrollCalculationEngine.CalculateAsync with recalculate=true) marks the prior attempt's PayrollResult rows IsCurrent=false but never deletes, marks non-current, or otherwise touches the PayrollStatutoryResult rows the prior attempt created - they remain in the table indefinitely, one full set per attempt"
+    group: Payroll Integration and Retro/Recalculation Impact
+    status: Implemented
+    service: "PayrollCalculationEngine.CalculateAsync (full grep for PayrollStatutoryResults inside the recalculation cleanup block - zero matches)"
+    permission: "n/a"
+    db: PayrollStatutoryResults
+
+  - id: F-STAT-057
+    name: "CONFIRMED HEADLINE DEFECT - GetResultsAsync(payrollRunId, employeeId) filters only by TenantId/PayrollRunId/EmployeeId, with no PayrollResultId or attempt/IsCurrent filter. After any recalculation this endpoint returns the UNION of every attempt's statutory rows (e.g. two PF rows, two ESI rows... after one recalculation) rather than only the current attempt's results, with no field anywhere letting a caller distinguish current from stale"
+    group: Payroll Integration and Retro/Recalculation Impact
+    status: Implemented
+    api: "GET /api/payroll/runs/{runId}/results/{employeeId}/statutory"
+    service: "StatutoryPayrollService.GetResultsAsync"
+    permission: "Payroll.Statutory.View"
+    db: PayrollStatutoryResults (unfiltered by attempt)
+
+  - id: F-STAT-058
+    name: The (TenantId, PayrollResultId, StatutoryType) unique index (F-STAT-047) prevents duplicates only WITHIN a single attempt's own PayrollResult id - it does nothing to prevent or even flag the cross-attempt accumulation described in F-STAT-057, since each attempt mints an entirely new PayrollResultId
+    group: Payroll Integration and Retro/Recalculation Impact
+    status: Implemented
+    service: "PayrollStatutoryResultConfiguration (unique index scope)"
+    permission: "n/a"
+    db: PayrollStatutoryResults (unique index)
+
+  - id: F-STAT-059
+    name: A retro/off-cycle adjustment run recalculates statutory contributions from scratch against whatever EmployeeStatutoryProfile/StatutoryConfiguration is effective as of THAT run's own PeriodEndDate - a later change to profile/configuration does not retroactively re-open or flag an earlier run's already-persisted PayrollStatutoryResult rows
+    group: Payroll Integration and Retro/Recalculation Impact
+    status: Implemented
+    service: "StatutoryPayrollService.CalculateAsync (each call independently resolves profile/configuration as of its own result.PeriodEndDate)"
+    permission: "n/a"
+    db: PayrollStatutoryResults
+
+  - id: F-STAT-060
+    name: "Because PayrollResultComponent (the statutory basis source) IS attempt-scoped via CalculationAttemptId while PayrollStatutoryResult is not (F-STAT-055), a recalculation that changes the underlying components produces a NEW statutory result computed from the new components while the OLD attempt's stale statutory rows (F-STAT-056) still linger and are still returned by F-STAT-057's endpoint, compounding the ambiguity for any caller who does not already know to cross-reference the latest PayrollResult id independently"
+    group: Payroll Integration and Retro/Recalculation Impact
+    status: Implemented
+    service: "PayrollCalculationEngine.cs / StatutoryPayrollService.cs (cross-reference of attempt scoping)"
+    permission: "n/a"
+    db: PayrollStatutoryResults, PayrollResultComponents
+
+  # =========================== E. COMPLIANCE PERIODS AND RETURN BATCHES ===========================
+  - id: F-STAT-061
+    name: CreatePeriodAsync requires PeriodEnd>=PeriodStart, else Invalid
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    ui: StatutoryCompliancePage
+    api: "POST /api/payroll/statutory-compliance/periods"
+    service: "PayrollStatutoryComplianceService.CreatePeriodAsync"
+    permission: "Payroll.StatutoryCompliance.ManagePeriods"
+    db: PayrollCompliancePeriods
+
+  - id: F-STAT-062
+    name: "A duplicate (TenantId, JurisdictionCode, ComplianceType, PeriodStart, PeriodEnd) combination is rejected Conflict UNLESS every existing match is Cancelled - a Cancelled period's slot can in principle be reused, but per F-STAT-064 no API ever sets a period to Cancelled, making this reuse path currently unreachable"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.CreatePeriodAsync"
+    permission: "Payroll.StatutoryCompliance.ManagePeriods"
+    db: PayrollCompliancePeriods (compound unique index)
+
+  - id: F-STAT-063
+    name: JurisdictionCode is trimmed and upper-cased on create
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.CreatePeriodAsync"
+    permission: "Payroll.StatutoryCompliance.ManagePeriods"
+    db: PayrollCompliancePeriods.JurisdictionCode
+
+  - id: F-STAT-064
+    name: "CONFIRMED - no API exists to close or cancel a PayrollCompliancePeriod after creation; PayrollCompliancePeriodStatus.Closed and .Cancelled are declared but never assigned by IPayrollStatutoryComplianceService's own implementation (full grep) - the identical dead-enum-state shape as F-STAT-014/F-STAT-026"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.cs (full grep for PayrollCompliancePeriodStatus.Closed / .Cancelled - zero matches)"
+    permission: "Payroll.StatutoryCompliance.ManagePeriods"
+    db: PayrollCompliancePeriods.Status
+
+  - id: F-STAT-065
+    name: "GenerateAsync requires the period to be Status=Open, else Conflict - since nothing ever moves a period away from Open (F-STAT-064), this guard can in practice never fire today"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    api: "POST /api/payroll/statutory-compliance/periods/{id}/returns"
+    service: "PayrollStatutoryComplianceService.GenerateAsync"
+    permission: "Payroll.StatutoryCompliance.Generate"
+    db: PayrollCompliancePeriods.Status
+
+  - id: F-STAT-066
+    name: "GenerateAsync requires no existing non-Cancelled PayrollStatutoryReturnBatch for the period, else Conflict ('An active return already exists for this period') - since Cancelled is unreachable (F-STAT-064), at most one return batch can ever be generated per period today"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    api: "POST /api/payroll/statutory-compliance/periods/{id}/returns"
+    service: "PayrollStatutoryComplianceService.GenerateAsync"
+    permission: "Payroll.StatutoryCompliance.Generate"
+    db: PayrollStatutoryReturnBatches
+
+  - id: F-STAT-067
+    name: GenerateAsync sources rows only from Approved-or-Finalized PayrollRuns whose PayrollPeriod overlaps the compliance period, further filtered to PayrollStatutoryResult rows matching the mapped StatutoryType and JurisdictionCode
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    api: "POST /api/payroll/statutory-compliance/periods/{id}/returns"
+    service: "PayrollStatutoryComplianceService.GenerateAsync"
+    permission: "Payroll.StatutoryCompliance.Generate"
+    db: PayrollRuns, PayrollStatutoryResults
+
+  - id: F-STAT-068
+    name: "If zero PayrollStatutoryResult rows match, GenerateAsync fails Conflict with the literal message 'MissingStatutorySource: no persisted statutory results match this period'; because of F-STAT-057's cross-attempt accumulation, this same unfiltered query ALSO picks up every retained recalculation attempt's stale rows for any in-scope run, so a return generated after a recalculation can double- (or multiple-) count an employee's contribution across every retained attempt"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    api: "POST /api/payroll/statutory-compliance/periods/{id}/returns"
+    service: "PayrollStatutoryComplianceService.GenerateAsync"
+    permission: "Payroll.StatutoryCompliance.Generate"
+    db: PayrollStatutoryResults
+
+  - id: F-STAT-069
+    name: "BatchNumber is generated as STAT/{ComplianceType}/{yyyyMM}/{a new GUID} truncated to 36 characters - the truncation can cut the trailing GUID segment short, and the number is not a sequential, human-auditable counter the way other modules' AwardNumber/LoanNumber sequences are"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.GenerateAsync"
+    permission: "Payroll.StatutoryCompliance.Generate"
+    db: PayrollStatutoryReturnBatches.BatchNumber
+
+  - id: F-STAT-070
+    name: "Return rows are grouped per employee, summing GrossWages/StatutoryWages/EmployeeContribution/EmployerContribution/DeductionAmount/PayableAmount from that employee's own matched PayrollStatutoryResult rows - GrossWages and StatutoryWages are populated with the IDENTICAL CalculationBasis sum, so there is no separately-preserved 'gross wages before ceiling' figure"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.GenerateAsync"
+    permission: "Payroll.StatutoryCompliance.Generate"
+    db: PayrollStatutoryReturnEmployees
+
+  - id: F-STAT-071
+    name: "CONFIRMED DEFECT - PtRegistrationReference on PayrollStatutoryReturnEmployee is declared but NEVER assigned anywhere in GenerateAsync - every ProfessionalTax compliance return row has this identifier permanently null"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.GenerateAsync (row initializer - no PtRegistrationReference assignment)"
+    permission: "Payroll.StatutoryCompliance.Generate"
+    db: PayrollStatutoryReturnEmployees.PtRegistrationReference
+
+  - id: F-STAT-072
+    name: "Uan/EsicNumber/Pan on the return row are sourced from Employee.UanNumber/EsicNumber/PanNumber (the legacy Personal Details fields) - NOT from EmployeeStatutoryProfile.Uan/EsiNumber used by CalculateAsync itself (F-STAT-027) - so the compliance register can show a different identifier than the one the calculation engine's own profile record carries"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.GenerateAsync"
+    permission: "Payroll.StatutoryCompliance.Generate"
+    db: PayrollStatutoryReturnEmployees.Uan, EsicNumber, Pan
+
+  - id: F-STAT-073
+    name: ValidationStatus on every generated PayrollStatutoryReturnEmployee row defaults to, and is never subsequently changed away from, Valid - no code anywhere ever sets it to Invalid or Warning
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.cs (full grep for ValidationStatus assignment - only the entity's own default)"
+    permission: "Payroll.StatutoryCompliance.Generate"
+    db: PayrollStatutoryReturnEmployees.ValidationStatus
+
+  - id: F-STAT-074
+    name: "CONFIRMED - because of F-STAT-073, ValidateAsync's own 'if (batch.Employees.Any(x => x.ValidationStatus == Invalid)) return Conflict(...)' guard is unreachable dead code - no return can ever fail this specific check"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.ValidateAsync"
+    permission: "Payroll.StatutoryCompliance.Validate"
+    db: "n/a"
+
+  - id: F-STAT-075
+    name: ValidateAsync requires Status=Generated or already-Validated (idempotent success message on repeat), else Conflict
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    api: "POST /api/payroll/statutory-compliance/returns/{id}/validate"
+    service: "PayrollStatutoryComplianceService.ValidateAsync"
+    permission: "Payroll.StatutoryCompliance.Validate"
+    db: PayrollStatutoryReturnBatches.Status
+
+  - id: F-STAT-076
+    name: ValidateAsync recomputes the batch's own aggregate totals (Reconcile) and persists them via a compare-and-swap ExecuteUpdateAsync keyed on (Status, ConcurrencyVersion), returning Conflict('Return was changed by another operation') on a lost race
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    api: "POST /api/payroll/statutory-compliance/returns/{id}/validate"
+    service: "PayrollStatutoryComplianceService.ValidateAsync"
+    permission: "Payroll.StatutoryCompliance.Validate"
+    db: PayrollStatutoryReturnBatches (compare-and-swap)
+
+  - id: F-STAT-077
+    name: "ApproveAsync requires Status=Validated and runs the shared PayrollApprovalGuard self-approval check against batch.GeneratedByUserId - self-approval is blocked ONLY when the tenant's PayrollControlConfiguration has BOTH RequireMakerChecker and PreventSelfApproval enabled; with no such row configured (the tenant default), the guard is a no-op and the generator may approve their own return"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    api: "POST /api/payroll/statutory-compliance/returns/{id}/approve"
+    service: "PayrollStatutoryComplianceService.ApproveAsync -> PayrollApprovalGuard.ValidateAsync"
+    permission: "Payroll.StatutoryCompliance.Approve"
+    db: PayrollControlConfigurations (opt-in gate)
+
+  - id: F-STAT-078
+    name: "MarkFiledAsync requires Status=Approved or Exported, runs the IDENTICAL PayrollApprovalGuard self-approval check against batch.GeneratedByUserId (not ApprovedByUserId) for action 'file', and its own history message explicitly states 'Filed status recorded manually; no portal submission was performed' - filing here is a manual record-keeping action only, never a real government submission"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    api: "POST /api/payroll/statutory-compliance/returns/{id}/mark-filed"
+    service: "PayrollStatutoryComplianceService.MarkFiledAsync"
+    permission: "Payroll.StatutoryCompliance.MarkFiled"
+    db: PayrollStatutoryReturnBatches.Status, FiledAtUtc, FiledByUserId, ExternalReference
+
+  - id: F-STAT-079
+    name: "ExportAsync requires Status=Approved, Exported, or Filed; produces a generic CSV (the code's own comment: 'Generic statutory CSV exported; not an official government upload file') whose identifier column is chosen per ComplianceType (always empty for ProfessionalTax per F-STAT-071); only the FIRST Approved->Exported transition records history/timestamps - re-exporting an already-Exported or Filed batch silently returns the identical file with no new history entry and no re-export counter"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    api: "GET /api/payroll/statutory-compliance/returns/{id}/export"
+    service: "PayrollStatutoryComplianceService.ExportAsync"
+    permission: "Payroll.StatutoryCompliance.Export"
+    db: PayrollStatutoryReturnBatches.Status, ExportedAtUtc
+
+  - id: F-STAT-080
+    name: "CONFIRMED - no Cancel action exists for a PayrollStatutoryReturnBatch despite PayrollStatutoryReturnStatus.Cancelled being a declared status referenced by other methods' own guard predicates (F-STAT-062, F-STAT-066); once Generated, a batch can only move forward (Validated->Approved->Exported->Filed) or be abandoned in place - it can never be withdrawn through this API"
+    group: Compliance Periods and Return Batches
+    status: Implemented
+    service: "IPayrollStatutoryComplianceService.cs (full interface - no Cancel member); PayrollOutputsController.cs (full grep - no cancel route for a statutory return)"
+    permission: "Payroll.StatutoryCompliance.Cancel"
+    db: PayrollStatutoryReturnBatches.Status
+
+  # =========================== F. STATUTORY CHALLANS (UNUSED FEATURE) ===========================
+  - id: F-STAT-081
+    name: PayrollStatutoryChallan (ChallanNumber/PaymentDate/Amount/Status/BankReference/ExternalReference) is a fully migrated entity, table, and EF configuration with a working Status enum (Pending/Prepared/Paid/Cancelled), indexed on (TenantId, PayrollStatutoryReturnBatchId) and cascading from its owning return batch
+    group: Statutory Challans (Unused Feature)
+    status: Implemented
+    service: "PayrollStatutoryChallanConfiguration.cs; migration AddPayrollStatutoryComplianceReturns"
+    permission: "n/a"
+    db: PayrollStatutoryChallans
+
+  - id: F-STAT-082
+    name: "CONFIRMED HEADLINE GAP - a full codebase grep for PayrollStatutoryChallan finds matches ONLY in the entity definition, its EF configuration, and its migrations - no controller endpoint, service method, DTO, or frontend reference anywhere ever creates, reads, updates, or lists a challan row. The entire challan-tracking feature implied by the entity's existence is completely unreachable and unused"
+    group: Statutory Challans (Unused Feature)
+    status: Implemented
+    service: "Full-codebase grep for 'PayrollStatutoryChallan' - 94 files matched, every one an entity/config/migration/snapshot file, zero service or controller usages"
+    permission: "n/a"
+    db: PayrollStatutoryChallans
+
+  - id: F-STAT-083
+    name: Consequently no statutory return - Approved, Exported, or even Filed - ever has an associated challan record, and there is no way through this API to record the bank payment reference/challan number that a real EPFO/ESIC/PT deposit would actually produce
+    group: Statutory Challans (Unused Feature)
+    status: Implemented
+    service: "n/a (feature has no code path)"
+    permission: "n/a"
+    db: PayrollStatutoryChallans (always empty)
+
+  # =========================== G. STATUTORY FILING EXTERNAL INTEGRATIONS ===========================
+  - id: F-STAT-084
+    name: CreateDefinitionAsync requires non-blank Code/Name/FilingType, else Invalid; Code is trimmed and upper-cased and must be unique per tenant, else Conflict
+    group: Statutory Filing External Integrations
+    status: Implemented
+    ui: StatutoryFilingsPage
+    api: "POST /api/payroll/statutory-filings/definitions"
+    service: "StatutoryFilingService.CreateDefinitionAsync"
+    permission: "Payroll.StatutoryFiling.Manage"
+    db: StatutoryFilingDefinitions
+
+  - id: F-STAT-085
+    name: An optional ConnectionProfileId on a new definition must reference an existing, Active connection profile for the tenant, else Invalid
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/definitions"
+    service: "StatutoryFilingService.CreateDefinitionAsync"
+    permission: "Payroll.StatutoryFiling.Manage"
+    db: StatutoryFilingConnectionProfiles
+
+  - id: F-STAT-086
+    name: "CreateDefinitionAsync always creates exactly one StatutoryFilingDefinitionVersion (Version=1, EffectiveFrom=today) in the same call - unlike StatutoryConfiguration (F-STAT-007), a filing definition IS immediately usable without a separate version-creation step"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/definitions"
+    service: "StatutoryFilingService.CreateDefinitionAsync"
+    permission: "Payroll.StatutoryFiling.Manage"
+    db: StatutoryFilingDefinitionVersions
+
+  - id: F-STAT-087
+    name: "CreateConnectionProfileAsync requires a non-blank, tenant-unique Name; on both create and update it immediately calls the resolved connector's ValidateConfigurationAsync and persists the outcome as a free-text LastValidationStatus string - a validation FAILURE does NOT block creation/update, it only records the failed status for later inspection"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST, PUT /api/payroll/statutory-filings/connections"
+    service: "StatutoryFilingService.CreateConnectionProfileAsync / UpdateConnectionProfileAsync"
+    permission: "Payroll.StatutoryFiling.ManageConnections"
+    db: StatutoryFilingConnectionProfiles
+
+  - id: F-STAT-088
+    name: "SecretReference is stored as an opaque reference string only (never a literal secret); the DTO's hasSecretReference boolean is the only externally-visible signal of whether one is set - no endpoint returns SecretReference/NonSecretConfigurationJson contents verbatim in a way that would leak a credential (spot-check, not a full secrets-handling audit)"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    service: "StatutoryFilingService.ToProfileDto"
+    permission: "Payroll.StatutoryFiling.ManageConnections"
+    db: StatutoryFilingConnectionProfiles.SecretReference
+
+  - id: F-STAT-089
+    name: ValidateConnectionProfileAsync re-runs connector validation on demand and persists the refreshed LastValidationStatus/LastValidatedAtUtc even when the validation itself fails, returning Invalid with the connector's own message on failure
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/connections/{id}/validate"
+    service: "StatutoryFilingService.ValidateConnectionProfileAsync"
+    permission: "Payroll.StatutoryFiling.ManageConnections"
+    db: StatutoryFilingConnectionProfiles.LastValidationStatus
+
+  - id: F-STAT-090
+    name: CreateRunAsync requires an Active StatutoryFilingDefinition with a version whose EffectiveFrom<=today<=EffectiveTo(or null), else NotFound
+    group: Statutory Filing External Integrations
+    status: Implemented
+    ui: StatutoryFilingsPage
+    api: "POST /api/payroll/statutory-filings/runs"
+    service: "StatutoryFilingService.CreateRunAsync"
+    permission: "Payroll.StatutoryFiling.Manage"
+    db: StatutoryFilingDefinitions, StatutoryFilingDefinitionVersions
+
+  - id: F-STAT-091
+    name: "CreateRunAsync's idempotency key is (TenantId, DefinitionId, FilingPeriod, Status != Cancelled) - a second create for the same definition+period while any non-cancelled run exists is Conflict; a new run starts at Status=Draft with a RunCreated history entry"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/runs"
+    service: "StatutoryFilingService.CreateRunAsync"
+    permission: "Payroll.StatutoryFiling.Manage"
+    db: StatutoryFilingRuns
+
+  - id: F-STAT-092
+    name: GenerateAsync is callable from Draft, Generated, Validated, Rejected, or Failed - a Rejected or Failed run can always be regenerated from scratch
+    group: Statutory Filing External Integrations
+    status: Implemented
+    ui: StatutoryFilingsPage
+    api: "POST /api/payroll/statutory-filings/runs/{id}/generate"
+    service: "StatutoryFilingService.GenerateAsync"
+    permission: "Payroll.StatutoryFiling.Generate"
+    db: StatutoryFilingRuns.Status
+
+  - id: F-STAT-093
+    name: "FilingPeriod must parse as yyyy-MM, else Invalid; source rows are PayrollStatutoryReturnEmployee rows whose owning ReturnBatch is neither Draft nor Cancelled and whose CompliancePeriod.PeriodEnd falls in that year/month - an empty match set is Conflict ('No finalized statutory source rows match the filing period')"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/runs/{id}/generate"
+    service: "StatutoryFilingService.GenerateAsync"
+    permission: "Payroll.StatutoryFiling.Generate"
+    db: PayrollStatutoryReturnEmployees
+
+  - id: F-STAT-094
+    name: "CONFIRMED - GenerateAsync's own source filter accepts a ReturnBatch merely at Status=Generated (NOT yet Validated/Approved) as a valid filing source - a filing package can be built (and later submitted) from statutory register data that has never passed the compliance module's own Validate/Approve gate at all"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    service: "StatutoryFilingService.GenerateAsync (ReturnBatch.Status != Draft && != Cancelled - Generated alone qualifies)"
+    permission: "Payroll.StatutoryFiling.Generate"
+    db: PayrollStatutoryReturnBatches.Status
+
+  - id: F-STAT-095
+    name: "Every Generate call fully replaces the run's StatutoryFilingRunItems (delete-then-reinsert) and computes a fresh package content hash - an unchanged source set on a repeat Generate produces byte-identical content, deduplicated to the SAME package row via the (TenantId, RunId, PackageHash) unique index, UNLESS the run is currently Rejected/Failed, in which case a 'resubmission' always creates a NEW package version even with an identical content hash"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    service: "StatutoryFilingService.GenerateAsync"
+    permission: "Payroll.StatutoryFiling.Generate"
+    db: StatutoryFilingPackages (unique on Version and on PackageHash)
+
+  - id: F-STAT-096
+    name: A new package's Version number is the prior maximum Version for that run plus 1; PreviousPackageId/ResubmissionOfSubmissionId link a resubmission package back to the package/submission it retries
+    group: Statutory Filing External Integrations
+    status: Implemented
+    service: "StatutoryFilingService.GenerateAsync"
+    permission: "Payroll.StatutoryFiling.Generate"
+    db: StatutoryFilingPackages.Version, PreviousPackageId, ResubmissionOfSubmissionId
+
+  - id: F-STAT-097
+    name: "Two history rows are recorded per successful Generate (Generated + PackageCreated, the latter carrying the SHA-256 hash); a SaveChangesAsync failure (concurrency OR any other DbUpdateException) is caught, the change tracker is cleared, and the CURRENT persisted state is returned instead of the exception propagating - a lost race silently degrades to 'return whatever is there now' rather than surfacing Conflict to the caller"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    service: "StatutoryFilingService.GenerateAsync (catch DbUpdateConcurrencyException / DbUpdateException)"
+    permission: "Payroll.StatutoryFiling.Generate"
+    db: StatutoryFilingHistories
+
+  - id: F-STAT-098
+    name: "ValidateAsync requires Status=Generated or Validated; it deletes all prior StatutoryFilingValidationIssues and re-derives a fresh set - today the ONLY implemented rule is 'every run item's SourceReference is non-blank' (Error, code MissingSource), which can in practice never actually trigger since GenerateAsync always assigns SourceReference from the source row's own Guid - the sole validation rule is effectively unreachable in normal operation, the identical shape as F-STAT-074"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/runs/{id}/validate"
+    service: "StatutoryFilingService.ValidateAsync"
+    permission: "Payroll.StatutoryFiling.Validate"
+    db: StatutoryFilingValidationIssues
+
+  - id: F-STAT-099
+    name: Any ValidationErrorCount>0 blocks the transition to Validated (Conflict, 'Filing run contains blocking validation errors'); ValidationWarningCount, by contrast, never blocks any transition anywhere in this service
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/runs/{id}/validate"
+    service: "StatutoryFilingService.ValidateAsync"
+    permission: "Payroll.StatutoryFiling.Validate"
+    db: StatutoryFilingRuns.ValidationErrorCount, ValidationWarningCount
+
+  - id: F-STAT-100
+    name: SubmitForApprovalAsync is a plain state transition Validated->SubmittedForApproval with no additional business rule
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/runs/{id}/submit-for-approval"
+    service: "StatutoryFilingService.SubmitForApprovalAsync -> TransitionAsync"
+    permission: "Payroll.StatutoryFiling.SubmitForApproval"
+    db: StatutoryFilingRuns.Status
+
+  - id: F-STAT-101
+    name: "ApproveAsync requires Status=SubmittedForApproval and applies the IDENTICAL PayrollApprovalGuard self-approval check (against run.GeneratedByUserId, action 'approve') as the compliance-return Approve (F-STAT-077) - the same tenant-configuration-gated, off-by-default behavior"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/runs/{id}/approve"
+    service: "StatutoryFilingService.ApproveAsync -> PayrollApprovalGuard.ValidateAsync"
+    permission: "Payroll.StatutoryFiling.Approve"
+    db: PayrollControlConfigurations (opt-in gate)
+
+  - id: F-STAT-102
+    name: "SubmitAsync (the real connector transmission, distinct from SubmitForApprovalAsync) is idempotent when a submission already exists for the current package UNLESS that submission's Outcome is Failed AND the run's own Status is also Failed - in every other case (including Rejected) it returns the current state without re-submitting"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/runs/{id}/submit"
+    service: "StatutoryFilingService.SubmitAsync"
+    permission: "Payroll.StatutoryFiling.Submit"
+    db: StatutoryFilingSubmissions
+
+  - id: F-STAT-103
+    name: "CONFIRMED - a retry of a Failed submission is permitted ONLY when the most recent StatutoryFilingSubmissionAttempt's ResponseCode literally equals the hardcoded string 'RETRYABLE_EXTERNAL_FAILURE' - any other failure code is Conflict ('Only retryable failed submissions may be retried'), coupling retry eligibility to one specific connector's own magic string rather than a declared enum/flag that a future connector could reuse consistently"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/runs/{id}/submit"
+    service: "StatutoryFilingService.SubmitAsync (priorAttempt?.ResponseCode == 'RETRYABLE_EXTERNAL_FAILURE')"
+    permission: "Payroll.StatutoryFiling.Submit"
+    db: StatutoryFilingSubmissionAttempts.ResponseCode
+
+  - id: F-STAT-104
+    name: "SubmitAsync resolves the connector from the definition's linked ConnectionProfile (falling back to a destination-implied default when none is linked); ONLY two connectors are ever registered in production wiring (StatutoryFilingConnectorRegistry constructed with exactly ManualDownloadStatutoryFilingConnector and TestStatutoryFilingConnector) - no EPFO/ESIC/GSTN/TRACES/any real government-portal connector exists anywhere in the codebase"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    service: "StatutoryFilingService.ResolveConnector; StatutoryFilingConnectorRegistry"
+    permission: "Payroll.StatutoryFiling.Submit"
+    db: "n/a"
+
+  - id: F-STAT-105
+    name: "CONFIRMED - ManualDownloadStatutoryFilingConnector.SubmitAsync ALWAYS returns Outcome=Pending with a fixed 'ready for operator download and external portal submission' message, regardless of package content. SubmitAsync's own outcome-to-status mapping (Rejected->Rejected, Failed->Failed, anything else->Submitted) means a ManualDownload submission ALWAYS lands the run at Status=Submitted immediately even though nothing was actually transmitted anywhere - 'Submitted' for this connector means only 'the package was marked ready for manual download,' not 'a government portal received it'"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    service: "ManualDownloadStatutoryFilingConnector.SubmitAsync; StatutoryFilingService.SubmitAsync (outcome mapping)"
+    permission: "Payroll.StatutoryFiling.Submit"
+    db: StatutoryFilingRuns.Status
+
+  - id: F-STAT-106
+    name: "TestStatutoryFilingConnector's entire outcome (Accepted/Rejected/Failed/Pending) is driven purely by matching the substrings 'retryable'/'rejected'/'pending' inside the connection profile's own free-text NonSecretConfigurationJson - a tenant could in principle wire a connection profile to the Test connector type and receive scripted, fake external outcomes indistinguishable in the API surface from a real integration"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    service: "TestStatutoryFilingConnector.SubmitAsync"
+    permission: "Payroll.StatutoryFiling.Submit"
+    db: "n/a"
+
+  - id: F-STAT-107
+    name: "RejectAsync requires Status=Submitted and takes a free-text reason recorded ONLY inside the StatutoryFilingHistory message string - StatutoryFilingRun itself has no persisted Reason field, so a rejection's reason is not independently queryable/reportable outside the history log"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/runs/{id}/reject"
+    service: "StatutoryFilingService.RejectAsync -> TransitionAsync"
+    permission: "Payroll.StatutoryFiling.Approve"
+    db: StatutoryFilingHistories.Message
+
+  - id: F-STAT-108
+    name: "AcknowledgeAsync requires an existing StatutoryFilingSubmission and a non-blank ReferenceNumber; it is idempotent per (TenantId, SubmissionId, ReferenceNumber) via a DB-unique index plus an app-level pre-check, and UNCONDITIONALLY sets the run to Acknowledged and the submission's Outcome to Acknowledged regardless of the submission's PRIOR Outcome - even a Rejected or Failed submission can be force-acknowledged"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/runs/{id}/acknowledgements"
+    service: "StatutoryFilingService.AcknowledgeAsync"
+    permission: "Payroll.StatutoryFiling.Submit"
+    db: StatutoryFilingAcknowledgements, StatutoryFilingSubmissions.Outcome
+
+  - id: F-STAT-109
+    name: "CancelAsync only transitions from Draft - once a run has been Generated even once, it can never be cancelled through this API (no Cancel path exists from Generated/Validated/SubmittedForApproval/Approved/Rejected/Failed)"
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "POST /api/payroll/statutory-filings/runs/{id}/cancel"
+    service: "StatutoryFilingService.CancelAsync -> TransitionAsync(required: Draft)"
+    permission: "Payroll.StatutoryFiling.Cancel"
+    db: StatutoryFilingRuns.Status
+
+  - id: F-STAT-110
+    name: GetPackageAsync/DownloadAsync always return the LATEST (highest-Version) package for the run, never a specific historical version by id - a caller cannot retrieve an earlier resubmission's exact package content through this API once a newer version exists
+    group: Statutory Filing External Integrations
+    status: Implemented
+    api: "GET /api/payroll/statutory-filings/runs/{id}/package, /download"
+    service: "StatutoryFilingService.GetPackageAsync / DownloadAsync"
+    permission: "Payroll.StatutoryFiling.View, Payroll.StatutoryFiling.Export"
+    db: StatutoryFilingPackages
+
+  # =========================== H. AUTHORIZATION AND SCOPE ===========================
+  - id: F-STAT-111
+    name: "Five Payroll.Statutory*/EmployeeStatutory* permissions gate the configuration/profile/results surface (View/Manage/ViewHistory, EmployeeStatutory.View/Manage) - StatutoryViewHistory has NO corresponding controller route anywhere (no GET history endpoint for StatutoryConfigurationHistory exists), a declared-but-unused permission"
+    group: Authorization and Scope
+    status: Implemented
+    service: "Permissions.cs (Payroll.Statutory* block); StatutoryPayrollController.cs (full grep - no history route)"
+    permission: "Payroll.Statutory.ViewHistory"
+    db: "n/a"
+
+  - id: F-STAT-112
+    name: "Nine Payroll.StatutoryCompliance* permissions gate the compliance-return surface (View/Generate/Validate/Approve/Export/MarkFiled/Cancel/ViewHistory/ManagePeriods) - StatutoryComplianceCancel and StatutoryComplianceViewHistory each have NO corresponding controller action (Cancel per F-STAT-080, ViewHistory has no GET history route), while ManagePeriods correctly gates period creation"
+    group: Authorization and Scope
+    status: Implemented
+    service: "Permissions.cs (Payroll.StatutoryCompliance* block); PayrollOutputsController.cs (PayrollStatutoryComplianceController - full grep)"
+    permission: "Payroll.StatutoryCompliance.Cancel, Payroll.StatutoryCompliance.ViewHistory"
+    db: "n/a"
+
+  - id: F-STAT-113
+    name: "Eleven Payroll.StatutoryFiling* permissions gate the filing surface (View/Manage/Generate/Validate/SubmitForApproval/Approve/Submit/Cancel/Export/ViewHistory/ManageConnections) - every one except ViewHistory has a real controller route (Cancel and Export both do); StatutoryFilingViewHistory has NO corresponding controller action anywhere (no GET history route for StatutoryFilingHistory exists)"
+    group: Authorization and Scope
+    status: Implemented
+    service: "Permissions.cs (Payroll.StatutoryFiling* block); StatutoryFilingsController.cs (full route list)"
+    permission: "Payroll.StatutoryFiling.ViewHistory"
+    db: "n/a"
+
+  - id: F-STAT-114
+    name: "CONFIRMED HEADLINE - grep-verified against SeedData.cs's RolePermissionMap for every one of the 29 Statutory/StatutoryCompliance/StatutoryFiling permission constants: NONE appears inside any individual seeded role's own grant array. Only SuperAdmin and TenantAdmin hold them, and only via the blanket Permissions.All catalogue - the identical shape to qa/11-loans-advances CR-183 and qa/12-bonus-variable-pay CR-202"
+    group: Authorization and Scope
+    status: Implemented
+    service: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, full grep for every one of the 29 constants)"
+    permission: "all 29 Statutory/StatutoryCompliance/StatutoryFiling permissions"
+    db: "n/a"
+
+  - id: F-STAT-115
+    name: Consequently a freshly seeded HRAdmin/HRManager/SuperHR/Manager/Employee role cannot view, configure, calculate, generate, approve, export, file, or download ANY statutory artifact out of the box, including an employee's own EmployeeStatutoryProfile view
+    group: Authorization and Scope
+    status: Implemented
+    service: "SeedData.cs (RolePermissionMap absence, per F-STAT-114)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-116
+    name: "A single user holding both StatutoryComplianceGenerate and StatutoryComplianceApprove (or the filing-equivalent Generate+Approve pair) can generate and approve their own return/run in two calls with the self-approval guard never firing UNLESS the tenant has separately opted into RequireMakerChecker+PreventSelfApproval (F-STAT-077/F-STAT-101) - the same off-by-default shape documented for other payroll sub-modules' own PayrollApprovalGuard usage"
+    group: Authorization and Scope
+    status: Implemented
+    service: "PayrollApprovalGuard.ValidateAsync (opt-in only)"
+    permission: "Payroll.StatutoryCompliance.Generate + .Approve; Payroll.StatutoryFiling.Generate + .Approve"
+    db: PayrollControlConfigurations
+
+  - id: F-STAT-117
+    name: "StatutoryFilingManageConnections is a DISTINCT permission from StatutoryFilingManage, correctly separating 'who can wire external credentials' from 'who can operate filing runs' - a genuine, correctly-scoped separation (a positive-confirmation case, not a gap)"
+    group: Authorization and Scope
+    status: Implemented
+    service: "StatutoryFilingsController.cs (connections routes gated by ManageConnections, runs routes gated by Manage/Generate/etc.)"
+    permission: "Payroll.StatutoryFiling.ManageConnections"
+    db: "n/a"
+
+  - id: F-STAT-118
+    name: Every controller action across StatutoryPayrollController, PayrollStatutoryComplianceController, and StatutoryFilingsController requires an authenticated tenant context and a declared permission; none of the three controllers exposes an [AllowAnonymous] route
+    group: Authorization and Scope
+    status: Implemented
+    service: "All three controllers (full grep for [AllowAnonymous] - zero matches)"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== I. TENANT ISOLATION ===========================
+  - id: F-STAT-119
+    name: Every read/write in all three services filters by the resolved TenantId first; a cross-tenant id on any get/update/transition action returns NotFound (the sole exception being CalculateAsync's own Forbidden, F-STAT-048)
+    group: Tenant Isolation
+    status: Implemented
+    service: "StatutoryPayrollService.cs, PayrollStatutoryComplianceService.cs, StatutoryFilingService.cs (TenantId filters throughout)"
+    permission: "n/a"
+    db: "all statutory tables"
+
+  - id: F-STAT-120
+    name: All statutory tables use composite (TenantId, Id) alternate/foreign keys for their parent-child relationships (Configuration->Version->Basis/Slab, ReturnBatch->Employee/Source/History/Challan, FilingRun->Items/Packages/Submissions/History), preventing a row from one tenant being linked as a child of another tenant's parent even if the raw child Id were guessed
+    group: Tenant Isolation
+    status: Implemented
+    service: "StatutoryConfiguration.cs, PayrollStatutoryComplianceConfiguration.cs, StatutoryFilingConfiguration.cs (composite FK definitions)"
+    permission: "n/a"
+    db: "all statutory tables"
+
+  - id: F-STAT-121
+    name: StatutoryConfiguration.Code uniqueness, EmployeeStatutoryProfile overlap, PayrollCompliancePeriod's compound key, and every filing-side uniqueness constraint are all scoped by TenantId first - two tenants may freely reuse the identical Code/Name/BatchNumber/FilingPeriod without collision
+    group: Tenant Isolation
+    status: Implemented
+    service: "All statutory EF configurations (unique indexes prefixed by TenantId)"
+    permission: "n/a"
+    db: "all statutory tables"
+
+  - id: F-STAT-122
+    name: "The EF global query filters (documented at the HrmsDbContext level per CLAUDE.md) apply uniformly to every entity in this module; no entity here uses a raw SQL query or an explicit IgnoreQueryFilters() call that could bypass the TenantId filter (spot-check based on the LINQ-only code read across all three services)"
+    group: Tenant Isolation
+    status: Implemented
+    service: "StatutoryPayrollService.cs, PayrollStatutoryComplianceService.cs, StatutoryFilingService.cs (full grep for IgnoreQueryFilters/raw SQL - zero matches)"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== J. AUDIT AND HISTORY ===========================
+  - id: F-STAT-123
+    name: "StatutoryConfigurationHistory is append-only (Created, VersionAdded - Activated/Deactivated per F-STAT-014 are declared but never written) and carries a JSON snapshot of the configuration's own scalar fields at the time of the event"
+    group: Audit and History
+    status: Implemented
+    service: "StatutoryPayrollService.History"
+    permission: "Payroll.Statutory.ViewHistory (declared, no read route - F-STAT-111)"
+    db: StatutoryConfigurationHistories
+
+  - id: F-STAT-124
+    name: EmployeeStatutoryProfileHistory is append-only (Created only in practice, per F-STAT-026) and snapshots the entire save request as JSON
+    group: Audit and History
+    status: Implemented
+    service: "StatutoryPayrollService.SaveProfileAsync"
+    permission: "n/a (no dedicated ViewHistory permission or route exists for this entity)"
+    db: EmployeeStatutoryProfileHistories
+
+  - id: F-STAT-125
+    name: "PayrollStatutoryComplianceHistory records one row per Generate/Validate/Approve/Export/MarkFiled transition, each carrying the acting user id and a human-readable message; Cancelled is declared but never written (F-STAT-080)"
+    group: Audit and History
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.AddHistory"
+    permission: "Payroll.StatutoryCompliance.ViewHistory (declared, no read route - F-STAT-112)"
+    db: PayrollStatutoryComplianceHistories
+
+  - id: F-STAT-126
+    name: "StatutoryFilingHistory records BOTH PreviousStatus and NewStatus (unlike the compliance-return history, which records only a message) for every Generate/Validate/SubmitForApproval/Approve/Submit/Reject/Acknowledge/Cancel/PackageCreated event - a strictly more complete audit trail than the compliance-return lifecycle's own history"
+    group: Audit and History
+    status: Implemented
+    service: "StatutoryFilingService.AddHistory"
+    permission: "Payroll.StatutoryFiling.ViewHistory (declared, no read route - F-STAT-113)"
+    db: StatutoryFilingHistories
+
+  - id: F-STAT-127
+    name: No history record anywhere in this module is ever deleted or updated after being written (spot-checked across all four history entity usages) - the append-only invariant holds throughout
+    group: Audit and History
+    status: Implemented
+    service: "All three services (full grep for a Remove/Update call against any *History entity - zero matches)"
+    permission: "n/a"
+    db: "all four history tables"
+
+  - id: F-STAT-128
+    name: "CONFIRMED - none of the four history tables (StatutoryConfigurationHistory, EmployeeStatutoryProfileHistory, PayrollStatutoryComplianceHistory, StatutoryFilingHistory) is exposed by any GET endpoint despite ViewHistory permissions being declared for two of the three sub-areas (F-STAT-111/F-STAT-113) - the audit trail is queryable only by direct database access, never through the API"
+    group: Audit and History
+    status: Implemented
+    service: "All three controllers (full grep for a history GET route - zero matches)"
+    permission: "Payroll.Statutory.ViewHistory, Payroll.StatutoryCompliance.ViewHistory, Payroll.StatutoryFiling.ViewHistory"
+    db: "n/a"
+
+  # =========================== K. CONCURRENCY AND IDEMPOTENCY ===========================
+  - id: F-STAT-129
+    name: "StatutoryConfiguration.ConcurrencyVersion exists on the entity but is NEVER incremented or read by any service method (no UpdateConfigurationAsync exists to increment it, per F-STAT-007) - a declared-but-dormant concurrency token"
+    group: Concurrency and Idempotency
+    status: Implemented
+    service: "StatutoryPayrollService.cs (full grep for ConcurrencyVersion on StatutoryConfiguration - only the DTO round-trip)"
+    permission: "n/a"
+    db: StatutoryConfigurations.ConcurrencyVersion
+
+  - id: F-STAT-130
+    name: PayrollStatutoryReturnBatch.ConcurrencyVersion is genuinely enforced via an ExecuteUpdateAsync compare-and-swap in ValidateAsync and incremented in TransitionAsync (Approve) - a losing race returns Conflict
+    group: Concurrency and Idempotency
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.ValidateAsync, TransitionAsync"
+    permission: "n/a"
+    db: PayrollStatutoryReturnBatches.ConcurrencyVersion
+
+  - id: F-STAT-131
+    name: "StatutoryFilingRun.ConcurrencyVersion is incremented on every TransitionAsync call but is NOT used as an explicit ExecuteUpdateAsync filter key anywhere - concurrency protection here relies on EF's own optimistic-concurrency detection via plain SaveChangesAsync wrapped in try/catch DbUpdateConcurrencyException, rather than an application-level compare-and-swap predicate"
+    group: Concurrency and Idempotency
+    status: Implemented
+    service: "StatutoryFilingService.TransitionAsync, GenerateAsync, SubmitAsync"
+    permission: "n/a"
+    db: StatutoryFilingRuns.ConcurrencyVersion
+
+  - id: F-STAT-132
+    name: StatutoryFilingConnectionProfile.ConcurrencyVersion is incremented on UpdateConnectionProfileAsync but is never read or compared anywhere else in the service - an advisory-only counter with the same dormant shape as F-STAT-129
+    group: Concurrency and Idempotency
+    status: Implemented
+    service: "StatutoryFilingService.UpdateConnectionProfileAsync (increments only)"
+    permission: "n/a"
+    db: StatutoryFilingConnectionProfiles.ConcurrencyVersion
+
+  - id: F-STAT-133
+    name: "Statutory-return idempotency (one active batch per compliance period, F-STAT-066) and filing-run idempotency ((Definition, FilingPeriod)-wise, F-STAT-091) are both enforced by an app-level AnyAsync pre-check racing against the actual insert, with no DB-level unique index backing either one directly (the batch's own unique index is on BatchNumber, a value only generated AFTER the check passes) - a race between two concurrent Generate/CreateRun calls for the same period could in principle both pass their own pre-check"
+    group: Concurrency and Idempotency
+    status: Implemented
+    service: "PayrollStatutoryComplianceService.GenerateAsync; StatutoryFilingService.CreateRunAsync"
+    permission: "n/a"
+    db: PayrollStatutoryReturnBatches, StatutoryFilingRuns (non-covering indexes)
+
+  - id: F-STAT-134
+    name: "Filing-package idempotency (F-STAT-095, content-hash-keyed) and filing-submission idempotency (one submission per package, F-STAT-102) are both genuinely DB-enforced via unique indexes, unlike F-STAT-133"
+    group: Concurrency and Idempotency
+    status: Implemented
+    service: "StatutoryFilingPackageConfiguration, StatutoryFilingSubmissionConfiguration (unique indexes)"
+    permission: "n/a"
+    db: StatutoryFilingPackages, StatutoryFilingSubmissions
+
+  - id: F-STAT-135
+    name: "PayrollStatutoryResult's own uniqueness (F-STAT-047) is DB-enforced per (PayrollResultId, StatutoryType), but as established in F-STAT-055 through F-STAT-060, this does nothing to protect against the cross-attempt accumulation defect since each recalculation attempt mints a brand-new PayrollResultId"
+    group: Concurrency and Idempotency
+    status: Implemented
+    service: "PayrollStatutoryResultConfiguration (unique index scope)"
+    permission: "n/a"
+    db: PayrollStatutoryResults
+
+  # =========================== L. SQL SERVER/MYSQL PROVIDER PARITY ===========================
+  - id: F-STAT-136
+    name: All three statutory schema areas (Calculation Framework, Compliance Returns, Filing including its connector-profile and package-hash-uniqueness follow-up migrations) have matching, dated migrations in both the SQL Server tenant chain and the MySQL tenant chain, confirmed by filename pairing
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "Backend/HRMS.Infrastructure/Persistence/Migrations and Backend/HRMS.Infrastructure.MySqlMigrations/Migrations (filename-paired glob)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-137
+    name: SqlServerStatutoryPayrollIntegrationTests/MySqlStatutoryPayrollIntegrationTests and SqlServerPayrollStatutoryComplianceIntegrationTests/MySqlPayrollStatutoryComplianceIntegrationTests exist as opt-in, silently-skipping-without-env provider fixtures per CLAUDE.md's documented convention, covering the Calculation Framework and Compliance Returns areas
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "Backend/HRMS.Tests/SqlServerStatutoryPayrollIntegrationTests.cs, MySqlStatutoryPayrollIntegrationTests.cs, SqlServerPayrollStatutoryComplianceIntegrationTests.cs, MySqlPayrollStatutoryComplianceIntegrationTests.cs"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-138
+    name: "CONFIRMED GAP - no SqlServerStatutoryFilingIntegrationTests/MySqlStatutoryFilingIntegrationTests class exists anywhere; only a single provider-agnostic StatutoryFilingProviderAcceptance.cs exists for the entire Filing area - a green run of the two provider-specific fixtures in F-STAT-137 is NOT evidence of provider parity for any Filing behavior (Generate/Validate/Submit/Approve/Reject/Acknowledge/retry/resubmission)"
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "Backend/HRMS.Tests (full glob for *StatutoryFiling*IntegrationTests.cs - zero matches beyond the generic ProviderAcceptance file)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-139
+    name: "SCOPE NOTE, not a gap - the CLAUDE.md-documented SQL Server rowversion vs MySQL binary(16) concurrency-token divergence does not apply to any entity in this module: all four ConcurrencyVersion-bearing entities here (StatutoryConfiguration, PayrollStatutoryReturnBatch, StatutoryFilingRun, StatutoryFilingConnectionProfile) use a plain app-managed int counter, not a genuine rowversion/timestamp column"
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "All four EF configurations (Property(x => x.ConcurrencyVersion).IsConcurrencyToken() on a plain int, not [Timestamp])"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== M. LARGE DATA AND PAGING ===========================
+  - id: F-STAT-140
+    name: GetConfigurationsAsync clamps PageSize to [1, PagedQuery.MaxPageSize] and Page to a minimum of 1, consistent with every other paginated listing in the codebase
+    group: Large Data and Paging
+    status: Implemented
+    api: "GET /api/payroll/statutory-configurations"
+    service: "StatutoryPayrollService.GetConfigurationsAsync"
+    permission: "Payroll.Statutory.View"
+    db: "n/a"
+
+  - id: F-STAT-141
+    name: "StatutoryFilingLargeDataTests.cs exists as the module's dedicated scale fixture for the Filing area; no equivalent *LargeDataTests.cs exists for the Compliance Returns register - GetAsync returns the FULL Employees collection eagerly via Include with NO paging at all on PayrollStatutoryReturnDto's own employee list, so a return batch with a very large employee count returns its entire register in one unpaginated response"
+    group: Large Data and Paging
+    status: Implemented
+    api: "GET /api/payroll/statutory-compliance/returns/{id}"
+    service: "PayrollStatutoryComplianceService.LoadAsync / GetAsync (Include(x => x.Employees), no Skip/Take)"
+    permission: "Payroll.StatutoryCompliance.View"
+    db: PayrollStatutoryReturnEmployees
+
+  - id: F-STAT-142
+    name: GetRunsAsync (filing) and GetConfigurationsAsync (configuration list) both order deterministically (CreatedDate descending / Code ascending) so paging/listing order is stable across repeated calls; GetAsync for a single compliance batch has no paging concern since only one aggregate is ever returned
+    group: Large Data and Paging
+    status: Implemented
+    service: "StatutoryFilingService.GetRunsAsync; StatutoryPayrollService.GetConfigurationsAsync"
+    permission: "Payroll.StatutoryFiling.View, Payroll.Statutory.View"
+    db: "n/a"
+
+  # =========================== N. FRONTEND ===========================
+  - id: F-STAT-143
+    name: "CONFIRMED FRONTEND GAP - StatutoryConfigurationsPage supports Create only (Jurisdiction/StateCode/StatutoryType/Code/Name); there is no 'Add version' control, form, or client function anywhere in the page or src/api/payroll.ts (full grep) - a configuration created through this UI can NEVER be made calculation-eligible through the UI, the identical shape as qa/12-bonus-variable-pay's CR-206"
+    group: Frontend
+    status: Implemented
+    ui: StatutoryConfigurationsPage
+    service: "Frontend/HRMS.Web/src/pages/payroll/StatutoryConfigurationsPage.tsx (full component read); src/api/payroll.ts (full grep - no addStatutoryConfigurationVersion export)"
+    permission: "Payroll.Statutory.Manage"
+    db: "n/a"
+
+  - id: F-STAT-144
+    name: "StatutoryCompliancePage exposes exactly two actions - 'Create open period' (hardcoded ComplianceType=ProvidentFund and JurisdictionCode=IN, with PeriodStart/End derived silently from the client's current date) and 'Generate return' - with no ComplianceType/jurisdiction selector, no manual date override, and no Validate/Approve/Export/MarkFiled control anywhere on the page"
+    group: Frontend
+    status: Implemented
+    ui: StatutoryCompliancePage
+    service: "Frontend/HRMS.Web/src/pages/payroll/StatutoryCompliancePage.tsx (full component read)"
+    permission: "Payroll.StatutoryCompliance.ManagePeriods, Payroll.StatutoryCompliance.Generate"
+    db: "n/a"
+
+  - id: F-STAT-145
+    name: "CONFIRMED - a tenant administrator using only StatutoryCompliancePage can never create an Esi/ProfessionalTax/IncomeTaxTds compliance period, nor progress any generated return past Generated, through the shipped UI - every further lifecycle action (Validate/Approve/Export/MarkFiled) requires a direct API call"
+    group: Frontend
+    status: Implemented
+    ui: StatutoryCompliancePage
+    service: "Frontend/HRMS.Web/src/pages/payroll/StatutoryCompliancePage.tsx (full component read - only 2 of 6 lifecycle actions have any UI entry point, and ComplianceType is not selectable at all)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-146
+    name: "CONFIRMED - StatutoryFilingsPage wires only Generate and Validate action buttons (plus a 'Create corrected resubmission' alias for Generate on Rejected/Failed runs) - SubmitForApproval, Approve, Submit (the real connector transmission), Acknowledge, Cancel, and package Download have no button, control, or client function anywhere in the page or src/api/statutoryFilings.ts, so a run can never progress past Validated through the shipped UI"
+    group: Frontend
+    status: Implemented
+    ui: StatutoryFilingsPage
+    service: "Frontend/HRMS.Web/src/pages/payroll/StatutoryFilingsPage.tsx (full component read); src/api/statutoryFilings.ts (full grep - only 5 of 13 backend routes have a client function)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-147
+    name: "CONFIRMED - no frontend page anywhere renders getEmployeeStatutoryProfile/saveEmployeeStatutoryProfile despite both client functions already existing in src/api/payroll.ts (F-STAT-028) - configuring which statutory types apply to a given employee (the record that actually drives F-STAT-031's calculation gate) has zero UI surface anywhere in the product"
+    group: Frontend
+    status: Implemented
+    service: "Full grep of Frontend/HRMS.Web/src/pages for either client function name - zero matches"
+    permission: "Payroll.EmployeeStatutory.View, Payroll.EmployeeStatutory.Manage"
+    db: "n/a"
+
+  - id: F-STAT-148
+    name: "PersonalDetailsForm's own 'Statutory & Benefits' section (esicApplicable/gratuity/pension/uanNumber) is a wholly separate, older Employee/PersonalDetails data model from EmployeeStatutoryProfile (F-STAT-027) - editing it has NO effect whatsoever on statutory calculation eligibility, and a user could reasonably believe otherwise given the section's name and its co-location with the UAN field"
+    group: Frontend
+    status: Implemented
+    ui: PersonalDetailsForm
+    service: "Frontend/HRMS.Web/src/pages/employees/PersonalDetailsForm.tsx (lines ~396-430, 'Statutory & Benefits' fieldset)"
+    permission: "n/a"
+    db: Employees (PersonalDetails fields, not EmployeeStatutoryProfiles)
+
+  - id: F-STAT-149
+    name: "CONFIRMED - navigation.ts has an entry only for Statutory Compliance (/payroll/statutory-compliance); StatutoryConfigurationsPage (/payroll/statutory) and StatutoryFilingsPage (/payroll/statutory-filings) are both registered routes in App.tsx with real permission gates but have NO sidebar/menu entry, reachable only by typing the exact URL - the identical shape as qa/12-bonus-variable-pay's CR-217"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/layout/navigation.ts (full grep for 'statutory' - one match of three routes); App.tsx (all three routes registered)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-150
+    name: "Every action button on StatutoryConfigurationsPage/StatutoryFilingsPage is correctly permission-gated via useAuth().can(...) against the matching backend permission constant (spot-checked: statutoryManage, statutoryFilingManage, statutoryFilingGenerate, statutoryFilingValidate, statutoryFilingManageConnections) - the frontend gating itself is consistent with the backend, even though per CLAUDE.md it is cosmetic only (the backend [HasPermission] attribute is the real gate)"
+    group: Frontend
+    status: Implemented
+    ui: StatutoryConfigurationsPage, StatutoryFilingsPage
+    service: "Both page components (can() checks read against Permissions.payroll.*)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-151
+    name: "CONFIRMED FRONTEND GAP - StatutoryCompliancePage has NO permission gating on its two buttons at all (no useAuth()/can() call anywhere in the component, unlike the other two statutory pages) - a user who can merely see the page (StatutoryComplianceView) sees both action buttons rendered regardless of whether they actually hold StatutoryComplianceManagePeriods/Generate, and would only discover the missing permission from a 403 response after clicking"
+    group: Frontend
+    status: Implemented
+    ui: StatutoryCompliancePage
+    service: "Frontend/HRMS.Web/src/pages/payroll/StatutoryCompliancePage.tsx (full component read - no useAuth import, no can() call)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-STAT-152
+    name: StatutoryCompliancePage.test.tsx exists as the only Vitest coverage among the three statutory pages - no dedicated test file exists for StatutoryConfigurationsPage or StatutoryFilingsPage
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/StatutoryCompliancePage.test.tsx (exists); full glob for StatutoryConfigurationsPage.test.tsx / StatutoryFilingsPage.test.tsx - no matches"
+    permission: "n/a"
+    db: "n/a"

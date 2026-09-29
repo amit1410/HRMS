@@ -1,0 +1,262 @@
+sheet: VPay_Plans
+submodule: Variable-Pay Plans and Plan Versions - CRUD, effective-dated Published versions, overlap validation
+defaults:
+  role: HRADMIN
+  perm: "Payroll.VariablePay.ManagePlans"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.VariablePay.ManagePlans granted, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: VPAY-PLN-001
+    func: [F-VPAY-002]
+    sc: Create a valid plan
+    t: A well-formed plan is created Active with the supplied Code/Name/PlanType
+    src: ["VariablePayService.CreatePlanAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/variable-pay-plans] Code=BONUS, Name=Annual Bonus, PlanType=FixedBonus => [200/201] Code=BONUS, IsActive=true"
+    auto: API
+
+  - id: VPAY-PLN-002
+    func: [F-VPAY-001]
+    sc: List plans for the tenant with their versions
+    t: GetPlansAsync returns tenant-scoped plans ordered by Code, each carrying its Versions array
+    src: ["VariablePayService.GetPlansAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.VariablePay.View"
+    steps:
+      - "[GET /api/payroll/variable-pay-plans] => [200] plans returned ordered by Code ascending, each with a Versions array"
+    auto: API
+
+  - id: VPAY-PLN-003
+    func: [F-VPAY-002]
+    sc: Missing Code or Name is rejected
+    t: Blank Code and blank Name each fail validation
+    src: ["VariablePayService.CreatePlanAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-plans] Code='' => [400] Plan code and name are required."
+      - "[POST /api/payroll/variable-pay-plans] Name='' => [400] Plan code and name are required."
+    auto: API
+
+  - id: VPAY-PLN-004
+    func: [F-VPAY-003]
+    sc: Plan Code is unique per tenant
+    t: A trimmed duplicate code is rejected as Conflict
+    src: ["VariablePayService.CreatePlanAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-plans] Code=' TARGET ' => [200/201] Code=TARGET (trimmed)"
+      - "[POST /api/payroll/variable-pay-plans] Code=TARGET (second attempt) => [409] A variable-pay plan with this code already exists."
+    auto: API
+
+  - id: VPAY-PLN-005
+    func: [F-VPAY-004]
+    sc: CurrencyCode is normalised on create
+    t: A lowercase/whitespace-padded CurrencyCode is trimmed and upper-cased
+    src: ["VariablePayService.CreatePlanAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/payroll/variable-pay-plans] Code=CUR, Name=Currency Test, CurrencyCode=' inr ' => [200/201] CurrencyCode=INR"
+    auto: API
+
+  - id: VPAY-PLN-006
+    func: [F-VPAY-004]
+    sc: A freshly created plan has zero versions
+    t: CreatePlanAsync does not auto-generate any initial VariablePayPlanVersion, unlike Loans' CreateProductAsync
+    src: ["VariablePayService.CreatePlanAsync (full method)"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    cr: [CR-206]
+    steps:
+      - "[POST /api/payroll/variable-pay-plans] Code=NOVER, Name=No Version => [200/201] Versions=[] (empty array)"
+      - "[GET /api/payroll/variable-pay-plans] => [200] the NOVER plan's Versions array is still empty"
+    auto: API
+
+  - id: VPAY-PLN-007
+    func: [F-VPAY-005]
+    sc: Update requires the plan to exist and persists Name/Description/IsActive/CurrencyCode
+    t: Update on an unknown id is NotFound; a valid update increments ConcurrencyVersion
+    src: ["VariablePayService.UpdatePlanAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[PUT /api/payroll/variable-pay-plans/{unknownId}] => [404] Variable-pay plan not found."
+      - "[PUT /api/payroll/variable-pay-plans/{bonusId}] Name='Annual Bonus (Revised)', IsActive=false => [200] Name=Annual Bonus (Revised), IsActive=false"
+    auto: API
+
+  - id: VPAY-PLN-008
+    func: [F-VPAY-006]
+    sc: Update does not re-check Code uniqueness or touch existing versions
+    t: VariablePayPlanRequest.Code is ignored on update, and an existing version's own fields are unaffected by a plan-header update
+    src: ["VariablePayService.UpdatePlanAsync (full method)"]
+    type: Boundary
+    pri: P2
+    tags: [Configuration]
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] EffectiveFrom=2026-01-01, CalculationMethod=FixedAmount, FixedAmount=5000 => [200/201] version created, FixedAmount=5000"
+      - "[PUT /api/payroll/variable-pay-plans/{bonusId}] Name='Renamed Bonus' => [200] Name=Renamed Bonus, Code unchanged"
+      - "[Manual/DB] Read the plan's existing VariablePayPlanVersion row => FixedAmount is still 5000, unaffected by the header update"
+    auto: DB-assisted
+
+  - id: VPAY-PLN-009
+    func: [F-VPAY-007]
+    sc: AddVersion requires the owning plan to exist in the tenant
+    t: Adding a version to an unknown plan id is NotFound
+    src: ["VariablePayService.AddVersionAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{unknownId}/versions] EffectiveFrom=2026-01-01, CalculationMethod=FixedAmount => [404] Variable-pay plan not found."
+    auto: API
+
+  - id: VPAY-PLN-010
+    func: [F-VPAY-008]
+    sc: New-version validation matrix
+    t: EffectiveTo<EffectiveFrom, out-of-range Percentage/TargetPercentage, negative/inverted amounts, inverted multiplier bounds, out-of-range PayoutMonth and TaxablePercentage are each rejected
+    src: ["VariablePayService.ValidateVersion"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] EffectiveFrom=2027-01-01, EffectiveTo=2026-01-01 => [400] EffectiveTo cannot precede EffectiveFrom."
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] Percentage=150 => [400] Percentages must be between 0 and 100."
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] MinimumAmount=5000, MaximumAmount=1000 => [400] Amounts must be non-negative and max must not be below min."
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] PerformanceMultiplierMinimum=2, PerformanceMultiplierMaximum=1 => [400] Performance multiplier range is invalid."
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] PayoutMonth=13 => [400] Payout month is invalid."
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] TaxablePercentage=150 => [400] Taxable percentage must be between 0 and 100."
+    auto: API
+
+  - id: VPAY-PLN-011
+    func: [F-VPAY-009]
+    sc: Overlap validation only blocks against Published versions
+    t: A new Published version overlapping an existing Published one is Conflict; overlapping a Draft version is accepted
+    src: ["VariablePayService.AddVersionAsync -> Overlaps"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] EffectiveFrom=2026-01-01, EffectiveTo=2026-12-31, Status=Published, CalculationMethod=FixedAmount, FixedAmount=1000 => [200/201] version created Published"
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] EffectiveFrom=2026-06-01, Status=Published, CalculationMethod=FixedAmount, FixedAmount=2000 => [409] Published variable-pay plan versions cannot overlap."
+      - "[POST /api/payroll/variable-pay-plans/{bonusId}/versions] EffectiveFrom=2026-06-01, Status=Draft, CalculationMethod=FixedAmount, FixedAmount=2000 => [200/201] Draft version created despite overlapping the Published one"
+    auto: API
+
+  - id: VPAY-PLN-012
+    func: [F-VPAY-010]
+    sc: Status defaults to Published when omitted
+    t: A version request omitting Status is created immediately Published
+    src: ["VariablePayPlanVersionRequest.Status default"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{targetId}/versions] EffectiveFrom=2027-01-01, CalculationMethod=TargetWithMultiplier, TargetPercentage=10 (Status omitted) => [200/201] Status=Published"
+    auto: API
+
+  - id: VPAY-PLN-013
+    func: [F-VPAY-011]
+    sc: No API path ever assigns Inactive or Superseded to a version
+    t: A full source grep confirms VariablePayPlanVersionStatus.Inactive/.Superseded are never assigned by any service method
+    src: ["VariablePayService.cs (full grep for VariablePayPlanVersionStatus.Inactive / .Superseded)"]
+    type: Boundary
+    pri: P2
+    tags: [Configuration]
+    cr: [CR-214]
+    steps:
+      - "[Manual/Code] Grep Backend/HRMS.Application/Services/VariablePayService.cs for 'VariablePayPlanVersionStatus.Inactive' and '.Superseded' => zero matches; every version is Draft (only if explicitly requested) or Published, and no transition-to-Inactive/Superseded code path exists"
+    auto: Manual only
+
+  - id: VPAY-PLN-014
+    func: [F-VPAY-012]
+    sc: A version persists its full configured term set verbatim
+    t: All calculation/proration/eligibility/payout/tax/settlement/override/applicability fields round-trip unchanged
+    src: ["VariablePayService.AddVersionAsync"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{targetId}/versions] EffectiveFrom=2026-01-01, CalculationMethod=TargetWithMultiplier, SalaryBasisType=Gross, TargetPercentage=15, MinimumAmount=1000, MaximumAmount=50000, PerformanceMultiplierMinimum=0.5, PerformanceMultiplierMaximum=1.5, ProrationMethod=CompletedMonths, EligibilityMethod=MinimumService, MinimumServiceMonths=6, PayoutFrequency=Annual, PayoutMonth=3, TaxTreatment=PartiallyTaxable, TaxablePercentage=60, FinalSettlementTreatment=ProrateAndInclude, RequiresApproval=true, AllowManualOverride=true, PerformanceRatingRequired=true => [200/201] every field round-trips unchanged in the response DTO"
+    auto: API
+
+  - id: VPAY-PLN-015
+    func: [F-VPAY-013]
+    sc: RequiresApproval has no observable runtime effect
+    t: A version configured RequiresApproval=false still leaves a generated award at Calculated, requiring an explicit Approve
+    src: ["VariablePayService.cs (full grep for RequiresApproval)"]
+    type: Boundary
+    pri: P2
+    tags: [Configuration]
+    cr: [CR-208]
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{targetId}/versions] EffectiveFrom=2026-01-01, CalculationMethod=FixedAmount, FixedAmount=1000, RequiresApproval=false => [200/201] version created, RequiresApproval=false"
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId, PlanVersionId=that version, period=2026-02 => [200] Status=Calculated (not auto-Approved despite RequiresApproval=false)"
+    auto: API
+
+  - id: VPAY-PLN-016
+    func: [F-VPAY-014]
+    sc: A cross-tenant plan id is NotFound
+    t: Updating a plan belonging to a different tenant returns NotFound, not Forbidden
+    src: ["VariablePayService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[PUT /api/payroll/variable-pay-plans/{tenantABonusId}] signed in as Tenant B HRAdmin => [404] Variable-pay plan not found."
+    auto: API
+
+  - id: VPAY-PLN-017
+    func: [F-VPAY-015]
+    sc: SelectedSalaryComponentIdsJson is accepted with no existence check
+    t: A version can be created citing arbitrary, non-existent salary component ids with no server-side rejection
+    src: ["VariablePayService.AddVersionAsync (no SalaryComponent existence check)"]
+    type: Boundary
+    pri: P2
+    tags: [Configuration]
+    steps:
+      - "[POST /api/payroll/variable-pay-plans/{targetId}/versions] SalaryBasisType=SelectedSalaryComponents, SelectedSalaryComponentIdsJson='[\"00000000-0000-0000-0000-000000000000\"]', CalculationMethod=PercentageOfSalary, Percentage=10 => [200/201] version created, no validation error for the non-existent component id"
+    auto: API
+
+  - id: VPAY-PLN-018
+    func: [F-VPAY-016]
+    sc: No cap exists on the number of versions a plan may accumulate
+    t: A plan can accumulate an arbitrary number of non-overlapping versions with no server-side limit
+    src: ["VariablePayService.AddVersionAsync"]
+    type: Boundary
+    pri: P3
+    tags: [Configuration]
+    steps:
+      - "[Manual/DB] Add five sequential non-overlapping Published versions to the same plan (2022..2026, one per year) => all five persist with no rejection or limit error"
+    auto: DB-assisted
+
+  - id: VPAY-PLN-019
+    func: [F-VPAY-017]
+    sc: An inactive plan's Published version cannot be matched for a new award
+    t: Setting Plan.IsActive=false blocks award generation via the version-lookup predicate, though existing awards are unaffected
+    src: ["VariablePayService.CalculateCoreAsync (version lookup predicate)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/payroll/variable-pay-plans/{bonusId}] IsActive=false => [200] IsActive=false"
+      - "[POST /api/payroll/variable-pay-awards/generate] employeeId, PlanVersionId=bonusId's Published version => [400] An active published plan version effective on the eligibility date is required."
+    auto: API
+
+  - id: VPAY-PLN-020
+    func: [F-VPAY-018]
+    sc: PlanType and CalculationMethod can be configured inconsistently
+    t: A PlanType.FixedBonus plan's version may use CalculationMethod.TargetWithMultiplier with no cross-validation between the two
+    src: ["VariablePayService.cs (full grep for PlanType usage outside DTO mapping)"]
+    type: Boundary
+    pri: P3
+    tags: [Configuration]
+    steps:
+      - "[POST /api/payroll/variable-pay-plans] Code=MIX, Name=Mixed, PlanType=FixedBonus => [200/201] plan created"
+      - "[POST /api/payroll/variable-pay-plans/{mixId}/versions] CalculationMethod=TargetWithMultiplier, TargetPercentage=10, SalaryBasisType=Gross => [200/201] version created despite PlanType=FixedBonus not matching CalculationMethod=TargetWithMultiplier"
+    auto: API

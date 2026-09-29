@@ -1,0 +1,269 @@
+sheet: Employee_History
+submodule: Employment History - effective-dated, append-only position records
+defaults:
+  role: HR_ADMIN
+  perm: "EmploymentHistory.Change"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (EmploymentHistory.View, EmploymentHistory.Change); employee EMP-HIST-001 has an Initial Employment record effective today in Department=Engineering/Designation=SE."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: EMP-HIST-001
+    func: [F-EMP-073]
+    sc: A position change creates a NEW history row rather than overwriting the previous one
+    t: A Promotion closes the previous open record's EffectiveTo and opens a new row, both atomically
+    src: ["EmployeeEmploymentService.CreateChangeAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Promotion, effective 30 days from today, designationId=SSE => [200] new row created"
+      - "[GET /api/employees/{id}/employment-history] Call => [200] 2 rows: the original (EffectiveTo = new EffectiveFrom - 1 day) and the new one (EffectiveTo=null)"
+    auto: API
+    ex: ["xU:EmployeeEmploymentEndToEndTests.A_promotion_closes_the_previous_record_and_opens_a_new_one_atomically"]
+
+  - id: EMP-HIST-002
+    func: [F-EMP-074]
+    sc: The FIRST employment record must use ChangeReason=NewJoining
+    t: Any other reason on an employee's first-ever employment record is rejected
+    src: ["EmployeeEmploymentService.CreateChangeAsync"]
+    type: Negative
+    pri: P0
+    smoke: true
+    pre: "A brand-new employee has NO employment-history record yet."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] changeReason=Promotion (as the FIRST record) => [400] 'The first employment record must use the New Hire/Initial Position reason.'"
+      - "[POST /api/employees/{id}/employment-history] changeReason=NewJoining => [200] accepted"
+    auto: API
+    ex: ["xU:EmployeeEmploymentEndToEndTests.New_hire_creates_the_first_open_record_and_syncs_the_employee_row"]
+
+  - id: EMP-HIST-003
+    func: [F-EMP-075]
+    sc: Department and Designation are required; every other organizational FK is optional but must be valid, Active and tenant-owned when supplied
+    t: Full reference-validation matrix for the 12 organizational FKs beyond Department/Designation
+    src: ["EmploymentChangeRequestValidator", "EmployeeEmploymentService.ValidateEmploymentReferencesAsync"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    steps:
+      - "[POST /api/employees/{id}/employment-history] departmentId omitted => [400] 'Department is required.'"
+      - "[POST /api/employees/{id}/employment-history] designationId omitted => [400] 'Designation is required.'"
+      - "[POST /api/employees/{id}/employment-history] gradeId=<random guid> => [400] 'Grade does not exist, is inactive, or belongs to another tenant.'"
+      - "[POST /api/employees/{id}/employment-history] costCenterId=<inactive cost center> => [400] same-style rejection"
+      - "[POST /api/employees/{id}/employment-history] Every optional FK omitted, only Department/Designation/PositionChangeReasonId/ChangeReason/EmploymentType supplied => [200] accepted"
+    auto: API
+    ex: ["xU:EmployeeEmploymentEndToEndTests.A_master_reference_that_does_not_exist_is_rejected", "xU:EmployeeEmploymentHardeningTests.Inactive_master_values_and_invalid_country_are_rejected"]
+
+  - id: EMP-HIST-004
+    func: [F-EMP-076]
+    sc: Hierarchy consistency is enforced pairwise between parent/child masters
+    t: A SubDepartment not belonging to the selected Department (and similarly for Lob/HoldingCompany, Section/SubDepartment, SubSection/Section) is rejected
+    src: ["EmployeeEmploymentService.ValidateEmploymentReferencesAsync"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/employment-history] subDepartmentId belonging to a DIFFERENT department than departmentId => [400] hierarchy mismatch rejected"
+      - "[POST /api/employees/{id}/employment-history] lobId belonging to a different HoldingCompany than holdingCompanyId => [400] hierarchy mismatch rejected"
+      - "[POST /api/employees/{id}/employment-history] subDepartmentId correctly belonging to departmentId => [200] accepted"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Invalid_hierarchy_combination_is_rejected", "xU:EmployeeEmploymentHardeningTests.Invalid_holding_and_lob_combination_is_rejected"]
+
+  - id: EMP-HIST-005
+    func: [F-EMP-077]
+    sc: Work Location requires a Country to also be supplied
+    t: workLocationId without countryLocationId on the same change is rejected
+    src: ["EmployeeEmploymentService.ValidateEmploymentChangeCommand"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/employees/{id}/employment-history] workLocationId set, countryLocationId omitted => [400] 'Country is required when a work location is selected.'"
+      - "[POST /api/employees/{id}/employment-history] workLocationId and countryLocationId both set consistently => [200] accepted"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Work_location_requires_a_country"]
+
+  - id: EMP-HIST-006
+    func: [F-EMP-078]
+    sc: A genuinely backdated effective date is always rejected, for every ChangeReason including Correction
+    t: EffectiveFrom earlier than today's business date is unconditionally rejected
+    src: ["EmployeeEmploymentService.CreateChangeAsync"]
+    type: Boundary
+    tags: [Contract]
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employees/{id}/employment-history] effectiveFrom = today - 1 day, changeReason=Promotion => [400] 'Employment changes may not be effective-dated in the past.'"
+      - "[POST /api/employees/{id}/employment-history] effectiveFrom = today - 1 day, changeReason=Correction => [400] same rejection - Correction does NOT bypass the past-date guard"
+      - "[POST /api/employees/{id}/employment-history] effectiveFrom = today exactly => [200] accepted"
+    auto: API
+    ex: ["xU:EmployeeEmploymentEndToEndTests.A_past_effective_date_is_rejected", "xU:EmployeeEmploymentHardeningTests.Backdated_employment_change_is_rejected"]
+    cr: [CR-51]
+
+  - id: EMP-HIST-007
+    func: [F-EMP-079]
+    sc: A future-dated change is accepted and recorded but does not become current until its date arrives
+    t: A future transfer appears in history immediately but does not affect the Employee's snapshot fields, list filters, or isCurrentlyEmployed
+    src: ["EmployeeEmploymentService.CreateChangeAsync (isEffectiveToday gate)"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Transfer, effective 30 days from today, departmentId=Finance => [200] recorded"
+      - "[GET /api/employees/{id}] Call immediately after => [200] department is STILL Engineering (the current record), not Finance"
+      - "[GET /api/employees/{id}/employment-history/current] Call => [200] returns the still-current Engineering record, not the future Finance one"
+    auto: API
+    ex: ["xU:EmployeeEmploymentEndToEndTests.A_future_transfer_is_not_current_or_copied_to_employee_until_its_date", "xU:EmployeeEmploymentEndToEndTests.A_future_initial_joining_has_no_current_employment_before_its_date"]
+
+  - id: EMP-HIST-008
+    func: [F-EMP-080]
+    sc: A same-day record collision is rejected UNLESS ChangeReason=Correction, which supersedes and revises
+    t: Two records on the same EffectiveFrom date are only possible via Correction, which marks the prior same-day record superseded and bumps RevisionNumber
+    src: ["EmployeeEmploymentService.CreateChangeAsync (sameDayRecords branch)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/employment-history] Second record on the SAME effectiveFrom as an existing one, changeReason=Promotion => [400] 'An employment record already exists for the effective date.'"
+      - "[POST /api/employees/{id}/employment-history] Second record on the SAME effectiveFrom, changeReason=Correction => [200] accepted; the prior same-day record is marked superseded, revisionNumber increments"
+      - "[GET /api/employees/{id}/employment-history] Call => [200] the LATEST revision for that date resolves as the effective one"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Same_day_corrections_create_revisions_and_latest_revision_resolves"]
+
+  - id: EMP-HIST-009
+    func: [F-EMP-081]
+    sc: Inserting a change strictly between two existing dated records reconciles both boundaries
+    t: The record before is closed and the following record's window is preserved with no gap or overlap
+    src: ["EmployeeEmploymentService.CreateChangeAsync"]
+    type: Boundary
+    tags: [Integration-Concurrency]
+    pri: P1
+    pre: "Employee has records effective on Day 1 and Day 30."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] effectiveFrom = Day 15 (strictly between Day 1 and Day 30) => [200] accepted"
+      - "[GET /api/employees/{id}/employment-history] Call => [200] Day 1 record's EffectiveTo = Day 14, Day 15 record's EffectiveTo = Day 29, Day 30 record unchanged - no gap, no overlap"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Inserting_between_two_records_reconciles_both_boundaries", "xU:EmployeeEmploymentEndToEndTests.Multiple_changes_chain_the_effective_periods_without_overlaps_or_gaps"]
+
+  - id: EMP-HIST-010
+    func: [F-EMP-082]
+    sc: A Retirement/Resignation/Termination change marks the Employee row inactive and stamps DateOfLeaving once effective
+    t: An EmploymentStatus!=Active change, effective today, syncs onto the Employee's own Status/DateOfLeaving
+    src: ["EmployeeEmploymentService.CreateChangeAsync (isEffectiveToday sync)"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/employees/{id}/employment-history] employmentStatus=Terminated, effective today => [200] accepted"
+      - "[GET /api/employees/{id}] Call => [200] status='Terminated', dateOfLeaving is set"
+    auto: API
+    ex: ["xU:EmployeeEmploymentEndToEndTests.Retirement_closes_the_current_record_and_marks_the_employee_inactive"]
+
+  - id: EMP-HIST-011
+    func: [F-EMP-083]
+    sc: Snapshot fields are frozen at write time and never retroactively updated when a master is renamed
+    t: Renaming a Department after a history row references it leaves that row's stored DepartmentName unchanged
+    src: ["EmployeeEmploymentService.CreateChangeAsync (snapshot assignment)"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    pre: "A history row was created while Department 'Engineering' held that name."
+    steps:
+      - "[PUT /api/departments/{id}] Rename the department to 'Platform Engineering' => [200] renamed"
+      - "[GET /api/employees/{id}/employment-history] Call => [200] the older row's departmentName STILL reads 'Engineering' - the snapshot, not the live name"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.History_names_are_snapshot_values_after_master_renames"]
+
+  - id: EMP-HIST-012
+    func: [F-EMP-084]
+    sc: The current-as-of-date query resolves exactly one record, and treats more than one match as a data-integrity Conflict
+    t: 0 matches is NotFound, 2+ matches is Conflict, never a silent pick
+    src: ["EmployeeEmploymentService.GetAsOfAsync"]
+    type: Boundary
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[GET /api/employees/{id}/employment-history/current?asOfDate=<date before hire>] Call => [404] 'No current employment record found.'"
+      - "[GET /api/employees/{id}/employment-history/current] Omit asOfDate (defaults to today) => [200] the one current record is returned"
+    auto: API
+
+  - id: EMP-HIST-013
+    func: [F-EMP-085]
+    sc: Full history is unpaged, most-recent-first
+    t: GET .../employment-history returns every row ordered by EffectiveFrom desc, RevisionNumber desc, CreatedDate desc
+    src: ["EmployeeEmploymentService.GetHistoryAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/employees/{id}/employment-history] An employee with 5 history rows => [200] all 5 returned, most recent EffectiveFrom first"
+    auto: API
+
+  - id: EMP-HIST-014
+    func: [F-EMP-086]
+    sc: Employment History is isolated per tenant
+    t: A cross-tenant employee id gets 404 on every history route
+    src: ["EmployeeEmploymentService (tenant-filtered)"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[GET /api/employees/{Tenant A id}/employment-history] As Tenant B => [404] Not Found"
+      - "[POST /api/employees/{Tenant A id}/employment-history] As Tenant B => [404] Not Found"
+    auto: API
+    ex: ["xU:EmployeeEmploymentEndToEndTests.History_is_isolated_across_tenants"]
+
+  - id: EMP-HIST-015
+    func: [F-EMP-087]
+    sc: An omitted ManagerId carries forward the manager from the prior effective record, except for ManagerChange
+    t: A non-manager-related change (e.g. GradeChange) with no managerId keeps the previous manager; only ManagerChange treats null as clear-the-manager
+    src: ["EmployeeEmploymentService.CreateChangeAsync (carry-forward)"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    pre: "EMP-HIST-001's current manager is MGR-001."
+    steps:
+      - "[POST /api/employees/{id}/employment-history] changeReason=GradeChange, managerId omitted => [200] accepted"
+      - "[GET /api/employees/{id}/employment-history/current] Call => [200] managerId is STILL MGR-001 - carried forward, not cleared"
+      - "[POST /api/employees/{id}/employment-history] changeReason=ManagerChange, managerId explicitly null => [200] accepted, manager is now unassigned"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Manager_only_employment_change_preserves_position_fields_and_employee_code"]
+
+  - id: EMP-HIST-016
+    func: [F-EMP-088]
+    sc: Employment endpoints reject an unauthenticated caller and enforce View/Change separately from Employee.View/.Edit
+    t: A token without EmploymentHistory.Change cannot POST a change even if it holds Employee.Edit
+    src: ["[HasPermission(EmploymentHistory.View|Change)]"]
+    type: Authorization
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/employees/{id}/employment-history] No Authorization header => [401] Unauthorized"
+      - "[POST /api/employees/{id}/employment-history] Caller holds Employee.Edit but NOT EmploymentHistory.Change => [403] Forbidden"
+    auto: API
+    ex: ["xU:EmployeeEmploymentEndpointsTests.Employment_endpoints_require_a_token", "xU:EmployeeEmploymentEndpointsTests.Adding_employment_requires_the_change_permission"]
+
+  - id: EMP-HIST-017
+    func: [F-EMP-075]
+    sc: Master reference dropdowns (Position Change Reason, org hierarchy) are populated for the Employment form
+    t: The dependent-dropdown master data endpoints return the expected lists and enforce their own read permission
+    src: ["EmployeeEmploymentEndpointsTests"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/master-data/position-change-reasons] Call => [200] includes both a New Hire and a Retirement-style reason"
+      - "[GET /api/master-data/departments] Call => [200] returns the org-hierarchy dropdown data used by the Employment form"
+    auto: API
+    ex: ["xU:EmployeeEmploymentEndpointsTests.Position_change_reason_master_offers_new_hire_and_retirement", "xU:EmployeeEmploymentEndpointsTests.Org_hierarchy_masters_are_available_for_the_dependent_dropdowns"]
+
+  - id: EMP-HIST-018
+    func: [F-EMP-075]
+    sc: Master dropdown reads are permission-gated
+    t: Reading the position-change-reason master without the required permission is forbidden
+    src: ["EmployeeEmploymentEndpointsTests"]
+    type: Authorization
+    pri: P2
+    role: EMPLOYEE
+    perm: "none"
+    steps:
+      - "[GET /api/master-data/position-change-reasons] As a caller with no relevant permission => [403] Forbidden"
+    auto: API
+    ex: ["xU:EmployeeEmploymentEndpointsTests.Position_change_reason_master_read_without_permission_is_forbidden"]

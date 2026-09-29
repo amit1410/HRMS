@@ -1,0 +1,313 @@
+sheet: Payroll_Reimbursements
+submodule: Reimbursements and Claims - categories/policy versions, claim lifecycle, approval limits, settlement, self-service
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Reimbursements.Request"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, with an active Employee and an active Reimbursement Category (Travel, INR, RequiresReceipt=false) with an active policy version, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-RB-001
+    func: [F-PAY-156]
+    sc: Create a reimbursement category and update it
+    t: A category with a unique code is created, then updated
+    src: ["ReimbursementService.CreateCategoryAsync", "ReimbursementService.UpdateCategoryAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.Reimbursements.ManageCategories"
+    steps:
+      - "[POST /api/payroll/reimbursement-categories] Code=FUEL, CurrencyCode=INR => [200/201]"
+      - "[PUT /api/payroll/reimbursement-categories/{id}] Name='Fuel & Mileage' => [200] Name updated"
+    auto: API
+
+  - id: PAY-RB-002
+    func: [F-PAY-157]
+    sc: Policy versions cannot overlap
+    t: A second active version whose window overlaps an existing active version is Conflict
+    src: ["ReimbursementService.CreatePolicyVersionAsync"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.Reimbursements.ManageCategories"
+    steps:
+      - "[POST /api/payroll/reimbursement-categories/{id}/versions] Status=Active, dates overlapping the existing active version => [409] Reimbursement policy versions cannot overlap."
+    auto: API
+
+  - id: PAY-RB-003
+    func: [F-PAY-159]
+    sc: Create a valid single-line claim
+    t: A well-formed claim with one line is created in Draft
+    src: ["ReimbursementService.CreateClaimAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/reimbursements] EmployeeId, Lines=[{CategoryId=Travel, ClaimedAmount=1500, Description='Client visit taxi'}] => [200/201] Status=Draft"
+    auto: API
+
+  - id: PAY-RB-004
+    func: [F-PAY-159]
+    sc: Create validation
+    t: Zero lines, a blank description, a non-positive amount, and an inverted expense date range are each rejected
+    src: ["ReimbursementService.CreateClaimAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/reimbursements] Lines=[] => [400] At least one claim line is required."
+      - "[POST /api/payroll/reimbursements] Lines=[{ClaimedAmount=0}] => [400] Each line requires a description and a positive amount."
+      - "[POST /api/payroll/reimbursements] ExpenseFromDate=2026-06-01, ExpenseToDate=2026-01-01 => [400] Expense To cannot be earlier than Expense From."
+    auto: API
+
+  - id: PAY-RB-005
+    func: [F-PAY-160]
+    sc: Category rules are enforced at claim creation
+    t: A second line in a single-line-only category, and a line whose category currency mismatches the claim currency, are both rejected
+    src: ["ReimbursementService.CreateClaimAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Category Travel has AllowsMultipleLines=false => precondition established"
+      - "[POST /api/payroll/reimbursements] Lines=[Travel, Travel] (two lines, same category) => [400] This category does not allow multiple lines."
+      - "[POST /api/payroll/reimbursements] CurrencyCode=USD, Lines=[Travel (category currency=INR)] => [400] Claim currency must match each category currency."
+    auto: API
+
+  - id: PAY-RB-006
+    func: [F-PAY-161]
+    sc: Claim numbers are unique per tenant per year even under concurrent creation
+    t: Two concurrent claim creates never produce the same ClaimNumber
+    src: ["ReimbursementService.NextClaimNumberAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire two concurrent POST /api/payroll/reimbursements via Task.WhenAll for the same tenant/year => both succeed with two distinct ClaimNumbers - no duplicate CLM/{yyyy}/{seq} value is produced"
+    auto: DB-assisted
+
+  - id: PAY-RB-007
+    func: [F-PAY-162]
+    sc: Claim totals reconcile after every line change
+    t: Editing a Draft claim's lines updates TotalClaimedAmount to match the new line sum
+    src: ["ReimbursementService.ReconcileClaim"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[PUT /api/payroll/reimbursements/{id}] Lines total changed from 1500 to 2200 => [200] TotalClaimedAmount=2200"
+    auto: API
+
+  - id: PAY-RB-008
+    func: [F-PAY-163]
+    sc: Update is Draft-only
+    t: Updating a Submitted claim is Conflict
+    src: ["ReimbursementService.UpdateClaimAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Claim Status=Submitted => precondition established"
+      - "[PUT /api/payroll/reimbursements/{id}] => [409] Only draft claims can be edited."
+    auto: API
+
+  - id: PAY-RB-009
+    func: [F-PAY-164]
+    sc: Submit resolves policy eligibility and enforces the receipt gate
+    t: A line with no active policy on its expense date is rejected; a receipt-required line with no uploaded receipt blocks submission
+    src: ["ReimbursementService.SubmitAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] Category's policy version's EffectiveTo is before the line's ExpenseDate => precondition established"
+      - "[POST /api/payroll/reimbursements/{id}/submit] => [400] No active reimbursement policy applies to category TRAVEL on <date>."
+      - "[Setup] Category RequiresReceipt=true, line has no attachment => precondition established"
+      - "[POST /api/payroll/reimbursements/{id}/submit] => [400] A receipt is required for every submitted line that requires one."
+    auto: API
+
+  - id: PAY-RB-010
+    func: [F-PAY-165]
+    sc: Submit requires an Active employee
+    t: An inactive employee's claim cannot be submitted
+    src: ["ReimbursementService.SubmitAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Employee.Status != Active => precondition established"
+      - "[POST /api/payroll/reimbursements/{id}/submit] => [409] Only active employees may submit reimbursement claims."
+    auto: API
+
+  - id: PAY-RB-011
+    func: [F-PAY-166]
+    sc: Approve computes taxable/non-taxable split and derives the claim's overall status
+    t: A full approval promotes the claim straight to ReadyForSettlement; a partial approval reports PartiallyApproved
+    src: ["ReimbursementService.ApproveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Payroll.Reimbursements.Approve"
+    steps:
+      - "[POST /api/payroll/reimbursements/{id}/approve] Lines=[{ApprovedAmount=EligibleAmount}] => [200] Status=ReadyForSettlement (not merely 'Approved')"
+      - "[Setup] A second claim, Lines=[{ApprovedAmount < EligibleAmount}] => precondition established"
+      - "[POST /api/payroll/reimbursements/{id2}/approve] => [200] Status=PartiallyApproved"
+    auto: API
+
+  - id: PAY-RB-012
+    func: [F-PAY-166]
+    sc: Approve validates the approved-amount bounds
+    t: An ApprovedAmount above EligibleAmount is rejected
+    src: ["ReimbursementService.ApproveAsync"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.Reimbursements.Approve"
+    steps:
+      - "[POST /api/payroll/reimbursements/{id}/approve] Lines=[{ApprovedAmount = EligibleAmount + 1}] => [400] Approved amount must be between zero and eligible amount, and eligible cannot exceed claimed."
+    auto: API
+
+  - id: PAY-RB-013
+    func: [F-PAY-167]
+    sc: Approve enforces the policy's monthly/yearly category limit
+    t: Approving a claim that would push the employee's monthly total for the category over the policy's MonthlyLimit is Conflict
+    src: ["ReimbursementService.LimitExceededAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Payroll.Reimbursements.Approve"
+    steps:
+      - "[Setup] Employee already has 9000 approved this month in category Travel with MonthlyLimit=10000 => precondition established"
+      - "[POST /api/payroll/reimbursements/{id}/approve] Lines=[{ApprovedAmount=2000}] => [409] The reimbursement policy limit would be exceeded."
+    auto: API
+
+  - id: PAY-RB-014
+    func: [F-PAY-168]
+    sc: Reject requires a reason
+    t: Reject without a reason is Invalid
+    src: ["ReimbursementService.RejectAsync"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.Reimbursements.Approve"
+    steps:
+      - "[POST /api/payroll/reimbursements/{id}/reject] reason='' => [400] Rejection reason is required."
+    auto: API
+
+  - id: PAY-RB-015
+    func: [F-PAY-169, F-PAY-170]
+    sc: Manual settlement distributes across lines and closes the claim
+    t: Settling the full outstanding amount moves the claim to Settled
+    src: ["ReimbursementService.SettleManuallyAsync"]
+    type: Positive
+    pri: P0
+    perm: "Payroll.Reimbursements.Settle"
+    steps:
+      - "[POST /api/payroll/reimbursements/{id}/settle-manually] Reference='NEFT-1029' (full remaining amount) => [200] Status=Settled, SettledAmount=TotalApprovedAmount"
+    auto: API
+
+  - id: PAY-RB-016
+    func: [F-PAY-169]
+    sc: Settlement amount and reference validation
+    t: An amount exceeding the remaining balance, and a blank reference, are both rejected
+    src: ["ReimbursementService.SettleManuallyAsync"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.Reimbursements.Settle"
+    steps:
+      - "[POST /api/payroll/reimbursements/{id}/settle-manually] Amount=<remaining + 1> => [400] Settlement amount must be positive and no greater than the approved outstanding amount."
+      - "[POST /api/payroll/reimbursements/{id}/settle-manually] Reference='' => [400] A settlement reference is required."
+    auto: API
+
+  - id: PAY-RB-017
+    func: [F-PAY-171]
+    sc: Cancel is blocked once Settled
+    t: Cancelling a Settled claim is Conflict; a Draft claim cancels cleanly with a reason
+    src: ["ReimbursementService.CancelAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Claim Status=Settled => precondition established"
+      - "[POST /api/payroll/reimbursements/{id}/cancel] reason='Test' => [409] Settled claims cannot be cancelled."
+      - "[Setup] A fresh Draft claim => precondition established"
+      - "[POST /api/payroll/reimbursements/{id2}/cancel] reason='Duplicate' => [200] Status=Cancelled"
+    auto: API
+
+  - id: PAY-RB-018
+    func: [F-PAY-172]
+    sc: Attachment metadata validation and receipt-status flip
+    t: Incomplete attachment metadata is rejected; a valid one flips the targeted line's ReceiptStatus to Uploaded
+    src: ["ReimbursementService.AddAttachmentAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/reimbursements/{id}/attachments] FileName='' => [400] Attachment metadata is incomplete."
+      - "[POST /api/payroll/reimbursements/{id}/attachments] ClaimLineId=<line>, FileName='receipt.pdf', ContentType='application/pdf', StorageReference='blob://...', FileSize=204800 => [200/201]"
+      - "[GET /api/payroll/reimbursements/{id}] => [200] that line's ReceiptStatus=Uploaded"
+    auto: API
+
+  - id: PAY-RB-019
+    func: [F-PAY-173]
+    sc: Register and CSV export
+    t: The register filters correctly and its CSV export includes the same rows
+    src: ["ReimbursementService.GetRegisterAsync"]
+    type: Positive
+    pri: P2
+    role: EMPLOYEE
+    perm: "Payroll.Reimbursements.View"
+    steps:
+      - "[GET /api/payroll/reimbursements/register?status=Settled] => [200] only Settled claims"
+      - "[GET /api/payroll/reimbursements/register/export.csv?status=Settled] => [200] text/csv, matching row count"
+    auto: API
+
+  - id: PAY-RB-020
+    func: [F-PAY-174, F-PAY-175]
+    sc: Payroll recovery resolution and settlement idempotency
+    t: A ReadyForSettlement Payroll-method claim is outstanding for recovery; recording the same payroll settlement twice for the same result is Conflict
+    src: ["ReimbursementService.GetPayrollRecoveriesAsync", "ReimbursementService.RecordPayrollSettlementAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Setup] Claim SettlementMethod=Payroll, Status=ReadyForSettlement, ApprovedAmount=1000, no prior settlement => precondition established"
+      - "[Manual] ReimbursementService.GetPayrollRecoveriesAsync(employeeId, asOf) => outstanding recovery of 1000 is returned"
+      - "[Manual] RecordPayrollSettlementAsync(claimId, lineId, runId, resultId, 1000, date) twice for the SAME payrollResultId => second call [409] Reimbursement line is already settled for this payroll result."
+    auto: "DB-assisted"
+
+  - id: PAY-RB-021
+    func: [F-PAY-176]
+    sc: Eligibility evaluation is advisory, not throwing
+    t: An inactive employee/category/no-active-policy each return a structured ineligible result
+    src: ["ReimbursementEligibilityService.EvaluateAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual] EvaluateAsync(inactiveEmployeeId, categoryId, 500, today) => IsEligible=false, Issues=['Employee is not active.'], no exception thrown"
+    auto: "Manual only"
+
+  - id: PAY-RB-022
+    func: [F-PAY-177]
+    sc: Self-service my-reimbursements is scoped to the caller's own employee
+    t: An employee cannot reach another employee's claim through the self-service routes
+    src: ["ReimbursementsController.MyClaim / MySubmit"]
+    type: Security
+    pri: P0
+    role: EMPLOYEE
+    steps:
+      - "[GET /api/me/reimbursements/{anotherEmployeesClaimId}] => [404] not the caller's own claim"
+      - "[POST /api/me/reimbursements/{anotherEmployeesClaimId}/submit] => [404] not the caller's own claim"
+    auto: API
+
+  - id: PAY-RB-023
+    func: [F-PAY-178]
+    sc: Cross-tenant category/claim id is not reachable
+    t: Tenant B's claim id is NotFound as Tenant A
+    src: ["ReimbursementService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[GET /api/payroll/reimbursements/{tenantBClaimId}] As Tenant A => [404] Reimbursement claim not found."
+    auto: API
+
+  - id: PAY-RB-024
+    func: [F-PAY-158]
+    sc: List/get read paths
+    t: GetClaims respects every documented filter and get-by-id returns full line/history detail
+    src: ["ReimbursementService.GetClaimsAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Reimbursements.View"
+    steps:
+      - "[GET /api/payroll/reimbursements?employeeId={id}&status=Settled] => [200] only that employee's Settled claims"
+    auto: API

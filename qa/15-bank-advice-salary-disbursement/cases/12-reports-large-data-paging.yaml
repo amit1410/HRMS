@@ -1,0 +1,116 @@
+sheet: BankAdv_Reports_LargeData_Paging
+submodule: Reports, Listing & Large Data/Paging
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-PAGE-001
+    func: [F-BANKADV-093]
+    sc: List supports only a Status filter
+    t: There is no PayrollRunId, PayrollPeriodId, date-range, or BatchNumber query parameter on the list endpoint
+    src: "BankAdviceService.GetAsync, BankAdviceQuery"
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: "T1 has 3 batches across 2 different payroll runs"
+    role: HRAdmin (custom role holding BankAdvice.View)
+    perm: Payroll.BankAdvice.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice?payrollRunId={RUN1}] => [200] the unrecognized payrollRunId parameter is silently ignored, ALL 3 batches across both runs are returned, not filtered to RUN1"
+    auto: API
+    cr: [CR-270]
+
+  - id: BANKADV-PAGE-002
+    func: [F-BANKADV-094]
+    sc: Page size clamp
+    t: Requesting a pageSize above MaxPageSize=100 is clamped, not rejected
+    src: "BankAdviceService.GetAsync (shared PagedQuery contract)"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "T1 has at least 5 batches"
+    role: HRAdmin (custom role holding BankAdvice.View)
+    perm: Payroll.BankAdvice.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice?page=1&pageSize=500] => [200] pageSize in the response metadata is clamped to 100, not 500"
+    auto: API
+
+  - id: BANKADV-PAGE-003
+    func: [F-BANKADV-095]
+    sc: Fixed sort order
+    t: The list is always ordered by CreatedDate descending, with no alternate sort parameter honored
+    src: "BankAdviceService.GetAsync (OrderByDescending CreatedDate)"
+    type: Contract
+    tags: [Positive]
+    pri: P3
+    sev: Low
+    pre: "T1 has 3 batches generated at different times"
+    role: HRAdmin (custom role holding BankAdvice.View)
+    perm: Payroll.BankAdvice.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice] => [200] items[0] is the most recently generated batch, items[last] is the oldest"
+    auto: API
+
+  - id: BANKADV-PAGE-004
+    func: [F-BANKADV-096]
+    sc: List eagerly loads full child collections
+    t: A list page's rows each carry their full Payments and History arrays, not just summary counts
+    src: "BankAdviceService.GetAsync (Include Payments, Include History)"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "T1 has a batch with 50 payments and 4 history events"
+    role: HRAdmin (custom role holding BankAdvice.View)
+    perm: Payroll.BankAdvice.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice] => [200] the row for that batch includes all 50 Payments and all 4 History entries inline, not a count-only summary"
+    auto: API
+
+  - id: BANKADV-PAGE-005
+    func: [F-BANKADV-097]
+    sc: Unbounded per-batch payment list
+    t: A batch with a very large employee population returns every payment row in one response with no server-side paging within the batch
+    src: "BankAdviceService.Load, ToDto"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN_LARGE (Approved) has 5,000 eligible employees, each with a valid salary account"
+    role: HRAdmin (custom role holding BankAdvice.Generate, View)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 5000 PayrollResult + EmployeeBankDetail rows
+    steps:
+      - "[POST /api/payroll/runs/{RUN_LARGE}/bank-advice] => [200] batch created with 5000 payments"
+      - "[GET /api/payroll/bank-advice/{batchId}] => [200] response Payments array has exactly 5000 entries, no pagination cursor/offset parameter is honored on this route"
+    auto: API
+
+  - id: BANKADV-PAGE-006
+    func: [F-BANKADV-098]
+    sc: Export materializes the full file in memory
+    t: Exporting a batch with a very large employee population still succeeds, building the whole CSV in one pass
+    src: "BankAdviceService.ExportAsync (StringBuilder over batch.Payments)"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN_LARGE's batch (5,000 payments) is Approved"
+    role: HRAdmin (custom role holding BankAdvice.Export)
+    perm: Payroll.BankAdvice.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{batchId}/export] => [200] returned CSV has exactly 5001 lines (1 header + 5000 data rows), no truncation, within a reasonable response time for this dataset size"
+    auto: API

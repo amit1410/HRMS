@@ -1,0 +1,312 @@
+sheet: Masters_Generic_Update
+submodule: Generic Engine - Update (api/masters/{kind}/{id}) plus dedicated Department/Designation update
+defaults:
+  role: HR_ADMIN
+  perm: Geography.Manage
+  tenant: A
+  pre: "Tenant A signed in as a user holding the HRAdmin role (Geography.Manage). Holding company HC01 exists and is active."
+  data: "kind=holding-companies, id=HC01's id unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: MASTER-UPDATE-001
+    func: [F-MST-04]
+    sc: Valid update replaces every field
+    t: PUT with a full, valid body updates code, name, description and isActive together
+    src: ["MasterManagementService.WriteAsync (id supplied)"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[PUT /api/masters/holding-companies/{HC01 id}] Body {code: 'HC01B', name: 'Renamed Holding', description: 'Updated', isActive: true} => [200] all four fields reflect the new values"
+    auto: API
+
+  - id: MASTER-UPDATE-002
+    func: [F-MST-04]
+    sc: Update changes only the code
+    t: Renaming just the code leaves name/description/isActive intact when they are resent unchanged
+    src: ["MasterManagementService.WriteAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/masters/holding-companies/{HC01 id}] Body {code: 'HC01C', name: 'Renamed Holding', description: 'Updated', isActive: true} => [200] code=HC01C, other fields unchanged from MASTER-UPDATE-001"
+    auto: API
+
+  - id: MASTER-UPDATE-003
+    func: [F-MST-04]
+    sc: A PUT that omits an optional field clears it - this is a full replace, not a merge
+    t: Sending no description on an update removes a previously-set description
+    src: ["MasterManagementService.WriteAsync (Description set unconditionally from the request each time)"]
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    pre: "HC01 currently has description 'Updated' (from MASTER-UPDATE-001)."
+    steps:
+      - "[PUT /api/masters/holding-companies/{HC01 id}] Body {code: 'HC01C', name: 'Renamed Holding', isActive: true} (description omitted) => [200] description=null (the previous value is not preserved)"
+    auto: API
+    cm: "Same full-replace contract the Departments controller documents explicitly ('an omitted optional field is cleared rather than left unchanged') - confirming the generic engine follows the same rule."
+
+  - id: MASTER-UPDATE-004
+    func: [F-MST-05]
+    sc: A record may keep its own code and name unchanged
+    t: Resubmitting a record's current code/name on update does not trip the uniqueness check against itself
+    src: ["MasterManagementService.Definition.HasConflict (id excluded from the conflict query)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[PUT /api/masters/holding-companies/{HC01 id}] Body {code: 'HC01C', name: 'Renamed Holding', isActive: true} (identical to its current values) => [200] no conflict"
+    auto: API
+
+  - id: MASTER-UPDATE-005
+    func: [F-MST-05]
+    sc: Update rejects a code already used by a different record
+    t: Renaming HC02 to HC01C's code is refused
+    src: ["MasterManagementService.Definition.HasConflict"]
+    type: Negative
+    pri: P0
+    pre: "Tenant A has a second holding company HC02, active."
+    steps:
+      - "[PUT /api/masters/holding-companies/{HC02 id}] Body {code: 'HC01C', name: 'HC02 New Name', isActive: true} => [409] 'Code or name is already used in this organization.'"
+    auto: API
+
+  - id: MASTER-UPDATE-006
+    func: [F-MST-05]
+    sc: Update rejects a name already used by a different record
+    t: Same as MASTER-UPDATE-005 but colliding on name instead of code
+    src: ["MasterManagementService.Definition.HasConflict"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[PUT /api/masters/holding-companies/{HC02 id}] Body {code: 'HC02', name: 'Renamed Holding'} => [409]"
+    auto: API
+
+  - id: MASTER-UPDATE-007
+    func: [F-MST-06, F-MST-10]
+    sc: Update can change a hierarchical record's parent to a different valid, active parent
+    t: Moving a Line of Business from one Holding Company to another succeeds
+    src: ["MasterManagementService.WriteAsync (ParentExistsAsync re-run on every write)"]
+    type: Positive
+    pri: P1
+    pre: "Tenant A has LOB01 currently parented to HC01, and a second active holding company HC02."
+    data: "kind=lines-of-business"
+    steps:
+      - "[PUT /api/masters/lines-of-business/{LOB01 id}] Body {code: 'LOB01', name: 'Moved LOB', parentId: '{HC02 id}'} => [200] parentId={HC02 id}, parentCode=HC02"
+    auto: API
+
+  - id: MASTER-UPDATE-008
+    func: [F-MST-06]
+    sc: Update to an inactive parent is rejected
+    t: Attempting to re-parent a sub-department onto an inactive department fails the same way create does
+    src: ["MasterManagementService.ParentExistsAsync"]
+    type: Negative
+    pri: P1
+    pre: "Tenant A has SubDepartment SUBDEPT01 (parent DEPT01, active) and an inactive Department DEPT99."
+    data: "kind=sub-departments"
+    steps:
+      - "[PUT /api/masters/sub-departments/{SUBDEPT01 id}] Body {code: 'SUBDEPT01', name: 'SubDept', parentId: '{DEPT99 id}'} => [400] field 'parentId'"
+    auto: API
+
+  - id: MASTER-UPDATE-009
+    func: [F-MST-06]
+    sc: Update to a nonexistent parent id is rejected
+    t: A random GUID as the new parentId is refused
+    src: ["MasterManagementService.ParentExistsAsync (record is null)"]
+    type: Negative
+    pri: P1
+    data: "kind=sub-departments"
+    steps:
+      - "[PUT /api/masters/sub-departments/{SUBDEPT01 id}] Body {code: 'SUBDEPT01', name: 'SubDept', parentId: '{random GUID}'} => [400] field 'parentId'"
+    auto: API
+
+  - id: MASTER-UPDATE-010
+    func: [F-MST-06, F-MST-35]
+    sc: Update to a cross-tenant parent id is rejected
+    t: Tenant B's department id cannot become the parent of a Tenant A sub-department on update, matching create's behavior
+    src: ["MasterManagementService.ParentExistsAsync (tenant-filtered Find)"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    pre: "Tenant B has active Department DEPTB1."
+    data: "kind=sub-departments, parentId=DEPTB1's id"
+    steps:
+      - "[PUT /api/masters/sub-departments/{SUBDEPT01 id}] As Tenant A, body {code: 'SUBDEPT01', name: 'SubDept', parentId: '{DEPTB1 id}'} => [400] field 'parentId', same message as MASTER-UPDATE-008/009"
+    auto: API
+
+  - id: MASTER-UPDATE-011
+    func: [F-MST-04]
+    sc: Update of a nonexistent record id returns 404
+    t: A well-formed but unknown id is reported as not found
+    src: ["MasterManagementService.WriteAsync (definition.Find returns null)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[PUT /api/masters/holding-companies/{random GUID}] Body {code: 'HCXX', name: 'Ghost'} => [404] 'Master record not found.'"
+    auto: API
+
+  - id: MASTER-UPDATE-012
+    func: [F-MST-04, F-MST-34]
+    sc: Update of another tenant's record is not found, and changes nothing
+    t: Tenant B cannot update Tenant A's holding company by id
+    src: ["EF global query filter on TenantId (definition.Find is tenant-scoped)"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A record, B caller
+    steps:
+      - "[PUT /api/masters/holding-companies/{HC01 id}] As a Tenant B HRAdmin, body {code: 'HIJACKED', name: 'Hijacked'} => [404]"
+      - "[GET /api/masters/holding-companies/{HC01 id}] As the original Tenant A HRAdmin => [200] code/name unchanged from before the attempted update"
+    auto: API
+
+  - id: MASTER-UPDATE-013
+    func: [F-MST-04]
+    sc: isActive can be flipped by a general update, independent of the DELETE endpoint
+    t: PUT with isActive=false deactivates a record without going through DELETE
+    src: ["MasterManagementService.WriteAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[PUT /api/masters/holding-companies/{HC02 id}] Body {code: 'HC02', name: 'Renamed Holding', isActive: false} => [200] isActive=false"
+      - "[PUT /api/masters/holding-companies/{HC02 id}] Body {code: 'HC02', name: 'Renamed Holding', isActive: true} => [200] isActive=true (reactivated by the same endpoint)"
+    auto: API
+
+  - id: MASTER-UPDATE-014
+    func: [F-MST-04]
+    sc: There is no optimistic concurrency control on master records
+    t: Two sequential updates from different sessions silently overwrite each other; no version/ETag conflict is ever raised
+    src: ["Backend/HRMS.Domain/Common/BaseEntity.cs (no RowVersion/concurrency token on any master entity)"]
+    type: Integration-Concurrency
+    pri: P3
+    sev: Low
+    steps:
+      - "Session 1 reads HC01, then Session 2 updates HC01's name to 'Session 2 Name' and saves => [200]"
+      - "Session 1 (still holding the pre-Session-2 data) submits its own update with a different name => [200] succeeds and silently overwrites Session 2's change; no 409/412 is raised, confirming there is no concurrency guard on this entity"
+    auto: Manual only
+
+  - id: MASTER-UPDATE-015
+    func: [F-MST-04]
+    sc: Update requires Geography.Manage
+    t: A Geography.View-only caller cannot update a record
+    src: ["[HasPermission(Permissions.Geography.Manage)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: MANAGER
+    perm: Geography.View (held); Geography.Manage (missing)
+    steps:
+      - "[PUT /api/masters/holding-companies/{HC01 id}] As MANAGER => [403]"
+    auto: API
+
+  - id: MASTER-UPDATE-016
+    func: [F-MST-09]
+    sc: Update is always rejected for the 'countries' kind
+    t: PUT /api/masters/countries/{id} returns 409 regardless of payload
+    src: ["MasterManagementService.WriteAsync (kind == 'countries' short-circuit)"]
+    type: Negative
+    pri: P1
+    data: "kind=countries"
+    steps:
+      - "[PUT /api/masters/countries/{India id}] Body {code: 'IN', name: 'India Renamed'} => [409] 'Countries are shared reference data and cannot be changed from the tenant Masters screen.'"
+    auto: API
+
+  - id: MASTER-UPDATE-017
+    func: [F-MST-04]
+    sc: Coverage matrix - update behavior verified on a required-parent kind re-parenting between two valid parents
+    t: Confirms the same WriteAsync path used for holding-companies/LOB above also re-validates the parent on every update for sub-departments
+    src: ["MasterManagementService.WriteAsync (shared across all hierarchical kinds)"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    pre: "Tenant A has two active departments DEPT01 and DEPT02, and SubDepartment SUBDEPT06 currently parented to DEPT01."
+    data: "kind=sub-departments"
+    steps:
+      - "[PUT /api/masters/sub-departments/{SUBDEPT06 id}] Body {code: 'SUBDEPT06', name: 'SubDept', parentId: '{DEPT02 id}'} => [200] parentId={DEPT02 id}"
+    auto: API
+
+  - id: DEPT-UPDATE-001
+    func: [F-MST-16]
+    sc: Dedicated Department update replaces the record and reports the current employee count
+    t: PUT /api/departments/{id} returns the freshly computed employeeCount alongside the updated fields
+    src: ["DepartmentService.UpdateAsync"]
+    type: Positive
+    pri: P0
+    pre: "Tenant A department ENG has 2 employees assigned."
+    steps:
+      - "[PUT /api/departments/{ENG id}] Body {code: 'ENG', name: 'Engineering Dept', isActive: true} => [200] employeeCount=2"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Update_replaces_the_record_and_reports_the_employee_count"]
+
+  - id: DEPT-UPDATE-002
+    func: [F-MST-16]
+    sc: Dedicated Department update lets a department keep its own code and name
+    t: Resubmitting ENG's current code/name does not self-conflict
+    src: ["DepartmentService.FindConflictAsync (excludeId)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[PUT /api/departments/{ENG id}] Body {code: 'ENG', name: 'Engineering Dept', isActive: true} (unchanged) => [200]"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Update_lets_a_department_keep_its_own_code_and_name"]
+
+  - id: DEPT-UPDATE-003
+    func: [F-MST-16]
+    sc: Dedicated Department update rejects a code another department already uses
+    t: A field-level conflict error is returned, matching DEPT-CREATE-003's shape
+    src: ["DepartmentService.FindConflictAsync"]
+    type: Negative
+    pri: P1
+    pre: "Tenant A also has department FIN."
+    steps:
+      - "[PUT /api/departments/{FIN id}] Body {code: 'ENG', name: 'Finance'} => [409] field 'code'"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Update_rejects_a_code_another_department_already_uses"]
+
+  - id: DEPT-UPDATE-004
+    func: [F-MST-16, F-MST-34]
+    sc: Dedicated Department update of another tenant's department is not found and changes nothing
+    t: Mirrors MASTER-UPDATE-012 for the dedicated endpoint
+    src: ["DepartmentService.UpdateAsync (tenant-filtered lookup)"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A record, B caller
+    steps:
+      - "[PUT /api/departments/{ENG id}] As a Tenant B HRAdmin => [404]"
+    auto: API
+    ex: ["xU:DepartmentServiceTests.Update_of_another_tenants_department_is_not_found_and_changes_nothing"]
+
+  - id: DESIG-UPDATE-001
+    func: [F-MST-18, F-MST-34]
+    sc: Dedicated Designation update of another tenant's designation is not found and changes nothing
+    t: Mirrors DEPT-UPDATE-004 for designations
+    src: ["DesignationService.UpdateAsync"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A record, B caller
+    steps:
+      - "[PUT /api/designations/{SE2 id}] As a Tenant B HRAdmin => [404]"
+    auto: API
+    ex: ["xU:DesignationServiceTests.Update_of_another_tenants_designation_is_not_found_and_changes_nothing"]
+
+  - id: DESIG-UPDATE-002
+    func: [F-MST-18]
+    sc: Dedicated Designation update requires Designation.Edit
+    t: A role holding only Designation.View cannot update
+    src: ["[HasPermission(Permissions.Designation.Edit)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: MANAGER
+    perm: Designation.View (held); Designation.Edit (missing)
+    steps:
+      - "[PUT /api/designations/{SE2 id}] As MANAGER => [403]"
+    auto: API

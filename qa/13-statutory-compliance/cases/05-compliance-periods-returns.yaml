@@ -1,0 +1,321 @@
+sheet: Stat_ComplianceReturns
+submodule: Compliance Periods and Return Batches
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: STAT-COMP-001
+    func: [F-STAT-061, F-STAT-063]
+    sc: Creating a compliance period
+    t: CreatePeriodAsync validates the date range and normalises JurisdictionCode
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs CreatePeriodAsync"
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: PayrollAdmin (with StatutoryCompliance.ManagePeriods granted)
+    perm: Payroll.StatutoryCompliance.ManagePeriods
+    tenant: "T1 (DEMO01)"
+    data: "periodStart=2026-09-30, periodEnd=2026-09-01 (inverted); jurisdictionCode=' in '"
+    steps:
+      - "[POST /api/payroll/statutory-compliance/periods] with PeriodEnd before PeriodStart => [400] Invalid, 'Period End cannot be earlier than Period Start.'"
+      - "[POST /api/payroll/statutory-compliance/periods] with jurisdictionCode=' in ' and a valid range => [201] created; stored JurisdictionCode='IN'"
+    auto: API
+
+  - id: STAT-COMP-002
+    func: [F-STAT-062, F-STAT-064]
+    sc: Duplicate compliance period detection
+    t: A duplicate (Jurisdiction, ComplianceType, PeriodStart, PeriodEnd) is Conflict, and no API can ever move a period to Cancelled to free the slot
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs CreatePeriodAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "A period (IN, ProvidentFund, 2026-09-01..2026-09-30) already exists, Status=Open"
+    role: PayrollAdmin (with StatutoryCompliance.ManagePeriods granted)
+    perm: Payroll.StatutoryCompliance.ManagePeriods
+    tenant: "T1 (DEMO01)"
+    data: "identical jurisdiction/type/date range"
+    steps:
+      - "[POST /api/payroll/statutory-compliance/periods] identical (jurisdiction, type, dates) request => [409] Conflict, 'Compliance period already exists.'"
+      - "[Manual] full grep of IPayrollStatutoryComplianceService.cs => no Cancel/Close member exists, so this Conflict predicate's Cancelled exemption can never be reached through this API today"
+    auto: API
+    cr: [CR-231]
+
+  - id: STAT-COMP-003
+    func: [F-STAT-065]
+    sc: GenerateAsync requires an Open period
+    t: A period at any status other than Open cannot have a return generated - though this can never be exercised via the API since no status transition exists
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs GenerateAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: An Open compliance period with matching statutory source data
+    role: PayrollAdmin (with StatutoryCompliance.Generate granted)
+    perm: Payroll.StatutoryCompliance.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-compliance/periods/{id}/returns] on the Open period => [201] Generated; this guard is documented as effectively unreachable in normal operation (F-STAT-064) since no API ever moves a period away from Open"
+    auto: API
+
+  - id: STAT-COMP-004
+    func: [F-STAT-066]
+    sc: One active return per period
+    t: A second Generate for a period with an existing non-Cancelled return batch is Conflict
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: A compliance period already has a Generated return batch
+    role: PayrollAdmin (with StatutoryCompliance.Generate granted)
+    perm: Payroll.StatutoryCompliance.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-compliance/periods/{id}/returns] a second Generate for the same period => [409] Conflict, 'An active return already exists for this period.'"
+    auto: API
+    cr: [CR-231]
+
+  - id: STAT-COMP-005
+    func: [F-STAT-067, F-STAT-068]
+    sc: Generate sources rows from Approved/Finalized runs only
+    t: GenerateAsync only pulls PayrollStatutoryResult rows whose owning run is Approved/Finalized, matched by StatutoryType and JurisdictionCode; an empty match set is Conflict
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "A compliance period (IN, ProvidentFund) whose overlapping payroll run is still Calculated (not yet Approved/Finalized)"
+    role: PayrollAdmin (with StatutoryCompliance.Generate granted)
+    perm: Payroll.StatutoryCompliance.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-compliance/periods/{id}/returns] while the only overlapping run is still Calculated (not Approved/Finalized) => [409] Conflict, 'MissingStatutorySource: no persisted statutory results match this period.'"
+      - "[POST /api/payroll/statutory-compliance/periods/{id}/approve-run-then-retry-not-applicable]  approve the run, then retry Generate => [201] Generated, now that the run qualifies"
+    auto: API
+
+  - id: STAT-COMP-006
+    func: [F-STAT-068]
+    sc: Recalculation accumulation corrupts return generation
+    t: A return generated after a recalculation double-counts an employee's contribution across every retained attempt
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    pre: "Following STAT-INT-005/006's setup: the overlapping Approved payroll run has TWO retained calculation attempts' worth of PayrollStatutoryResult rows for one employee (one PF row per attempt, per CR-219)"
+    role: PayrollAdmin (with StatutoryCompliance.Generate granted)
+    perm: Payroll.StatutoryCompliance.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-compliance/periods/{id}/returns] generate a return for the period covering the recalculated run => [201] Generated; the resulting PayrollStatutoryReturnEmployee row's EmployeeContribution SUMS both attempts' PF amounts together (group.Sum(x => x.EmployeeAmount) over the unfiltered PayrollStatutoryResult query), overstating the employee's true, single-attempt contribution"
+    db: "PayrollStatutoryReturnEmployees.EmployeeContribution reflects the sum across BOTH retained attempts, not just the current one"
+    auto: DB-assisted
+    cr: [CR-219]
+
+  - id: STAT-COMP-007
+    func: [F-STAT-069]
+    sc: Batch numbering
+    t: BatchNumber follows STAT/{ComplianceType}/{yyyyMM}/{guid} truncated to 36 characters
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs GenerateAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: A qualifying compliance period
+    role: PayrollAdmin (with StatutoryCompliance.Generate granted)
+    perm: Payroll.StatutoryCompliance.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-compliance/periods/{id}/returns] => [201] the returned BatchNumber matches the pattern STAT/{ComplianceType}/{yyyyMM}/... and is exactly 36 characters or fewer (truncated) - it is not a sequential, incrementing counter"
+    auto: API
+
+  - id: STAT-COMP-008
+    func: [F-STAT-070, F-STAT-071]
+    sc: Return row aggregation and the always-null PT identifier
+    t: GrossWages equals StatutoryWages for a return row, and PtRegistrationReference is always null
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    pre: "A qualifying ProfessionalTax compliance period with one employee's PT statutory results"
+    role: PayrollAdmin (with StatutoryCompliance.Generate granted)
+    perm: Payroll.StatutoryCompliance.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-compliance/periods/{id}/returns] => [201] Generated"
+      - "[GET /api/payroll/statutory-compliance/returns/{id}] => [200] the employee row's GrossWages and StatutoryWages are IDENTICAL (both the same CalculationBasis sum); PtRegistrationReference is null despite the field existing specifically for this compliance type"
+    db: "PayrollStatutoryReturnEmployees.PtRegistrationReference is always null"
+    auto: API
+    cr: [CR-224]
+
+  - id: STAT-COMP-009
+    func: [F-STAT-072]
+    sc: Identifier source is the legacy Employee record, not the statutory profile
+    t: Return row Uan/EsicNumber/Pan are sourced from Employee.UanNumber/EsicNumber/PanNumber, not from EmployeeStatutoryProfile.Uan/EsiNumber
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs GenerateAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Following STAT-PROF-007's setup: Employee.UanNumber='100200300400' while EmployeeStatutoryProfile.Uan='999888777666' for the same employee"
+    role: PayrollAdmin (with StatutoryCompliance.Generate granted)
+    perm: Payroll.StatutoryCompliance.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-compliance/periods/{id}/returns] generate a ProvidentFund return covering this employee => [201] Generated"
+      - "[GET /api/payroll/statutory-compliance/returns/{id}] => [200] the row's Uan is '100200300400' (the legacy Employee field), NOT '999888777666' (the EmployeeStatutoryProfile value actually used by the calculation engine)"
+    auto: API
+    cr: [CR-225]
+
+  - id: STAT-COMP-010
+    func: [F-STAT-073, F-STAT-074]
+    sc: ValidationStatus is always Valid; the Invalid guard is dead code
+    t: Every generated return row is ValidationStatus=Valid, making ValidateAsync's own Invalid-blocking guard unreachable
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs GenerateAsync, ValidateAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: A Generated return batch with several employee rows
+    role: PayrollAdmin (with StatutoryCompliance.Validate granted)
+    perm: Payroll.StatutoryCompliance.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/statutory-compliance/returns/{id}] => [200] every employee row shows ValidationStatus=Valid"
+      - "[POST /api/payroll/statutory-compliance/returns/{id}/validate] => [200] Validated succeeds - no data condition exists in this codebase today that could ever make this call return Conflict('Return contains validation errors.')"
+    auto: API
+    cr: [CR-229]
+
+  - id: STAT-COMP-011
+    func: [F-STAT-075, F-STAT-076]
+    sc: Validate lifecycle and its compare-and-swap
+    t: ValidateAsync requires Generated/Validated, is idempotent on repeat, and uses a compare-and-swap keyed on Status+ConcurrencyVersion
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs ValidateAsync"
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P0
+    sev: High
+    pre: A Generated return batch
+    role: PayrollAdmin (with StatutoryCompliance.Validate granted)
+    perm: Payroll.StatutoryCompliance.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-compliance/returns/{id}/validate] first call => [200] Status=Validated; totals reconciled from the employee rows"
+      - "[POST /api/payroll/statutory-compliance/returns/{id}/validate] a repeat call while already Validated => [200] Success, 'Return was already validated.' (idempotent)"
+      - "[Manual] simulate a concurrent modification (stale ConcurrencyVersion at the time of the ExecuteUpdateAsync) => [409] Conflict, 'Return was changed by another operation.'"
+    auto: API
+
+  - id: STAT-COMP-012
+    func: [F-STAT-077]
+    sc: Approve - opt-in self-approval guard
+    t: The generator can approve their own return unless the tenant has RequireMakerChecker+PreventSelfApproval enabled
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs ApproveAsync -> PayrollApprovalGuard"
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    sev: High
+    pre: A Validated return batch generated by user U1; two tenant states are exercised
+    role: PayrollAdmin (U1, holding StatutoryCompliance.Generate AND .Approve)
+    perm: Payroll.StatutoryCompliance.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-compliance/returns/{id}/approve] as U1 (the generator), with NO PayrollControlConfiguration row for the tenant (the default) => [200] Approved - self-approval succeeds"
+      - "[Manual] configure PayrollControlConfiguration with RequireMakerChecker=true and PreventSelfApproval=true, repeat with a new Validated batch generated by U1 => [400] Invalid, 'SelfApprovalNotAllowed: the user who created this payroll action cannot approve it.'"
+    auto: API
+    cr: [CR-233]
+
+  - id: STAT-COMP-013
+    func: [F-STAT-078]
+    sc: MarkFiled is a manual record only
+    t: MarkFiledAsync requires Approved/Exported, applies the same self-approval guard against GeneratedByUserId, and its history explicitly disclaims any real portal submission
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs MarkFiledAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: An Approved return batch
+    role: PayrollAdmin (with StatutoryCompliance.MarkFiled granted)
+    perm: Payroll.StatutoryCompliance.MarkFiled
+    tenant: "T1 (DEMO01)"
+    data: "externalReference='EPFO-ACK-12345'"
+    steps:
+      - "[POST /api/payroll/statutory-compliance/returns/{id}/mark-filed] with an externalReference => [200] Status=Filed, ExternalReference stored"
+      - "[DB] inspect PayrollStatutoryComplianceHistories' new row => Message is literally 'Filed status recorded manually; no portal submission was performed.', confirming this action never contacts any government system"
+      - "[POST /api/payroll/statutory-compliance/returns/{id}/mark-filed] on a batch still at Generated (not Approved/Exported) => [409] Conflict, 'Only approved or exported returns can be marked filed.'"
+    db: "PayrollStatutoryComplianceHistories message text"
+    auto: API
+    cr: [CR-222]
+
+  - id: STAT-COMP-014
+    func: [F-STAT-079]
+    sc: Export is a generic CSV, not an official government file
+    t: ExportAsync produces a generic CSV, records history/timestamps only on the first Approved->Exported transition, and re-export is silent afterward
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs ExportAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: An Approved return batch
+    role: PayrollAdmin (with StatutoryCompliance.Export granted)
+    perm: Payroll.StatutoryCompliance.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/statutory-compliance/returns/{id}/export] first export => [200] text/csv file returned; Status transitions Approved->Exported; ExportedAtUtc/ExportedByUserId stamped; one new PayrollStatutoryComplianceHistory row whose message states 'Generic statutory CSV exported; not an official government upload file.'"
+      - "[GET /api/payroll/statutory-compliance/returns/{id}/export] a second export of the SAME already-Exported batch => [200] the identical CSV content is returned again, but NO new history row is recorded and ExportedAtUtc is unchanged - there is no re-export counter or audit trail for repeat downloads"
+      - "[GET /api/payroll/statutory-compliance/returns/{id}/export] on a batch still at Generated (not yet Approved) => [409] Conflict, 'Only approved statutory returns can be exported.'"
+    db: "PayrollStatutoryComplianceHistories gains exactly one Exported row regardless of how many times export is called"
+    auto: API
+
+  - id: STAT-COMP-015
+    func: [F-STAT-080]
+    sc: No Cancel action exists for a return batch
+    t: A generated return can never be withdrawn - it can only move forward or be abandoned in place
+    src: "Backend/HRMS.Application/Abstractions/IPayrollStatutoryComplianceService.cs; PayrollOutputsController.cs"
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    sev: Medium
+    pre: A Generated return batch created against the wrong compliance period by mistake
+    role: PayrollAdmin (with StatutoryCompliance.Cancel granted)
+    perm: Payroll.StatutoryCompliance.Cancel
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/statutory-compliance/returns/{id}/cancel] any attempt to cancel => [404] the route does not exist (no cancel action is mapped for a statutory return batch, despite StatutoryComplianceCancel being a declared, seedable permission)"
+      - "[POST /api/payroll/statutory-compliance/periods/{id}/returns] attempt to generate a replacement return for the same period => [409] Conflict, 'An active return already exists for this period.' (F-STAT-066's guard permanently blocks a replacement since the erroneous batch can never become Cancelled)"
+    auto: Manual only
+    cr: [CR-231]
+
+  - id: STAT-COMP-016
+    func: [F-STAT-141]
+    sc: Return register has no paging
+    t: GetAsync returns the full Employees collection for a batch with no Skip/Take, unlike every other listing endpoint in this module
+    src: "Backend/HRMS.Application/Services/PayrollStatutoryComplianceService.cs LoadAsync, GetAsync"
+    type: Boundary
+    tags: [Integration-Concurrency]
+    pri: P2
+    sev: Medium
+    pre: "A return batch with 500+ employee rows (a large-tenant scenario)"
+    role: PayrollAdmin (with StatutoryCompliance.View granted)
+    perm: Payroll.StatutoryCompliance.View
+    tenant: "T1 (DEMO01)"
+    data: "500 employee rows"
+    steps:
+      - "[GET /api/payroll/statutory-compliance/returns/{id}] => [200] all 500+ employee rows are returned in a single response with no pageSize/page parameter accepted or honored at all"
+    auto: API

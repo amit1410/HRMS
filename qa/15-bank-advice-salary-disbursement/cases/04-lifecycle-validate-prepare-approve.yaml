@@ -1,0 +1,214 @@
+sheet: BankAdv_Lifecycle_Validate_Prepare_Approve
+submodule: Batch Lifecycle - Validate, Prepare & Approve
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-LIFE-001
+    func: [F-BANKADV-033]
+    sc: Validate/Prepare require Draft
+    t: Both Validate and Prepare are Conflict when the batch is not currently Draft
+    src: "BankAdviceService.SetPreparedAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "BATCH1 is already Status=Prepared"
+    role: HRAdmin (custom role holding BankAdvice.Validate)
+    perm: Payroll.BankAdvice.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/validate] => [409] Conflict (\"Only a draft bank advice batch can be validated or prepared.\")"
+      - "[POST /api/payroll/bank-advice/{BATCH1}/prepare] => [409] Conflict, same message"
+    auto: API
+
+  - id: BANKADV-LIFE-002
+    func: [F-BANKADV-034]
+    sc: Recalculate runs on every Validate/Prepare call
+    t: TotalEmployees/TotalAmount are recomputed from only the currently-Valid payments each time Validate or Prepare is called
+    src: "BankAdviceService.SetPreparedAsync -> Recalculate"
+    type: Contract
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: "BATCH1 (Draft) has 2 Valid payments (NetPay 5000 and 6000) and 1 Invalid payment (NetPay 3000, missing IFSC)"
+    role: HRAdmin (custom role holding BankAdvice.Validate)
+    perm: Payroll.BankAdvice.Validate
+    tenant: "T1 (DEMO01)"
+    data: 3 BankAdvicePayment rows
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/validate] => [200] TotalEmployees==2, TotalAmount==11000.00 (the Invalid row's 3000 excluded)"
+    auto: API
+
+  - id: BANKADV-LIFE-003
+    func: [F-BANKADV-035]
+    sc: Prepare blocked by any invalid payment
+    t: PrepareAsync returns Conflict and leaves the batch at Draft when at least one payment is Invalid
+    src: "BankAdviceService.SetPreparedAsync(requireValid: true)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "BATCH1 (Draft) has 1 Invalid payment"
+    role: HRAdmin (custom role holding BankAdvice.Validate)
+    perm: Payroll.BankAdvice.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/prepare] => [409] Conflict (\"Bank advice contains payment validation errors.\")"
+      - "[GET /api/payroll/bank-advice/{BATCH1}] => [200] Status is still \"Draft\""
+    auto: API
+
+  - id: BANKADV-LIFE-004
+    func: [F-BANKADV-036]
+    sc: Validate on an invalid batch succeeds without transitioning
+    t: ValidateAsync returns 200 with a "completed with errors" message and logs ValidationFailed, but the batch stays Draft
+    src: "BankAdviceService.SetPreparedAsync(requireValid: false) -> History(ValidationFailed)"
+    type: Negative
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "BATCH1 (Draft) has 1 Invalid payment"
+    role: HRAdmin (custom role holding BankAdvice.Validate)
+    perm: Payroll.BankAdvice.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/validate] => [200] message contains \"validation completed with errors\", Status still \"Draft\""
+      - "[GET /api/payroll/bank-advice/{BATCH1}] => [200] History contains a ValidationFailed-type event"
+    auto: API
+
+  - id: BANKADV-LIFE-005
+    func: [F-BANKADV-037]
+    sc: CONFIRMED - Validate silently commits to Prepared when everything is already valid
+    t: Calling Validate (not Prepare) on a batch where every payment is Valid still advances the batch to Prepared
+    src: "BankAdviceService.SetPreparedAsync (if (valid) branch runs regardless of requireValid)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Medium
+    pre: "BATCH2 (Draft) has every payment ValidationStatus=Valid"
+    role: HRAdmin (custom role holding BankAdvice.Validate)
+    perm: Payroll.BankAdvice.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH2}/validate] => [200] response.Status == \"Prepared\" (not still \"Draft\")"
+      - "[GET /api/payroll/bank-advice/{BATCH2}] => [200] History contains a Prepared-type event, not merely a validation-only event"
+    auto: API
+    cr: [CR-266]
+    secc: true
+
+  - id: BANKADV-LIFE-006
+    func: [F-BANKADV-038]
+    sc: Lost concurrency race on Prepare
+    t: A Prepare call whose ConcurrencyVersion has been superseded by another completed transition returns Conflict, not a 500
+    src: "BankAdviceService.SetPreparedAsync (ExecuteUpdateAsync)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "BATCH1 (Draft, fully Valid) is loaded by two concurrent callers; caller A's Prepare completes first"
+    role: HRAdmin (custom role holding BankAdvice.Validate)
+    perm: Payroll.BankAdvice.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/prepare] as caller A => [200] Prepared"
+      - "[POST /api/payroll/bank-advice/{BATCH1}/prepare] as caller B, using the stale pre-A ConcurrencyVersion in-flight => [409] Conflict (\"Bank advice was changed by another operation.\")"
+    auto: API
+
+  - id: BANKADV-LIFE-007
+    func: [F-BANKADV-039]
+    sc: Approve requires Prepared
+    t: ApproveAsync is Conflict when the batch is not exactly Status=Prepared
+    src: "BankAdviceService.ApproveAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "BATCH1 is Status=Draft"
+    role: HRAdmin (custom role holding BankAdvice.Approve)
+    perm: Payroll.BankAdvice.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/approve] => [409] Conflict (\"Only a prepared bank advice batch can be approved.\")"
+    auto: API
+
+  - id: BANKADV-LIFE-008
+    func: [F-BANKADV-040]
+    sc: Opt-in self-approval guard
+    t: Approve is blocked only when PayrollControlConfiguration has RequireMakerChecker AND PreventSelfApproval both enabled and the approver is the same user who generated the batch
+    src: "BankAdviceService.ApproveAsync -> PayrollApprovalGuard.ValidateAsync"
+    type: Authorization
+    tags: [Security, Negative, Positive]
+    pri: P0
+    sev: High
+    pre: "BATCH1 is Prepared, GeneratedByUserId == USER1; tenant PayrollControlConfiguration has RequireMakerChecker=true, PreventSelfApproval=true"
+    role: USER1 (also holds BankAdvice.Approve)
+    perm: Payroll.BankAdvice.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/approve] as USER1 (the same generator) => [400] Invalid (\"SelfApprovalNotAllowed...\")"
+      - "[Manual] with PreventSelfApproval=false (opt-out), the SAME USER1 approve call => [200] Approved (guard does not apply)"
+    auto: API
+    secc: true
+
+  - id: BANKADV-LIFE-009
+    func: [F-BANKADV-041]
+    sc: Approve's own defense-in-depth valid-payments check
+    t: Approve requires every payment ValidationStatus=Valid at the moment of approval, even though Prepared should already imply this
+    src: "BankAdviceService.ApproveAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: "BATCH1 is Prepared; via a direct DB edit for test setup, one payment's ValidationStatus is forced back to Invalid"
+    role: HRAdmin (custom role holding BankAdvice.Approve)
+    perm: Payroll.BankAdvice.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/approve] => [409] Conflict (\"All payment instructions must pass validation before approval.\")"
+    auto: DB-assisted
+
+  - id: BANKADV-LIFE-010
+    func: [F-BANKADV-042]
+    sc: Approve's total-reconciliation check
+    t: Approve compares batch.TotalAmount against the full payments sum and rejects a disagreement
+    src: "BankAdviceService.ApproveAsync -> Recalculate"
+    type: Negative
+    tags: [Boundary]
+    pri: P3
+    sev: Low
+    pre: "BATCH1 is Prepared; via a direct DB edit, batch.TotalAmount is forced to an incorrect value that disagrees with the payments sum"
+    role: HRAdmin (custom role holding BankAdvice.Approve)
+    perm: Payroll.BankAdvice.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/approve] => [409] Conflict (\"Bank advice total does not reconcile with its payment instructions.\")"
+    auto: DB-assisted
+
+  - id: BANKADV-LIFE-011
+    func: [F-BANKADV-043, F-BANKADV-044]
+    sc: Successful approval stamps and records history
+    t: A valid Approve stamps ApprovedAtUtc/ApprovedByUserId and records an Approved history event, guarded by concurrency compare-and-swap
+    src: "BankAdviceService.ApproveAsync -> History(Approved)"
+    type: Positive
+    tags: []
+    pri: P0
+    sev: High
+    pre: "BATCH1 is Prepared, all payments Valid, no self-approval conflict"
+    role: HRAdmin (custom role holding BankAdvice.Approve)
+    perm: Payroll.BankAdvice.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/approve] => [200] Status==\"Approved\", ApprovedAtUtc set"
+      - "[GET /api/payroll/bank-advice/{BATCH1}] => [200] History contains an Approved-type event"
+    auto: API

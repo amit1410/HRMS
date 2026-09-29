@@ -1,0 +1,117 @@
+sheet: VPay_Override
+submodule: Manual override - validation, missing status guard, and the confirmed silent no-op (CR-201)
+defaults:
+  role: HRADMIN
+  perm: "Payroll.VariablePay.Override"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.VariablePay.Override granted and an award exists under a plan version with AllowManualOverride=true, unless stated."
+  data: "n/a unless stated."
+  sev: Critical
+  reg: true
+
+cases:
+  - id: VPAY-OVR-001
+    func: [F-VPAY-055]
+    sc: OverrideAmount and Reason are required
+    t: A negative OverrideAmount or blank Reason is rejected as Invalid
+    src: ["VariablePayService.OverrideAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/override] OverrideAmount=-1, Reason='Adjustment' => [400] A non-negative amount and reason are required."
+      - "[POST /api/payroll/variable-pay-awards/{id}/override] OverrideAmount=5000, Reason='' => [400] A non-negative amount and reason are required."
+    auto: API
+
+  - id: VPAY-OVR-002
+    func: [F-VPAY-056]
+    sc: Override requires AllowManualOverride on the version
+    t: Overriding an award whose plan version has AllowManualOverride=false is Forbidden
+    src: ["VariablePayService.OverrideAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/override] award's version AllowManualOverride=false, OverrideAmount=5000, Reason='Adjustment' => [403] This plan version does not allow overrides."
+    auto: API
+
+  - id: VPAY-OVR-003
+    func: [F-VPAY-057]
+    sc: Override has no Status precondition - an Approved award accepts an override request
+    t: Unlike every other mutating action in this module, Override applies with no check on the award's current Status
+    src: ["VariablePayService.OverrideAsync (full method - no Status guard)"]
+    type: Boundary
+    pri: P0
+    cr: [CR-201]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/approve] award Status=Calculated => [200] Status=Approved"
+      - "[POST /api/payroll/variable-pay-awards/{id}/override] the now-Approved award, OverrideAmount=9999, Reason='Post-approval correction' => [200] response reports Status=Calculated, CalculatedAmount=9999 (accepted with no Conflict, despite the award being Approved)"
+    auto: API
+
+  - id: VPAY-OVR-004
+    func: [F-VPAY-058]
+    sc: HEADLINE - Override's apparent success is never persisted to the award row
+    t: The response to a successful-looking Override reflects the new amount/status, but nothing is written to the database
+    src: ["VariablePayService.OverrideAsync (AsNoTracking load, no Update/Attach/ExecuteUpdate, SaveChangesAsync persists nothing)"]
+    type: Boundary
+    pri: P0
+    sev: Critical
+    cr: [CR-201]
+    steps:
+      - "[GET /api/payroll/variable-pay-awards/{id}] before override, award CalculatedAmount=10000, Status=Calculated => [200] CalculatedAmount=10000, Status=Calculated"
+      - "[POST /api/payroll/variable-pay-awards/{id}/override] OverrideAmount=1, Reason='Correction' => [200] response body shows CalculatedAmount=1, ApprovedAmount=null, Status=Calculated"
+      - "[GET /api/payroll/variable-pay-awards/{id}] immediately after (fresh query) => [200] CalculatedAmount=10000, Status=Calculated (unchanged - the override was never persisted, proving the response was a fabricated success)"
+    auto: API
+
+  - id: VPAY-OVR-005
+    func: [F-VPAY-059]
+    sc: HEADLINE - Override's history entry is never persisted either
+    t: An AwardOverridden history event never appears after a successful-looking Override call
+    src: ["VariablePayService.OverrideAsync (AddHistory appends only to the detached in-memory History collection)"]
+    type: Boundary
+    pri: P0
+    sev: Critical
+    cr: [CR-201]
+    steps:
+      - "[GET /api/payroll/variable-pay-awards/{id}/history] before override => [200] N history rows, none EventType=AwardOverridden"
+      - "[POST /api/payroll/variable-pay-awards/{id}/override] OverrideAmount=1, Reason='Correction' => [200] apparent success"
+      - "[GET /api/payroll/variable-pay-awards/{id}/history] immediately after => [200] still exactly N history rows - no AwardOverridden row was added"
+    auto: API
+
+  - id: VPAY-OVR-006
+    func: [F-VPAY-060]
+    sc: The award register also reflects the un-overridden original values
+    t: A subsequent GetAwardsAsync listing for the same award shows the original CalculatedAmount, confirming the no-op from the read-path other than GetAsync
+    src: ["VariablePayService.GetAwardsAsync (re-queries the database)"]
+    type: Boundary
+    pri: P1
+    cr: [CR-201]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/override] OverrideAmount=1, Reason='Correction' => [200] apparent success"
+      - "[GET /api/payroll/variable-pay-awards?employeeId={employeeId}] => [200] the award's CalculatedAmount in the listing is still the original pre-override value"
+    auto: API
+
+  - id: VPAY-OVR-007
+    func: [F-VPAY-061]
+    sc: A cross-tenant award id on override is NotFound
+    t: Overriding a Tenant A award while signed in as Tenant B is NotFound, not Forbidden
+    src: ["VariablePayService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{tenantAAwardId}/override] signed in as Tenant B HRAdmin, OverrideAmount=100, Reason='x' => [404] Variable-pay award not found."
+    auto: API
+
+  - id: VPAY-OVR-008
+    func: [F-VPAY-062]
+    sc: Override requires its own distinct permission
+    t: A role holding only Approve (not Override) cannot call the override endpoint
+    src: ["VariablePayController.Override"]
+    type: Authorization
+    pri: P1
+    role: HRADMIN
+    perm: "Payroll.VariablePay.Approve"
+    tags: [Authorization]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/override] signed in with ONLY Payroll.VariablePay.Approve granted (Override NOT granted), OverrideAmount=100, Reason='x' => [403] Forbidden"
+    auto: API

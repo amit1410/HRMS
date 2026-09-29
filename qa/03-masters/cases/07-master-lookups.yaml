@@ -1,0 +1,228 @@
+sheet: Masters_Lookups
+submodule: Master Lookup / Dropdown Endpoints (api/master-data/*)
+defaults:
+  role: HR_ADMIN
+  perm: Department.View
+  tenant: A
+  pre: "Tenant A signed in as a user holding the HRAdmin role (which includes Geography.View/Manage, Department.View, Designation.View and EmploymentHistory.View)."
+  data: "kind=holding-companies unless stated otherwise in the case's steps."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: LOOKUP-001
+    func: [F-MST-24]
+    sc: Default lookup call returns only active records
+    t: GET /api/master-data/holding-companies with no query string returns active holding companies only, matching ActiveOnly's default of true
+    src: ["MasterLookupService.QueryAsync (ActiveOnly defaults to true)"]
+    type: Positive
+    pri: P0
+    smoke: true
+    pre: "Tenant A has active holding company HC01 and inactive holding company HC03."
+    steps:
+      - "[GET /api/master-data/holding-companies] Call with no query string => [200] items contains HC01, does not contain HC03"
+    auto: API
+
+  - id: LOOKUP-002
+    func: [F-MST-24]
+    sc: activeOnly=false includes inactive records
+    t: Explicitly disabling the active filter returns the full set
+    src: ["MasterLookupService.QueryAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/master-data/holding-companies?activeOnly=false] Call => [200] items contains both HC01 and HC03"
+    auto: API
+
+  - id: LOOKUP-003
+    func: [F-MST-24, F-MST-25]
+    sc: Search matches code or name as a substring
+    t: A partial code/name term narrows the lookup results
+    src: ["MasterLookupService.QueryAsync (search is { Length: > 0 })"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/master-data/holding-companies?search=HC01] Call => [200] items contains only records whose Code or Name contains 'HC01'"
+    auto: API
+
+  - id: LOOKUP-003B
+    func: [F-MST-24]
+    sc: Lookup search case-sensitivity is provider-dependent, unlike the generic engine's list search
+    t: A lower-case search term against an upper-case-stored code is not guaranteed to match, because MasterLookupService applies no ToLower normalization (contrast MASTER-LIST-002, which explicitly documents case-insensitive behavior for the same kind of search on the /api/masters/{kind} route)
+    src: ["MasterLookupService.QueryAsync (raw .Contains(search), no ToLower)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P2
+    sev: Low
+    steps:
+      - "[GET /api/master-data/holding-companies?search=hc01] Call against the QA stack's configured provider => [200] record and confirm whether 'hc01' matches the stored 'HC01' - do not assume either way; document the actual provider-dependent result observed"
+    auto: API
+    cr: [CR-36]
+
+  - id: LOOKUP-004
+    func: [F-MST-24]
+    sc: parentId narrows a hierarchical lookup to only that parent's children
+    t: Cross-reference of HIER-003/HIER-004; re-verified here as part of the lookup functionality group rather than duplicated
+    src: ["MasterLookupService.GetSubDepartmentsAsync and equivalents"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[GET /api/master-data/sub-departments?parentId={DEPT01 id}] Call => [200] items contains only DEPT01's own sub-departments (full scenario detailed in HIER-003/HIER-004; repeated here only to keep this sheet's functionality coverage complete, not to re-author duplicate steps)"
+    auto: API
+    cm: "Deliberate cross-reference, not a duplicate: the coverage matrix in the module README lists this functionality against both the Hierarchy and Lookups sheets."
+
+  - id: LOOKUP-005
+    func: [F-MST-24]
+    sc: The lookup DTO carries only id/code/name/isActive - no description and no parent information
+    t: Even for a hierarchical kind, the lookup response never includes the parent's id, code or name; only List/GetById on the generic engine (or the dedicated Department/Designation endpoints) expose that
+    src: ["MasterLookupDto(Guid Id, string Code, string Name, bool IsActive)"]
+    type: Contract
+    pri: P2
+    sev: Low
+    data: "kind=sub-departments"
+    steps:
+      - "[GET /api/master-data/sub-departments?parentId={DEPT01 id}] Call => [200] each item has exactly id/code/name/isActive; no description, parentId, parentCode or parentName field is present anywhere in the response"
+    auto: API
+
+  - id: LOOKUP-006
+    func: [F-MST-24]
+    sc: Default lookup ordering is Code ascending
+    t: Without an explicit SortOrder column, results come back alphabetically by Code
+    src: ["MasterLookupService.QueryAsync (.OrderBy(Code))"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Low
+    data: "kind=cost-centers"
+    steps:
+      - "[GET /api/master-data/cost-centers] Call with at least CC01/CC02/CC03 seeded => [200] items ordered CC01, CC02, CC03"
+    auto: API
+
+  - id: LOOKUP-007
+    func: [F-MST-15, F-MST-26]
+    sc: Grade/Employee Type/Position Change Reason lookups order by SortOrder first, Code second
+    t: Two records with the same SortOrder fall back to Code order; a record with a lower SortOrder always precedes one with a higher SortOrder regardless of Code
+    src: ["MasterLookupService.QuerySortedAsync (.OrderBy(SortOrder).ThenBy(Code))"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    pre: "Tenant A has Grade G-SENIOR (SortOrder=1, Code='G-SENIOR') and Grade G-JUNIOR (SortOrder=2, Code='G-JUNIOR') - Code order alone would put G-JUNIOR first, SortOrder puts G-SENIOR first."
+    data: "kind=grades"
+    steps:
+      - "[GET /api/master-data/grades] Call => [200] G-SENIOR appears before G-JUNIOR, confirming SortOrder (not Code) is the primary sort key"
+    auto: API
+
+  - id: LOOKUP-008
+    func: [F-MST-24, F-MST-25]
+    sc: Designation lookup is gated by Designation.View, not Department.View like the other 14 kinds
+    t: A role holding Department.View but not Designation.View can browse every other lookup kind but is refused on designations
+    src: ["MasterLookupController.GetDesignations ([HasPermission(Permissions.Designation.View)])"]
+    type: Authorization
+    tags: [Negative]
+    pri: P1
+    role: "A role with Department.View but not Designation.View (no seeded role has exactly this split; construct a custom test role)"
+    steps:
+      - "[GET /api/master-data/departments] As the constructed role => [200]"
+      - "[GET /api/master-data/designations] As the constructed role => [403]"
+    auto: API
+    cr: [CR-30]
+
+  - id: LOOKUP-009
+    func: [F-MST-24, F-MST-25]
+    sc: Position Change Reasons lookup is gated by EmploymentHistory.View, a third distinct permission
+    t: A role holding Department.View and Designation.View but not EmploymentHistory.View can read most lookups but is refused on position-change-reasons
+    src: ["MasterLookupController.GetPositionChangeReasons ([HasPermission(Permissions.EmploymentHistory.View)])"]
+    type: Authorization
+    tags: [Negative]
+    pri: P1
+    role: "A role with Department.View and Designation.View but not EmploymentHistory.View (construct a custom test role)"
+    steps:
+      - "[GET /api/master-data/position-change-reasons] As the constructed role => [403]"
+    auto: API
+
+  - id: LOOKUP-010
+    func: [F-MST-24, F-MST-27]
+    sc: Bank is readable through the lookup endpoint, confirming it is the ONLY surface where Bank data can be reached
+    t: GET /api/master-data/banks succeeds and returns the seeded banks, while no create/update/delete route exists for the same data
+    src: ["MasterLookupService.GetBanksAsync"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    data: "kind=banks"
+    steps:
+      - "[GET /api/master-data/banks] Call => [200] items contains the tenant's seeded banks"
+      - "[POST /api/masters/banks] Attempt to create a new bank through the generic engine => [404] 'Master type is not supported.'"
+    auto: API
+    cr: [CR-31]
+
+  - id: LOOKUP-011
+    func: [F-MST-24, F-MST-33]
+    sc: Lookup endpoints require authentication
+    t: An anonymous caller is refused
+    src: ["[Authorize] + [HasPermission]"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    steps:
+      - "[GET /api/master-data/holding-companies] With no token => [401]"
+    auto: API
+
+  - id: LOOKUP-012
+    func: [F-MST-24, F-MST-34]
+    sc: Lookups only ever return the caller's own tenant's records
+    t: Tenant B's lookup call for holding companies never includes any of Tenant A's records, even by coincidence of a matching search term
+    src: ["MasterLookupService queries are built on tenant-filtered DbSets (EF global query filter)"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: B
+    steps:
+      - "[GET /api/master-data/holding-companies?search=HC01] As a Tenant B HRAdmin => [200] items=[] (Tenant B has no HC01; Tenant A's HC01 is never visible here)"
+    auto: API
+
+  - id: LOOKUP-013
+    func: [F-MST-24]
+    sc: An unrecognized lookup path segment is a plain routing 404, not a service-level 'not supported' message
+    t: Unlike /api/masters/{kind}, MasterLookupController has one fixed route per kind (no {kind} route parameter), so an unknown segment never reaches any controller action
+    src: ["MasterLookupController (one [HttpGet('...')] attribute per kind, no {kind} template)"]
+    type: Negative
+    tags: [Contract]
+    pri: P3
+    sev: Low
+    steps:
+      - "[GET /api/master-data/not-a-real-kind] Call => [404] framework routing 404 (no ApiResponse body, unlike MASTER-LIST-010's application-level 404 for the generic engine)"
+    auto: API
+
+  - id: LOOKUP-014
+    func: [F-MST-25]
+    sc: A role with Geography.View can read the generic Masters list but is refused the equivalent lookup, and vice versa
+    t: "Concretely demonstrates CR-30 - the Employee seed role has Geography.View only (no Department.View), so it can list holding companies via the admin route but not via the dropdown route"
+    src: ["SeedData.RolePermissionMap[RoleNames.Employee] (Geography.View only, no Department.View)"]
+    type: Authorization
+    tags: [Security]
+    pri: P1
+    role: EMPLOYEE
+    perm: Geography.View (held); Department.View (missing)
+    steps:
+      - "[GET /api/masters/holding-companies] As EMPLOYEE => [200] (Geography.View is sufficient here)"
+      - "[GET /api/master-data/holding-companies] As EMPLOYEE => [403] (Department.View is required here instead)"
+    auto: API
+    cr: [CR-30]
+
+  - id: LOOKUP-015
+    func: [F-MST-24]
+    sc: Coverage matrix - Organisations, Work Locations and Cost Centers lookups behave identically to Holding Companies
+    t: One representative call per remaining flat kind confirms the shared QueryAsync helper, without repeating the full active/search/order matrix for every one of the 15 kinds
+    src: ["MasterLookupService.QueryAsync (shared generic helper for every non-hierarchical, non-sort-ordered kind)"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[GET /api/master-data/organisations] Call => [200] active-only, Code-ordered, as in LOOKUP-001/006"
+      - "[GET /api/master-data/work-locations] Call => [200] same contract"
+      - "[GET /api/master-data/cost-centers] Call => [200] same contract"
+    auto: API

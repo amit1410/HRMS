@@ -1,0 +1,159 @@
+sheet: TaxDcl_Statements_History_Reports
+submodule: Statements, History & Reports
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-RPT-001
+    func: [F-TAXDCL-109]
+    sc: GetHistoryAsync requires the run to exist and returns chronological order
+    t: History is NotFound for a missing run and chronologically ordered otherwise
+    src: "YearEndTaxService.cs GetHistoryAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Run has been Created, Calculated, and Submitted"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.ViewHistory
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/year-end-tax/runs/{random GUID}/history] => [404] NotFound"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/history] => [200] 3 events oldest-first: Created, Calculated, Submitted"
+    auto: API
+
+  - id: TAXDCL-RPT-002
+    func: [F-TAXDCL-110]
+    sc: History is append-only with PreviousStatus/NewStatus pairs
+    t: Each transition event records both the old and new status
+    src: "YearEndTaxService.cs AddHistory"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "Run transitions Draft->Calculated->Submitted"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.ViewHistory
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/year-end-tax/runs/{id}/history] => the Submitted event has PreviousStatus=Calculated, NewStatus=Submitted"
+    auto: API
+
+  - id: TAXDCL-RPT-003
+    func: [F-TAXDCL-111]
+    sc: Recalculation is recorded identically to a first calculation
+    t: A second CalculateAsync call on an already-Calculated run still records plain Event=Calculated, never Recalculated
+    src: "YearEndTaxService.cs CalculateAsync (always AddHistory(..., Calculated, ...))"
+    type: Contract
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: "Run already Calculated once"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate, ViewHistory
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] second call (recalculation) => [200]"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/history] => the second event is also Event=Calculated - Event=Recalculated is never used, so history alone cannot distinguish first calculation from recalculation"
+    auto: API
+    cr: [CR-260]
+
+  - id: TAXDCL-RPT-004
+    func: [F-TAXDCL-112]
+    sc: A statement is (re)created per employee on every successful calculation
+    t: StatementReference format and content are correct, and a recalculation regenerates it
+    src: "YearEndTaxService.cs CalculateAsync (YearEndTaxStatements.Add)"
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: "TaxYear=2026, EmployeeId=<GUID>"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] a YearEndTaxStatement per employee created with StatementReference='YTS/2026/{employeeId:N}' (truncated to 100 chars) and a JSON snapshot of the reconciliation"
+    auto: DB-assisted
+
+  - id: TAXDCL-RPT-005
+    func: [F-TAXDCL-113]
+    sc: "CONFIRMED - no GET route for a persisted statement; 'statements' export is an alias of 'employees'"
+    t: The 'statements' export kind returns the identical rows as 'employees', not the persisted SnapshotJson
+    src: "YearEndTaxController.cs (full route grep); YearEndTaxService.cs ExportAsync ('statements'/'employees' both -> EmployeeCsv)"
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Run has been Calculated"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of YearEndTaxController.cs for a YearEndTaxStatement GET route => zero matches"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/export/statements] => [200] year-end-tax-statements.csv"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/export/employees] => [200] year-end-tax-reconciliation.csv"
+      - "[Manual] byte-diff the two CSV bodies aside from the filename => identical column set and row values, both from EmployeeCsv over YearEndTaxEmployee, not from YearEndTaxStatement.SnapshotJson"
+    auto: API
+    cr: [CR-261]
+
+  - id: TAXDCL-RPT-006
+    func: [F-TAXDCL-114]
+    sc: ExportAsync kind validation
+    t: An unsupported kind is a 400 Invalid, not a 404
+    src: "YearEndTaxService.cs ExportAsync"
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Export
+    tenant: "T1 (DEMO01)"
+    data: "kind=bogus"
+    steps:
+      - "[GET /api/payroll/year-end-tax/runs/{id}/export/bogus] => [400] BadRequest, 'Supported exports are summary, employees, statements, and exceptions.'"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/export/SUMMARY] (case-insensitive) => [200] succeeds"
+    auto: API
+
+  - id: TAXDCL-RPT-007
+    func: [F-TAXDCL-115]
+    sc: The exceptions export excludes excess-only employees
+    t: An employee with EstimatedExcessTax>0 but no blocking issue never appears in the exceptions CSV
+    src: "YearEndTaxService.cs ExportAsync ('exceptions' branch, BlockingIssueCode filter)"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Employee A: BlockingIssueCode set. Employee B: Status=Reconciled, EstimatedExcessTax=5000, BlockingIssueCode=null"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Export
+    tenant: "T1 (DEMO01)"
+    data: as described
+    steps:
+      - "[GET /api/payroll/year-end-tax/runs/{id}/export/exceptions] => [200] CSV contains Employee A's row only; Employee B (excess but not blocked) is absent"
+    auto: API
+
+  - id: TAXDCL-RPT-008
+    func: [F-TAXDCL-116]
+    sc: CSV money formatting and no formula-execution risk
+    t: All 4 export kinds format money fields to exactly 2 decimals with no leading '=' or other formula-trigger characters
+    src: "YearEndTaxService.cs SummaryCsv, EmployeeCsv, Money"
+    type: Security
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/year-end-tax/runs/{id}/export/summary] => [200] every monetary column formatted as N.NN (InvariantCulture), no cell begins with '=', '+', '-', or '@'"
+    auto: API
+    secc: true

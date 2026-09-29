@@ -1,0 +1,323 @@
+sheet: Separation_Impact
+submodule: Manager/supervisor reassignment impact, Leave integration, Attendance/Overtime integration, and Comp-Off/Overtime carry-forward (CR-110)
+defaults:
+  role: HRADMIN
+  perm: "Separation.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  # ── Manager / supervisor impact ──
+  - id: SEP-MGR-001
+    func: [F-SEP-105]
+    sc: Exit execution is blocked while active direct reports (legacy column) still point at the separating employee
+    t: ManagerReassignmentRequired blocks readiness/execution until reports are reassigned
+    src: ["SeparationExitService.EvaluateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Employee E1 (separating) has an active direct report E2 with Employee.ReportingManagerId=E1 => precondition established"
+      - "[GET /api/separation/exit/{e1CaseId}/readiness] => [200] blockers include ManagerReassignmentRequired"
+      - "[POST /api/separation/exit/{e1CaseId}/execute] => [409] Exit execution is blocked."
+    auto: DB-assisted
+
+  - id: SEP-MGR-002
+    func: [F-SEP-106]
+    sc: The ManagerReassignmentRequired check only reads the legacy Employee.ReportingManagerId column
+    t: A manager recorded solely via EmployeeEmploymentHistory.ManagerId (not the legacy column) produces NO blocker
+    src: ["SeparationExitService.EvaluateAsync"]
+    type: Negative
+    pri: P0
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Employee E1 (separating) is E2's manager ONLY via EmployeeEmploymentHistory.ManagerId - E2's legacy Employee.ReportingManagerId points elsewhere or is null => precondition established"
+      - "[GET /api/separation/exit/{e1CaseId}/readiness] => [200] ManagerReassignmentRequired is ABSENT from blockers, despite E2 still being an active report of E1 via Employment History"
+      - "[POST /api/separation/exit/{e1CaseId}/execute] (all other blockers cleared) => [200] Succeeded - E1 is fully exited while E2's employment-history manager reference is now dangling"
+    auto: DB-assisted
+    cr: [CR-159]
+
+  - id: SEP-MGR-003
+    func: [F-SEP-107]
+    sc: Reassigning a blocked direct report clears the blocker
+    t: Changing the report's manager allows exit execution to proceed
+    src: ["SeparationExitService.EvaluateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] E1 blocked by ManagerReassignmentRequired due to active report E2 => precondition established"
+      - "[Manual/API] Reassign E2's manager to a different employee via the Employee module => precondition established"
+      - "[GET /api/separation/exit/{e1CaseId}/readiness] => [200] ManagerReassignmentRequired no longer present"
+      - "[POST /api/separation/exit/{e1CaseId}/execute] (all other blockers cleared) => [200] Succeeded"
+    auto: API
+
+  - id: SEP-MGR-004
+    func: [F-SEP-108, F-SEP-109]
+    sc: No code path reassigns EmployeeSupervisor rows (L1-L5/Time/ERO/CHRO) when a supervisor is separated
+    t: A departed manager's L2ManagerId/TimeManagerId/EroId references on other employees' EmployeeSupervisor rows are left dangling
+    src: ["SeparationExitService.cs (absence of EmployeeSupervisor writes)"]
+    type: Negative
+    pri: P0
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Employee E1 (separating) is recorded as E3's L2ManagerId on E3's EmployeeSupervisor row (not the primary ReportingManagerId/EmploymentHistory.ManagerId) => precondition established"
+      - "[GET /api/separation/exit/{e1CaseId}/readiness] => [200] no blocker of any kind references E3's EmployeeSupervisor row"
+      - "[POST /api/separation/exit/{e1CaseId}/execute] => [200] Succeeded"
+      - "[Manual/DB] Query E3's EmployeeSupervisor row after exit => L2ManagerId still points at the now-Terminated E1, unchanged, with no warning surfaced anywhere"
+    auto: DB-assisted
+    cr: [CR-159]
+
+  - id: SEP-MGR-005
+    func: [F-SEP-110]
+    sc: ExecuteRolesAsync time-bounds only the separating employee's own roles, not any other employee's Manager-role continuity
+    t: A direct report who was auto-granted a Manager-tier role continues to hold it unaffected by their former manager's exit
+    src: ["SeparationExitService.ExecuteRolesAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/separation/exit/{e1CaseId}/execute] => [200] Succeeded"
+      - "[Manual/DB] Query UserRoles for E1's former direct report (now reassigned) => their own roles are entirely unaffected by E1's exit"
+    auto: DB-assisted
+
+  - id: SEP-MGR-006
+    func: [F-SEP-111]
+    sc: SeparationService and ClearanceService disagree on manager resolution within the same module
+    t: A manager relationship recorded only via Employment History resolves correctly in /team but produces an empty Clearance manager inbox
+    src: ["SeparationService.GetTeamAsync", "ClearanceService.GetInboxAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    role: MANAGER
+    perm: "Separation.ViewTeam"
+    steps:
+      - "[Setup] Manager M is recorded as an employee's manager ONLY via EmployeeEmploymentHistory.ManagerId, never the legacy Employee.ReportingManagerId => precondition established"
+      - "[GET /api/separation/team] As M => [200] the employee IS listed (IEmployeeManagerResolver resolves Employment History)"
+      - "[GET /api/separation/clearance/inbox/manager] As M holding Separation.Clearance.ViewTeam, after clearance has started for that employee => [200] the employee's clearance tasks are ABSENT - ClearanceService.GetInboxAsync's raw legacy-column join does not find M as the manager"
+    auto: DB-assisted
+    cr: [CR-77]
+
+  # ── Leave integration ──
+  - id: SEP-LV-001
+    func: [F-SEP-112]
+    sc: Leave requests are freely submitted/approved throughout the notice period
+    t: An employee still Active during notice can submit and have leave approved with no NoticePeriodMode restriction
+    src: ["LeaveRequestSubmissionService.cs"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.Request"
+    steps:
+      - "[Setup] Case is Approved, currently within the notice period, Employee.Status still Active => precondition established"
+      - "[POST /api/leave/requests] Dates within the notice period, before LWD => [200/201] Pending, no NoticePeriodMode-driven restriction encountered"
+    auto: API
+
+  - id: SEP-LV-002
+    func: [F-SEP-113]
+    sc: Leave approved before exit execution is fully preserved untouched
+    t: An Approved leave request's status and day rows are unchanged after exit execution runs
+    src: ["SeparationExitService.ExecuteAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] An Approved leave request exists, dated before the final LWD => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[GET /api/leave/requests/{leaveId}] => [200] Status=Approved, day rows unchanged - exit execution never touches historical leave data"
+    auto: DB-assisted
+
+  - id: SEP-LV-003
+    func: [F-SEP-114]
+    sc: A new leave request dated after the exit's final LWD is rejected
+    t: LeaveRequestValidationService rejects a post-exit leave request via the employment-context check
+    src: ["LeaveRequestValidationService.ValidateEmploymentContext"]
+    type: Negative
+    pri: P0
+    smoke: true
+    role: EMPLOYEE
+    perm: "Leave.Request"
+    steps:
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[POST /api/leave/requests] Dates entirely after the final LWD, as the now-separated employee (if still authenticatable via a test-only bypass) => [403] Forbidden - Employee.DateOfLeaving/EmploymentHistory.EmploymentStatus block it"
+    auto: DB-assisted
+
+  - id: SEP-LV-004
+    func: [F-SEP-115]
+    sc: A leave request spanning the LWD (starting before, ending after) is not specifically validated
+    t: Only a request dated ENTIRELY after LWD is rejected by the employment-context check
+    src: ["LeaveRequestValidationService.cs"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.Request"
+    steps:
+      - "[Setup] LWD=2026-10-15 (pre-exit-execution, still Active) => precondition established"
+      - "[POST /api/leave/requests] StartDate=2026-10-10, EndDate=2026-10-20 (spans the LWD) => [200/201] accepted while still Active - no span-specific validation exists"
+    auto: API
+
+  - id: SEP-LV-005
+    func: [F-SEP-116]
+    sc: A pending leave request left unresolved at separation completion is never auto-cancelled
+    t: Exit execution does not touch a Pending leave request at all - it remains actionable by a manager indefinitely
+    src: ["SeparationExitService.ExecuteAsync"]
+    type: Negative
+    pri: P1
+    perm: "Leave.Approve"
+    steps:
+      - "[Setup] A Pending leave request exists for the separating employee => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[GET /api/leave/requests/{leaveId}] => [200] Status still Pending, unaffected by the exit"
+    auto: DB-assisted
+
+  - id: SEP-LV-006
+    func: [F-SEP-117, F-SEP-118]
+    sc: Leave-encashment calculation reads EmployeeLeaveBalances but never reserves the amount, allowing double-spend during the notice period
+    t: The same leave days priced into an encashment calculation can still be separately consumed by an approved leave request
+    src: ["SeparationBenefitsService.CalculateLeaveAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    perm: "Payroll.SeparationBenefits.Calculate"
+    steps:
+      - "[Setup] Employee has 10 days of unused leave balance during their notice period => precondition established"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] FinalSettlementId=<x> => [200] Leave encashment computed for all 10 days"
+      - "[POST /api/leave/requests] As the still-Active employee, consuming 5 of those same 10 days during the remaining notice period, then approved => [200] Approved - EmployeeLeaveBalances.ConsumedQuantity increments"
+      - "[Manual/DB] Re-query the persisted GratuityCalculation's leave-encashment amount => still reflects the original 10 days, never revalidated against the now-reduced remaining balance"
+    auto: DB-assisted
+    cr: [CR-158]
+
+  - id: SEP-LV-007
+    func: [F-SEP-119]
+    sc: Leave-encashment days are capped by policy configuration, not by a Leave-module carry-forward rule
+    t: MaximumLeaveEncashmentDays caps the encashed amount even when the actual balance exceeds it
+    src: ["SeparationBenefitsService.CalculateLeaveAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Payroll.SeparationBenefits.Calculate"
+    steps:
+      - "[Setup] GratuityPolicyVersion.MaximumLeaveEncashmentDays=15; employee's actual unused balance is 25 days => precondition established"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] => [200] leave-encashment amount is computed for exactly 15 days, not 25"
+    auto: API
+
+  # ── Attendance / Overtime integration ──
+  - id: SEP-ATT-001
+    func: [F-SEP-120]
+    sc: Attendance before the LWD is fully preserved by exit execution
+    t: A historical EmployeeAttendanceDay is unchanged after exit execution
+    src: ["SeparationExitService.ExecuteAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] A historical EmployeeAttendanceDay exists dated before the final LWD (Present, WorkedMinutes=480) => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[GET /api/attendance/me/days/{date}] (as HR reading the historical record) => [200] Status/WorkedMinutes/punches unchanged"
+    auto: DB-assisted
+
+  - id: SEP-ATT-002
+    func: [F-SEP-121, F-SEP-122]
+    sc: Post-exit Regularization/On-Duty submission is blocked, and the day processor never even attempts to run
+    t: A submission for a date after the final LWD is Forbidden, checking Employee.Status and DateOfLeaving directly
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync", "SubmitOnDutyAsync"]
+    type: Negative
+    pri: P0
+    smoke: true
+    role: EMPLOYEE
+    perm: "Attendance.Regularization.Request"
+    steps:
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[POST /api/attendance/me/regularizations] BusinessDate one day after the final LWD => [403] Forbidden - unavailable after separation"
+      - "[POST /api/attendance/me/on-duty] BusinessDate one day after the final LWD => [403] Forbidden"
+    auto: DB-assisted
+
+  - id: SEP-ATT-003
+    func: [F-SEP-123]
+    sc: Regularization/On-Duty submission DURING the notice period (before LWD, still Active) succeeds normally
+    t: Only post-LWD dates are blocked - the notice period itself imposes no restriction
+    src: ["AttendanceWorkflowService.SubmitRegularizationAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Attendance.Regularization.Request"
+    steps:
+      - "[Setup] Case is Approved, within notice period, Employee.Status still Active => precondition established"
+      - "[POST /api/attendance/me/regularizations] BusinessDate within the notice period, before LWD => [200/201] Pending - succeeds normally"
+    auto: API
+
+  - id: SEP-ATT-004
+    func: [F-SEP-124]
+    sc: A pending Regularization/On-Duty approval left unresolved at separation completion is never auto-cancelled and can still be approved post-exit
+    t: A manager can approve/reject a pending request from a since-separated employee, since the transition method never checks the target's Employee.Status
+    src: ["AttendanceWorkflowService.TransitionRegularization"]
+    type: Negative
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[Setup] A Pending Regularization request exists for the employee before their exit => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] => [200] Succeeded"
+      - "[POST /api/attendance/manager/regularizations/{regId}/approve] As the now-former manager => [200] Approved - succeeds even though the employee is now Terminated"
+    auto: DB-assisted
+
+  - id: SEP-ATT-005
+    func: [F-SEP-125]
+    sc: Monthly attendance summary for the exit month is unaffected by exit execution
+    t: Historical WorkedMinutes/day status for the exit month are never rewritten
+    src: ["AttendanceReadService.cs"]
+    type: Positive
+    pri: P1
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/me/calendar] For the month containing the LWD, after exit execution (as HR reading the historical record) => [200] all pre-LWD days unchanged"
+    auto: API
+
+  - id: SEP-ATT-006
+    func: [F-SEP-126]
+    sc: Overtime's own eligibility gates are not separately hardened against Separation state within OvertimeService
+    t: No Overtime-specific check references Separation/DateOfLeaving directly
+    src: ["OvertimeService.cs"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/Code] Grep OvertimeService.cs for 'Separation' or 'DateOfLeaving' => zero matches confirmed"
+    auto: Manual only
+
+  # ── Comp-Off / Overtime (CR-110 carry-forward) ──
+  - id: SEP-CO-001
+    func: [F-SEP-127]
+    sc: Outstanding Comp-Off/Overtime are never read by Separation's benefits or settlement services
+    t: A grep-confirmed absence of any Comp-Off/Overtime table reference in SeparationBenefitsService.cs or SeparationSettlementOrchestrationService.cs
+    src: ["SeparationBenefitsService.cs", "SeparationSettlementOrchestrationService.cs"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/Code] Grep both files for CompOff/Overtime => zero matches confirmed"
+    auto: Manual only
+    cr: [CR-110]
+
+  - id: SEP-CO-002
+    func: [F-SEP-128]
+    sc: Separation completes fully while outstanding Comp-Off/approved Overtime remain unresolved
+    t: An employee with a large outstanding Comp-Off balance and pending Overtime completes exit execution with those balances untouched
+    src: ["SeparationExitService.cs"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee has an outstanding, unused Comp-Off earning and an approved-but-unpaid Overtime request => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] (all other blockers cleared) => [200] Succeeded - neither the Comp-Off nor the Overtime balance is referenced, consumed, or blocked by this call"
+    auto: DB-assisted
+    cr: [CR-110]
+
+  - id: SEP-CO-003
+    func: [F-SEP-129]
+    sc: A Comp-Off/Overtime payout in the final settlement must be added manually, with no automated linkage
+    t: Adding a manual settlement line for outstanding Comp-Off/Overtime creates an unlinked, SourceType='Manual' line
+    src: ["PayrollRetroSettlementService.AddSettlementLineAsync"]
+    type: Boundary
+    pri: P2
+    perm: "Payroll.FinalSettlementManage"
+    steps:
+      - "[POST /api/payroll/final-settlements/{id}/lines] LineType=Bonus, ComponentCode='COMPOFF_PAYOUT', Amount=<manual value>, SourceType='Manual' (default, no SourceId) => [200/201] line added with no back-reference to the actual Comp-Off/Overtime record"
+    auto: API
+    cr: [CR-110]

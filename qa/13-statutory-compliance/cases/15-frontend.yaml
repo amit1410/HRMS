@@ -1,0 +1,174 @@
+sheet: Stat_Frontend
+submodule: Frontend
+defaults:
+  tenant: "T1 (DEMO01)"
+  pre: "see scenario/ui for setup"
+  reg: true
+
+cases:
+  - id: STAT-FE-001
+    func: [F-STAT-143]
+    sc: StatutoryConfigurationsPage cannot add a version
+    t: A configuration created through the UI can never be made calculation-eligible through the UI
+    src: "Frontend/HRMS.Web/src/pages/payroll/StatutoryConfigurationsPage.tsx"
+    type: Contract
+    tags: [Negative]
+    pri: P0
+    sev: High
+    role: TenantAdmin
+    perm: Payroll.Statutory.Manage
+    data: none
+    ui: "StatutoryConfigurationsPage renders a create form and a read-only table; no 'Add version' button/form exists anywhere"
+    steps:
+      - "[UI] navigate to /payroll/statutory (StatutoryConfigurationsPage), create a new configuration through the form => the new row appears in the table with a 'Versions: 0' count"
+      - "[UI] inspect every control on the page for any way to add a version to that row => none exists; the only path is a direct API call to POST .../versions"
+    auto: UI
+    cr: [CR-234]
+
+  - id: STAT-FE-002
+    func: [F-STAT-144, F-STAT-145]
+    sc: StatutoryCompliancePage's minimal, hardcoded lifecycle
+    t: Only Create-open-period (hardcoded ProvidentFund/IN) and Generate-return exist; no type selector, no Validate/Approve/Export/MarkFiled
+    src: "Frontend/HRMS.Web/src/pages/payroll/StatutoryCompliancePage.tsx"
+    type: Contract
+    tags: [Negative]
+    pri: P0
+    sev: High
+    role: PayrollAdmin (with StatutoryCompliance.ManagePeriods, .Generate granted)
+    perm: Payroll.StatutoryCompliance.ManagePeriods, Payroll.StatutoryCompliance.Generate
+    data: none
+    ui: "StatutoryCompliancePage renders exactly two buttons: 'Create open period' and 'Generate return'"
+    steps:
+      - "[UI] navigate to /payroll/statutory-compliance and click 'Create open period' => a period is created with ComplianceType=ProvidentFund and JurisdictionCode=IN, with no way to choose Esi/ProfessionalTax/IncomeTaxTds or a different jurisdiction from the UI"
+      - "[UI] click 'Generate return' => the return is generated and its batch number/status/employee count/total payable are displayed as plain text"
+      - "[UI] inspect the page for any Validate/Approve/Export/MarkFiled control => none exists; every further lifecycle step requires a direct API call"
+    auto: UI
+    cr: [CR-235]
+
+  - id: STAT-FE-003
+    func: [F-STAT-146]
+    sc: StatutoryFilingsPage stalls after Validate
+    t: Only Generate and Validate are wired; SubmitForApproval/Approve/Submit/Acknowledge/Cancel/Download have no UI entry point
+    src: "Frontend/HRMS.Web/src/pages/payroll/StatutoryFilingsPage.tsx; src/api/statutoryFilings.ts"
+    type: Contract
+    tags: [Negative]
+    pri: P0
+    sev: High
+    role: PayrollAdmin (with all StatutoryFiling.* permissions granted)
+    perm: "Payroll.StatutoryFiling.Manage, .Generate, .Validate"
+    data: none
+    ui: "The filing runs table's Actions column renders Generate for Draft, Validate for Generated, and a resubmission-Generate alias for Rejected/Failed - nothing else, for any status"
+    steps:
+      - "[UI] navigate to /payroll/statutory-filings, create a definition, create a run, click Generate => Status becomes Generated"
+      - "[UI] click Validate => Status becomes Validated"
+      - "[UI] inspect the Actions column for the now-Validated run => it renders NO button at all (SubmitForApproval has no UI wiring for the Validated status) - the run is stuck in the UI even though the backend supports SubmitForApproval->Approve->Submit->Acknowledge"
+      - "[Manual] full grep of src/api/statutoryFilings.ts against StatutoryFilingsController.cs's 13 routes => only 5 have a client function (definitions/runs/generate/validate/connections-list/connections-create); submitForApproval/approve/submit/reject/acknowledge/cancel/download/issues have none"
+    auto: UI
+    cr: [CR-235]
+
+  - id: STAT-FE-004
+    func: [F-STAT-147]
+    sc: No UI exists for the employee statutory profile
+    t: getEmployeeStatutoryProfile/saveEmployeeStatutoryProfile are unused by every page component
+    src: "Frontend/HRMS.Web/src/api/payroll.ts; full grep of src/pages"
+    type: Contract
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: HRAdmin (with EmployeeStatutory.View/Manage granted)
+    perm: Payroll.EmployeeStatutory.View, Payroll.EmployeeStatutory.Manage
+    data: none
+    steps:
+      - "[UI] navigate the entire product looking for any screen that lets an operator view or edit an employee's PF/ESI/PT/IncomeTax applicability, UAN, ESI number, tax regime, or effective dates => none exists"
+      - "[Manual] read src/api/payroll.ts lines 20/53 and grep src/pages for either function name => both are fully implemented, working client functions with zero callers anywhere in src/pages"
+    auto: Manual only
+    cr: [CR-234]
+
+  - id: STAT-FE-005
+    func: [F-STAT-148]
+    sc: PersonalDetailsForm's unrelated "Statutory & Benefits" section
+    t: Editing esicApplicable/gratuity/pension/uanNumber on Personal Details has no effect on statutory calculation eligibility
+    src: "Frontend/HRMS.Web/src/pages/employees/PersonalDetailsForm.tsx (lines ~396-430)"
+    type: Contract
+    tags: [Negative]
+    pri: P0
+    sev: High
+    role: HRAdmin
+    perm: "employee-management permission (see qa/05-employee)"
+    data: "esicApplicable=Yes on an employee whose EmployeeStatutoryProfile.EsiApplicable is false or unset"
+    ui: "PersonalDetailsForm's 'Statutory & Benefits' fieldset, co-located with the UAN field"
+    steps:
+      - "[UI] on an employee's Personal Details tab, set 'ESIC applicable' to Yes and save => the change is persisted to Employee's own PersonalDetails record"
+      - "[Manual] run a payroll calculation for that employee's period => the Esi statutory deduction is STILL not applied, because CalculateAsync reads EmployeeStatutoryProfile.EsiApplicable, a completely different, unedited field - proving the two 'ESIC applicable'-shaped settings are unconnected"
+    auto: Manual only
+    cr: [CR-234]
+
+  - id: STAT-FE-006
+    func: [F-STAT-149]
+    sc: Two of three statutory pages have no navigation entry
+    t: navigation.ts links only Statutory Compliance; Statutory Configuration and Statutory Filings are URL-only
+    src: "Frontend/HRMS.Web/src/layout/navigation.ts; App.tsx"
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    role: TenantAdmin
+    perm: "n/a"
+    data: none
+    steps:
+      - "[UI] log in and browse the sidebar for any 'Statutory Configuration' or 'Statutory Filings' entry => neither exists; only 'Statutory Compliance' appears"
+      - "[UI] navigate directly to /payroll/statutory and /payroll/statutory-filings by typing the URL => both load successfully with correct permission gating, confirming the routes exist but are simply undiscoverable via the UI"
+    auto: UI
+    cr: [CR-236]
+
+  - id: STAT-FE-007
+    func: [F-STAT-150]
+    sc: Permission gating is consistent on two of the three pages
+    t: StatutoryConfigurationsPage and StatutoryFilingsPage correctly disable/hide actions via useAuth().can(...)
+    src: "Frontend/HRMS.Web/src/pages/payroll/StatutoryConfigurationsPage.tsx; StatutoryFilingsPage.tsx"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Low
+    role: "Custom role without Payroll.Statutory.Manage / Payroll.StatutoryFiling.Manage"
+    perm: "Payroll.Statutory.View, Payroll.StatutoryFiling.View only"
+    data: none
+    steps:
+      - "[UI] view StatutoryConfigurationsPage as a view-only role => the 'Add configuration' form card is not rendered at all (can(statutoryManage) gate)"
+      - "[UI] view StatutoryFilingsPage as a view-only role => 'Create configured definition'/'Add ManualDownload profile'/'Create run' buttons are all disabled"
+    auto: UI
+
+  - id: STAT-FE-008
+    func: [F-STAT-151]
+    sc: StatutoryCompliancePage has no permission gating at all
+    t: Both action buttons render unconditionally regardless of the viewer's actual permissions
+    src: "Frontend/HRMS.Web/src/pages/payroll/StatutoryCompliancePage.tsx"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    role: "Custom role holding only Payroll.StatutoryCompliance.View"
+    perm: Payroll.StatutoryCompliance.View
+    data: none
+    steps:
+      - "[UI] view StatutoryCompliancePage as a role holding ONLY View (not ManagePeriods/Generate) => both 'Create open period' and 'Generate return' buttons render fully enabled"
+      - "[UI] click 'Create open period' => the request fails with [403] Forbidden, surfaced as an inline error message - the user only discovers the missing permission after clicking, unlike the other two statutory pages' disabled-button affordance"
+    auto: UI
+    cr: [CR-237]
+
+  - id: STAT-FE-009
+    func: [F-STAT-152]
+    sc: Frontend automated test coverage
+    t: Only StatutoryCompliancePage has a dedicated Vitest file
+    src: "Frontend/HRMS.Web/src/pages/payroll/StatutoryCompliancePage.test.tsx"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    role: n/a
+    perm: n/a
+    data: none
+    steps:
+      - "[Manual] glob for StatutoryCompliancePage.test.tsx and read it in full => exists; record what it actually covers"
+      - "[Manual] glob for StatutoryConfigurationsPage.test.tsx / StatutoryFilingsPage.test.tsx => neither exists"
+    auto: Manual only

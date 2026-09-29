@@ -1,0 +1,326 @@
+# Module 8 QA-risk register. Numbering continues after Module 7's CR-90 (qa/07-leave/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. Classification starts 'Open - awaiting decision'.
+#
+# CR-53, CR-57, CR-66, CR-77, and CR-82 are carried forward and RE-VERIFIED directly against Attendance's own
+# code (not assumed to carry over unchanged - see qa/08-attendance/README.md's CR carry-forward section for the
+# full research). Two of these flip framing for this module: CR-57 is confirmed to ORIGINATE in Attendance
+# (EmployeeAccessScopeService's narrowing is literally keyed off Attendance.MonthlyViewTeam/ViewAll), and CR-77
+# recurs as Attendance's own 5th independent scope mechanism (AttendanceAuthorizationService), not a reuse of
+# Leave's LeaveAuthorizationService. Each carried-forward entry below is a short cross-reference, not a
+# restatement - see the originating module's own clarifications.yaml for full text.
+
+clarifications:
+  - id: CR-53
+    title: "(carried forward, re-verified) Terminated/Resigned employees keep an active portal login - but Attendance is the FIRST module whose own business logic reacts to Employee.Status directly, not just User.IsActive"
+    observation: "See qa/05-employee/clarifications.yaml#CR-53, qa/06-rbac-account-linking/clarifications.yaml#CR-53, and qa/07-leave/clarifications.yaml#CR-53 for the full carried-forward observation. Attendance genuinely differs: AttendanceWorkflowService.SubmitRegularizationAsync/SubmitOnDutyAsync check employee.Status != EmployeeStatus.Active directly (not User.IsActive/EmploymentEligibility) and block submission for ANY business date the instant Status changes - this is a real, working business-eligibility gate distinct from every other module's pure read-side gap. However, everything else about CR-53 still holds for Attendance: AttendanceDayProcessor.ProcessAsync, AttendanceMonthlyProcessor, GetMyRegularizationsAsync/GetMyOnDutyAsync (history reads), GetManagerRegularizationsAsync/GetManagerOnDutyAsync (manager queue), and TransitionRegularization/TransitionOnDuty (approve/reject) never check the target employee's Employee.Status at all - only row existence. A manager can still approve/reject a pending request from a since-separated employee, and a separated employee's historical data/monthly-processing inclusion is fully unaffected (F-ATT-269 through F-ATT-271, F-ATT-285, F-ATT-286, F-ATT-291)."
+    risk: "The write-path gate is real and correctly enforced, but read/queue/approval/processing surfaces remain exactly as exposed as every other module's CR-53 finding - a QA/product reviewer should not assume Attendance 'fixes' CR-53 wholesale just because one code path checks Employee.Status."
+    source: "Backend/HRMS.Application/Services/AttendanceWorkflowService.cs (SubmitRegularizationAsync/SubmitOnDutyAsync/TransitionRegularization/TransitionOnDuty); AttendanceDayProcessor.cs; AttendanceMonthlyProcessor.cs; SeparationExitService.cs:112,115,122; qa/05-employee, qa/06-rbac-account-linking, qa/07-leave clarifications.yaml (CR-53)"
+    classification: Open - awaiting decision
+
+  - id: CR-57
+    title: "(carried forward, re-verified) Attendance IS THE ORIGIN of the Employee-module directory-narrowing coupling, not a downstream consumer"
+    observation: "See qa/05-employee/clarifications.yaml#CR-57, qa/06-rbac-account-linking/clarifications.yaml#CR-57, and qa/07-leave/clarifications.yaml#CR-57 for the full observation of EmployeeAccessScopeService's Attendance-permission-keyed narrowing. Module 8 confirms directly: EmployeeAccessScopeService.BuildPredicateAsync's self+direct-report narrowing decision is keyed off Permissions.Attendance.MonthlyViewTeam/MonthlyViewAll - these are Attendance's own permission constants. Furthermore, Attendance's own AttendanceAuthorizationService.BuildEmployeePredicateAsync is a first-class, direct caller of EmployeeAccessScopeService.BuildRoleScopePredicateAsync (the sibling method) for its role-scope arm - Attendance is not merely 'affected' by CR-57 the way the Employee directory or Leave are; it is the source of the permission constants CR-57 keys off AND a partial consumer of the same service class (F-ATT-272)."
+    risk: "A reviewer who reads Module 5/6/7's CR-57 writeup first would reasonably conclude Attendance is just another affected module downstream of an Employee-module quirk - it is actually the reverse: fixing or auditing this coupling starts in Attendance's own permission naming, not the Employee module."
+    source: "Backend/HRMS.Application/Services/EmployeeAccessScopeService.cs (BuildPredicateAsync, BuildRoleScopePredicateAsync); AttendanceAuthorizationService.cs:44-45; Backend/HRMS.Domain/Authorization/Permissions.cs (Attendance.MonthlyViewTeam/ViewAll); qa/05-employee, qa/06-rbac-account-linking, qa/07-leave clarifications.yaml (CR-57)"
+    classification: Open - awaiting decision
+
+  - id: CR-66
+    title: "(carried forward, re-verified) PageAccess.Manage self-escalation reaches every Attendance.*/Attendance.Overtime.*/AttendanceDevice.* permission with no module-specific carve-out"
+    observation: "See qa/06-rbac-account-linking/clarifications.yaml#CR-66 for the full observation of PageAccessService.UpdateAsync's unrestricted grant behavior. Module 8 confirms the concrete Attendance-side impact: PageAccessService.UpdateAsync validates a requested permission ONLY against Permissions.All membership - Attendance.*, Attendance.Overtime.*, and AttendanceDevice.* are ordinary members exactly like every Leave.* permission Module 7 proved reachable. An HRAdmin or SuperHR session (both hold PageAccess.Manage) can self-grant Attendance.Regularization.Approve, Attendance.OnDuty.Approve, Attendance.AdminCorrection.Manage, every Attendance.Overtime.* permission, and AttendanceDevice.Manage in a single PUT /api/page-access/roles/{roleId} call, then immediately exercise the entire correction/approval/overtime/device-admin surface end-to-end (F-ATT-273)."
+    risk: "Attendance's careful permission segregation (no seeded role except SuperAdmin/TenantAdmin holds Regularization.Approve/OnDuty.Approve/AdminCorrection.Manage/any Overtime permission, per CR-112/CR-114) is entirely dependent on Module 6's PageAccess.Manage boundary holding - it provides no independent defense of its own, exactly mirroring Leave's CR-66 finding."
+    source: "Backend/HRMS.Application/Services/PageAccessService.cs (UpdateAsync); Backend/HRMS.Domain/Authorization/Permissions.cs:297-303 (Attendance.Overtime.*); qa/06-rbac-account-linking clarifications.yaml (CR-66)"
+    classification: Open - awaiting decision
+
+  - id: CR-77
+    title: "(carried forward, re-verified) AttendanceAuthorizationService is a DISTINCT, 5th independent manager/scope mechanism, sharing only the role-scope dimension with Leave's LeaveAuthorizationService - and independently reproduces Leave's CR-83-style legacy-fallback gap"
+    observation: >
+      See qa/07-leave/clarifications.yaml#CR-77 for the full observation of LeaveAuthorizationService as a
+      third mechanism (after RoleScopeResolver and EmployeeAccessScopeService.BuildPredicateAsync). Module 8
+      confirms Attendance does NOT reuse LeaveAuthorizationService: AttendanceAuthorizationService is a
+      separately-implemented class backing Regularization approval, On-Duty approval, and Foundation's roster
+      resolution authorization gate. Architecturally the same shape (self OR role-scope OR manager, unioned),
+      it shares genuine code reuse with Leave ONLY at the role-scope dimension (both call
+      IEmployeeAccessScopeService.BuildRoleScopePredicateAsync) - the manager-relationship arm is Attendance's
+      own independently-written BuildCurrentManagerPredicate, textually distinct from Leave's own method of the
+      same name in a different file (F-ATT-274). Additionally, AttendanceWorkflowService carries the identical
+      "new vs. legacy" fork Module 7's CR-83 documents for Leave: when IAttendanceAuthorizationService is null
+      (optional constructor parameter), GetManagerRegularizationsAsync/GetManagerOnDutyAsync/
+      TransitionRegularization/TransitionOnDuty fall back to a raw IEmployeeManagerResolver-only check with
+      ZERO role-scope (HRBP/SuperHR) fallback at all (F-ATT-275, CR-124).
+    risk: "Counting mechanisms across the whole product surveyed so far: (1) RoleScopeResolver, (2) EmployeeAccessScopeService.BuildPredicateAsync (Employee/CR-57 origin), (3) LeaveAuthorizationService (Leave/CR-77), and now (4) AttendanceAuthorizationService - a 5th non-communicating 'who is whose manager' implementation. A change to manager-resolution semantics in one module does not automatically apply to the others."
+    source: "Backend/HRMS.Application/Services/AttendanceAuthorizationService.cs (BuildEmployeePredicateAsync, BuildCurrentManagerPredicate, CanAccessEmployeeAsync); AttendanceWorkflowService.cs:17 (optional IAttendanceAuthorizationService); qa/07-leave clarifications.yaml (CR-77)"
+    classification: Open - awaiting decision
+
+  - id: CR-82
+    title: "(carried forward, re-verified) GET api/attendance/comp-off/operations still has no [HasPermission] attribute - the exact 'service-level-only authorization' pattern Module 7 flagged, confirmed present in Attendance's own controller too"
+    observation: "See qa/07-leave/clarifications.yaml#CR-82 for the full original finding. Module 8 independently re-confirms: CompOffController.Operations carries only the controller-level [Authorize], no [HasPermission] attribute, while every other route in every other Attendance-family controller declares one. CompOffService.GetOperationalAsync -> BuildOperationalScopeAsync does perform a real internal check (tries CompOffViewAll/ViewTeam/Manage/Approve/ViewHistory in turn, denies if none held), so this is not a true authorization bypass - but the endpoint remains invisible to any route-attribute-based permission audit tool, and unlike every sibling route it accepts any ONE of five different permissions rather than a single declared one, undocumented at the route layer (F-ATT-212)."
+    risk: "A permission-matrix audit that greps for [HasPermission] attributes across the codebase will silently miss this endpoint's actual reachability, exactly as it would have for Leave's CompOffController.Operations before Module 7's finding - since it is literally the same controller action shared by both modules' functional area."
+    source: "Backend/HRMS.API/Controllers/CompOffController.cs:31-33; Backend/HRMS.Application/Services/CompOffService.cs:105-184 (BuildOperationalScopeAsync); qa/07-leave clarifications.yaml (CR-82)"
+    classification: Open - awaiting decision
+
+  - id: CR-91
+    title: Applicability rule GET responses drop 10 of the ~16 supported dimension conditions from the Conditions dictionary, even though they are persisted and used in matching
+    observation: "ShiftApplicabilityDto's Conditions dictionary (ToApplicabilityDto) surfaces only Employee/Department/WorkLocation/EmployeeType/Grade/Designation/CostCenter. Gender, HoldingCompanyId, LobId, OrganisationId, SubDepartmentId, SectionId, SubSectionId, FunctionId, SubFunctionId, and CountryLocationId are silently absent from GET responses even when persisted and actively used by ResolveAsync's Matches() for resolution. A rule configured with e.g. Gender/Organisation conditions cannot be fully round-tripped/audited via the API. Related gaps in the same area: an inactive default Shift can still block a new default (the overlap-check query does not filter by IsActive on the OTHER shift); a Pattern day with DayType=Shift and null ShiftId is accepted with no error; OriginalShiftId is captured but never consumed anywhere; every manual WeeklyOff assignment is unconditionally flagged IsCalendarOverride=true even over an already-working day; IWorkingDayCalendarResolver's absence silently degrades all Holiday/WeeklyOff signals to Unknown with no error."
+    risk: "A configured rule's true matching criteria cannot be fully audited through the UI/API, which could mask an incorrectly-scoped rule from a reviewer relying on the GET response alone."
+    source: "Backend/HRMS.Application/Services/AttendanceFoundationService.cs (ToApplicabilityDto, SaveShiftAsync default-overlap check, CreatePatternAsync, AssignRosterAsync IsCalendarOverride computation, CalendarDayTypeAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-92
+    title: A Roster Upload batch that fails commit mid-loop (e.g. due to a caller's scope narrowing since validation) is left permanently stuck at Validated status with no retry/repair path
+    observation: "CommitRosterUploadAsync re-checks per-row authorization scope independently at commit time, separate from validate time. If any row's employee falls out of the committer's scope between validate and commit, the method returns before SaveChangesAsync is ever reached - so nothing from that commit attempt persists (a useful all-or-nothing guarantee), but the batch itself is left indefinitely in Validated status: every retry re-encounters the identical scope failure on the identical row, and no code path ever flips the batch to Failed or offers a partial-commit-of-valid-rows option. The only workaround is starting an entirely new upload (F-ATT-048)."
+    risk: "An HR operator whose team reassignment happens to land between validating and committing a large roster upload will see their upload permanently jammed with no diagnostic path back to 'why can't I commit this.'"
+    source: "Backend/HRMS.Application/Services/AttendanceFoundationService.cs (CommitRosterUploadAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-93
+    title: Frontend permission-gating for Attendance Foundation/Shift-Pattern is inconsistent and in one case entirely absent, despite backend enforcement being correct
+    observation: "AttendanceFoundationPage.tsx gates the 'Save Applicability Rule' button on the frontend permission constant shiftManage, but the backend actually enforces Attendance.PatternManage for all applicability CRUD - a user holding PatternManage but not ShiftManage never sees the button, even though their direct API call would succeed. Separately, ShiftPatternsPage.tsx's 'Create Pattern' button has NO permission gate at all - any user reaching the route (plain Attendance.View) sees an always-enabled Create button, despite Permissions.attendance.patternManage existing as a defined constant that is simply never referenced anywhere in this page's source (F-ATT-304, F-ATT-305)."
+    risk: "Neither is a security hole (the backend enforces correctly in both cases), but the first is a usable-but-hidden UX bug that could be mistaken for a permission-seeding problem, and the second means any Attendance.View holder can attempt pattern creation and only discover denial via a server error toast rather than a hidden control."
+    source: "Frontend/HRMS.Web/src/pages/attendance/AttendanceFoundationPage.tsx; Frontend/HRMS.Web/src/pages/attendance/ShiftPatternsPage.tsx; Frontend/HRMS.Web/src/auth/permissions.ts"
+    classification: Open - awaiting decision
+
+  - id: CR-94
+    title: Deactivating a Shift does not invalidate or cascade to existing ShiftApplicabilityRule/ShiftPatternDay/EmployeeRosterDay references, which keep resolving to the inactive Shift indefinitely
+    observation: "ResolveAsync checks a referenced Shift's IsActive flag only at rule-creation time (AddApplicabilityAsync), at manual roster-assignment time (AssignRosterAsync), and for the tenant-default fallback path - it does NOT re-check IsActive when resolving an already-persisted applicability rule's ShiftId, an existing pattern day's ShiftId, or an existing manual/uploaded roster row's ShiftId. So an inactive Shift keeps being served as the effective shift for any employee/date already pointing at it (F-ATT-007, F-ATT-094)."
+    risk: "An admin who deactivates a Shift believing it will stop being assigned may be surprised that every employee already resolving to it (via a pre-existing applicability rule, pattern, or manual roster row) continues to see it as their effective shift, with no warning surfaced anywhere."
+    source: "Backend/HRMS.Application/Services/AttendanceFoundationService.cs (ResolveAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-95
+    title: Applicability rule Update skips the existence/active validation that Create performs, allowing a PUT to silently point a rule at a nonexistent or inactive Shift/Pattern/Employee
+    observation: "AddApplicabilityAsync validates ShiftId/ShiftPatternId/EmployeeId existence and active status before persisting. UpdateApplicabilityAsync performs no equivalent checks before persisting item.ShiftId = r.ShiftId etc. - a PUT can point an existing rule at an inactive or nonexistent target with no validation error (F-ATT-023)."
+    risk: "Update-endpoint validation is materially weaker than create-endpoint validation for the identical business entity, an inconsistency that could let a dangling/inactive reference slip in through routine editing rather than only initial creation."
+    source: "Backend/HRMS.Application/Services/AttendanceFoundationService.cs (UpdateApplicabilityAsync vs AddApplicabilityAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-96
+    title: There is no employee self-service punch endpoint anywhere in the API - PunchSource.Portal/Manual/AutoLoginLogout are fully modeled and validated but structurally unreachable
+    observation: "The only caller of IAttendancePunchIngestionService.IngestAsync in the entire codebase is AttendanceDeviceIntegrationService, itself only reachable from AttendanceDevicesController's sync/import routes (device-administration permissions, not employee-held). That service hard-codes PunchSource.Biometric on every punch it ingests. PunchSource.Portal/Manual/AutoLoginLogout and AttendanceCaptureMode.SelfPunch are fully implemented in the validation layer (the AllowedAttendanceSources bitmask check works for all four sources) but no HTTP-reachable code path ever constructs a request with any source but Biometric. Confirmed deliberately deferred by docs/attendance-phase-2-punch-processing.md:24 ('portal punch UI' listed as deferred) (F-ATT-068)."
+    risk: "Any test case or bug report assuming an employee can punch in/out from the web/mobile app describes a not-yet-implemented feature, not a broken one - QA should verify no undocumented endpoint exists before accepting such a report."
+    source: "Backend/HRMS.Application/Services/AttendancePunchIngestionService.cs; AttendanceDeviceIntegrationService.cs:110; docs/attendance-phase-2-punch-processing.md:24"
+    classification: Open - awaiting decision
+
+  - id: CR-97
+    title: Tenant business timezone is hard-coded to UTC for every tenant, regardless of the tenant's actual physical location, affecting overnight-shift business-date cutoff correctness
+    observation: "AttendanceBusinessTimeZoneProvider.GetTimeZone(tenantId) accepts a tenantId parameter but always returns TimeZoneInfo.Utc, ignoring it entirely. The XML doc comment calls this a 'neutral default until a tenant-specific timezone setting is available,' and docs/attendance-phase-2-punch-processing.md:13 confirms it's intentional-for-now ('IST is not hard-coded'). But AttendanceBusinessDateResolver's overnight-shift cutoff math is computed against this timezone - for any tenant whose real business timezone is not UTC, an overnight punch near the cutoff boundary could be assigned to the wrong business day relative to the tenant's actual local midnight/shift boundary (F-ATT-078)."
+    risk: "This is documented as an intentional placeholder, not a bug, but it is a live correctness gap that should be a standing QA watch item for any non-UTC tenant, not assumed already fixed."
+    source: "Backend/HRMS.Application/Services/AttendanceBusinessTimeZoneProvider.cs; AttendanceBusinessDateResolver.cs; docs/attendance-phase-2-punch-processing.md:13"
+    classification: Open - awaiting decision
+
+  - id: CR-98
+    title: Self-view, punch ingestion, and daily derivation never check employment/separation status - only Employee row existence - for reads and processing (the write-path submission gate is the exception, see CR-53)
+    observation: "EmployeeIdentityResolver.ResolveCurrentAsync, AttendancePunchIngestionService.IngestAsync, and AttendanceDayProcessor.ProcessAsync all check only that the linked Employee row exists in the tenant (Employees.Any(TenantId, Id)) - none check EmployeeStatus/an active flag. A separated employee whose Employee row remains present (and whose account/token remains valid) can very likely still read their own attendance calendar/day and have device punches processed against them through the device pipeline (F-ATT-062, F-ATT-098, F-ATT-271)."
+    risk: "Nothing in these specific files revokes access on separation - this may be mitigated elsewhere (account deactivation on separation is out of this file's scope), but is not enforced HERE, and should be tested explicitly rather than assumed."
+    source: "Backend/HRMS.Application/Services/EmployeeIdentityResolver.cs; AttendancePunchIngestionService.cs:25; AttendanceDayProcessor.cs:22"
+    classification: Open - awaiting decision
+
+  - id: CR-99
+    title: An approved Regularization or Admin Correction silences raw-punch irregularity flags without altering the raw punch data still shown to the employee, creating a flags-vs-raw-data inconsistency
+    observation: "AttendanceDayProcessor.Pair (the punch-pairing routine that sets HasMissingInPunch/HasMissingOutPunch/HasInvalidPunchSequence) is only invoked in the branch where NO adjustment/admin-correction exists. Once a correction/adjustment is approved, these three flags simply keep their reset-to-false values regardless of how malformed the underlying raw punches actually are - but the raw punches themselves remain fully visible to the employee in GetMyDayAsync's punch list, confirmed by the frontend rendering both the clean flags and the original irregular punches side by side (F-ATT-093)."
+    risk: "A UI consumer could show a visibly broken raw punch sequence next to a 'clean' exception-flag state for the same day, which is confusing without context and could mask that the flags reflect the CORRECTION's inputs, not the raw data displayed alongside them."
+    source: "Backend/HRMS.Application/Services/AttendanceDayProcessor.cs (Pair, called only in the no-adjustment branch)"
+    classification: Open - awaiting decision
+
+  - id: CR-100
+    title: GetManagerDayAsync's denial status code (404 vs 403) for an unauthorized colleague-day lookup depends on which optional authorization service is wired in DI
+    observation: "With IAttendanceAuthorizationService present, a denied CanAccessEmployeeAsync check becomes NotFound (anti-enumeration). Without it (the null-DI fallback, using a plain manager-resolver check), the same denial becomes Forbidden instead. Both are reachable code paths in the same method depending on constructor wiring (F-ATT-066)."
+    risk: "An automated test asserting a specific status code for 'manager viewing a non-report's day' needs to know which path is actually active in the running configuration - a naive assumption of either 403 or 404 could be wrong depending on deployment/test-harness wiring."
+    source: "Backend/HRMS.Application/Services/AttendanceReadService.cs:84-95 (GetManagerDayAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-101
+    title: No pessimistic row locking (SELECT FOR UPDATE / UPDLOCK,HOLDLOCK) exists anywhere in Monthly Processing/Period Lock/Admin Corrections/Payroll Snapshot - only a plain int optimistic-concurrency counter plus DB unique indexes back every race, diverging from the CLAUDE.md-documented repo pattern
+    observation: "AttendancePeriod.ConcurrencyVersion is a plain int, not a native rowversion (SQL Server) or app-managed binary(16) token (MySQL) as CLAUDE.md documents elsewhere in the codebase. The period-lock check itself (EnsureDateIsOpenAsync/EnsureRangeIsOpenAsync) is a plain AnyAsync read with no row lock at all - mutual exclusion between a Close and a concurrent Admin Correction relies entirely on the outcome invariants of each write's own optimistic concurrency, not on serializing the lock-check read. This is a provider-portable design choice (works identically across SQLite/MySQL/SQL Server) rather than a bug, but the race-safety guarantees should be independently verified on real MySQL and SQL Server, not assumed from SQLite alone. One specific interleaving (Close-vs-Admin-Correction) has only SQLite provider-test coverage in the codebase found during this research - no MySQL/SQL-Server-provider test exercises it directly (F-ATT-114, F-ATT-116, F-ATT-323)."
+    risk: "A pattern-matching audit expecting CLAUDE.md's documented FOR UPDATE/UPDLOCK,HOLDLOCK convention in this module would be surprised to find none - and the specific Close-vs-Correction race lacks the same real-provider evidence every other race-sensitive Monthly path has."
+    source: "Backend/HRMS.Application/Services/AttendancePeriodLockService.cs; AttendanceMonthlyProcessor.cs; AttendanceAdminCorrectionService.cs; Backend/HRMS.Infrastructure/Persistence (AttendancePeriod.ConcurrencyVersion configuration)"
+    classification: Open - awaiting decision
+
+  - id: CR-102
+    title: "GET /periods/{id}/exceptions is gated by Attendance.Exception.View at the controller, but the underlying service resolves employee-scoping using Attendance.Monthly.ViewAll internally - a permission/scope mismatch"
+    observation: "AttendanceMonthlyController.Exceptions carries [HasPermission(Attendance.Exception.View)] but calls processor.GetExceptionsAsync(periodId, query, ct) WITHOUT passing an explicit authorizationPermission argument. AttendanceMonthlyProcessor.GetExceptionsAsync resolves the actual scope predicate using authorizationPermission ?? Permissions.Attendance.MonthlyViewAll - so a user who has Exception.View but NOT MonthlyViewAll passes the controller's declarative gate but has their internal scope resolved under a different permission's rules entirely, which could silently return an empty/failure-shaped scope or apply unintended breadth (F-ATT-120, F-ATT-102 group)."
+    risk: "This is exactly the kind of gap that's invisible to a route-attribute-only permission audit - the declared permission and the actually-enforced scoping permission diverge for one specific endpoint."
+    source: "Backend/HRMS.API/Controllers/AttendanceMonthlyController.cs:47-48; Backend/HRMS.Application/Services/AttendanceMonthlyProcessor.cs:231-244 (GetExceptionsAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-103
+    title: A failed monthly-processing attempt leaves zero audit trail - AttendancePeriodEventType.ProcessingFailed and Refinalized are defined but never written by any code path
+    observation: "AttendanceMonthlyProcessor.ProcessAsync's ProcessingStarted event is written inside the same DB transaction as the later aggregation/completion steps. If the transaction rolls back due to a later failure, the ENTIRE transaction reverts, including the ProcessingStarted write - so a failed processing attempt leaves NO trace at all in AttendancePeriodEvents, despite the enum explicitly defining a ProcessingFailed event type for exactly this scenario (F-ATT-101)."
+    risk: "For an HR/audit-sensitive module, 'why does the period history show a gap with no failure record' is a legitimate audit question that current code cannot answer from the event log alone."
+    source: "Backend/HRMS.Application/Services/AttendanceMonthlyProcessor.cs:47-107; Backend/HRMS.Domain/Enums/AttendanceEnums.cs (AttendancePeriodEventType)"
+    classification: Open - awaiting decision
+
+  - id: CR-104
+    title: "Admin Correction list's default scope date (when FromDate is not supplied) is evaluated against TODAY, not the historical date range actually being queried"
+    observation: "AttendanceAdminCorrectionService.ListAsync, when the caller supplies no FromDate, builds the authorization scope predicate using today's date rather than any date related to the corrections being retrieved. A manager reassigned since a correction's own historical date could get a materially different (possibly empty, possibly over-broad) result set than intended for a query that is conceptually about a past period (F-ATT-137)."
+    risk: "An org-chart change between a correction's own date and 'today' could silently narrow or widen what a manager sees when browsing correction history, in a way that's easy to misread as a data-completeness bug rather than a scope-timing artifact."
+    source: "Backend/HRMS.Application/Services/AttendanceAdminCorrectionService.cs:66 (ListAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-105
+    title: There is no 'view my Overtime requests' or 'view team Overtime requests' endpoint anywhere server-side, despite Overtime.ViewSelf/ViewTeam permissions being defined, seeded, and permission-level tested - and the frontend's corresponding buttons are dead stubs
+    observation: "grep across the entire API surface for Attendance.Overtime.ViewSelf/ViewTeam returns zero controller-attribute matches - only OvertimeViewAll (the finalized payroll snapshot) is wired to any route. This is the root cause of a frontend finding: OvertimePage.tsx's 'Team Overtime' card Approve/Reject buttons render (correctly permission-gated) but have NO onClick handler at all and are wired to unrelated leftover state - there is no team-OT list ever fetched on this screen to act on in the first place (F-ATT-174, F-ATT-298)."
+    risk: "A Time Manager or Manager holding Attendance.Overtime.Approve sees a live-looking approval UI that cannot actually approve or reject anything - Overtime approval is currently only reachable via a direct API call, with zero discoverable UI path."
+    source: "Backend/HRMS.API/Controllers/OvertimeController.cs (no route uses ViewSelf/ViewTeam); Frontend/HRMS.Web/src/pages/attendance/OvertimePage.tsx (Team Overtime card)"
+    classification: Open - awaiting decision
+
+  - id: CR-106
+    title: On Duty overlap validation at submission time is incomplete - it only checks the employee's own other PENDING requests, never an already-Approved On-Duty, existing attendance, or approved Leave (Leave overlap is checked only at approval time)
+    observation: "SubmitOnDutyAsync's overlap guard is scoped to Status==Pending only, so a second OD request over dates already covered by an APPROVED On-Duty is silently accepted at submission. Leave overlap has no submission-time check at all - an employee can freely submit an OD that overlaps their own approved Leave, and only discovers the conflict when a manager tries to approve it (F-ATT-158)."
+    risk: "An employee could accumulate multiple overlapping OD submissions against an already-approved OD with no early warning, and a Leave/OD conflict surfaces only at the approval step rather than at submission, which is a later and more disruptive point to discover it."
+    source: "Backend/HRMS.Application/Services/AttendanceWorkflowService.cs (SubmitOnDutyAsync, lines 94-106; TransitionOnDuty's approval-time Leave overlap check)"
+    classification: Open - awaiting decision
+
+  - id: CR-107
+    title: There is no Overtime request cancellation/withdrawal endpoint at all, despite OvertimeRequestStatus.Cancelled being a defined enum member
+    observation: "Only Draft -> Submitted -> Approved/Rejected is reachable through OvertimeService/OvertimeController; nothing ever sets Status=Cancelled. This contrasts directly with Regularization and On Duty, both of which have an explicit /cancel endpoint available to the owning employee while Pending (F-ATT-175)."
+    risk: "An employee who submits an Overtime request in error has no self-service way to withdraw it - the only remedies are a manager Reject or a post-hoc Correct by an Overtime.Approve holder, neither of which is owner-initiated."
+    source: "Backend/HRMS.Application/Services/OvertimeService.cs; Backend/HRMS.Domain/Enums/OvertimeEnums.cs (OvertimeRequestStatus.Cancelled, unreachable)"
+    classification: Open - awaiting decision
+
+  - id: CR-108
+    title: Overtime's ActualEligibleMinutes is frozen at request-creation time and is NEVER recomputed at approval, even if the underlying attendance day changes in between
+    observation: "ApproveAsync clamps ApprovedMinutes = min(RequestedMinutes, ActualEligibleMinutes) using the value computed once inside CreateRequestAsync from the attendance day's WorkedMinutes at that moment. If an admin subsequently regularizes/corrects the same day's attendance downward before the OT request is approved, the approval still uses the STALE ActualEligibleMinutes, not a recomputed value reflecting the correction. Existing concurrency tests (Approve_vs_attendance_regularization, Approve_vs_leave_change) explicitly tolerate either outcome rather than asserting recomputation (F-ATT-176)."
+    risk: "An employee could be approved for overtime pay based on attendance figures that have since been corrected downward, with no automatic reconciliation - worth a product decision on whether recomputation at approval time is the intended behavior."
+    source: "Backend/HRMS.Application/Services/OvertimeService.cs (CreateRequestAsync, ApproveAsync); Backend/HRMS.Tests/OvertimeConcurrencyTests.cs (Approve_vs_attendance_regularization, Approve_vs_leave_change)"
+    classification: Open - awaiting decision
+
+  - id: CR-109
+    title: Overtime's Category (NormalDay/WeekOff/Holiday) is caller-supplied and validated only against the policy's Allow flags - never cross-checked against the day's actual resolved RosterDayType/Status
+    observation: "CreateRequestAsync validates the requested Category against policy.AllowNormalWorkingDay/AllowWeekOff/AllowHoliday, but never queries the date's actual resolved RosterDayType or the EmployeeAttendanceDay.Status for consistency. A caller could in principle submit Category=Holiday for a date that AttendanceDayProcessor did NOT resolve as a Holiday at all, as long as the policy's AllowHoliday flag happens to be enabled (F-ATT-183, F-ATT-289 area)."
+    risk: "The multiplier/eligible-minutes math for the chosen category only depends on WorkedMinutes, not on the day's true classification - a mismatched Category could apply the wrong pay multiplier for a genuinely normal working day, or vice versa, with nothing in the create path catching the inconsistency."
+    source: "Backend/HRMS.Application/Services/OvertimeService.cs (CreateRequestAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-110
+    title: The Comp-Off/Overtime DoubleBenefitDenied exclusivity guard is a pre-commit AnyAsync check with NO backing DB unique constraint - the one genuinely race-susceptible boundary identified across this entire module
+    observation: "Unlike every other race-sensitive boundary in Attendance (Monthly summaries, Period close, Admin corrections, Workflow transitions, Overtime finalization, Device lease/mapping), all of which have a DB-level unique index as the ultimate backstop, the Comp-Off/Overtime double-benefit exclusivity check (db.CompOffEarnings.AnyAsync(x => x.SourceAttendanceDayId == day.Id && x.Status != Rejected && x.Status != Superseded)) has no such constraint. CompOffOvertimeExclusivityTests exercises this only sequentially, not concurrently - no dedicated concurrent-race test was found proving two simultaneous 'earn Comp-Off' and 'create OT' calls against the identical attendance day cannot both slip through (F-ATT-184, F-ATT-328)."
+    risk: "This is the single genuine concurrency gap in an otherwise consistently DB-constrained module - a race between the two write paths could theoretically create a double-paid benefit for the same day, though no evidence was found that it actually happens in practice."
+    source: "Backend/HRMS.Application/Services/OvertimeService.cs (CreateRequestAsync, DoubleBenefitDenied check); Backend/HRMS.Tests/CompOffOvertimeExclusivityTests.cs"
+    classification: Open - awaiting decision
+
+  - id: CR-111
+    title: "Attendance.View gates self-service (me/calendar, me/days, me/exceptions) AND manager-team routes that the seeded Employee and Manager roles respectively do not hold at all, while other 'view attendance' surfaces on the SAME roles use different permissions entirely"
+    observation: "The seeded Employee role holds MonthlyViewSelf/ExceptionViewSelf/CompOffViewSelf but NOT plain Attendance.View - so a plain Employee gets 403 on GET /api/attendance/me/calendar, /me/days/{date}, and /me/exceptions, all three gated on Attendance.View. The seeded Manager role holds MonthlyViewTeam/ExceptionView/CompOffViewTeam+Approve but likewise NOT Attendance.View - so Manager cannot call GET /api/attendance/manager/team or /manager/team/{employeeId}/{date}, even though the SAME Manager role CAN reach the Operations exception queue (via ExceptionView) and Monthly summaries (via MonthlyViewTeam) through different permissions. The frontend nav items for these routes are consistently hidden for such callers (gated on the same Attendance.View), so the gap never surfaces as a visibly broken click - only as a route that silently never appears in navigation and would 403 if hit directly (F-ATT-109, F-ATT-197, F-ATT-218, F-ATT-219)."
+    risk: "This mirrors the CR-44/CR-79-style pattern from prior modules: a role operationally central to a feature holds a permission that sounds adjacent but is not the one actually checked. In the SEEDED matrix, neither a plain Employee nor a plain Manager can use their own daily calendar/day-detail/team views at all unless Attendance.View is explicitly granted alongside their other Attendance permissions."
+    source: "Backend/HRMS.API/Controllers/AttendanceReadController.cs; AttendanceOperationsController.cs (MyAttendanceOperationsController); Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (Employee/Manager RolePermissionMap entries)"
+    classification: Open - awaiting decision
+
+  - id: CR-112
+    title: No seeded role except SuperAdmin/TenantAdmin holds Regularization.Request/Approve, OnDuty.Request/Approve, or AdminCorrection.Manage - the entire correction/approval maker-checker workflow is operationally SuperAdmin/TenantAdmin-only
+    observation: "HRAdmin holds Attendance.ExceptionView/MonthlyProcess/MonthlyClose/MonthlyReopen (can see the queue and manage periods) but NOT Regularization.Approve, OnDuty.Approve, or AdminCorrection.Manage - it cannot approve/reject a single regularization or on-duty request, and cannot submit a manual attendance correction. No other seeded role (HRManager, Manager, Employee, ERO, HRBP, TimeManager, SuperHR) holds any of these three permissions either (F-ATT-111, F-ATT-214, F-ATT-215)."
+    risk: "POST operations/bulk, POST operations/manual, and POST operations/bulk-corrections - the entire HR-operator correction workflow - is reachable, in the seeded demo/dev matrix, ONLY by SuperAdmin/TenantAdmin, even though HRAdmin appears otherwise well-provisioned for day-to-day Attendance administration."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, HRAdmin array lines ~459-488)"
+    classification: Open - awaiting decision
+
+  - id: CR-113
+    title: SuperHR and TimeManager's seeded Attendance permission sets are narrower than their role names imply, mirroring Leave's CR-79 pattern
+    observation: "SuperHR holds only Attendance.CompOff.ViewAll/Approve/Manage - despite holding PageAccess.Manage and the full Payroll configuration surface, it cannot open the Operations queue, Attendance Reports, or Device Integration screens through its own role at all. TimeManager - the role whose name most directly implies Attendance-operations ownership - cannot approve regularizations, cannot approve on-duty requests, cannot submit manual corrections, cannot view Attendance Reports, and (despite holding DeviceMapping/DeviceSync/DeviceImport/DeviceViewHistory) does NOT hold Device.Manage, so it cannot register/edit/activate/deactivate/disable a device (F-ATT-216, F-ATT-217)."
+    risk: "A QA persona matrix or a new hire configuring roles by name alone ('SuperHR should surely see Attendance Reports', 'TimeManager should surely manage devices') would be surprised by the seeded reality in both directions."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, SuperHR and TimeManager arrays)"
+    classification: Open - awaiting decision
+
+  - id: CR-114
+    title: No seeded role except SuperAdmin/TenantAdmin holds any Attendance.Overtime.* permission (all 6) - the Overtime module is operationally unreachable by any HR/manager persona in the seeded matrix
+    observation: "Request, Approve, Finalize, Reopen, ViewSelf, ViewTeam, and ViewAll are all unheld by HRAdmin, HRManager, Manager, Employee, ERO, HRBP, TimeManager, and SuperHR alike. OvertimeController is fully gated (no missing-attribute risk), so this is not an authorization-bypass concern - but it means no QA script assuming a Manager or TimeManager persona can exercise Overtime approval will succeed against the seeded demo/dev matrix without an explicit additional grant (F-ATT-214)."
+    risk: "Any test plan or demo scenario for Overtime approval must explicitly provision a custom role/grant beyond the seeded set, since none of the day-to-day operational roles can reach it as configured."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap)"
+    classification: Open - awaiting decision
+
+  - id: CR-115
+    title: The Attendance Exceptions report correctly scopes authorization at the SQL level but then derives, filters, sorts, AND paginates entirely in memory over the whole scoped employee x period set - and export re-derives the full set once per export page rather than once overall
+    observation: "AttendanceReportService.GetExceptionsAsync delegates to AttendanceMonthlyProcessor.DeriveExceptions, which applies the authorization scope correctly first, at the SQL level (no data-leak risk), but then loads ALL EmployeeEmploymentHistory, ALL EmployeeAttendanceDay, and ALL pending Regularization/OnDuty rows for every scoped employee for the ENTIRE period into memory (three unpaged ToListAsync calls), derives the exception list day-by-day in C#, then applies EmployeeId/ExceptionType/IsBlocking/date filters via LINQ-to-Objects, sorts in memory, and finally Skip/Take on the in-memory List - not the database. Export additionally re-invokes this full derivation once PER export page up to MaxExportRows=50,000, rather than deriving once (F-ATT-226, F-ATT-227)."
+    risk: "For a caller with tenant-wide scope and a wide date range, this is a full unpaged employee/day/history scan per report request/page - a genuine performance/scale risk (not a security leak) that grows with tenant size and period length, distinct from Daily/Monthly reports and the Operations-queue exceptions endpoint, both of which correctly page at the SQL level."
+    source: "Backend/HRMS.Application/Services/AttendanceMonthlyProcessor.cs (DeriveExceptions); AttendanceReportService.cs (GetExceptionsAsync, GetAllExceptionsAsync, ExportExceptionsAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-116
+    title: A device's CredentialReference can never be cleared via the Update API - a blank/whitespace submission silently retains the existing value, with no explicit 'clear credential' affordance
+    observation: "UpdateDeviceAsync only overwrites CredentialReference if the submitted value is non-blank (if (!string.IsNullOrWhiteSpace(...))). The frontend form always starts blank on Edit, reinforcing this exact behavior as if it were 'leave blank to keep current' - which appears to be the intended contract, but there is no way to explicitly REMOVE a previously-configured credential once set, and no test asserts an opposite explicit-clear capability exists (F-ATT-237, F-ATT-009)."
+    risk: "If a device's credential is ever compromised or needs to be intentionally removed (e.g. switching to an unauthenticated connection mode), there is currently no API/UI path to actually clear it - worth confirming with product whether this is the intended contract."
+    source: "Backend/HRMS.Application/Services/AttendanceDeviceOperationsService.cs (UpdateDeviceAsync); Frontend/HRMS.Web/src/pages/attendance/AttendanceDevicesPage.tsx (DeviceForm)"
+    classification: Open - awaiting decision
+
+  - id: CR-117
+    title: Device ingestion has TWO independent idempotency keys - the receipt-level dedup key includes the ingestion Source string, while the authoritative-punch dedup key does not, so the same real-world event can accumulate multiple audit-issue rows even though the resulting punch is correctly deduplicated
+    observation: "The receipt-level unique index is on (TenantId, 'device:{deviceId}:{Source}', ExternalEventId) - Source-specific, so the same ExternalEventId ingested under two different Source values (worker sync vs 'manual-import' vs 'issue-reprocess') produces TWO SEPARATE AttendanceDeviceIngestionEvent rows. The authoritative AttendancePunch dedup key is (DeviceId, ExternalEventId) ONLY - source-independent - so no duplicate raw punch is ever created regardless of how many receipt rows accumulate for 'the same' event (F-ATT-241, F-ATT-248)."
+    risk: "This is intentional/documented as auditable-per-attempt, not a defect, but an operator reviewing the Ingestion Issues tab could see what looks like multiple distinct events for a single real-world punch attempt across repeated reprocess attempts - worth explicit QA cases counting exactly how many receipt rows accumulate under repeated reprocessing."
+    source: "Backend/HRMS.Application/Services/AttendanceDeviceIntegrationService.cs (IngestAsync); AttendancePunchIngestionService.cs (external punch id construction)"
+    classification: Open - awaiting decision
+
+  - id: CR-118
+    title: Manual device POST /import bypasses the sync lease system entirely, allowing it to race an active worker/manual sync cycle on the same device with no coordination
+    observation: "AttendanceDevicesController.Import calls ingestion.IngestAsync directly with LeaseToken=null (default). Since IngestAsync's lease check is only enforced when a LeaseToken is actually supplied, a manual file-import batch can run concurrently with an active Pull-worker cycle or a manual 'Sync Now' on the SAME device with no lease-level coordination at all between the two paths (F-ATT-252). The dual-layer ingestion idempotency (CR-117's authoritative-punch key) should still prevent a duplicate raw punch, but this specific concurrent-import-vs-worker-sync interleaving was not found exercised by any existing automated test."
+    risk: "A plausible untested race: an operator kicks off a manual import while the background worker is mid-cycle on the same device - the two proceed with no mutual awareness, relying entirely on the punch-level idempotency key rather than any explicit coordination."
+    source: "Backend/HRMS.API/Controllers/AttendanceDevicesController.cs (Import action, line ~51-53)"
+    classification: Open - awaiting decision
+
+  - id: CR-119
+    title: No HTTP-layer (WebApplicationFactory) test exists for AttendanceDevicesController's 17 routes at all - every existing test calls Application-layer services directly, so the actual 403-for-missing-permission behavior over real HTTP has never been automatically verified
+    observation: "A reflection-based test confirms every controller action carries a [HasPermissionAttribute], but it does not send a real request and assert a 403 for a caller lacking the permission. This is a genuine coverage gap distinct from every other Attendance controller, most of which DO have dedicated HTTP-level authorization test files (F-ATT-266)."
+    risk: "The device module's declarative permission attributes have never been proven to actually enforce at the HTTP pipeline level through an automated test - only through code inspection. A manual QA pass explicitly sending real requests without the matching permission and asserting 403 across all 17 routes closes this gap."
+    source: "Backend/HRMS.Tests/AttendanceDeviceOperationsTests.cs (Device_api_actions_require_the_canonical_permission_for_each_operation, reflection-only)"
+    classification: Open - awaiting decision
+
+  - id: CR-120
+    title: AttendanceDeviceIntegration.SerialNumber has no tenant-uniqueness constraint at all - only Code does - so two devices can silently share an identical real-world serial number
+    observation: "ValidateDeviceAsync checks only Code for duplicates; SerialNumber has no DB index or application-level check. Two devices with an identical SerialNumber, different Code, can both be created and activated in the same tenant with no warning of any kind (F-ATT-235)."
+    risk: "A data-quality gap, not a functional bug per se - worth confirming with product/operations whether SerialNumber uniqueness should be enforced, since operators may reasonably assume it already is given Code's own uniqueness enforcement."
+    source: "Backend/HRMS.Application/Services/AttendanceDeviceOperationsService.cs (ValidateDeviceAsync, lines ~282-294)"
+    classification: Open - awaiting decision
+
+  - id: CR-121
+    title: Holiday is silently ignored for any employee with a matching Shift/Shift-Pattern applicability rule for that date - the Holiday calendar is only consulted in the no-rule-matched fallback branch
+    observation: "AttendanceFoundationService.ResolveAsync only calls CalendarDayTypeAsync (the Holiday/WeeklyOff lookup) in the fallback branch reached when no Applicability rule matches AND no active default Shift exists. If ANY ShiftApplicabilityRule or ShiftPattern matches the employee/date, the resolved RosterDayType/pattern day type is returned directly - the tenant Holiday table is NEVER cross-checked for that date. A newly-declared Holiday falling on a date an employee already has an explicit/pattern-based Shift assignment for has ZERO automatic effect on that employee's AttendanceDayProcessor outcome unless an admin explicitly re-runs AssignRosterAsync to apply a manual calendar override (F-ATT-288)."
+    risk: "An HR admin who declares a company-wide Holiday could reasonably expect it to apply to everyone - but any employee whose Shift resolution is driven by an Applicability rule or Pattern (rather than the tenant-default fallback) will be processed as a normal working day unless a manual roster override is separately applied for that specific date."
+    source: "Backend/HRMS.Application/Services/AttendanceFoundationService.cs (ResolveAsync, CalendarDayTypeAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-122
+    title: An approved On Duty request unconditionally overwrites a Holiday/WeeklyOff day's user-facing Status to OnDuty, with no exclusion - RosterDayType still correctly records the underlying calendar type, so the two fields diverge
+    observation: "In AttendanceDayProcessor.ProcessAsync, the Holiday/WeeklyOff branch sets Status=Holiday/WeeklyOff first; the approved-On-Duty override runs unconditionally AFTERWARD with no check for whether the day was already Holiday/WeeklyOff. RosterDayType is left untouched (still correctly Holiday/WeeklyOff), but the Status field that most UI/consumer code reads reports OnDuty instead (F-ATT-289)."
+    risk: "Two consumers of the same EmployeeAttendanceDayDto reading Status vs RosterDayType could disagree about what actually happened on that date - worth confirming which field each downstream consumer (UI badge, monthly-summary aggregation, payroll) actually relies on, since they can now diverge."
+    source: "Backend/HRMS.Application/Services/AttendanceDayProcessor.cs (ProcessAsync, on-duty override branch)"
+    classification: Open - awaiting decision
+
+  - id: CR-123
+    title: A manager can approve or reject a pending Regularization or On-Duty request from an employee who has since separated - the transition methods never re-check the target employee's current Employee.Status, only the creation-time submission path does
+    observation: "TransitionRegularization and TransitionOnDuty check the APPROVER's own authorization (self-approval guard, manager/role-scope predicate) but never re-check the TARGET employee's current Status. Only SubmitRegularizationAsync/SubmitOnDutyAsync (the creation path) enforces the Employee.Status==Active gate. A pending request submitted before separation remains visible in the manager's queue and approvable/rejectable after the requester separates, exactly paralleling Leave's F-LEAVE-293 finding from Module 7 (F-ATT-286, F-ATT-291)."
+    risk: "A manager could unknowingly approve/reject a stale request from a now-departed employee with no special warning that the requester has since separated - worth an explicit product decision on whether this should be blocked, flagged, or left as-is."
+    source: "Backend/HRMS.Application/Services/AttendanceWorkflowService.cs (TransitionRegularization, TransitionOnDuty)"
+    classification: Open - awaiting decision
+
+  - id: CR-124
+    title: "AttendanceWorkflowService's optional-DI legacy fallback (reached only when IAttendanceAuthorizationService is null) has ZERO role-scope (HRBP/SuperHR) authorization path at all, independently reproducing Leave's own CR-83 gap"
+    observation: "When AttendanceWorkflowService is constructed without IAttendanceAuthorizationService (as some test harnesses do directly), GetManagerRegularizationsAsync/GetManagerOnDutyAsync/TransitionRegularization/TransitionOnDuty fall back to a raw IEmployeeManagerResolver-only check comparing ManagerId to the caller's own EmployeeId, with no OR-arm for role-scope access at all. In production, DI always registers IAttendanceAuthorizationService (confirmed Scoped registration in DependencyInjection.cs), so this fallback is believed unreachable outside test contexts constructing the service directly - but it is a design-consistency risk worth confirming stays true (F-ATT-275)."
+    risk: "If any future wiring change ever constructed AttendanceWorkflowService without its authorization service, an HRBP/SuperHR with genuine role-scope access but no direct manager relationship would have NO fallback authorization path at all for Regularization/On-Duty - exactly mirroring the risk Module 7's CR-83 identified for Leave."
+    source: "Backend/HRMS.Application/Services/AttendanceWorkflowService.cs:17 (optional constructor parameter, null-fallback branches)"
+    classification: Open - awaiting decision
+
+  - id: CR-125
+    title: "CONFIRMED frontend anti-pattern: the Applicability Rules table's Edit and Delete buttons render UNCONDITIONALLY with no permission check at all - any user with plain Attendance.View sees live Edit/Delete controls, unlike the correctly-gated Save button on the same page"
+    observation: "AttendanceFoundationPage.tsx's Applicability Rules table renders its Edit and Delete buttons with no can(...) wrapper of any kind - contrast with the same page's Shift/Applicability-save buttons, which ARE correctly gated behind canManage. A user holding only Attendance.View can click Edit/Delete, trigger a window.confirm, and fire a real updateApplicability/deleteApplicability API call, which the server correctly rejects with 403 - so this is not a security hole (the backend enforces correctly), but it is the exact 'full mutating UI regardless of granted permissions, relying on a 403 at submit time' pattern flagged (as CR-44/CR-88) in prior modules. No existing test renders this page with a non-manager user and asserts these buttons are hidden (F-ATT-303)."
+    risk: "A user without edit rights sees fully-live-looking Edit/Delete controls for every applicability rule and only discovers they lack permission after attempting the action and receiving an error - a confusing UX regression relative to the same page's own Save-button gating."
+    source: "Frontend/HRMS.Web/src/pages/attendance/AttendanceFoundationPage.tsx (Applicability Rules table)"
+    classification: Open - awaiting decision
+
+  - id: CR-126
+    title: Two Attendance frontend routes (Overtime and Comp-Off Operations) exist, are fully functional, and are covered by tests, but have ZERO navigation.ts entries or in-app links - reachable only by typing the URL directly
+    observation: "/attendance/overtime (OvertimePage) and /attendance/comp-off/operations (CompOffOperationsPage) are both registered in App.tsx with working route guards and both have dedicated Vitest test files, but a grep across the entire nav configuration and every .tsx source for links to either route returns zero matches outside App.tsx and their own test files (F-ATT-297, F-ATT-301)."
+    risk: "A Time Manager or Comp-Off approver holding the correct permissions has no discoverable path to either screen through normal navigation - they would need to already know the exact URL, which is a real usability gap for two functionally significant approval/administration surfaces."
+    source: "Frontend/HRMS.Web/src/layout/navigation.ts; Frontend/HRMS.Web/src/App.tsx (attendance route block)"
+    classification: Open - awaiting decision
+
+  - id: CR-127
+    title: The Regularization submission form only supports correcting an OUT punch, has no UI for IN-punch correction despite full API support, and manager Reject actions send a hardcoded generic comment with no way to type a real reason
+    observation: "AttendanceRequestsPage.tsx's Regularization form only ever submits requestType='MissingOutPunch' with a single 'Corrected out' datetime field - there is no field for proposedInAtUtc and no way to select any of the other five AttendanceRegularizationType values (MissingInPunch, MissingBothPunches, CorrectInTime, CorrectOutTime, CorrectInOutTime), even though POST /api/attendance/me/regularizations fully supports all of them. Separately, manager Reject actions on both Regularization and On Duty send the hardcoded string 'Rejected by manager' with no UI field to type an actual reason, and Cancel/Approve/Reject all rely on native window.confirm dialogs rather than in-page confirmation (F-ATT-295, F-ATT-296)."
+    risk: "Any employee needing to regularize a missing/incorrect IN punch (a very common real-world scenario - forgetting to clock in) has NO UI path to do so and must be told to contact IT/HR for a direct API call or an admin correction instead. Every rejection recorded through this screen carries the same generic, uninformative comment regardless of the actual reason."
+    source: "Frontend/HRMS.Web/src/pages/attendance/AttendanceRequestsPage.tsx"
+    classification: Open - awaiting decision
+
+  - id: CR-128
+    title: "CONFIRMED functional defect: the Attendance periods table's Pagination control on the Monthly Finalization page is a dead no-op (onPageChange={() => undefined}) - Previous/Next on this specific control does nothing, unlike the correctly-wired summaries table beside it"
+    observation: "AttendanceMonthlyFinalizationPage.tsx's 'Attendance periods' table passes onPageChange={() => undefined} to its Pagination component - a literal no-op. No page-state variable is wired to it at all, in contrast to the 'Finalization preview' summaries table below it on the same page, which correctly uses onPageChange={setPage}. Only relevant for a tenant with 50+ months of period history (default pageSize=50), but genuinely reachable once that threshold is crossed - no existing test has enough seeded periods to even render the Pagination control, so this defect has never been exercised by an automated test (F-ATT-310)."
+    risk: "For a mature tenant with more than 50 months of Attendance history, an HR admin trying to browse older periods via this specific control will find Previous/Next entirely non-functional, with no error or indication of why."
+    source: "Frontend/HRMS.Web/src/pages/attendance/AttendanceMonthlyFinalizationPage.tsx (periods table Pagination)"
+    classification: Open - awaiting decision

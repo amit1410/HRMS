@@ -1,0 +1,185 @@
+# Module 10 QA-risk register. Numbering continues after Module 9's CR-164 (qa/09-separation/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. Classification starts 'Open - awaiting decision'.
+# CR-181 is the exception: it documents a confirmed source-level defect (a structurally unreachable status),
+# not merely a design ambiguity, and is classified accordingly.
+#
+# CR-66 and CR-77 are carried forward and RE-VERIFIED directly against Payroll's own code (not assumed to
+# carry over unchanged - see README.md's carry-forward section). CR-66 recurs with a NEW twist: unlike every
+# prior module where the self-escalating role (SuperHR) started from zero native permissions in the family,
+# here SuperHR already holds a *partial* native Payroll footprint (including irreversible Run.Finalize) and
+# uses PageAccess.Manage only to close the REMAINING gap. CR-77 does NOT recur - Payroll has no manager/
+# team-scope permission concept at all, the first module surveyed so far where that mechanism is entirely
+# absent rather than merely another inconsistent variant of it.
+
+clarifications:
+  - id: CR-66
+    title: "(carried forward, RE-VERIFIED with a new twist) SuperHR's PageAccess.Manage self-escalation closes the gap to the REMAINDER of the Payroll permission surface, on top of a partial NATIVE footprint that already includes irreversible Run.Finalize"
+    observation: >
+      See qa/06-rbac-account-linking/clarifications.yaml#CR-66 for the original finding
+      (PageAccessService.UpdateAsync validates only against Permissions.All membership, no
+      actor-already-holds check, no target-role restriction) and qa/09-separation's CR-66 entry for the
+      prior worst-case (SuperHR starting from zero native Separation permissions). Payroll reframes this
+      again, differently: SeedData.cs's RolePermissionMap[SuperHR] already grants, natively, full
+      SalaryComponent/SalaryStructure/EmployeeSalary management, Period management and Unlock, Controls
+      management, and Run management including Run.Approve/Run.Finalize/Run.Calculate/Run.Recalculate -
+      SuperHR can already finalize a payroll run with ZERO self-escalation. What PageAccess.Manage adds on
+      top is the remainder of the module: Adjustments.*, Reimbursements.*, OffCycle.*, Analytics.*,
+      Retro.*, FinalSettlement.*, and every PayrollInput.* permission, none of which SuperHR holds
+      natively. One PUT /api/page-access/roles/{roleId} call closes that gap entirely.
+    risk: >
+      This is a different shape of the same underlying finding: previous modules showed CR-66 escalating a
+      role from "zero capability" to "full capability" in one step. Payroll shows a role that ALREADY has
+      one of the two most consequential Payroll capabilities (irreversible run finalization) by direct
+      design, with self-escalation only needed for the remaining, arguably less catastrophic capabilities
+      (adjustments, reimbursement approval/settlement, off-cycle processing). A reviewer auditing only the
+      self-escalation vector would under-estimate SuperHR's true baseline exposure in this module.
+    source: "Backend/HRMS.Application/Services/PageAccessService.cs (UpdateAsync); Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[SuperHR] Payroll slice); qa/06-rbac-account-linking, qa/09-separation clarifications.yaml (CR-66)"
+    classification: Open - awaiting decision
+
+  - id: CR-77
+    title: "(carried forward, RE-VERIFIED - does NOT recur) Payroll has no manager/team-scope permission concept at all - the first module surveyed where this mechanism is entirely absent, not merely another inconsistent variant"
+    observation: >
+      See qa/07-leave, qa/08-attendance, qa/09-separation clarifications.yaml#CR-77 for the growing list of
+      independent, occasionally-disagreeing "who can see whose employees" mechanisms found across the
+      product (RoleScopeResolver, EmployeeAccessScopeService, LeaveAuthorizationService,
+      AttendanceAuthorizationService, SeparationService's own resolver, ClearanceService's raw-SQL variant,
+      and TaskActionAsync's local check). A full grep of Backend/HRMS.Domain/Authorization/Permissions.cs's
+      Payroll class confirms there is no "ViewTeam"-style constant anywhere in the ~160-entry Payroll
+      permission inventory - every permission is either self-scoped (ViewOwn/Request) or tenant-wide
+      (View/Manage). Manager, the role that would be expected to hold any such team-scope permission, holds
+      literally zero Payroll permissions (see CR-168).
+    risk: >
+      This is a genuinely different finding shape from every prior CR-77 sighting: rather than adding an
+      Nth inconsistent scope mechanism, Payroll confirms the concept was never built here at all. A manager
+      cannot see their own direct reports' payslips, salary assignments, or reimbursement claims through
+      this module by any seeded means - the only path to that visibility is the tenant-wide View permission,
+      which is a materially different (and much broader) grant than a scoped team-view would be.
+    source: "Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll class, full grep for 'ViewTeam'); Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[Manager]); qa/07-leave, qa/08-attendance, qa/09-separation clarifications.yaml (CR-77)"
+    classification: Open - awaiting decision
+
+  - id: CR-165
+    title: "HRManager holds NONE of Payroll's core module permissions - a narrower gap than even qa/09-separation's own HRManager finding (CR-135)"
+    observation: "SeedData.cs's HRManager grant set includes Employee/Attendance/Separation permissions and exactly Payroll.TaxDeclaration.Review/ViewAudit plus Payroll.YearEndTax.View/ViewHistory (both explicitly out-of-scope carry-forward areas for this module) - zero SalaryComponent/SalaryStructure/EmployeeSalary/Period/Run/Payslip/Register/Adjustments/Reimbursements/OffCycle/Analytics/Retro/FinalSettlement/PayrollInput permissions of any kind."
+    risk: "HRManager, a role positioned as senior HR in every other module surveyed, is functionally invisible to this entire module - cannot view a payslip, a salary structure, a payroll run, or approve a single reimbursement or adjustment. Confirm with product whether this is an intentional narrower mandate (Payroll reserved for HRAdmin/SuperHR/Finance-adjacent roles) or an oversight, since HRManager DOES review the two out-of-scope Tax/YearEnd areas, suggesting Payroll access generally was intended but the core grant list was simply never filled in."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[HRManager], full Payroll-permission absence)"
+    classification: Open - awaiting decision
+
+  - id: CR-166
+    title: "SuperHR's native Payroll footprint already reaches irreversible Run.Finalize with zero self-escalation, and PageAccess.Manage closes the gap to everything else"
+    observation: "See CR-66 above for the full re-verified observation. Distilled: SuperHR's SEEDED (not escalated) permission set already includes Payroll.Run.Manage/Approve/Finalize/Calculate/Recalculate, Payroll.Period.Manage/Unlock, and Payroll.Controls.Manage - a payroll-finalization-capable footprint larger than HRManager's (CR-165: zero) baked in by direct design, before any self-escalation is even considered."
+    risk: "A security review that only checks 'can this role self-escalate' would miss that SuperHR's baseline, as-seeded configuration already authorizes an irreversible financial action (Run.Finalize) with no additional grant required - the self-escalation vector (CR-66) is actually the SMALLER of the two concerns for this specific role in this specific module."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[SuperHR] Payroll slice)"
+    classification: Open - awaiting decision
+
+  - id: CR-167
+    title: "Payroll.Run.Approve and Payroll.Run.Finalize are declared and seeded but checked by ZERO endpoints - the same dead-permission shape as qa/09-separation's CR-134"
+    observation: "A full grep of every [HasPermission(...)] attribute in PayrollRunsController.cs shows the run's only real state-transition action, POST /runs/{id}/transition, is gated by Payroll.Run.Manage for every target status including Approved and Finalized. Payroll.Run.Approve and Payroll.Run.Finalize, both declared in Permissions.cs and seeded to SuperAdmin/TenantAdmin/HRAdmin/SuperHR, are never referenced by any [HasPermission] attribute anywhere in the codebase."
+    risk: "A role granted ONLY Payroll.Run.Approve or Payroll.Run.Finalize (without the broader Run.Manage) - a plausible design a role administrator might attempt, believing these two specifically-named permissions grant exactly that capability - would find both fail with Forbidden. This mirrors the CR-134/CR-80/CR-113 pattern recurring for a fourth time across the product."
+    source: "Backend/HRMS.API/Controllers/PayrollRunsController.cs (full [HasPermission] grep, line 20); Backend/HRMS.Domain/Authorization/Permissions.cs (RunApprove/RunFinalize declarations)"
+    classification: Open - awaiting decision
+
+  - id: CR-168
+    title: "Manager holds zero Payroll permissions of any kind"
+    observation: "SeedData.cs's RolePermissionMap[Manager] grants Employee/Department/Designation/Attendance/Leave/Separation permissions only - no entry from the Payroll class appears anywhere in the Manager role's grant list."
+    risk: "A manager cannot see even their own direct reports' salary, payslip, or reimbursement data through any seeded permission in this module - confirm whether this is an intentional confidentiality boundary (payroll data is deliberately kept out of line-manager visibility) or a genuine gap, especially since Manager DOES hold Separation.ManagerReview and Leave.Approve, i.e. is trusted with other sensitive employee-lifecycle decisions."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[Manager])"
+    classification: Open - awaiting decision
+
+  - id: CR-169
+    title: "(frontend) ~19 of ~27 Payroll-family routes have no navigation.ts entry - reachable only by typing the URL, the same discoverability shape as qa/09-separation's CR-163"
+    observation: "src/layout/navigation.ts registers 14 '/payroll' entries; src/App.tsx registers roughly 27 '/payroll' <Route> elements. The missing ~19 include, within this module's own in-scope surface, Reimbursements, My Reimbursements, Payroll Adjustments, My Payroll Adjustments, Off-Cycle, Payroll Inputs, Payroll Analytics, and Payroll Reports - several of the module's most operationally important screens."
+    risk: "Manual QA and day-to-day operators alike can only reach the reimbursement-approval, adjustment-approval, off-cycle-processing, and analytics/reports screens by already knowing the URL - a discoverability gap on top of the CR-170 permission-gating gap below, on exactly the screens where mistaken clicks have real financial consequences."
+    source: "Frontend/HRMS.Web/src/layout/navigation.ts; Frontend/HRMS.Web/src/App.tsx (route registrations, lines 175-223)"
+    classification: Open - awaiting decision
+
+  - id: CR-170
+    title: "(frontend) Only 8 of ~29 Payroll pages (exactly the master-configuration screens) perform any client-side permission check; every approval/workflow screen and both dashboards do not"
+    observation: "A grep of useAuth|usePermission|hasPermission|can( across every non-test *.tsx in src/pages/payroll shows exactly 8 matches: SalaryComponentsPage, SalaryStructuresPage, EmployeeSalaryAssignmentsPage, PayrollInputsPage, PayrollPeriodsRunsPage, StatutoryConfigurationsPage, StatutoryFilingsPage, YearEndTaxPage. PayrollAdjustmentsPage, ReimbursementsPage, PayrollOffCyclePage, PayrollRetroPage, FinalSettlementPage, PayrollOperationsDashboardPage, and PayrollConfigurationHealthPage (among others) have zero matches."
+    risk: "A user holding only a route's view-tier permission can still see every mutating button (Approve/Reject/Settle/Process/Finalize) on the un-gated pages, and only discovers the action is unavailable after a failed round-trip to the backend - the same pattern qa/09-separation's CR-160 documented, here affecting the majority of the module's own screens rather than 15 of 16."
+    source: "Frontend/HRMS.Web/src/pages/payroll/*.tsx (grep for useAuth/usePermission/hasPermission/can()"
+    classification: Open - awaiting decision
+
+  - id: CR-171
+    title: "EmployeeSalaryAssignmentService.SetActiveAsync always writes a new history row and DB update even on a status no-op, unlike SalaryComponentService/SalaryStructureService's idempotent SetActiveAsync"
+    observation: "SalaryComponentService.SetActiveAsync and SalaryStructureService.SetActiveAsync both guard their write with `if (item.IsActive != active)`, making a repeated activate/deactivate call on an already-matching state a true no-op (no history row, no SaveChanges). EmployeeSalaryAssignmentService.SetActiveAsync has no such guard - it unconditionally sets Status, appends an AddHistory call, and calls SaveChangesAsync every time, even when the requested Status already matches the current one."
+    risk: "This is a minor, low-severity behavioral inconsistency across three structurally near-identical activation methods in the same module - worth flagging so an automated 'idempotent-activate' regression test isn't written against EmployeeSalaryAssignment and fails for the wrong reason, and so an audit-log reviewer doesn't over-interpret a repeated Activated history row as evidence the assignment was genuinely toggled off and back on."
+    source: "Backend/HRMS.Application/Services/EmployeeSalaryAssignmentService.cs (SetActiveAsync); contrast with SalaryComponentService.cs and SalaryStructureService.cs (SetActiveAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-172
+    title: "CONFIRMED SOURCE-LEVEL BUG: PayrollRunService.TransitionAsync's unbraced if-statement stamps CompletedByUserId on EVERY transition, not only Finalized/Cancelled"
+    observation: "The statement `if (target is PayrollRunStatus.Finalized or PayrollRunStatus.Cancelled) row.CompletedAtUtc = clock.GetUtcNow().UtcDateTime; row.CompletedByUserId = tenant.UserId;` has no braces around the if-body. In C#, only the single statement immediately following the condition (CompletedAtUtc) is conditional; the next statement (CompletedByUserId) executes unconditionally on every call to TransitionAsync, including transitions to Processing, Calculated, and Approved. The result is a run that has CompletedByUserId populated long before it is actually complete, while CompletedAtUtc correctly remains null until Finalized/Cancelled."
+    risk: "Any report, audit trail, or business logic that treats a non-null CompletedByUserId as evidence the run reached a terminal state would be misled - the field is set from the very first transition onward. This is a genuine, reproducible code defect, not a design ambiguity, and is trivially fixable by adding braces."
+    source: "Backend/HRMS.Application/Services/PayrollRunService.cs (TransitionAsync, line ~76)"
+    classification: Confirmed defect
+
+  - id: CR-173
+    title: "Payroll.Payslip.ViewHistory is declared and seeded but no payslip-history endpoint or service method exists anywhere - a dead permission"
+    observation: "Permissions.Payroll.PayslipViewHistory is declared and granted to SuperAdmin/TenantAdmin/HRAdmin. A full grep of PayrollOutputsController.cs and MyPayslipsController.cs's [HasPermission] attributes shows Generate/Publish/GetRunPayslips/Get/Document/Register/Export only; IPayrollOutputService has no GetHistoryAsync method and no /history route exists for payslips anywhere in the codebase, unlike every other in-scope entity (SalaryComponent, SalaryStructure, EmployeeSalaryAssignment, PayrollPeriod, PayrollRun, PayrollAdjustment, PayrollInputBatch) which all expose a working history endpoint."
+    risk: "A role granted this permission, reasonably expecting it to unlock a payslip audit trail (who generated/published/superseded which version, and when), will find no such feature exists at all - not merely gated wrong, genuinely absent. This is the same class of finding as qa/09-separation's CR-149 (declared-but-never-raised event types), here one level up at the endpoint/permission layer."
+    source: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs, MyPayslipsController.cs (full [HasPermission] grep); Backend/HRMS.Application/Abstractions/IPayrollOutputService.cs (absence of GetHistoryAsync); Backend/HRMS.Domain/Authorization/Permissions.cs (PayslipViewHistory declaration)"
+    classification: Open - awaiting decision
+
+  - id: CR-174
+    title: "Payroll.Retro.Cancel is an orphan permission - no cancel endpoint or method exists for PayrollRetroCase, distinct from the already-documented Payroll.FinalSettlement.Cancel (qa/09-separation CR-152)"
+    observation: "Permissions.Payroll.RetroCancel is declared in Permissions.cs. A full grep of the PayrollRetroSettlementController's routes (nested inside PayrollOutputsController.cs) shows CreateRetro/Evaluate/ApproveRetro/Apply for retro cases, and CreateSettlement/AddLine/CalculateSettlement/ApproveSettlement/FinalizeSettlement for final settlements - no Cancel route exists for either entity, and IPayrollRetroSettlementService declares no CancelRetroAsync method."
+    risk: "This is the SAME orphan-permission shape qa/09-separation's CR-152 found for Payroll.FinalSettlementCancel, confirming the pattern recurs a second time on a sibling permission in the identical service - a role granted RetroCancel believing it can cancel an in-progress retro case will find no button or endpoint that does anything."
+    source: "Backend/HRMS.Application/Services/PayrollRetroSettlementService.cs (absence of a Cancel method for PayrollRetroCase); Backend/HRMS.Domain/Authorization/Permissions.cs (RetroCancel declaration); qa/09-separation clarifications.yaml (CR-152, the sibling FinalSettlementCancel orphan)"
+    classification: Open - awaiting decision
+
+  - id: CR-175
+    title: "Payroll.Exceptions.Manage is declared and seeded but PayrollExceptionsController's only two routes both check Payroll.Exceptions.View - Manage is checked nowhere"
+    observation: "PayrollExceptionsController.cs declares exactly two routes (list, export.csv), both gated by [HasPermission(Permissions.Payroll.ExceptionsView)]. Payroll.Exceptions.Manage is declared in Permissions.cs and seeded alongside ExceptionsView but is referenced by zero [HasPermission] attributes anywhere in the codebase."
+    risk: "A role granted only Exceptions.Manage (without View) cannot reach either exceptions route at all, and there is no separate action anywhere that Manage actually gates - a fourth confirmed instance of the dead-permission pattern in this module alone (alongside Run.Approve/Finalize and Payslip.ViewHistory)."
+    source: "Backend/HRMS.API/Controllers/PayrollAnalyticsController.cs (PayrollExceptionsController class, full [HasPermission] grep); Backend/HRMS.Domain/Authorization/Permissions.cs (ExceptionsManage declaration)"
+    classification: Open - awaiting decision
+
+  - id: CR-176
+    title: "PayrollCalculationEngine rejects ANY negative computed component value unconditionally - there is no supported way for a generic structure component to net negative"
+    observation: "CalculateValue's final check is `if (value < 0) return Invalid(PayrollCalculationErrorCode.InvalidOverride, \"Negative component values are not supported by the generic engine.\")` - applied uniformly across FixedAmount, Percentage, Formula, and Manual calculation types, with no carve-out. A Formula component deliberately designed to produce a negative correction (e.g. clawing back a prior over-payment inline within the structure) fails calculation outright rather than computing a negative earning or an implicit deduction."
+    risk: "Anyone configuring a salary structure to model a negative-adjusting component (a legitimate real-world need, distinct from the separate Adjustments/Retro side-channels which DO support signed corrections) will hit an opaque calculation failure with no indication that the structure engine categorically cannot do this - worth a clear product decision on whether this is permanent by design (negative corrections must always go through Adjustments/Retro, never the structure itself) or a gap."
+    source: "Backend/HRMS.Application/Services/PayrollCalculationEngine.cs (CalculateValue, line ~231)"
+    classification: Open - awaiting decision
+
+  - id: CR-177
+    title: "(positive contrast, not a defect) StatutoryPayrollService explicitly raises a Conflict on a statutory-configuration Priority tie, unlike qa/09-separation's CR-145 gratuity-policy silent alphabetical pick"
+    observation: "SeparationBenefitsService's gratuity-policy lookup (qa/09-separation CR-145) silently resolves multiple simultaneously-active policies by picking the alphabetically-first Code, with no ambiguity error. StatutoryPayrollService.CalculateAsync instead explicitly detects a Priority tie among matching active configuration versions (`configs.Skip(1).Any(x => x.Version.Priority == selected.Version.Priority)`) and returns `Result.Conflict($\"Statutory configuration is ambiguous for {type}.\")` rather than silently choosing one."
+    risk: "None by itself - this is documented so a tester does not assume the CR-145 silent-pick pattern automatically recurs here and skip testing the ambiguity path; it is worth an explicit test proving the Conflict actually fires, since it is easy to assume (incorrectly, based on the CR-145 precedent elsewhere in the same broader Payroll domain) that Payroll's statutory engine would behave the same way."
+    source: "Backend/HRMS.Application/Services/StatutoryPayrollService.cs (CalculateAsync, line ~41); qa/09-separation clarifications.yaml (CR-145, the contrasting gratuity-policy behavior)"
+    classification: Design confirmed (no change requested)
+
+  - id: CR-178
+    title: "EmployeeSalaryAssignmentService.GetEffectiveAsync's 'multiple effective assignments' Conflict branch is defensive, not reachable through ordinary API use"
+    observation: "GetEffectiveAsync returns Conflict when more than one Active assignment covers the queried date for an employee. In ordinary use this state can never arise, because CreateAsync/UpdateAsync's OverlapsAsync guard specifically prevents two overlapping Active assignments from ever being created for the same employee through the API. The Conflict branch can only be exercised via direct data manipulation bypassing the API (e.g. a data-migration script, or a manually-seeded test fixture)."
+    risk: "None functionally - this is a defensible 'belt and suspenders' safeguard, not a bug, but worth documenting so QA does not spend effort hunting for an API-only way to trigger it, and so a future refactor that removes OverlapsAsync's guard understands this branch is the only remaining protection against a silent wrong-assignment pick."
+    source: "Backend/HRMS.Application/Services/EmployeeSalaryAssignmentService.cs (GetEffectiveAsync, OverlapsAsync)"
+    classification: Design confirmed (no change requested)
+
+  - id: CR-179
+    title: "(frontend/self-service) Payroll.Payslip.ViewOwn and Payroll.Reimbursements.Request are absent from the seeded Employee role, while Payroll.Adjustments.View/ViewHistory and Payroll.TaxDeclaration.ViewOwn/ManageOwn ARE present"
+    observation: "SeedData.cs's RolePermissionMap[Employee] grants exactly Payroll.Adjustments.View, Payroll.Adjustments.ViewHistory, Payroll.TaxDeclaration.ViewOwn, and Payroll.TaxDeclaration.ManageOwn from the Payroll permission family. Payroll.Payslip.ViewOwn (needed for /api/me/payslips) and Payroll.Reimbursements.Request (needed for every /api/me/reimbursements route) are both absent, meaning a plain, out-of-the-box seeded Employee cannot view their own payslip or file a reimbursement claim at all."
+    risk: "This is a striking inconsistency within the SAME role's self-service grant set: an employee can see their own payroll adjustments and manage their own tax declaration, but cannot see their own payslip or submit an expense claim - two of the most commonly-expected employee self-service features. Confirm with product whether tenants are universally expected to grant these two permissions during onboarding (in which case this is intentional and should be documented) or whether this is a seeding oversight."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[Employee], Payroll slice)"
+    classification: Open - awaiting decision
+
+  - id: CR-180
+    title: "A payroll reversal is scoped to ONE PER ORIGINAL RUN, not one per result/employee, despite PayrollReversalRequest exposing an OriginalPayrollResultId field that suggests per-employee scoping"
+    observation: "RequestReversalAsync's duplicate guard is `db.PayrollReversals.AnyAsync(x => x.TenantId == tid && x.OriginalPayrollRunId == request.OriginalPayrollRunId, ct)` - it checks only OriginalPayrollRunId, ignoring OriginalPayrollResultId entirely for the purpose of the duplicate check. A second reversal request for a DIFFERENT employee's result within the same already-reversed run is rejected with the same 'A reversal already exists for this payroll run' message, even though the DTO's OriginalPayrollResultId field implies a request can be scoped to a single employee's result."
+    risk: "A UI or API consumer that reads OriginalPayrollResultId's presence as 'reversals are requestable per-employee' will be surprised when a second, legitimately-different employee's reversal is rejected - worth an explicit product decision on whether reversal should genuinely be per-run only (in which case OriginalPayrollResultId's practical effect during ProcessReversalAsync - narrowing which results get reversing adjustments - should be documented as 'scope of what gets reversed', not 'how many reversals may exist')."
+    source: "Backend/HRMS.Application/Services/PayrollAdjustmentService.cs (RequestReversalAsync, line ~172)"
+    classification: Open - awaiting decision
+
+  - id: CR-181
+    title: "CONFIRMED SOURCE-LEVEL DEFECT: PayrollRetroSettlementService.EvaluateRetroAsync never actually recalculates anything - every retro case is structurally incapable of reaching Evaluated, making the entire Retro Approve/Apply pipeline unreachable through ordinary use"
+    observation: "EvaluateRetroAsync builds one PayrollRetroResult per overlapping finalized PayrollResult, but hardcodes CorrectedGross=OriginalGross, CorrectedDeductions=OriginalDeductions, CorrectedNet=OriginalNet, and GrossDifference/DeductionDifference/NetDifference all literally 0 for every row - there is no recalculation logic invoked anywhere in this method (no call to PayrollCalculationEngine or any equivalent). The case's resulting status is then computed as `results.Count == 0 || !await db.PayrollRetroResults.AnyAsync(x => ... x.NetDifference != 0, ct) ? PayrollRetroStatus.NoImpact : PayrollRetroStatus.Evaluated`. Since NetDifference is unconditionally 0 for every generated row, the second disjunct's negated-Any condition is always true, so the ternary ALWAYS selects NoImpact - Evaluated is dead code, unreachable through this method regardless of input. ApproveRetroAsync requires Status==Evaluated as its precondition, and ApplyRetroAsync requires Status==Approved - both are therefore also unreachable through ordinary use of the exposed API."
+    risk: "This is not a design ambiguity or a permission-inventory quirk - it is a confirmed, reproducible logic defect in a feature (retroactive salary-revision/arrears correction) that is presumably meant to actually compute and apply corrections. As implemented, creating and evaluating a retro case can never produce anything beyond 'no impact detected', regardless of how real the underlying correction is. Any manual or automated test asserting a genuine retro correction flows through to a target payroll run's adjustments will fail at the Evaluate step, every time. This should be raised with the engineering team as a functional gap requiring an actual fix (the method needs to invoke a real recalculation, presumably reusing the PayrollCalculationEngine against the corrected salary/structure data), not merely documented as expected behavior."
+    source: "Backend/HRMS.Application/Services/PayrollRetroSettlementService.cs (EvaluateRetroAsync, lines 21-34)"
+    classification: Confirmed defect
+
+  - id: CR-182
+    title: "PayrollReportsService's Dashboard classifies reimbursement/loan/variable-pay/adjustment totals by case-insensitive substring matching on CalculationSource, not a structured type or foreign key"
+    observation: "GetDashboardAsync computes ReimbursementTotal/LoanTotal/VariableTotal/AdjustmentTotal via `components.Where(x => x.CalculationSource.Contains(\"reimbursement\", StringComparison.OrdinalIgnoreCase)).Sum(...)` (and the analogous pattern for loan/variable/adjustment) rather than filtering on a structured enum, a boolean flag, or a foreign key to the originating entity. CalculationSource is a free-text string set at calculation time (e.g. 'TaxableReimbursement', 'LoanRecovery', 'PayrollAdjustment')."
+    risk: "Any future addition or rename of a CalculationSource string that does not happen to contain the exact expected substring would silently be excluded from its category's dashboard total, with no error, warning, or test failure to catch it - the dashboard would simply under-report that category from that point forward. This is a fragile classification mechanism for a management-facing summary figure and is worth flagging to engineering as a candidate for a structured refactor, independent of whether product treats the current numbers as accurate today."
+    source: "Backend/HRMS.Application/Services/PayrollReportsService.cs (GetDashboardAsync, line ~96)"
+    classification: Open - awaiting decision

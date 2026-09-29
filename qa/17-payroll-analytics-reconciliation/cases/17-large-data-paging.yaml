@@ -1,0 +1,102 @@
+sheet: PYA_Large_Data_Paging
+submodule: Large Data & Paging
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-LARGE-001
+    func: [F-PYA-128]
+    sc: Variance pages correctly over 500 employees
+    t: Employee variance across 500 employees and 2 runs pages correctly (page 1 and page 10 of 50 both return exactly 50 rows, TotalCount=500), every row's GrossDelta correct
+    src: "PayrollAnalyticsService.GetVarianceAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "RUN-PREV and RUN-CURR each have 500 employees; every employee's Gross increased by exactly 100 between the two runs"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, compareRunId=RUN-PREV, pageSize=50"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?compareRunId={RUN-PREV}&page=1&pageSize=50] => [200] TotalCount=500, Items.Count=50"
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?compareRunId={RUN-PREV}&page=10&pageSize=50] => [200] TotalCount=500, Items.Count=50, every row's GrossDelta=100"
+    auto: DB-assisted
+    db: "Seed 500 employees x 2 runs x 1 result each directly, matching PayrollAnalyticsLargeDataTests.cs's fixture shape"
+
+  - id: PYA-LARGE-002
+    func: [F-PYA-129]
+    sc: Department/CostCenter summaries over 500 employees reconcile exactly to run totals
+    t: 500 employees split across 2 Departments and 2 Cost Centers sum back exactly to the run's overall Gross/Deduction/Net control totals with no double-counting or drops
+    src: "PayrollAnalyticsService.GetDimensionSummaryAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "RUN-CURR from PYA-LARGE-001, 250 employees in Department A / Cost Center A, 250 in Department B / Cost Center B"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/control-totals] => [200] note GrossTotal=X"
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/departments] => [200] sum of both rows' GrossTotal equals X exactly"
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/cost-centers] => [200] sum of both rows' GrossTotal also equals X exactly"
+    auto: API
+
+  - id: PYA-LARGE-003
+    func: [F-PYA-130]
+    sc: Component variance over 500 employees aggregates one row per component, not one per employee
+    t: A shared ANALYTICS component code across 500 employees sums into exactly ONE aggregate row, not 500
+    src: "PayrollAnalyticsService.GetComponentVarianceAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    pre: "RUN-CURR from PYA-LARGE-001, every employee has one ANALYTICS component (CalculatedAmount=200 current, 100 prior)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-CURR, compareRunId=RUN-PREV"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/components?compareRunId={RUN-PREV}] => [200] exactly 1 row for ComponentCode=ANALYTICS, CurrentAmount=100000 (500 x 200), BaseAmount=50000 (500 x 100)"
+    auto: API
+
+  - id: PYA-LARGE-004
+    func: [F-PYA-131]
+    sc: A PageSize above 100 is clamped/rejected consistently across every list endpoint
+    t: pageSize=500 on variance, findings, exceptions, and controls-list all behave identically (either clamped to 100 or rejected) - never silently honored as 500
+    src: "Backend/HRMS.Application/Common/PagedQuery.cs (MaxPageSize=100), shared model binding"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN-CURR from PYA-LARGE-001 (500 employees); 500+ anomaly flags/findings/controls are NOT required - the binding behavior is tested regardless of underlying row count"
+    role: HRAdmin (custom role holding Payroll.Analytics.View + Payroll.Exceptions.View)
+    perm: "Payroll.Analytics.View, Payroll.Exceptions.View"
+    tenant: "T1 (DEMO01)"
+    data: "pageSize=500"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?pageSize=500] => [200] Items.Count never exceeds 100 (MaxPageSize), regardless of the requested 500"
+      - "[GET /api/payroll/exceptions?pageSize=500] => [200] identical clamping behavior applied"
+      - "[GET /api/payroll/analytics-controls?pageSize=500] => [200] identical clamping behavior applied"
+    auto: API
+
+  - id: PYA-LARGE-005
+    func: [F-PYA-132]
+    sc: A page number beyond the last page returns an empty array with the correct TotalCount
+    t: Requesting page=999 on the 500-employee variance list returns an empty Items array while TotalCount still correctly reports 500
+    src: "PayrollAnalyticsService.GetVarianceAsync"
+    type: Boundary
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN-CURR from PYA-LARGE-001"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "page=999, pageSize=50"
+    steps:
+      - "[GET /api/payroll/analytics/runs/{RUN-CURR}/variance?page=999&pageSize=50] => [200] Items=[], TotalCount=500 (unchanged), no error"
+    auto: API

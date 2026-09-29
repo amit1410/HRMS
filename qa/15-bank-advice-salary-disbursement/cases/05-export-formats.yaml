@@ -1,0 +1,158 @@
+sheet: BankAdv_Export_Formats
+submodule: Export & Bank/Export Formats
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-EXP-001
+    func: [F-BANKADV-045]
+    sc: Export status gate
+    t: Export is Conflict for Draft/Prepared/Cancelled batches; only Approved/Exported are exportable
+    src: "BankAdviceService.ExportAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "BATCH_DRAFT is Draft, BATCH_PREP is Prepared, BATCH_CANC is Cancelled"
+    role: HRAdmin (custom role holding BankAdvice.Export)
+    perm: Payroll.BankAdvice.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{BATCH_DRAFT}/export] => [409] Conflict (\"Only an approved bank advice batch can be exported.\")"
+      - "[GET /api/payroll/bank-advice/{BATCH_PREP}/export] => [409] Conflict, same message"
+      - "[GET /api/payroll/bank-advice/{BATCH_CANC}/export] => [409] Conflict, same message"
+    auto: API
+
+  - id: BANKADV-EXP-002
+    func: [F-BANKADV-046]
+    sc: CSV header and row shape
+    t: The exported CSV has the exact documented header row and one data row per payment, ordered by Sequence
+    src: "BankAdviceService.ExportAsync"
+    type: Contract
+    tags: [Positive]
+    pri: P0
+    sev: High
+    pre: "BATCH1 (Approved) has 3 payments with sequences 1,2,3"
+    role: HRAdmin (custom role holding BankAdvice.Export)
+    perm: Payroll.BankAdvice.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{BATCH1}/export] => [200] first line == \"Sequence,EmployeeCode,EmployeeName,AccountHolder,BankName,AccountNumber,IFSC,NetPay,Currency,PaymentReference\", 3 data rows follow in sequence order"
+    auto: API
+
+  - id: BANKADV-EXP-003
+    func: [F-BANKADV-047]
+    sc: Only masked account numbers appear in the export
+    t: The "AccountNumber" CSV column contains the masked value; the full unmasked account number never appears in the file
+    src: "BankAdviceService.ExportAsync (p.MaskedAccountNumber)"
+    type: Security
+    tags: [Positive]
+    pri: P0
+    sev: High
+    pre: "BATCH1 (Approved) has a payment with a known full account number \"1234567890\""
+    role: HRAdmin (custom role holding BankAdvice.Export)
+    perm: Payroll.BankAdvice.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{BATCH1}/export] => [200] file content contains \"XXXXXX7890\", does NOT contain the literal string \"1234567890\""
+    auto: API
+    secc: true
+
+  - id: BANKADV-EXP-004
+    func: [F-BANKADV-048]
+    sc: CSV escaping of special characters
+    t: An employee name containing a comma or quote is correctly quoted/escaped in the export
+    src: "BankAdviceService.Csv"
+    type: Boundary
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: "BATCH1 (Approved) has a payment whose EmployeeName is 'O\"Brien, Jr.'"
+    role: HRAdmin (custom role holding BankAdvice.Export)
+    perm: Payroll.BankAdvice.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{BATCH1}/export] => [200] the EmployeeName field is rendered as \"O\"\"Brien, Jr.\" (quoted, embedded quote doubled) and the file still parses as valid CSV with the correct column count per row"
+    auto: API
+
+  - id: BANKADV-EXP-005
+    func: [F-BANKADV-049]
+    sc: First export transitions the batch
+    t: The first export from Approved transitions to Exported, stamps ExportedAtUtc/ExportedByUserId, marks every payment PaymentStatus=Exported, and records history
+    src: "BankAdviceService.ExportAsync"
+    type: Positive
+    tags: []
+    pri: P0
+    sev: High
+    pre: "BATCH1 is Approved with 2 payments"
+    role: HRAdmin (custom role holding BankAdvice.Export)
+    perm: Payroll.BankAdvice.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{BATCH1}/export] => [200] CSV returned"
+      - "[GET /api/payroll/bank-advice/{BATCH1}] => [200] Status==\"Exported\", ExportedAtUtc set, both payments have PaymentStatus==\"Exported\", History contains an Exported-type event"
+    auto: API
+
+  - id: BANKADV-EXP-006
+    func: [F-BANKADV-050]
+    sc: Idempotent re-export
+    t: Exporting an already-Exported batch a second time returns identical content with no further state change or extra history event
+    src: "BankAdviceService.ExportAsync (Status==Exported skips the update block)"
+    type: Integration-Concurrency
+    tags: [Idempotency, Positive]
+    pri: P1
+    sev: Medium
+    pre: "BATCH1 is already Status=Exported (from a prior export)"
+    role: HRAdmin (custom role holding BankAdvice.Export)
+    perm: Payroll.BankAdvice.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] record History count and ExportedAtUtc before this call => baseline captured"
+      - "[GET /api/payroll/bank-advice/{BATCH1}/export] a second time => [200] byte-identical CSV content to the first export"
+      - "[GET /api/payroll/bank-advice/{BATCH1}] => [200] History count and ExportedAtUtc are UNCHANGED from before this second export"
+    auto: API
+    reg: true
+
+  - id: BANKADV-EXP-007
+    func: [F-BANKADV-051]
+    sc: Lost concurrency race on the first export
+    t: Two concurrent first-exports of the same Approved batch - the race loser gets Conflict, not a 500
+    src: "BankAdviceService.ExportAsync (ExecuteUpdateAsync)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "BATCH1 is Approved, loaded by two concurrent callers"
+    role: HRAdmin (custom role holding BankAdvice.Export)
+    perm: Payroll.BankAdvice.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/bank-advice/{BATCH1}/export] as caller A => [200] transitions to Exported"
+      - "[GET /api/payroll/bank-advice/{BATCH1}/export] as caller B, racing on the stale pre-A ConcurrencyVersion => [409] Conflict (\"Bank advice was changed by another operation.\")"
+    auto: API
+
+  - id: BANKADV-EXP-008
+    func: [F-BANKADV-052]
+    sc: No live bank-submission format exists
+    t: Confirm there is no NEFT/RTGS/IMPS/SFTP or bank-specific signed export anywhere - the CSV is the only format
+    src: "Backend/HRMS.Application/Services/BankAdviceService.cs (full grep, single export branch)"
+    type: Contract
+    tags: []
+    pri: P3
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of BankAdviceService.cs and IBankAdviceService.cs for any second export method/format/bank-file-type => zero matches beyond the one CSV ExportAsync"
+    auto: Manual only

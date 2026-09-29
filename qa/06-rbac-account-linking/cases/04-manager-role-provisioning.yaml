@@ -1,0 +1,137 @@
+sheet: RBAC_ManagerRole
+submodule: Manager Role auto-provisioning
+defaults:
+  role: HR_MANAGER
+  perm: "EmploymentHistory.Change"
+  tenant: A
+  pre: "Tenant A signed in as an HRManager-equivalent caller (EmploymentHistory.Change) unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: RBAC-MGRROLE-001
+    func: [F-RBAC-061]
+    sc: Recording an employment change with a manager provisions the Manager role
+    t: Naming ManagerId on a new employment-history record grants the Manager role to the manager's linked account
+    src: ["ManagerRoleProvisioningService.EnsureForManagerEmployeeAsync", "EmployeeEmploymentService.CreateChangeAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/role-assignments/users/{managerUserId}] Before the change => [200] no Manager-role assignment"
+      - "[POST /api/employees/{reportId}/employment-history] changeReason=NewJoining (or a later change), managerId=<manager employee id whose account is linked> => [201]"
+      - "[GET /api/role-assignments/users/{managerUserId}] Call => [200] a new Manager-role assignment: assignmentSource='System', effectiveFrom=today, reason='Reporting manager assignment'"
+    auto: API
+
+  - id: RBAC-MGRROLE-002
+    func: [F-RBAC-062]
+    sc: Manager not linked to any account
+    t: Naming an unlinked employee as manager is a silent no-op for role provisioning - the employment change itself still succeeds
+    src: ["ManagerRoleProvisioningService.EnsureForManagerEmployeeAsync (link is null branch)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/employees/{reportId}/employment-history] managerId=<an employee with NO linked account> => [201] the employment change is recorded successfully"
+      - "[GET /api/account-employee-links/employees/{unlinkedManagerEmployeeId}] Confirm still Unlinked => [200]"
+      - "[GET /api/role-assignments] Search for any Manager-role grant attributable to this employee => [200] none exists - nothing to grant a role to"
+    auto: API
+
+  - id: RBAC-MGRROLE-003
+    func: [F-RBAC-062]
+    sc: Later account linking to an already-current manager
+    t: If the manager gains an account link AFTER already being a current manager, the Manager role is NOT retroactively granted by the link call itself (only a subsequent employment-history change re-triggers the check)
+    src: ["AccountEmployeeLinkService.MutateAsync calls ManagerRoleProvisioning.EnsureForLinkedEmployeeAsync only, not EnsureForManagerEmployeeAsync's own 'is this employee currently a manager' probe independently of a NEW employment change"]
+    type: Contract
+    tags: [Positive]
+    pri: P1
+    steps:
+      - "[POST /api/employees/{reportId}/employment-history] managerId=<an unlinked employee> => [201] employment change recorded, manager has direct reports but no account"
+      - "[POST /api/account-employee-links/users/{newUserId}/link] Link that manager employee to a new account => [200]"
+      - "[GET /api/role-assignments/users/{newUserId}] Call => [200] confirm whether the Manager role is granted at link time too (AccountEmployeeLinkService.MutateAsync DOES call ManagerRoleProvisioning.EnsureForLinkedEmployeeAsync(tenantId, userId, target.Id) unconditionally on Link/Replace - verify this branch actually re-checks 'is a current manager' via the shared EnsureForLinkedEmployeeAsync method, which it does, so the role SHOULD be granted here too)"
+    auto: API
+
+  - id: RBAC-MGRROLE-004
+    func: [F-RBAC-063, F-RBAC-068]
+    sc: No duplicate Manager role for multiple reports
+    t: A manager with several direct reports is granted the Manager role exactly once
+    src: ["ManagerRoleProvisioningService.EnsureForLinkedEmployeeAsync (alreadyAssigned guard)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/employees/{reportA}/employment-history] managerId=<linked manager> => [201] Manager role granted (first report)"
+      - "[POST /api/employees/{reportB}/employment-history] managerId=<same linked manager> => [201] second report recorded"
+      - "[GET /api/role-assignments/users/{managerUserId}] Call => [200] exactly ONE Manager-role assignment row, not two"
+    auto: API
+
+  - id: RBAC-MGRROLE-005
+    func: [F-RBAC-064]
+    sc: A future-dated manager assignment still provisions today
+    t: An employment change with EffectiveFrom in the future, naming a manager, grants the Manager role immediately rather than waiting for the effective date
+    src: ["ManagerRoleProvisioningService.EnsureForManagerEmployeeAsync (no EffectiveFrom<=today lower bound)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[GET /api/role-assignments/users/{futureManagerUserId}] Before the change => [200] no Manager role"
+      - "[POST /api/employees/{reportId}/employment-history] managerId=<linked employee>, effectiveFrom=+90days (a scheduled future promotion/transfer) => [201]"
+      - "[GET /api/role-assignments/users/{futureManagerUserId}] Call TODAY => [200] the Manager-role assignment is ALREADY present, effectiveFrom=today (not +90 days) - granted immediately despite the underlying reporting relationship not yet being effective"
+    auto: API
+    cr: [CR-70]
+
+  - id: RBAC-MGRROLE-006
+    func: [F-RBAC-061]
+    sc: Current effective manager change
+    t: Changing WHO the current manager is (a manager reassignment) provisions the Manager role for the NEW manager if not already held
+    src: ["ManagerRoleProvisioningService.EnsureForManagerEmployeeAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/employees/{reportId}/employment-history] changeReason=Transfer, managerId=<a different, linked, never-before-manager employee> => [201]"
+      - "[GET /api/role-assignments/users/{newManagerUserId}] Call => [200] the new manager now holds the Manager role"
+    auto: API
+
+  - id: RBAC-MGRROLE-007
+    func: [F-RBAC-065, F-RBAC-069]
+    sc: Former manager role is never removed
+    t: Reassigning a report away from a manager (leaving them with zero current reports) does not revoke the former manager's Manager role
+    src: ["ManagerRoleProvisioningService (additive-only, documented in its own XML comment)"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    sev: Critical
+    steps:
+      - "[POST /api/employees/{reportId}/employment-history] managerId=<manager A, linked> => [201] Manager A granted the Manager role"
+      - "[POST /api/employees/{reportId}/employment-history] changeReason=Transfer, managerId=<manager B> (moves the ONLY report away from Manager A) => [201]"
+      - "[GET /api/role-assignments/users/{managerAUserId}] Call => [200] Manager A STILL holds the Manager role - it was never revoked, even though they now have zero direct reports"
+      - "[POST /api/role-assignments/{managerAAssignmentId}/revoke] Attempt a manual revoke => [400] System-managed roles cannot be revoked manually - there is no supported removal path"
+    auto: API
+    cr: [CR-71]
+
+  - id: RBAC-MGRROLE-008
+    func: [F-RBAC-066, F-RBAC-067, F-RBAC-072]
+    sc: No startup reconciliation and no legacy-path provisioning
+    t: A manager relationship set only through the legacy full-record PUT (ReportingManagerId) never triggers Manager-role provisioning, and no reconciliation job back-fills it later
+    src: ["EmployeeService.UpdateAsync (no ManagerRoleProvisioning call)"]
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    perm: "Employee.Edit"
+    steps:
+      - "[PUT /api/employees/{reportId}] Set ReportingManagerId=<a linked employee, never before a manager> via the legacy full-record path => [200] succeeds"
+      - "[GET /api/role-assignments/users/{legacyManagerUserId}] Call => [200] NO Manager-role assignment was granted - the legacy path bypasses provisioning entirely"
+      - "[POST /api/employees/{reportId}/employment-history] Now ALSO record the same manager through Employment History => [201]"
+      - "[GET /api/role-assignments/users/{legacyManagerUserId}] Call again => [200] the Manager role is now granted, confirming the History path is the only trigger"
+    auto: API
+    cr: [CR-72]
+
+  - id: RBAC-MGRROLE-009
+    func: [F-RBAC-070]
+    sc: Manager with no current reports is never provisioned
+    t: An employee who has never had a direct report simply never receives the Manager role
+    src: ["ManagerRoleProvisioningService.EnsureForManagerEmployeeAsync (isManager probe is false)"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[GET /api/role-assignments/users/{individualContributorUserId}] Call for an employee with zero direct reports, ever => [200] no Manager-role assignment"
+    auto: API

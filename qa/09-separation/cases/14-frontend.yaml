@@ -1,0 +1,285 @@
+sheet: Separation_Frontend
+submodule: Page-level behavior across all 16 Separation-family pages plus 2 Payroll-hosted Separation-Benefits pages - permission gating, loading/empty/error states, navigation discoverability, and dead/hardcoded UI handlers
+defaults:
+  role: HRADMIN
+  perm: "Separation.ViewAll"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: SEP-FE-001
+    func: [F-SEP-321]
+    sc: Only MySeparationPage performs any client-side permission check
+    t: A grep across every Separation-family page confirms the other 15 pages rely solely on the page-level route guard, with zero in-component permission logic
+    src: ["Frontend/HRMS.Web/src/pages/separation/*.tsx", "src/pages/payroll/SeparationBenefitsPage.tsx"]
+    type: Contract
+    pri: P1
+    cr: [CR-160]
+    steps:
+      - "[Manual/Code] Grep `useAuth|Permissions\\.|can(` across src/pages/separation/*.tsx and SeparationBenefitsPage.tsx => only MySeparationPage.tsx has a match; all others rely purely on the route-level RequirePermission guard"
+    auto: Manual only
+
+  - id: SEP-FE-002
+    func: [F-SEP-322]
+    sc: MySeparationPage - full self-service resignation flow
+    t: The page correctly renders create/submit/withdraw actions, notice card, clearance-progress card, and the history timeline
+    src: ["MySeparationPage.tsx"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: EMPLOYEE
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[UI] Navigate to My Separation, no active case => 'Start a request' form renders"
+      - "[UI] Submit the create form with a valid reason/LWD => [200/201] case created, page now shows Submit/Withdraw actions"
+      - "[UI] Click Submit => case moves to ManagerReview/HrReview, notice card and clearance-progress card render once populated by the backend"
+      - "[UI] Open the history timeline section => Created/Submitted events shown in order"
+    auto: UI
+
+  - id: SEP-FE-003
+    func: [F-SEP-323]
+    sc: The create-request form renders on ANY error, not specifically 'no active separation'
+    t: A forced network/500 error on GET /api/separation/me/current shows the SAME create-resignation form as a genuine no-active-case state, risking a misleading duplicate submission
+    src: ["MySeparationPage.tsx (line ~16, `current.error ? ...`)"]
+    type: Negative
+    pri: P1
+    cr: [CR-164]
+    role: EMPLOYEE
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[Setup] Employee genuinely has an active separation case, but GET /api/separation/me/current is forced to return a 500 => precondition established"
+      - "[UI] Navigate to My Separation => the 'Start a request' create form renders (identical to the genuine no-active-case state), rather than an error message - confirms the gap"
+    auto: UI
+
+  - id: SEP-FE-004
+    func: [F-SEP-324]
+    sc: SeparationInboxPage - window.prompt() actions, no permission gating, no loading/empty state, no pagination
+    t: Approve/reject/revise-LWD are all driven through window.prompt(); the page never hides its action buttons based on granted permission; there is no loading spinner, no empty-state message, and no pagination control anywhere, unlike every other Separation dashboard
+    src: ["SeparationInboxPage.tsx"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[UI] Trigger Manager Approve on a row => a native window.prompt() dialog collects the reason/comment rather than an in-page form"
+      - "[UI] Sign in as a role holding only ManagerReview (no HrReview) => the HR-inbox action buttons still render on screen (no client-side hide), relying entirely on the backend's eventual 403"
+      - "[UI] Load the inbox with zero pending cases => no empty-state text is shown, just a blank table"
+      - "[UI] Seed 200+ pending cases => no pagination control appears anywhere on the page"
+    auto: UI
+
+  - id: SEP-FE-005
+    func: [F-SEP-325]
+    sc: SeparationInboxPage has zero automated (Vitest) test coverage
+    t: A repo-wide check confirms no .test.tsx file references SeparationInboxPage - the core manager/HR approval workflow UI is entirely untested
+    src: ["grep of Frontend/HRMS.Web/src/pages/separation/**/*.test.tsx for SeparationInboxPage"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Manual/Code] Grep every .test.tsx under src/pages/separation for 'SeparationInboxPage' => zero matches"
+    auto: Manual only
+
+  - id: SEP-FE-006
+    func: [F-SEP-326]
+    sc: ClearanceOperationsPage claims 'permission-gated' but performs zero client-side checks, and has no error rendering on fetch failure
+    t: The on-screen subtitle text is directly contradicted by the component's own code; a forced API failure produces a silently-empty table with no error message
+    src: ["ClearanceOperationsPage.tsx (line ~29 subtitle text)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[UI] Read the page subtitle => literally states 'Permission-gated operational clearance...'"
+      - "[Manual/Code] Grep ClearanceOperationsPage.tsx for useAuth/Permissions/can( => zero matches, directly contradicting the subtitle"
+      - "[Setup] Force GET /api/separation/clearance/inbox to return a 500 => precondition established"
+      - "[UI] Load the page => the table renders silently empty with NO error message shown to the user"
+    auto: UI
+
+  - id: SEP-FE-007
+    func: [F-SEP-327]
+    sc: No client function or UI exists for waiving a clearance task or completing/reopening the whole clearance
+    t: These backend endpoints are confirmed API-only, not reachable through any button on any page
+    src: ["absence in Frontend/HRMS.Web/src/api/separation.ts and every separation/*.tsx page"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Grep the frontend API client and every separation page for a call to POST .../clearance/tasks/{id}/waive, .../clearance/{id}/complete, or .../clearance/{id}/reopen => zero matches anywhere in the UI layer"
+    auto: Manual only
+
+  - id: SEP-FE-008
+    func: [F-SEP-328]
+    sc: SettlementDashboardPage never surfaces blocker detail, only a bare count
+    t: The dedicated readiness endpoint's client function exists but is never called by this page, so a user can see '3 blockers' with no way to see which three
+    src: ["SettlementDashboardPage.tsx (getSettlementReadiness/getSettlementStatus dead exports)"]
+    type: Negative
+    pri: P1
+    cr: [CR-162]
+    steps:
+      - "[Setup] A settlement row has blockerCount=3 => precondition established"
+      - "[UI] View the row in SettlementDashboardPage => shows '3' with no way to expand or view the individual blocker messages (ClearanceIncomplete, etc.)"
+      - "[Manual/Code] Grep the page for getSettlementReadiness/getSettlementStatus => imported/exported in the API client but never called from this page"
+      - "[UI] Click Initiate/Retry on a row => [200] action succeeds"
+    auto: UI
+
+  - id: SEP-FE-009
+    func: [F-SEP-329]
+    sc: SeparationExitClosurePage uses window.confirm() for execute/retry and has the same blocker-detail gap as Settlement
+    t: Execute/Retry are gated behind a native confirm dialog; getSeparationExitReadiness is a dead export, so blocker detail is never shown, only a count
+    src: ["SeparationExitClosurePage.tsx"]
+    type: Negative
+    pri: P1
+    cr: [CR-162]
+    steps:
+      - "[UI] Click Execute on a row with a nonzero blocker count => a window.confirm() dialog appears; no blocker detail is shown before or after confirming"
+      - "[Manual/Code] Grep the page for getSeparationExitReadiness => imported but never called"
+    auto: UI
+
+  - id: SEP-FE-010
+    func: [F-SEP-330, F-SEP-333]
+    sc: SeparationDocumentsPage bundles the full document lifecycle on one screen but has dead handlers and no client function for cancel
+    t: Template create/version/generate/approve/issue/download all work from this one page; publish/preview handlers are imported and explicitly voided (never wired to a button); no client function exists at all for document cancel, and supersede is exported but never called
+    src: ["SeparationDocumentsPage.tsx (line ~13 void publish; void preview)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[UI] Generate, then Approve, then Issue a document from this page => [200] each step succeeds via the page's own buttons"
+      - "[Manual/Code] Grep the page for `void publish` / `void preview` => confirmed present, both imported functions are suppressed-unused, wired to no button on this page (they only work from the separate, orphan-routed SeparationDocumentTemplateConfigurationPage)"
+      - "[Manual/Code] Grep the frontend API client for a POST .../documents/{id}/cancel call => zero matches anywhere in the UI; grep for supersedeSeparationDocument => exported but never called by any page"
+    auto: UI
+
+  - id: SEP-FE-011
+    func: [F-SEP-331]
+    sc: SeparationDocumentsPage hardcodes expectedConcurrencyVersion=1 for both Approve and Issue
+    t: If a document's real server-side ConcurrencyVersion has advanced past 1, Approve/Issue from this page fails an optimistic-concurrency check the UI cannot resolve or display correctly
+    src: ["SeparationDocumentsPage.tsx (hardcoded version literals)"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] A document's real ConcurrencyVersion is 2 (e.g. after a prior failed approve attempt) => precondition established"
+      - "[UI] Click Approve on that document => the page sends expectedConcurrencyVersion=1 regardless => [409] The document changed concurrently. - surfaced to the user with no clear recovery action, since the page has no field showing the real current version"
+    auto: UI
+    cr: [CR-161]
+
+  - id: SEP-FE-012
+    func: [F-SEP-332]
+    sc: SeparationDocumentsPage has zero automated test coverage
+    t: The document generate/approve/issue lifecycle UI, including the hardcoded-concurrency-version bug, is entirely unverified by any Vitest file
+    src: ["grep of Frontend/HRMS.Web/src/pages/separation/**/*.test.tsx for SeparationDocumentsPage"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Manual/Code] Grep every .test.tsx under src/pages/separation for 'SeparationDocumentsPage' => zero matches"
+    auto: Manual only
+
+  - id: SEP-FE-013
+    func: [F-SEP-334]
+    sc: SeparationDocumentTemplateConfigurationPage correctly threads concurrencyVersion on Publish but hardcodes RequiresApproval=true on create
+    t: Contrast with the SeparationDocumentsPage bug - Publish here reads the real selected.concurrencyVersion; but the create-template form has no checkbox at all to set RequiresApproval=false, so a no-approval-required template can never be created from this UI
+    src: ["SeparationDocumentTemplateConfigurationPage.tsx"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[UI] Publish a template version => the request correctly sends the version's actual current concurrencyVersion, not a hardcoded literal"
+      - "[UI] Create a new template through this page's form => there is no control to set RequiresApproval=false; every template created from this UI requires approval - a no-approval template must be created via direct API call"
+    auto: UI
+
+  - id: SEP-FE-014
+    func: [F-SEP-335]
+    sc: MySeparationDocumentsPage requires manual separation-ID entry and hides download only for Cancelled status
+    t: The employee must manually supply/know the separation id (no auto-resolution to 'my current case'); download is hidden ONLY when Status=Cancelled, and no loading/empty-state text is shown
+    src: ["MySeparationDocumentsPage.tsx"]
+    type: Negative
+    pri: P2
+    role: EMPLOYEE
+    perm: "Separation.ViewSelf"
+    steps:
+      - "[UI] Navigate to My Documents with no separation id pre-filled => the page requires the employee to manually enter/select a separation id rather than defaulting to their current case"
+      - "[UI] A document in PendingApproval status is listed (not Cancelled) => the Download control still renders (only Cancelled hides it), even though download will fail server-side for a non-Issued/Superseded document"
+      - "[UI] Zero documents exist => no empty-state message is shown"
+    auto: UI
+
+  - id: SEP-FE-015
+    func: [F-SEP-336]
+    sc: ExitInterviewConfigurationPage always seeds exactly one hardcoded Q1 question on template creation
+    t: There is no discoverable UI to add more questions to a draft template beyond the single auto-seeded Q1
+    src: ["ExitInterviewConfigurationPage.tsx"]
+    type: Negative
+    pri: P2
+    perm: "Separation.Clearance.Configure"
+    steps:
+      - "[UI] Create a new exit-interview template through this page => exactly one question, hardcoded Q1, is seeded automatically; no 'Add question' control is discoverable anywhere on the page for adding a second question to the same draft version"
+    auto: UI
+
+  - id: SEP-FE-016
+    func: [F-SEP-337]
+    sc: ExitInterviewHrInboxPage is correctly server-paged with a status filter
+    t: The page correctly requests 25 rows per page and applies the status dropdown filter
+    src: ["ExitInterviewHrInboxPage.tsx"]
+    type: Positive
+    pri: P2
+    perm: "Separation.HrReview"
+    steps:
+      - "[UI] Load the inbox with 50+ interviews => exactly 25 rows shown per page, with working Next/Previous controls"
+      - "[UI] Select the status filter dropdown => the list narrows to only the selected status"
+    auto: UI
+
+  - id: SEP-FE-017
+    func: [F-SEP-338]
+    sc: ExitInterviewHrDetailPage - Complete has no state guard, and employee responses render as raw JSON
+    t: "'Complete interview' is clickable even before Start HR Interview was ever called; the employee's response values render via JSON.stringify rather than a formatted view; confidential notes and rehire-recommendation controls are correctly server-gated"
+    src: ["ExitInterviewHrDetailPage.tsx"]
+    type: Negative
+    pri: P1
+    perm: "Separation.HrReview"
+    steps:
+      - "[Setup] Interview Status=EmployeeSubmitted (Start HR Interview never called) => precondition established"
+      - "[UI] The 'Complete interview' button is fully clickable with no disabled state or warning => clicking it succeeds server-side with no prior Start-HR call required (confirms F-SEP-204's backend behavior is mirrored, not guarded, by the UI)"
+      - "[UI] View an employee's Rating/MultiChoice response => rendered as raw JSON.stringify output (e.g. '{\"value\":4}') rather than a formatted label"
+      - "[UI] As a role without Separation.Manage => Reopen control is correctly absent/disabled; confidential HR notes section is correctly hidden from an employee-scoped view"
+    auto: UI
+
+  - id: SEP-FE-018
+    func: [F-SEP-339]
+    sc: SeparationBenefitsPage / MySeparationBenefitsPage lack in-component gating and hardcode the policy-version form
+    t: No permission check exists beyond the route-level payroll.separationBenefitsView guard; the policy-version creation form hardcodes formulaType='FixedAmount' and status='Published' with no draft/review step available in this UI
+    src: ["SeparationBenefitsPage.tsx", "MySeparationBenefitsPage.tsx"]
+    type: Negative
+    pri: P2
+    perm: "Payroll.SeparationBenefits.View"
+    steps:
+      - "[UI] Create a gratuity policy version through this page => the request always sends formulaType='FixedAmount' and status='Published' regardless of what the underlying API supports (ServiceDaysBased/ServiceMonthsBased/ServiceYearsBased/CustomConfigured and Draft status are unreachable from this UI)"
+    auto: UI
+
+  - id: SEP-FE-019
+    func: [F-SEP-340]
+    sc: Notice waiver and post-approval LWD revision are API-only - no client function calls either endpoint
+    t: A repo-wide check confirms neither backend action has a corresponding frontend entry point
+    src: ["absence in Frontend/HRMS.Web/src/api/separation.ts"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Grep the frontend API client and every separation page for a call to POST .../notice/waive or .../revise-approved-lwd => zero matches anywhere in the UI layer"
+    auto: Manual only
+
+  - id: SEP-FE-020
+    func: [F-SEP-341, F-SEP-342]
+    sc: 13 of 17 Separation-family routes have no navigation entry; the 4 that do all correctly resolve
+    t: Only My Separation, Manager Inbox, HR Inbox, and Exit Closure appear in src/layout/navigation.ts; every other route (exit-interview self/HR/config, all 3 clearance modes, settlement dashboard, both document pages, my-documents, both payroll separation-benefits pages) is reachable only by typing the URL directly
+    src: ["Frontend/HRMS.Web/src/layout/navigation.ts", "App.tsx route registrations"]
+    type: Negative
+    pri: P1
+    cr: [CR-163]
+    steps:
+      - "[Manual/Code] Grep navigation.ts for Separation-family entries => exactly 4: My Separation/Resignation, Separation Manager Inbox, Separation HR Inbox, Separation Exit Closure"
+      - "[UI] Navigate directly by URL to /separation/clearance (not linked from any menu) => the page still loads and enforces its own route-level permission guard correctly, despite having no menu entry"
+      - "[UI] Click through the 4 nav-linked entries from the main menu => all 4 resolve to their correct pages with no broken links"
+    auto: UI
+
+  - id: SEP-FE-021
+    func: [F-SEP-343]
+    sc: useApiQuery's stale-while-revalidate behavior across Separation dashboards
+    t: A refetch keeps prior rows on screen while loading, and an aborted/canceled request (e.g. from a rapid filter change) is silently swallowed without populating an error state
+    src: ["useApiQuery hook, used by all Separation dashboard pages"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[UI] On SettlementDashboardPage, change the status filter twice in rapid succession before the first request resolves => the first (now-stale) request's rows remain visible briefly, then are replaced by the second filter's results with no flash of an error state, even though the first request was effectively aborted/superseded"
+    auto: UI

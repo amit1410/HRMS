@@ -1,0 +1,259 @@
+sheet: Payroll_SalaryStructures
+submodule: Salary Structures and Versions - header/component validation matrix, versioning, reconciliation, history
+defaults:
+  role: HRADMIN
+  perm: "Payroll.SalaryStructure.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, with at least two active Salary Components (BASIC=FixedAmount, HRA=Percentage-of-BASIC) available, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-SS-001
+    func: [F-PAY-019]
+    sc: Create a valid two-component salary structure
+    t: A structure with a FixedAmount base and a Percentage-of-base component is created successfully
+    src: ["SalaryStructureService.CreateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/salary-structures] Code=STD-001, Components=[BASIC FixedAmount 20000, HRA Percentage 40 of BASIC] => [200/201] Code=STD-001, Components.Count=2"
+    auto: API
+
+  - id: PAY-SS-002
+    func: [F-PAY-019]
+    sc: Missing Code/Name or inverted effective dates are rejected
+    t: Header validation fires before any component validation
+    src: ["SalaryStructureService.ValidateHeader"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/salary-structures] Code='' => [400] Salary Structure Code is required."
+      - "[POST /api/payroll/salary-structures] EffectiveFrom=2026-06-01, EffectiveTo=2026-01-01 => [400] Effective To cannot be earlier than Effective From."
+    auto: API
+
+  - id: PAY-SS-003
+    func: [F-PAY-020]
+    sc: Structure code must be unique per tenant
+    t: A second structure with the same normalized code is Conflict
+    src: ["SalaryStructureService.CreateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-structures] Code=STD-001 (duplicate) => [409] A salary structure with this code already exists in this tenant."
+    auto: API
+
+  - id: PAY-SS-004
+    func: [F-PAY-021]
+    sc: At least one component is required
+    t: An empty component list is rejected
+    src: ["SalaryStructureService.ValidateComponentsAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/salary-structures] Components=[] => [400] At least one Salary Component is required."
+    auto: API
+
+  - id: PAY-SS-005
+    func: [F-PAY-022, F-PAY-023]
+    sc: An empty/duplicate SalaryComponentId in the row set is rejected
+    t: A component row with Guid.Empty is Invalid; two rows sharing the same SalaryComponentId is Conflict
+    src: ["SalaryStructureService.ValidateComponentsAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-structures] Components include SalaryComponentId=00000000-0000-0000-0000-000000000000 => [400] Every structure row must reference a Salary Component."
+      - "[POST /api/payroll/salary-structures] Components=[BASIC, BASIC] (duplicate) => [409] A Salary Component may appear only once in a structure version."
+    auto: API
+
+  - id: PAY-SS-006
+    func: [F-PAY-024]
+    sc: Sequence values must be positive and unique
+    t: Sequence=0 and duplicate sequences are both rejected
+    src: ["SalaryStructureService.ValidateComponentsAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-structures] Components=[Seq=0] => [400] Component sequence values must be positive and unique."
+      - "[POST /api/payroll/salary-structures] Components=[Seq=1, Seq=1] => [400] Component sequence values must be positive and unique."
+    auto: API
+
+  - id: PAY-SS-007
+    func: [F-PAY-025]
+    sc: A component's own dates must stay inside the version window
+    t: A component EffectiveTo beyond the version's EffectiveTo is rejected
+    src: ["SalaryStructureService.ValidateComponentsAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/payroll/salary-structures] Version EffectiveTo=2026-12-31, Component EffectiveTo=2027-01-15 => [400] Component effective dates must remain within the structure version."
+    auto: API
+
+  - id: PAY-SS-008
+    func: [F-PAY-026]
+    sc: Referenced component must exist, be active, and belong to the tenant
+    t: An inactive or cross-tenant SalaryComponentId is rejected
+    src: ["SalaryStructureService.ValidateComponentsAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-structures] Components=[<inactive component id>] => [400] Every Salary Component must exist, be active, and belong to this tenant."
+      - "[POST /api/payroll/salary-structures] Components=[<Tenant B component id>] As Tenant A => [400] Every Salary Component must exist, be active, and belong to this tenant."
+    auto: API
+
+  - id: PAY-SS-009
+    func: [F-PAY-027]
+    sc: PercentageOfComponentId cannot self-reference or reference an unknown component
+    t: A Percentage row whose base is itself, or an id outside the row set, is Invalid
+    src: ["SalaryStructureService.ValidateComponentsAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-structures] Component X: CalculationType=Percentage, PercentageOfComponentId=X (self) => [400] Percentage base must reference another active Salary Component in this tenant."
+    auto: API
+
+  - id: PAY-SS-010
+    func: [F-PAY-028]
+    sc: CalculationType-specific field matrix
+    t: Each calculation type rejects fields that belong to a different type
+    src: ["SalaryStructureService.ValidateComponentsAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-structures] FixedAmount with PercentageOfComponentId set => [400] Fixed amount cannot include a percentage base or formula."
+      - "[POST /api/payroll/salary-structures] Percentage with Value=150 => [400] Percentage must be between 0 and 100."
+      - "[POST /api/payroll/salary-structures] Formula with blank Formula text => [400] Formula text is required."
+      - "[POST /api/payroll/salary-structures] Manual with a Value set => [400] Manual rows cannot include a calculated value."
+    auto: API
+
+  - id: PAY-SS-011
+    func: [F-PAY-029]
+    sc: MinimumAmount/MaximumAmount bounds
+    t: A negative minimum and a minimum exceeding maximum are both rejected
+    src: ["SalaryStructureService.ValidateComponentsAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/payroll/salary-structures] MinimumAmount=-1 => [400] Minimum and maximum amounts are invalid."
+      - "[POST /api/payroll/salary-structures] MinimumAmount=5000, MaximumAmount=1000 => [400] Minimum and maximum amounts are invalid."
+    auto: API
+
+  - id: PAY-SS-012
+    func: [F-PAY-030, F-PAY-031]
+    sc: Updating with a new EffectiveFrom creates a new version; an overlapping new version is rejected
+    t: A genuinely new date range creates SalaryStructureVersions row #2; a range overlapping version #1 is Conflict
+    src: ["SalaryStructureService.UpdateAsync", "SalaryStructureService.Overlaps"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/payroll/salary-structures/{id}] EffectiveFrom=<after version 1's EffectiveTo> => [200] a second version now exists"
+      - "[PUT /api/payroll/salary-structures/{id}] EffectiveFrom=<inside version 1's window> => [409] The effective salary structure version overlaps an existing version."
+    auto: API
+
+  - id: PAY-SS-013
+    func: [F-PAY-032, F-PAY-033]
+    sc: Updating with a matching EffectiveFrom reconciles the SAME version's components
+    t: Omitting a previously-present component from an in-place update soft-deactivates it instead of deleting it
+    src: ["SalaryStructureService.ReconcileComponents"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/payroll/salary-structures/{id}] EffectiveFrom=<matches existing version>, Components omits HRA => [200] HRA component IsActive=false, row still present"
+    auto: API
+
+  - id: PAY-SS-014
+    func: [F-PAY-034]
+    sc: Update honors ExpectedConcurrencyVersion
+    t: A stale version on update is Conflict
+    src: ["SalaryStructureService.UpdateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[PUT /api/payroll/salary-structures/{id}] ExpectedConcurrencyVersion=<stale> => [409] The salary structure was changed by another user."
+    auto: API
+
+  - id: PAY-SS-015
+    func: [F-PAY-035]
+    sc: Activate/Deactivate toggles the header flag idempotently
+    t: Deactivating an already-inactive structure is a no-op
+    src: ["SalaryStructureService.SetActiveAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/payroll/salary-structures/{id}/deactivate] first call => [200] IsActive=false"
+      - "[POST /api/payroll/salary-structures/{id}/deactivate] second call => [200] IsActive=false, no additional history row"
+    auto: API
+
+  - id: PAY-SS-016
+    func: [F-PAY-036, F-PAY-038]
+    sc: AddComponent operates on the currently-effective version and rejects a duplicate active component
+    t: Adding a component that already has an active row is Conflict
+    src: ["SalaryStructureService.AddComponentAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/salary-structures/{id}/components] SalaryComponentId=BASIC (already present) => [409] This Salary Component is already in the structure version."
+    auto: API
+
+  - id: PAY-SS-017
+    func: [F-PAY-037]
+    sc: RemoveComponent is a soft delete
+    t: Removing a component sets IsActive=false without deleting the row
+    src: ["SalaryStructureService.RemoveComponentAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[DELETE /api/payroll/salary-structures/{id}/components/{componentId}] => [200] true"
+      - "[GET /api/payroll/salary-structures/{id}/history] => [200] most recent row is ComponentRemoved"
+    auto: API
+
+  - id: PAY-SS-018
+    func: [F-PAY-039]
+    sc: SelectVersion resolution across effectiveOn boundaries
+    t: A date inside version 1's window resolves version 1; a date in the gap after all versions resolves the latest active version as a fallback
+    src: ["SalaryStructureService.SelectVersion"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/payroll/salary-structures/{id}?effectiveOn=<inside v1 window>] => [200] version 1's components returned"
+      - "[GET /api/payroll/salary-structures/{id}?effectiveOn=<far future, beyond every version>] => [200] the latest active version's components returned as a fallback"
+    auto: API
+
+  - id: PAY-SS-019
+    func: [F-PAY-040]
+    sc: History append-only with a full component snapshot
+    t: Each mutation's history row's ComponentsJson reflects that version's components at the time
+    src: ["SalaryStructureService.AddHistory"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.SalaryStructure.ViewHistory"
+    steps:
+      - "[GET /api/payroll/salary-structures/{id}/history] => [200] each row's snapshot corresponds to the mutation that produced it"
+    auto: API
+
+  - id: PAY-SS-020
+    func: [F-PAY-041]
+    sc: Cross-tenant structure id is not reachable
+    t: Tenant B's structure id is NotFound as Tenant A
+    src: ["SalaryStructureService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[GET /api/payroll/salary-structures/{tenantBStructureId}] As Tenant A => [404] Salary structure not found."
+    auto: API
+
+  - id: PAY-SS-021
+    func: [F-PAY-017, F-PAY-018]
+    sc: List and get-by-id read paths
+    t: List respects search/active filters; get-by-id resolves the current version by default
+    src: ["SalaryStructureService.GetAsync", "SalaryStructureService.GetByIdAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.SalaryStructure.View"
+    steps:
+      - "[GET /api/payroll/salary-structures?search=STD] => [200] matches by code/name"
+      - "[GET /api/payroll/salary-structures/{id}] => [200] current-day version's components returned"
+    auto: API

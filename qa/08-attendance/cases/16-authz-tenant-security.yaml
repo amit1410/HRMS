@@ -1,0 +1,138 @@
+sheet: Attendance_Security
+submodule: Consolidated Authorization Matrix and Tenant Isolation sweep across the whole Attendance module
+defaults:
+  role: HRADMIN
+  perm: "Attendance.View"
+  tenant: A
+  pre: "Tenant A, unless stated."
+  data: "n/a unless stated."
+  sev: Critical
+  reg: true
+
+cases:
+  - id: ATT-SEC-001
+    func: [F-ATT-331]
+    sc: Consolidated tenant-isolation matrix - one sweep across every Attendance data category
+    t: A single documented pass confirming zero Tenant A leakage across all 10 data categories
+    src: ["all Attendance controllers/services"]
+    type: Tenant-Isolation
+    pri: P0
+    smoke: true
+    tenant: B
+    steps:
+      - "[GET /api/attendance/me/calendar] As a Tenant B employee whose EmployeeId numerically/textually resembles a Tenant A employee => [200] only Tenant B's own data, zero Tenant A rows"
+      - "[GET /api/attendance/manager/team] As a Tenant B manager => [200] zero Tenant A rows"
+      - "[GET /api/attendance/me/regularizations, /me/on-duty] As Tenant B => [200] zero Tenant A rows"
+      - "[GET /api/attendance/overtime/snapshot] As Tenant B => [200] zero Tenant A rows"
+      - "[GET /api/attendance/reports/daily, /monthly, /exceptions] As Tenant B => [200] zero Tenant A rows"
+      - "[GET /api/attendance/devices, /devices/mappings, /devices/issues] As Tenant B => [200] zero Tenant A rows"
+      - "[GET /api/attendance/admin-corrections] As Tenant B => [200] zero Tenant A rows"
+      - "[GET /api/attendance/periods] As Tenant B => [200] zero Tenant A rows"
+      - "[GET /api/attendance/operations/exceptions] As Tenant B => [200] zero Tenant A rows"
+    auto: API
+
+  - id: ATT-SEC-002
+    func: [F-ATT-332]
+    sc: A cross-tenant Overtime call is rejected at the host/tenant-resolution layer with 401
+    t: Distinct failure shape from every other Attendance controller's in-tenant 403/404 pattern
+    src: ["TenantShardResolutionMiddleware"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[POST /api/attendance/overtime/requests] Using a Tenant A-issued token against Tenant B's host => [401] Unauthorized - rejected before controller authorization even runs, unlike Attendance's other 403/404-shaped denials for in-tenant scope mismatches"
+    auto: API
+
+  - id: ATT-SEC-003
+    func: [F-ATT-333]
+    sc: Out-of-scope-within-tenant vs missing-permission produce different status codes consistently
+    t: Verify the 404-for-scope, 403-for-permission distinction across four representative endpoints
+    src: ["multiple"]
+    type: Security
+    pri: P1
+    role: MANAGER
+    steps:
+      - "[POST /api/attendance/roster/assign] A manager HOLDING RosterManage but with no scope over the target employee => [404] not Forbidden"
+      - "[GET /api/attendance/admin-corrections/{id}] A manager HOLDING AdminCorrection.Manage but with no scope over the target correction's employee => [404] not Forbidden"
+      - "[GET /api/attendance/me/regularizations/{colleaguesId}] An employee with no relationship to the request owner => [404]"
+      - "[POST /api/attendance/roster/assign] Contrast: a caller with ZERO Attendance.RosterManage permission at all (regardless of scope) => [403] Forbidden - permission absence is 403, scope absence is 404"
+    auto: API
+
+  - id: ATT-SEC-004
+    func: [F-ATT-334]
+    sc: Every Attendance route rejects an unauthenticated caller
+    t: A representative sweep across every controller with no Authorization header
+    src: ["all Attendance controllers"]
+    type: Authorization
+    pri: P0
+    smoke: true
+    role: NONE
+    perm: "n/a"
+    steps:
+      - "[GET /api/attendance/me/calendar] No token => [401]"
+      - "[GET /api/attendance/shifts] No token => [401]"
+      - "[GET /api/attendance/periods] No token => [401]"
+      - "[GET /api/attendance/devices] No token => [401]"
+      - "[GET /api/attendance/reports/daily] No token => [401]"
+      - "[GET /api/attendance/overtime/snapshot] No token => [401]"
+      - "[GET /api/attendance/admin-corrections] No token => [401]"
+      - "[GET /api/attendance/operations/exceptions] No token => [401]"
+      - "[Manual] Confirm via source inspection that no Attendance-family controller action carries [AllowAnonymous] => confirmed"
+    auto: API
+
+  - id: ATT-SEC-005
+    func: [F-ATT-335]
+    sc: IT, Accounts, and AccountLink* roles are denied every Attendance route
+    t: A blanket denial sweep for roles with zero Attendance permission
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P2
+    steps:
+      - "[GET /api/attendance/devices] As IT => [403] - IT holds zero Attendance.Device.* permissions despite the plausible name association"
+      - "[GET /api/attendance/shifts] As Accounts => [403]"
+      - "[GET /api/attendance/me/calendar] As AccountLinkAdministrator => [403]"
+      - "[GET /api/attendance/reports/daily] As AccountLinkAuditor => [403]"
+    auto: API
+
+  - id: ATT-SEC-006
+    func: [F-ATT-336]
+    sc: A direct API call with a crafted request cannot escalate beyond the token's own resolved permissions
+    t: Client-supplied role/permission-shaped fields in the request body are ignored server-side
+    src: ["all Attendance controllers"]
+    type: Security
+    pri: P1
+    role: EMPLOYEE
+    perm: "Attendance.View"
+    steps:
+      - "[POST /api/attendance/manager/regularizations/{id}/approve] As an Employee holding only Attendance.View, with an extra JSON field like isManager=true or role=HRAdmin injected into the request body => [403] Forbidden - server-side authorization is derived entirely from the validated JWT's resolved permissions, never from request body content"
+    auto: API
+    secc: true
+
+  - id: ATT-SEC-007
+    func: [F-ATT-337]
+    sc: A forged cross-tenant token is rejected before any Attendance logic runs
+    t: A valid-signature token whose tenant claim mismatches the resolved host is denied
+    src: ["TenantShardResolutionMiddleware"]
+    type: Security
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/attendance/me/calendar] Present a validly-signed Tenant A JWT against Tenant B's resolved host => [401/403] rejected at tenant resolution - no Attendance data of either tenant is ever reached"
+    auto: API
+    secc: true
+
+  - id: ATT-SEC-008
+    func: [F-ATT-338]
+    sc: A second, larger-scale consolidated tenant-isolation sweep including writes
+    t: Confirm cross-tenant mutation attempts across the highest-risk write endpoints all fail with zero side effects
+    src: ["all Attendance controllers"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[POST /api/attendance/admin-corrections] As Tenant B, referencing a Tenant A EmployeeId => [400/404] rejected, no row written"
+      - "[POST /api/attendance/manager/regularizations/{tenantARequestId}/approve] As Tenant B => [404] no state change to Tenant A's request"
+      - "[POST /api/attendance/periods/{tenantAPeriodId}/close] As Tenant B => [404] Tenant A's period status unchanged"
+      - "[POST /api/attendance/devices/{tenantADeviceId}/sync] As Tenant B => [404] no punches created against Tenant A"
+      - "[Manual/DB] Confirm zero Tenant A rows were created/modified by any of the above cross-tenant attempts => confirmed"
+    auto: API

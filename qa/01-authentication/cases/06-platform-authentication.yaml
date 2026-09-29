@@ -1,0 +1,408 @@
+sheet: Platform_Auth
+submodule: Platform Authentication (identity domain, separate from tenant auth)
+defaults:
+  role: PLATFORM_ADMIN
+  perm: "PlatformAuthenticated policy (see individual case; login/refresh are anonymous)"
+  tenant: None (platform identity domain)
+  pre: "QA platform.localhost stack running; a bootstrapped platform admin exists (tools/PlatformAdminBootstrap against the disposable QA catalog only)."
+  data: "Platform admin credentials from env (QA_PLATFORM_ADMIN_*); no secrets stored here."
+  sev: High
+  reg: true
+
+cases:
+  - id: PLATFORM-AUTH-001
+    func: [F-PLT-01]
+    sc: Valid platform login
+    t: A correct platform admin login returns a token pair and identity
+    src: ["PlatformAuthController.Login", "PlatformAuthService.LoginAsync"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "[POST /api/platform/auth/login] At platform.localhost, send {email, password} for the platform admin => [200] success=true"
+      - "Inspect data => accessToken (JWT), refreshToken, accessTokenExpiresAtUtc ~ now+15 min (PlatformJwt:AccessTokenMinutes), user.roles contains PlatformSuperAdmin"
+    db: "PlatformUsers.LastLoginAtUtc updated; PlatformRefreshTokens: one new row."
+    auto: API
+    ex: ["xU:PlatformTenantAuthorizationTests"]
+    cm: "No existing xUnit test exercises PlatformAuthController/PlatformAuthService end to end; classify as a coverage gap (see coverage review)."
+
+  - id: PLATFORM-AUTH-002
+    func: [F-PLT-01]
+    sc: Invalid platform credentials
+    t: Wrong password and unknown email return the same generic 401
+    src: ["PlatformAuthService.LoginAsync (dummy hash comparison)"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    steps:
+      - "[POST /api/platform/auth/login] Correct email, wrong password => [401] 'Invalid email address or password.'"
+      - "[POST /api/platform/auth/login] Unknown email, any password => [401] identical message"
+    sec: "Enumeration-resistant, mirrors tenant login's design."
+    auto: API
+
+  - id: PLATFORM-AUTH-003
+    func: [F-PLT-01]
+    sc: Deactivated platform account
+    t: A deactivated platform user is refused with 403 only after the password is verified
+    src: ["PlatformAuthService.LoginAsync (!user.IsActive)"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    role: PLATFORM_INACTIVE (disposable)
+    steps:
+      - "[POST /api/platform/auth/login] Correct credentials for a deactivated platform user => [403] 'This platform account has been deactivated.'"
+      - "[POST /api/platform/auth/login] Same account, wrong password => [401] generic (deactivation not disclosed on a failed password)"
+    auto: API
+
+  - id: PLATFORM-AUTH-004
+    func: [F-PLT-07]
+    sc: Tenant credentials cannot authenticate as platform
+    t: A tenant user's credentials fail against the platform login endpoint
+    src: ["PlatformUsers is a separate catalog table from tenant Users"]
+    type: Tenant-Isolation
+    tags: [Security, Negative]
+    pri: P0
+    sev: Critical
+    role: A_ADMIN (tenant TenantAdmin)
+    steps:
+      - "[POST /api/platform/auth/login] Send the Tenant A TenantAdmin's email and correct tenant password => [401] generic invalid credentials"
+    sec: "Platform and tenant are separate identity stores; no accidental credential reuse."
+    auto: API
+
+  - id: PLATFORM-AUTH-005
+    func: [F-PLT-01, F-AUTH-03]
+    sc: Platform login request validation and malformed input
+    t: Missing fields and malformed JSON are rejected without a 500
+    src: ["PlatformLoginRequest (no explicit FluentValidation found)"]
+    type: Negative
+    tags: [Validation, Contract]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/platform/auth/login] Send {} => record status (expected [400] or [401]; there is no dedicated validator found in source - confirm actual behaviour)"
+      - "[POST /api/platform/auth/login] Send malformed JSON => [400] standard 'could not be read' envelope"
+      - "[POST /api/platform/auth/login] Send email as a number => [400]"
+    auto: API
+    cr: [CR-15]
+    cm: "Exposes CR-15: no PlatformLoginRequestValidator was found in HRMS.Application/Validators; confirm whether validation exists elsewhere or is genuinely absent."
+
+  - id: PLATFORM-AUTH-006
+    func: [F-PLT-02]
+    sc: Platform refresh rotation
+    t: A valid platform refresh token exchanges for a new pair and stops working itself
+    src: ["PlatformAuthService.RefreshAsync"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/platform/auth/login] Sign in => [200] T1"
+      - "[POST /api/platform/auth/refresh] Refresh with T1.refreshToken => [200] T2 differs from T1"
+      - "[POST /api/platform/auth/refresh] Reuse T1.refreshToken => [401] 'The platform session is no longer valid. Please sign in again.'"
+    db: "PlatformRefreshTokens: old row RevokedAtUtc set, ReplacedByTokenId points to the new row."
+    auto: API
+
+  - id: PLATFORM-AUTH-007
+    func: [F-PLT-02]
+    sc: Platform refresh does not revoke the whole family on replay
+    t: Unlike tenant refresh, a replayed platform refresh token only fails itself (no family-wide revocation found in source)
+    src: ["PlatformAuthService.RefreshAsync (no RevokeAll counterpart)"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    steps:
+      - "[POST /api/platform/auth/login] Sign in twice (two sessions) => [200] R1, R2"
+      - "[POST /api/platform/auth/refresh] Rotate R1 => [200] R1a; R1 revoked"
+      - "[POST /api/platform/auth/refresh] Replay R1 => [401]"
+      - "[POST /api/platform/auth/refresh] Refresh R2 (untouched session) => [200] still works"
+    cr: [CR-16]
+    auto: API
+    cm: "Exposes CR-16: platform refresh appears not to implement the tenant's theft-response (revoke-all) behaviour. Confirm intent - platform admin count is small and may not need it, but note the asymmetry."
+
+  - id: PLATFORM-AUTH-008
+    func: [F-PLT-02, F-AUTH-03]
+    sc: Platform refresh with invalid/empty/expired token
+    t: Empty, unknown and expired platform refresh tokens are rejected
+    src: ["PlatformAuthService.RefreshAsync"]
+    type: Negative
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/platform/auth/refresh] {refreshToken:''} => [401] (or [400] if validated; record actual)"
+      - "[POST /api/platform/auth/refresh] Unknown random token => [401]"
+      - "[POST /api/platform/auth/refresh] An expired platform refresh token (DB-assisted ExpiresAtUtc in the past) => [401]"
+    db: "PlatformRefreshTokens.ExpiresAtUtc edited for the expiry sub-case."
+    auto: DB-assisted
+
+  - id: PLATFORM-AUTH-009
+    func: [F-PLT-03]
+    sc: Platform logout
+    t: Logout revokes the refresh token and is idempotent
+    src: ["PlatformAuthService.LogoutAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/platform/auth/login] Sign in => [200] T1"
+      - "[POST /api/platform/auth/logout] Log out with T1 => [200] and access token still authorized for the request itself"
+      - "[POST /api/platform/auth/refresh] Refresh with T1.refreshToken => [401]"
+      - "[POST /api/platform/auth/logout] Log out again with the same token => [200] (idempotent)"
+    auto: API
+
+  - id: PLATFORM-AUTH-010
+    func: [F-PLT-03]
+    sc: Platform logout requires authentication
+    t: Logout without a valid platform bearer token is refused
+    src: ["PlatformAuthController.Logout [Authorize(PlatformBearer, PlatformAuthenticated)]"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/platform/auth/logout] Call with no Authorization header => [401]"
+      - "[POST /api/platform/auth/logout] Call with a TENANT access token => [401] (wrong scheme)"
+    auto: API
+
+  - id: PLATFORM-AUTH-011
+    func: [F-PLT-04]
+    sc: Platform current user
+    t: /api/platform/auth/me returns the caller's own identity, roles and permissions
+    src: ["PlatformAuthService.GetCurrentUserAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[GET /api/platform/auth/me] With a valid platform token => [200] id/email/firstName/lastName/roles/permissions match the platform admin"
+    auto: API
+
+  - id: PLATFORM-AUTH-012
+    func: [F-PLT-04]
+    sc: Platform security revision invalidates old tokens
+    t: A change to the platform user's SecurityRevision makes existing access tokens fail /me
+    src: ["PlatformAuthService.GetCurrentUserAsync (tokenRevision != user.SecurityRevision)"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: PLATFORM_ADMIN2 (disposable)
+    pre: "A mechanism exists to bump PlatformUsers.SecurityRevision (e.g. password reset flow); if none is exposed via API, use DB-assisted."
+    steps:
+      - "[POST /api/platform/auth/login] Sign in as PLATFORM_ADMIN2 => [200] T1"
+      - "Increment PlatformUsers.SecurityRevision for that user => bumped"
+      - "[GET /api/platform/auth/me] Call with T1 => [401] 'The platform session is no longer valid. Please sign in again.'"
+      - "[POST /api/platform/auth/refresh] Refresh then retry /me with the new token => [200] revision now matches"
+    db: "PlatformUsers.SecurityRevision."
+    sec: "Gives platform tokens a server-side kill switch that tenant tokens lack (see CR-17)."
+    auto: DB-assisted
+    cr: [CR-17]
+    cm: "Exposes CR-17 as an asymmetry worth confirming: tenant access tokens have no equivalent immediate-revocation mechanism (see AUTH-TOKEN-026/027)."
+
+  - id: PLATFORM-AUTH-013
+    func: [F-PLT-04]
+    sc: Platform me requires authentication
+    t: /me without a token, or with a deactivated user's token, is refused
+    src: ["PlatformAuthService.GetCurrentUserAsync"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[GET /api/platform/auth/me] No Authorization header => [401]"
+      - "[GET /api/platform/auth/me] Token for a user deactivated after issuance => [403] 'This platform account is no longer active.'"
+    auto: API
+
+  - id: PLATFORM-AUTH-014
+    func: [F-PLT-05, F-AUTH-07]
+    sc: Platform token validation (own issuer/audience/key/algorithm)
+    t: Platform tokens are validated against PlatformJwt settings, independent of the tenant Jwt settings
+    src: ["PlatformBearer scheme configuration"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    steps:
+      - "Craft a platform-shaped token signed with the TENANT Jwt:SecretKey (not PlatformJwt:SecretKey) => token prepared"
+      - "[GET /api/platform/auth/me] Send it => [401]"
+      - "Craft a token with iss/aud swapped to the TENANT values => [401]"
+      - "Craft a token missing auth_scope=platform => [401]"
+    auto: API
+
+  - id: PLATFORM-AUTH-015
+    func: [F-PLT-07]
+    sc: Tenant token rejected on platform endpoints
+    t: A valid tenant access token is refused by platform-authenticated endpoints
+    src: ["PlatformBearer scheme is separate from the default tenant scheme"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: A_ADMIN
+    steps:
+      - "[POST /api/auth/login] Sign in as a tenant TenantAdmin => [200] tenant access token"
+      - "[GET /api/platform/auth/me] Send the tenant access token => [401]"
+      - "[GET /api/platform/tenants] Send the tenant access token => [401]"
+    auto: API
+
+  - id: PLATFORM-AUTH-016
+    func: [F-PLT-07]
+    sc: Platform token rejected on tenant endpoints
+    t: A valid platform access token is refused by ordinary tenant endpoints
+    src: ["Default authorization policy uses the tenant bearer scheme"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: PLATFORM_ADMIN
+    steps:
+      - "[POST /api/platform/auth/login] Sign in as platform admin => [200] platform access token"
+      - "[GET /api/auth/me] Send the platform access token at a Tenant A host => [401]"
+      - "[GET /api/employees] Send the platform access token => [401]"
+    auto: API
+
+  - id: PLATFORM-AUTH-017
+    func: [F-PLT-06]
+    sc: Platform permissions enforced (view/create/update-status)
+    t: Platform endpoints require the specific PlatformTenant.* permission, not merely platform authentication
+    src: ["PlatformPermissionHandler", "PlatformTenantsController"]
+    type: Authorization
+    tags: [Positive, Negative]
+    pri: P0
+    sev: Critical
+    role: PLATFORM_LIMITED (platform user with no roles) and PLATFORM_ADMIN
+    steps:
+      - "[GET /api/platform/tenants] As PLATFORM_LIMITED (authenticated, no PlatformTenant.View) => [403]"
+      - "[GET /api/platform/tenants] As PLATFORM_ADMIN (PlatformSuperAdmin, holds PlatformTenant.View) => [200]"
+      - "[POST /api/platform/tenants] As PLATFORM_LIMITED => [403]"
+      - "[POST /api/platform/tenants/{id}/activate] As PLATFORM_LIMITED => [403]"
+    db: "PlatformUserRoles/PlatformRolePermissions for PLATFORM_LIMITED grant no PlatformTenant.* permission."
+    auto: API
+    ex: ["xU:PlatformTenantAuthorizationTests.Platform_permissions_are_granted_only_to_super_admin_seed_role"]
+
+  - id: PLATFORM-AUTH-018
+    func: [F-PLT-06, F-PLT-04]
+    sc: Platform permission handler re-checks the database every request
+    t: Revoking a platform user's role takes effect immediately, not just on next login
+    src: ["PlatformPermissionHandler.HandleRequirementAsync (DB read per request)"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    sev: High
+    role: PLATFORM_ADMIN2 (disposable)
+    steps:
+      - "[GET /api/platform/tenants] As PLATFORM_ADMIN2 (has the role) => [200]"
+      - "Revoke PLATFORM_ADMIN2's platform role (DB-assisted, no admin API found for this) => revoked"
+      - "[GET /api/platform/tenants] Call again with the SAME still-unexpired access token => [403] (unlike tenant permissions, this is enforced live, not from token claims)"
+    db: "PlatformUserRoles row removed."
+    auto: DB-assisted
+    cm: "Contrast with AUTH-TOKEN-027: tenant permission revocation is NOT live until refresh; platform permission revocation IS live. Record as a deliberate design difference, not a defect."
+
+  - id: PLATFORM-AUTH-019
+    func: [F-PLT-08]
+    sc: Platform frontend route protection
+    t: Direct navigation to a platform page without a session redirects to platform login; an authenticated session admits it
+    src: ["RequirePlatformAuth", "PlatformAuthProvider"]
+    type: Positive
+    tags: [Negative]
+    pri: P1
+    role: Anonymous then PLATFORM_ADMIN
+    steps:
+      - "As an anonymous browser at platform.localhost, navigate directly to /platform/tenants => redirected to /platform/login, with state.from capturing the attempted path"
+      - "Sign in => redirected back toward /platform/tenants (or the default landing) per the app's redirect logic"
+      - "Reload the page mid-session => shows 'Restoring platform session...' then the protected content, never a login flash"
+    auto: UI
+    ex: ["V:auth/RequirePlatformAuth.test.tsx::redirects an anonymous platform session to login", "V:auth/RequirePlatformAuth.test.tsx::waits for restoration before rendering or redirecting", "V:auth/RequirePlatformAuth.test.tsx::renders protected content after restoration"]
+
+  - id: PLATFORM-AUTH-020
+    func: [F-PLT-08, F-SEC-07]
+    sc: Platform session expiry event
+    t: A 401 anywhere except platform login clears the platform session and returns the app to anonymous
+    src: ["platformClient.ts response interceptor, platformSessionExpiredEvent"]
+    type: Positive
+    tags: [Security]
+    pri: P1
+    role: PLATFORM_ADMIN
+    steps:
+      - "Sign in to the platform UI => authenticated"
+      - "Force a 401 from any platform API call other than login (e.g. an expired/invalidated token via SecurityRevision bump) => the UI clears local platform session state and shows the login screen"
+    auto: UI
+    ex: ["V:auth/PlatformAuthProvider.test.tsx::becomes anonymous when the stored platform session cannot be refreshed"]
+
+  - id: PLATFORM-AUTH-021
+    func: [F-TEN-06, F-PLT-08]
+    sc: Platform host is not reachable for tenant routes
+    t: A tenant login page is not served at the platform host, and vice versa
+    src: ["App.tsx isPlatformHost routing"]
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "Navigate to http://platform.localhost:5173/login (a tenant-only route) => served content is the platform app shell (route not found within it), not the tenant LoginPage"
+      - "Navigate to http://demo01.localhost:5173/platform/login (if such a route existed) => not served; the tenant app shell owns this host"
+    auto: UI
+
+  - id: PLATFORM-AUTH-022
+    func: [F-TEN-06]
+    sc: Platform API path blocked on tenant hosts
+    t: /api/platform/* returns 404 when called at a tenant host, before authentication runs
+    src: ["PlatformRequestRoutingMiddleware"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    tenant: A
+    steps:
+      - "[GET /api/platform/tenants] Call at the Tenant A host (not platform.localhost) with NO token => [404] 'The platform endpoint is not available on this host.'"
+      - "[GET /api/platform/tenants] Repeat with a VALID platform token => [404] (host check happens first, before authentication)"
+    auto: API
+    ex: ["xU:PlatformRequestRoutingTests.Customer_host_cannot_reach_platform_route"]
+
+  - id: PLATFORM-AUTH-023
+    func: [F-TEN-06]
+    sc: Tenant shard resolution is skipped for platform-host requests
+    t: A platform-host request never resolves or opens a tenant shard, even for a path that looks tenant-shaped
+    src: ["TenantShardResolutionMiddleware (PlatformHostItem short-circuit)"]
+    type: Tenant-Isolation
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[GET /api/employees] Call at platform.localhost => [404] (not a platform route) and no tenant shard is resolved (no tenant DB touched)"
+    auto: API
+    ex: ["xU:PlatformRequestRoutingTests.Platform_host_does_not_resolve_a_tenant_for_platform_route", "xU:PlatformRequestRoutingTests.Platform_host_marks_platform_request_without_resolving_tenant"]
+
+  - id: PLATFORM-AUTH-024
+    func: [F-PLT-06]
+    sc: Platform tenant metadata update excludes sensitive fields
+    t: The tenant metadata update endpoint cannot alter provisioning identity or credentials
+    src: ["PlatformTenantAuthorizationTests.Tenant_metadata_update_contract_excludes_provisioning_identity_and_credentials"]
+    type: Security
+    tags: [Contract]
+    pri: P1
+    role: PLATFORM_ADMIN
+    steps:
+      - "[PUT /api/platform/tenants/{id}] Send a body attempting to set ShardKey, DatabaseProvider, or an admin password field alongside allowed fields => [200] but those fields are ignored/rejected (record actual: which fields persist)"
+      - "[GET /api/platform/tenants/{id}] Re-fetch => ShardKey/DatabaseProvider unchanged from before the update"
+    sec: "Update surface is narrower than the full entity."
+    auto: API
+    ex: ["xU:PlatformTenantAuthorizationTests.Tenant_metadata_update_contract_excludes_provisioning_identity_and_credentials"]
+
+  - id: PLATFORM-AUTH-025
+    func: [F-PLT-01, F-PLT-06]
+    sc: Platform login is not rate-limited (contrast with tenant login)
+    t: Repeated platform login failures are not throttled by the auth rate-limit policy
+    src: ["PlatformAuthController (no [EnableRateLimiting] attribute found)"]
+    type: Security
+    tags: [Negative, Boundary]
+    pri: P1
+    sev: High
+    role: Anonymous
+    pre: "Use a disposable platform admin account; do not run against a shared/production platform host."
+    steps:
+      - "[POST /api/platform/auth/login] Send 30 wrong-password attempts in one minute for the same platform account => record whether any [429] appears"
+      - "Compare with AUTH-RATE-001 (tenant login, which throttles at ~20/min) => document the difference"
+    sec: "If unthrottled, platform login is more exposed to credential stuffing than tenant login."
+    auto: API
+    cr: [CR-18]
+    cm: "Exposes CR-18: PlatformAuthController has no [EnableRateLimiting], unlike AuthController.Login. Confirm whether this is intended (small, trusted operator population) or a gap."

@@ -1,0 +1,248 @@
+Module,Group,Functionality ID,Functionality,Implementation Status,UI,API,Service,Permission,DB Impact,Manual Case Count,Manual Test Cases,Existing Test Count,Existing Tests,Automation Tests (Playwright),Defects
+Authentication & Tenant Security,Tenant Authentication,F-AUTH-01,Tenant credential login (email identifier),Implemented,/login (LoginPage),POST /api/auth/login,AuthService.LoginAsync; LoginRequestValidator,Anonymous (rate limited: auth policy),"Users (LastLoginDate), RefreshTokens (insert), Tenants, UserRoles, Roles, RolePermissions, Permissions",21,"AUTH-LOGIN-001, AUTH-LOGIN-002, AUTH-LOGIN-003, AUTH-LOGIN-004, AUTH-LOGIN-005, AUTH-LOGIN-006, AUTH-LOGIN-007, AUTH-LOGIN-008, AUTH-LOGIN-009, AUTH-LOGIN-010, AUTH-LOGIN-013, AUTH-LOGIN-014, AUTH-LOGIN-024, AUTH-LOGIN-025, AUTH-LOGIN-030, AUTH-LOGIN-031, AUTH-LOGIN-039, AUTH-LOGIN-040, AUTH-LOGIN-041, AUTH-LOGIN-042, AUTH-LOGIN-043",19,"Vitest pages/LoginPage.test.tsx :: sends trimmed values, and does not touch the password
+xUnit AuthEndpointsTests.Both_tenants_can_sign_in_concurrently_and_each_sees_only_itself
+xUnit AuthEndpointsTests.Login_response_contains_no_password_material
+xUnit AuthEndpointsTests.Login_returns_a_token_pair_and_the_users_profile
+xUnit AuthEndpointsTests.Login_with_bad_credentials_returns_401_in_the_standard_envelope
+xUnit AuthEndpointsTests.Me_returns_the_signed_in_user_for_a_token_the_api_issued
+xUnit AuthServiceLoginTests.Login_failures_are_indistinguishable_to_the_caller
+xUnit AuthServiceLoginTests.Login_grants_exactly_the_permissions_of_the_assigned_role
+xUnit AuthServiceLoginTests.Login_is_case_insensitive_on_the_email_and_trims_it
+xUnit AuthServiceLoginTests.Login_persists_only_a_hash_of_the_refresh_token
+xUnit AuthServiceLoginTests.Login_records_the_last_login_time
+xUnit AuthServiceLoginTests.Login_rejects_valid_credentials_presented_at_another_organizations_address
+xUnit AuthServiceLoginTests.Login_resolves_the_user_belonging_to_the_addressed_organization
+xUnit AuthServiceLoginTests.Login_with_valid_credentials_returns_tokens_and_profile
+xUnit AuthServiceLoginTests.Login_with_wrong_password_is_rejected
+xUnit AuthServiceRefreshTests.Refresh_reflects_a_role_change_made_since_sign_in
+xUnit AuthorizationMatrixTests.Canonical_role_matrix_has_explicit_business_boundaries
+xUnit MySqlTenantRuntimeIntegrationTests
+xUnit SqlServerProviderParityTests",,
+Authentication & Tenant Security,Tenant Authentication,F-AUTH-02,Login identifier modes and employee-code login,Implemented,/login; /configuration/login-settings (TenantLoginSettingsPage),POST /api/auth/login; GET|PUT /api/tenants/current/login-settings,AuthService.LoginAsync; TenantBrandingService,Anonymous (login); User.Edit (settings),"TenantBranding.LoginIdentifierMode, AccountEmployeeCurrentLinks, Employees.EmployeeCode",7,"AUTH-LOGIN-032, AUTH-LOGIN-033, AUTH-LOGIN-034, AUTH-LOGIN-035, AUTH-LOGIN-036, AUTH-LOGIN-037, AUTH-LOGIN-038",4,"xUnit AuthServiceLoginTests.Employee_code_only_keeps_tenant_admin_email_login_available
+xUnit AuthServiceLoginTests.Employee_code_only_rejects_email_for_non_admin_account_generically
+xUnit AuthServiceLoginTests.Login_identifier_mode_defaults_to_email_or_employee_code_and_accepts_employee_code
+xUnit TenantBrandingServiceTests",,
+Authentication & Tenant Security,Tenant Authentication,F-AUTH-03,Login request validation and error envelope,Implemented,LoginPage field errors,POST /api/auth/login,LoginRequestValidator; ValidationFilter; ApiBehaviorOptions.InvalidModelStateResponseFactory,Anonymous,none,18,"AUTH-LOGIN-005, AUTH-LOGIN-014, AUTH-LOGIN-015, AUTH-LOGIN-016, AUTH-LOGIN-017, AUTH-LOGIN-017A, AUTH-LOGIN-018, AUTH-LOGIN-019, AUTH-LOGIN-020, AUTH-LOGIN-021, AUTH-LOGIN-022, AUTH-LOGIN-023, AUTH-LOGIN-041, AUTH-REFRESH-007, AUTH-REFRESH-008, AUTH-PWD-FORGOT-010, PLATFORM-AUTH-005, PLATFORM-AUTH-008",6,"Vitest pages/LoginPage.test.tsx :: puts validation failures under the fields they belong to
+Vitest pages/LoginPage.test.tsx :: sends trimmed values, and does not touch the password
+xUnit AuthEndpointsTests.Login_with_a_non_email_identifier_and_no_password_returns_400_with_field_errors
+xUnit AuthEndpointsTests.Refresh_with_an_empty_token_is_rejected_by_validation
+xUnit AuthServiceLoginTests.Login_rejects_missing_credentials_without_throwing
+xUnit AuthServiceRefreshTests.Refresh_rejects_an_empty_token",,
+Authentication & Tenant Security,Tenant Authentication,F-AUTH-04,"Login enumeration resistance (generic errors, timing)",Implemented,LoginPage error banner,POST /api/auth/login,AuthService.LoginAsync (VerifyAgainstDummyHash),Anonymous,none,6,"AUTH-LOGIN-009, AUTH-LOGIN-010, AUTH-LOGIN-011, AUTH-LOGIN-012, AUTH-LOGIN-023, AUTH-LOGIN-024",3,"xUnit AuthEndpointsTests.Login_with_bad_credentials_returns_401_in_the_standard_envelope
+xUnit AuthServiceLoginTests.Login_failures_are_indistinguishable_to_the_caller
+xUnit AuthServiceLoginTests.Login_with_wrong_password_is_rejected",,
+Authentication & Tenant Security,Tenant Authentication,F-AUTH-05,Account and organization status gating at login,Implemented,LoginPage error banner / Workspace unavailable,POST /api/auth/login,AuthService.LoginAsync; TenantShardResolutionMiddleware,Anonymous,"Users.IsActive, Tenants.Status (tenant DB) and catalog Tenants.Status",6,"AUTH-LOGIN-026, AUTH-LOGIN-027, AUTH-LOGIN-028, AUTH-LOGIN-029, AUTH-LOGIN-036, AUTH-TOKEN-026",7,"xUnit AuthEndpointsTests.Login_at_an_address_no_organization_uses_is_refused
+xUnit AuthServiceLoginTests.Login_at_an_address_that_resolves_to_no_organization_is_refused
+xUnit AuthServiceLoginTests.Login_is_refused_for_a_deactivated_account
+xUnit AuthServiceLoginTests.Login_is_refused_when_the_organization_is_suspended
+xUnit AuthServiceRefreshTests.Refresh_revokes_the_token_when_the_account_has_been_deactivated
+xUnit TenantHostRoutingTests.A_suspended_organizations_host_is_refused_before_authentication_runs
+xUnit TenantHostRoutingTests.The_refusal_names_no_organization_and_gives_no_reason",,
+Authentication & Tenant Security,Tokens,F-AUTH-06,Access token issuance and claim content,Implemented,none (in-memory only),POST /api/auth/login; POST /api/auth/refresh,JwtTokenService.CreateAccessToken; JwtSettings,n/a,none (stateless),9,"AUTH-LOGIN-001, AUTH-LOGIN-002, AUTH-LOGIN-025, AUTH-TOKEN-021, AUTH-TOKEN-022, AUTH-TOKEN-023, AUTH-TOKEN-024, AUTH-TOKEN-029, AUTH-TOKEN-030",13,"xUnit AuthEndpointsTests.A_token_naming_another_tenant_cannot_reach_this_tenants_data
+xUnit AuthEndpointsTests.Login_response_contains_no_password_material
+xUnit AuthEndpointsTests.Login_returns_a_token_pair_and_the_users_profile
+xUnit AuthServiceLoginTests.Login_grants_exactly_the_permissions_of_the_assigned_role
+xUnit AuthServiceLoginTests.Login_persists_only_a_hash_of_the_refresh_token
+xUnit AuthServiceLoginTests.Login_records_the_last_login_time
+xUnit AuthServiceLoginTests.Login_with_valid_credentials_returns_tokens_and_profile
+xUnit AuthorizationMatrixTests.Canonical_role_matrix_has_explicit_business_boundaries
+xUnit JwtTokenServiceTests.Access_token_carries_identity_tenant_role_and_permission_claims
+xUnit JwtTokenServiceTests.Access_token_is_signed_with_hmac_sha256_and_validates_against_the_configured_key
+xUnit JwtTokenServiceTests.Access_token_lifetime_follows_configuration
+xUnit JwtTokenServiceTests.Configuration_validation_accepts_a_sound_configuration
+xUnit TenantIsolationTests.One_tenant_cannot_read_rows_created_by_another_tenant",,
+Authentication & Tenant Security,Tokens,F-AUTH-07,"Access token validation (signature, algorithm, issuer, audience, lifetime, tenant claims)",Implemented,401 handling in api/client.ts,Any authorized endpoint (probe GET /api/auth/me),AddJwtAuthentication (JwtBearer); TenantMatchesShardHandler,Authenticated,none,23,"AUTH-TOKEN-001, AUTH-TOKEN-002, AUTH-TOKEN-003, AUTH-TOKEN-004, AUTH-TOKEN-005, AUTH-TOKEN-006, AUTH-TOKEN-007, AUTH-TOKEN-008, AUTH-TOKEN-009, AUTH-TOKEN-010, AUTH-TOKEN-011, AUTH-TOKEN-012, AUTH-TOKEN-013, AUTH-TOKEN-014, AUTH-TOKEN-015, AUTH-TOKEN-016, AUTH-TOKEN-017, AUTH-TOKEN-018, AUTH-TOKEN-019, AUTH-TOKEN-020, AUTH-TOKEN-029, AUTH-TOKEN-030, PLATFORM-AUTH-014",15,"xUnit AuthEndpointsTests.A_token_issued_for_another_audience_is_refused
+xUnit AuthEndpointsTests.A_token_naming_another_tenant_cannot_reach_this_tenants_data
+xUnit AuthEndpointsTests.A_token_signed_with_a_different_algorithm_is_refused
+xUnit AuthEndpointsTests.A_token_signed_with_another_key_is_refused
+xUnit AuthEndpointsTests.A_token_without_a_tenant_claim_is_refused
+xUnit AuthEndpointsTests.An_endpoint_that_declares_no_authorization_is_closed_by_default
+xUnit AuthEndpointsTests.An_expired_token_is_refused
+xUnit AuthEndpointsTests.Me_requires_a_bearer_token
+xUnit AuthEndpointsTests.Me_returns_the_signed_in_user_for_a_token_the_api_issued
+xUnit AuthServiceLoginTests.Get_current_user_resolves_a_new_link_with_an_old_valid_token
+xUnit JwtTokenServiceTests.Access_token_signed_with_another_key_is_rejected
+xUnit JwtTokenServiceTests.An_expired_access_token_fails_validation
+xUnit JwtTokenServiceTests.Configuration_validation_accepts_a_sound_configuration
+xUnit JwtTokenServiceTests.Tampering_with_the_payload_invalidates_the_token
+xUnit TenantIsolationTests.One_tenant_cannot_read_rows_created_by_another_tenant",,
+Authentication & Tenant Security,Tokens,F-AUTH-08,"Refresh token issuance, storage and lifetime",Implemented,session.ts (localStorage key hrms.refreshToken.v1),POST /api/auth/login; POST /api/auth/refresh,JwtTokenService.CreateRefreshToken/HashRefreshToken; AuthService.IssueTokensAsync,n/a,"RefreshTokens (TokenHash, TenantId, UserId, ExpiresAtUtc, RevokedAtUtc, ReplacedByTokenHash)",11,"AUTH-LOGIN-001, AUTH-LOGIN-039, AUTH-LOGIN-040, AUTH-TOKEN-024, AUTH-REFRESH-010, AUTH-REFRESH-022, AUTH-REFRESH-023, AUTH-REFRESH-024, AUTH-REFRESH-025, AUTH-REFRESH-026, AUTH-REFRESH-027",12,"Vitest auth/AuthProvider.test.tsx :: goes anonymous when another tab signs out
+Vitest auth/AuthProvider.test.tsx :: ignores unrelated storage keys
+Vitest auth/AuthProvider.test.tsx :: restores a stored session with exactly one refresh
+Vitest pages/LoginPage.test.tsx :: keeps Remember Me behavior unchanged
+xUnit AuthEndpointsTests.Both_tenants_can_sign_in_concurrently_and_each_sees_only_itself
+xUnit AuthEndpointsTests.Login_response_contains_no_password_material
+xUnit AuthEndpointsTests.Login_returns_a_token_pair_and_the_users_profile
+xUnit AuthServiceLoginTests.Login_persists_only_a_hash_of_the_refresh_token
+xUnit AuthServiceLoginTests.Login_records_the_last_login_time
+xUnit AuthServiceLoginTests.Login_with_valid_credentials_returns_tokens_and_profile
+xUnit JwtTokenServiceTests.Refresh_token_hashing_is_deterministic_and_one_way
+xUnit JwtTokenServiceTests.Refresh_tokens_are_random_and_never_repeat",,
+Authentication & Tenant Security,Tokens,F-AUTH-09,Refresh rotation (single use),Implemented,api/client.ts refreshSession,POST /api/auth/refresh,AuthService.RefreshAsync,Anonymous (rate limited),"RefreshTokens (old row RevokedAtUtc + ReplacedByTokenHash, new row)",9,"AUTH-REFRESH-001, AUTH-REFRESH-002, AUTH-REFRESH-006, AUTH-REFRESH-007, AUTH-REFRESH-008, AUTH-REFRESH-009, AUTH-REFRESH-022, AUTH-REFRESH-024, AUTH-REFRESH-028",8,"xUnit AuthEndpointsTests.Refresh_rotates_the_pair_and_the_old_token_stops_working
+xUnit AuthEndpointsTests.Refresh_with_an_empty_token_is_rejected_by_validation
+xUnit AuthServiceRefreshTests.Refresh_cannot_consume_the_same_token_twice_when_two_callers_race
+xUnit AuthServiceRefreshTests.Refresh_issues_a_new_pair_and_consumes_the_presented_token
+xUnit AuthServiceRefreshTests.Refresh_rejects_an_empty_token
+xUnit AuthServiceRefreshTests.Refresh_rejects_an_expired_token
+xUnit AuthServiceRefreshTests.Refresh_rejects_an_unknown_token
+xUnit JwtTokenServiceTests.Refresh_tokens_are_random_and_never_repeat",,
+Authentication & Tenant Security,Tokens,F-AUTH-10,Refresh replay and theft response (all-session revocation),Implemented,session ends on refresh failure,POST /api/auth/refresh,AuthService.RefreshAsync; RevokeAllActiveTokensForUserAsync,Anonymous,RefreshTokens (all active rows for the user revoked),1,AUTH-REFRESH-003,2,"xUnit AuthEndpointsTests.Refresh_rotates_the_pair_and_the_old_token_stops_working
+xUnit AuthServiceRefreshTests.Refresh_replay_is_rejected_and_revokes_every_live_session",,
+Authentication & Tenant Security,Tokens,F-AUTH-11,Concurrent refresh race handling,Implemented,single-flight refresh in api/client.ts (per tab only),POST /api/auth/refresh,AuthService.RefreshAsync (conditional ExecuteUpdate),Anonymous,RefreshTokens (conditional UPDATE ... WHERE RevokedAtUtc IS NULL),2,"AUTH-REFRESH-004, AUTH-REFRESH-005",4,"Vitest api/client.test.ts :: collapses concurrent 401s onto a single refresh
+Vitest api/client.test.ts :: replays only once, so a second 401 surfaces to the caller
+Vitest api/client.test.ts :: starts a fresh refresh for a later 401 once the first has settled
+xUnit AuthServiceRefreshTests.Refresh_cannot_consume_the_same_token_twice_when_two_callers_race",,
+Authentication & Tenant Security,Tokens,F-AUTH-12,Refresh token host and tenant binding,Implemented,n/a,POST /api/auth/refresh,AuthService.RefreshAsync (shard vs token tenant; caller tenant vs token tenant),Anonymous,RefreshTokens.TenantId,2,"AUTH-REFRESH-011, AUTH-REFRESH-012",3,"xUnit AuthEndpointsTests.Refresh_is_refused_at_another_organizations_address
+xUnit AuthServiceRefreshTests.Refresh_rejects_a_token_belonging_to_a_different_tenant_than_the_bearer
+xUnit AuthServiceRefreshTests.Refresh_rejects_a_token_presented_at_another_organizations_address",,
+Authentication & Tenant Security,Tokens,F-AUTH-13,"Refresh revalidation (user active, tenant active, permissions re-read)",Implemented,AuthProvider handles 'refreshed' event (new permissions),POST /api/auth/refresh,AuthService.RefreshAsync; RoleResolutionService,Anonymous,"Users.IsActive, Tenants.Status, UserRoles (effective-dated), RolePermissions",4,"AUTH-LOGIN-008, AUTH-REFRESH-013, AUTH-REFRESH-014, AUTH-REFRESH-015",3,"xUnit AuthServiceRefreshTests.Refresh_reflects_a_role_change_made_since_sign_in
+xUnit AuthServiceRefreshTests.Refresh_revokes_the_token_when_the_account_has_been_deactivated
+xUnit AuthServiceRefreshTests.Refresh_revokes_the_token_when_the_organization_is_suspended",,
+Authentication & Tenant Security,Session,F-AUTH-14,"Logout (revocation, idempotency, ownership)",Implemented,Header/Sidebar sign-out; ChangePasswordPage post-change sign-out,POST /api/auth/logout,AuthService.LogoutAsync; RefreshTokenRequestValidator,Authenticated (default tenant-scoped policy),RefreshTokens.RevokedAtUtc,7,"AUTH-TOKEN-025, AUTH-REFRESH-016, AUTH-REFRESH-017, AUTH-REFRESH-018, AUTH-REFRESH-019, AUTH-REFRESH-020, AUTH-REFRESH-021",5,"xUnit AuthEndpointsTests.Logout_requires_authentication_and_then_invalidates_the_session
+xUnit AuthServiceRefreshTests.Logout_cannot_revoke_another_tenants_session
+xUnit AuthServiceRefreshTests.Logout_cannot_revoke_another_users_session_in_the_same_tenant
+xUnit AuthServiceRefreshTests.Logout_makes_the_refresh_token_unusable
+xUnit AuthServiceRefreshTests.Logout_revokes_the_refresh_token_and_is_idempotent",,
+Authentication & Tenant Security,Session,F-AUTH-15,"Current user (me) - profile, roles, permissions, tenant, employee identity",Implemented,AuthProvider.fetchCurrentUser; MyProfilePage (GET /api/me/profile),GET /api/auth/me; GET /api/me/profile,AuthService.GetCurrentUserAsync; MyEmployeeProfileService,Authenticated,"Users, Tenants, UserRoles, AccountEmployeeCurrentLinks, Employees, EmployeeEmploymentHistory",13,"AUTH-LOGIN-042, AUTH-TOKEN-020, AUTH-ME-001, AUTH-ME-002, AUTH-ME-003, AUTH-ME-004, AUTH-ME-005, AUTH-ME-006, AUTH-ME-007, AUTH-ME-008, AUTH-ME-009, AUTH-ME-011, AUTH-ME-012",4,"Vitest pages/MyProfilePage.test.tsx
+xUnit AuthEndpointsTests.A_token_naming_another_tenant_cannot_reach_this_tenants_data
+xUnit AuthEndpointsTests.Me_returns_the_signed_in_user_for_a_token_the_api_issued
+xUnit AuthServiceLoginTests.Get_current_user_resolves_a_new_link_with_an_old_valid_token",,
+Authentication & Tenant Security,Session,F-AUTH-16,Permission and account-state freshness (claims live in token until expiry/refresh),Needs clarification,AuthProvider re-fetches user after refresh,Any [HasPermission] endpoint; GET /api/auth/me,TenantScoped policy RequireClaim(permission); AuthService.GetCurrentUserAsync,Various,"UserRoles, RolePermissions, Users.IsActive",5,"AUTH-TOKEN-025, AUTH-TOKEN-026, AUTH-TOKEN-027, AUTH-TOKEN-028, AUTH-ME-010",2,"xUnit AuthServiceRefreshTests.Refresh_reflects_a_role_change_made_since_sign_in
+xUnit AuthServiceRefreshTests.Refresh_revokes_the_token_when_the_account_has_been_deactivated",,
+Authentication & Tenant Security,Password Lifecycle,F-AUTH-17,Change password (authenticated),Implemented,/change-password (ChangePasswordPage),POST /api/me/change-password,PasswordRecoveryService.ChangePasswordAsync; ChangePasswordRequestValidator,Authenticated,"Users.PasswordHash, RefreshTokens (all revoked)",5,"AUTH-PWD-CHANGE-001, AUTH-PWD-CHANGE-002, AUTH-PWD-CHANGE-003, AUTH-PWD-CHANGE-004, AUTH-PWD-CHANGE-005",2,"Vitest pages/ChangePasswordPage.test.tsx :: submits the three password fields and signs the user out on success
+Vitest pages/ChangePasswordPage.test.tsx :: validates the password policy before submitting",,
+Authentication & Tenant Security,Password Lifecycle,F-AUTH-18,Set initial password from invitation,Implemented,/set-password (SetPasswordPage),POST /api/auth/set-password,EmployeePortalAccountService.SetPasswordAsync; SetPasswordRequestValidator,Anonymous (rate limited: auth policy),"UserInvitations (UsedAtUtc/RevokedAtUtc/TokenHash), Users (PasswordHash, IsActive)",4,"AUTH-PWD-SET-001, AUTH-PWD-SET-002, AUTH-PWD-SET-004, AUTH-PWD-SET-005",1,xUnit EmployeePortalAccountServiceTests.Set_password_activates_account_and_makes_invitation_single_use,,
+Authentication & Tenant Security,Password Lifecycle,F-AUTH-19,Forgot password - identify account and channels,Implemented,/forgot-password (ForgotPasswordPage),POST /api/auth/forgot-password,PasswordRecoveryService.IdentifyAsync,Anonymous (rate limited: password-recovery policy),PasswordResetOtps (challenge rows),6,"AUTH-PWD-FORGOT-001, AUTH-PWD-FORGOT-002, AUTH-PWD-FORGOT-003, AUTH-PWD-FORGOT-015, AUTH-PWD-FORGOT-017, AUTH-PWD-FORGOT-018",7,"Vitest pages/ForgotPasswordPage.test.tsx :: does not render the recovery form when the tenant disables recovery
+Vitest pages/ForgotPasswordPage.test.tsx :: identifies an account, sends an OTP, and keeps recovery state in memory
+Vitest pages/ForgotPasswordPage.test.tsx :: shows the generic safe message when no channels are returned
+xUnit PasswordRecoveryRateLimitTests.All_forgot_password_endpoints_use_the_password_recovery_policy
+xUnit PasswordRecoveryRateLimitTests.Development_defaults_to_twenty_requests_per_one_minute
+xUnit PasswordRecoveryRateLimitTests.Production_defaults_to_five_requests_per_ten_minutes
+xUnit PasswordRecoveryServiceTests.Tenant_context_prevents_a_challenge_from_being_used_for_another_tenant",,
+Authentication & Tenant Security,Password Lifecycle,F-AUTH-20,"Recovery OTP send and resend (channels, cooldown, max resends)",Implemented,ForgotPasswordPage,POST /api/auth/forgot-password/send-otp; POST /api/auth/forgot-password/resend-otp,PasswordRecoveryService.SendCoreAsync; IEmailSender; ISmsOtpSender,Anonymous (password-recovery policy),"PasswordResetOtps (OtpHash, ExpiresAtUtc, ResendCount, LastSentAtUtc)",7,"AUTH-PWD-FORGOT-004, AUTH-PWD-FORGOT-005, AUTH-PWD-FORGOT-006, AUTH-PWD-FORGOT-007, AUTH-PWD-FORGOT-015, AUTH-PWD-FORGOT-016, AUTH-PWD-FORGOT-017",6,"Vitest pages/ForgotPasswordPage.test.tsx :: selects Mobile and sends the unwrapped challenge id with the Sms channel
+xUnit PasswordRecoveryRateLimitTests.All_forgot_password_endpoints_use_the_password_recovery_policy
+xUnit PasswordRecoveryRateLimitTests.Development_defaults_to_twenty_requests_per_one_minute
+xUnit PasswordRecoveryRateLimitTests.Production_defaults_to_five_requests_per_ten_minutes
+xUnit PasswordRecoveryServiceTests.SMTP_delivery_failure_returns_generic_service_unavailable_result
+xUnit PasswordRecoveryServiceTests.Tenant_context_prevents_a_challenge_from_being_used_for_another_tenant",,
+Authentication & Tenant Security,Password Lifecycle,F-AUTH-21,"Recovery OTP verification (attempts, expiry)",Implemented,ForgotPasswordPage,POST /api/auth/forgot-password/verify-otp,PasswordRecoveryService.VerifyOtpAsync; VerifyRecoveryOtpRequestValidator,Anonymous (password-recovery policy),"PasswordResetOtps (AttemptCount, VerifiedAtUtc)",6,"AUTH-PWD-FORGOT-008, AUTH-PWD-FORGOT-009, AUTH-PWD-FORGOT-010, AUTH-PWD-FORGOT-011, AUTH-PWD-FORGOT-015, AUTH-PWD-FORGOT-017",4,"xUnit PasswordRecoveryRateLimitTests.All_forgot_password_endpoints_use_the_password_recovery_policy
+xUnit PasswordRecoveryRateLimitTests.Development_defaults_to_twenty_requests_per_one_minute
+xUnit PasswordRecoveryRateLimitTests.Production_defaults_to_five_requests_per_ten_minutes
+xUnit PasswordRecoveryServiceTests.Tenant_context_prevents_a_challenge_from_being_used_for_another_tenant",,
+Authentication & Tenant Security,Password Lifecycle,F-AUTH-22,"Password reset with reset token (single use, session revocation)",Implemented,ForgotPasswordPage,POST /api/auth/forgot-password/reset,PasswordRecoveryService.ResetPasswordAsync; ResetPasswordRequestValidator,Anonymous (password-recovery policy),"Users.PasswordHash, PasswordResetOtps.ConsumedAtUtc, RefreshTokens (all revoked)",5,"AUTH-PWD-FORGOT-012, AUTH-PWD-FORGOT-013, AUTH-PWD-FORGOT-014, AUTH-PWD-FORGOT-015, AUTH-PWD-FORGOT-017",5,"Vitest pages/SetPasswordPage.test.tsx
+xUnit PasswordRecoveryRateLimitTests.All_forgot_password_endpoints_use_the_password_recovery_policy
+xUnit PasswordRecoveryRateLimitTests.Development_defaults_to_twenty_requests_per_one_minute
+xUnit PasswordRecoveryRateLimitTests.Production_defaults_to_five_requests_per_ten_minutes
+xUnit PasswordRecoveryServiceTests.Tenant_context_prevents_a_challenge_from_being_used_for_another_tenant",,
+Authentication & Tenant Security,Password Lifecycle,F-AUTH-23,Password policy and hashing,Implemented,ChangePasswordPage/SetPasswordPage requirement hints,set-password; reset; change-password,PasswordPolicy.IsValid; IdentityPasswordHasher,n/a,Users.PasswordHash (hash only),6,"AUTH-PWD-SET-001, AUTH-PWD-SET-003, AUTH-PWD-SET-004, AUTH-PWD-CHANGE-001, AUTH-PWD-CHANGE-004, AUTH-PWD-FORGOT-013",3,"Vitest pages/ChangePasswordPage.test.tsx :: submits the three password fields and signs the user out on success
+Vitest pages/ChangePasswordPage.test.tsx :: validates the password policy before submitting
+xUnit EmployeePortalAccountServiceTests.Set_password_activates_account_and_makes_invitation_single_use",,
+Authentication & Tenant Security,Tenant Authentication,F-AUTH-24,Public tenant branding and recovery/login settings administration,Implemented,LoginPage branding; /configuration/login-settings; /configuration/password-recovery,GET /api/tenants/current/branding; GET|PUT /api/tenants/current/login-settings; GET|PUT /api/tenants/current/password-recovery-settings,TenantBrandingService,"Anonymous (branding, rate limited); User.Edit (settings)",TenantBranding,1,AUTH-LOGIN-038,1,xUnit TenantBrandingServiceTests,,
+Authentication & Tenant Security,Tenant Resolution,F-TEN-01,Host to organization resolution (normalization),Implemented,host-aware API origin,Every request (middleware),TenantShardResolutionMiddleware; TenantShardResolver.Normalize,n/a,"Catalog Tenants (Host unique, lowercase)",3,"TENANT-HOST-001, TENANT-HOST-002, TENANT-HOST-003",4,"xUnit TenantHostRoutingTests.A_host_belonging_to_no_organization_is_still_served
+xUnit TenantHostRoutingTests.An_unresolved_host_does_not_open_an_authenticated_route
+xUnit TenantShardResolverTests.A_host_longer_than_the_column_is_refused_without_querying_the_catalog
+xUnit TenantShardResolverTests.Resolves_a_seeded_host_to_its_organization",,
+Authentication & Tenant Security,Tenant Resolution,F-TEN-02,Host resolution caching window,Implemented,n/a,Every request,"TenantShardResolver (IMemoryCache: CacheSeconds, UnknownHostCacheSeconds)",n/a,Catalog Tenants,1,TENANT-HOST-004,2,"xUnit TenantShardResolverTests.Remembers_a_resolved_host_rather_than_asking_the_catalog_again
+xUnit TenantShardResolverTests.Remembers_that_a_host_resolved_to_nothing",,
+Authentication & Tenant Security,Tenant Resolution,F-TEN-03,Inactive or suspended organization refused at the edge,Implemented,LoginPage 'Workspace not found/unavailable',Every request at that host,TenantShardResolutionMiddleware.WriteWorkspaceUnavailableAsync,n/a,Catalog Tenants.Status,3,"AUTH-LOGIN-028, AUTH-REFRESH-014, TENANT-HOST-005",4,"xUnit AuthServiceRefreshTests.Refresh_revokes_the_token_when_the_organization_is_suspended
+xUnit TenantHostRoutingTests.A_suspended_organizations_host_is_refused_before_authentication_runs
+xUnit TenantHostRoutingTests.An_active_organizations_host_leaves_the_pipeline_alone
+xUnit TenantHostRoutingTests.The_refusal_names_no_organization_and_gives_no_reason",,
+Authentication & Tenant Security,Tenant Isolation,F-TEN-04,Token to host agreement (tid and tcode) with 401 refusal,Implemented,401 -> refresh -> session end,Every authorized endpoint,TenantMatchesShardHandler; ShardMismatchAuthorizationResultHandler,Authenticated,none,8,"AUTH-TOKEN-015, AUTH-TOKEN-016, AUTH-TOKEN-017, AUTH-ME-009, TENANT-HOST-006, TENANT-HOST-007, TENANT-HOST-008, TENANT-HOST-009",5,"xUnit AuthEndpointsTests.A_token_naming_another_tenant_cannot_reach_this_tenants_data
+xUnit AuthEndpointsTests.A_token_without_a_tenant_claim_is_refused
+xUnit TokenHostAgreementTests.A_token_is_refused_at_a_host_that_resolves_to_no_workspace
+xUnit TokenHostAgreementTests.A_token_is_refused_at_another_organizations_host
+xUnit TokenHostAgreementTests.A_token_works_at_its_own_organizations_host",,
+Authentication & Tenant Security,Tenant Resolution,F-TEN-05,Apex and unregistered host behaviour,Implemented,WorkspacePickerPage (apex),/health; /ready; /api/system/info; branding; login; authorized routes,TenantShardResolutionMiddleware; TenantMatchesShardHandler; AuthService.LoginAsync,Mixed,none,4,"AUTH-LOGIN-029, AUTH-RATE-005, TENANT-HOST-002, TENANT-HOST-009",5,"xUnit AuthEndpointsTests.Login_at_an_address_no_organization_uses_is_refused
+xUnit AuthServiceLoginTests.Login_at_an_address_that_resolves_to_no_organization_is_refused
+xUnit TenantHostRoutingTests.A_host_belonging_to_no_organization_is_still_served
+xUnit TenantHostRoutingTests.An_unresolved_host_does_not_open_an_authenticated_route
+xUnit TokenHostAgreementTests.A_token_is_refused_at_a_host_that_resolves_to_no_workspace",,
+Authentication & Tenant Security,Platform vs Tenant,F-TEN-06,Platform host boundary (platform routes vs tenant hosts),Implemented,platform.localhost -> PlatformApplication,/api/platform/* ; tenant routes at platform host,PlatformRequestRoutingMiddleware; Platform:AllowedHosts,n/a,none,3,"PLATFORM-AUTH-021, PLATFORM-AUTH-022, PLATFORM-AUTH-023",3,"xUnit PlatformRequestRoutingTests.Customer_host_cannot_reach_platform_route
+xUnit PlatformRequestRoutingTests.Platform_host_does_not_resolve_a_tenant_for_platform_route
+xUnit PlatformRequestRoutingTests.Platform_host_marks_platform_request_without_resolving_tenant",,
+Authentication & Tenant Security,Tenant Resolution,F-TEN-07,Forwarded headers handling (X-Forwarded-For/Host/Proto),Implemented,n/a,Every request,AddHrmsForwardedHeaders; UseForwardedHeaders,n/a,none,2,"TENANT-HOST-024, TENANT-HOST-025",4,"xUnit ForwardedHeadersTests.A_trusted_proxy_can_say_which_address_the_browser_asked_for
+xUnit ForwardedHeadersTests.A_trusted_proxy_that_forwards_no_host_resolves_nothing
+xUnit ForwardedHeadersTests.An_untrusted_caller_cannot_choose_an_organization_with_a_header
+xUnit ForwardedHeadersTests.An_untrusted_caller_cannot_spend_someone_elses_rate_limit_budget",,
+Authentication & Tenant Security,Tenant Isolation,F-TEN-08,"Client-supplied tenant identity is ignored (body, query, header, route)",Implemented,n/a,"All tenant APIs (sample: employees, users)",HttpTenantContext; HrmsDbContext.ApplyAuditAndTenantStamps,Various,TenantId on created rows,2,"AUTH-TOKEN-007, TENANT-HOST-010",2,"xUnit JwtTokenServiceTests.Tampering_with_the_payload_invalidates_the_token
+xUnit TenantIsolationTests.SaveChanges_forces_new_rows_to_the_resolved_tenant_ignoring_client_value",,
+Authentication & Tenant Security,Tenant Isolation,F-TEN-09,Cross-tenant data isolation (read/update/delete by identifier),Implemented,direct URL /employees/:id etc.,Sample of ID-taking endpoints in Auth/RBAC scope (full matrix per module),"EF global query filters; composite (TenantId, ...) FKs",Various,All tenant tables,13,"TENANT-HOST-011, TENANT-HOST-012, TENANT-HOST-013, TENANT-HOST-014, TENANT-HOST-015, TENANT-HOST-016, TENANT-HOST-017, TENANT-HOST-018, TENANT-HOST-019, TENANT-HOST-021, TENANT-HOST-022, TENANT-HOST-026, TENANT-HOST-027",3,"xUnit AuthEndpointsTests.Both_tenants_can_sign_in_concurrently_and_each_sees_only_itself
+xUnit TenantIsolationTests.One_tenant_cannot_read_rows_created_by_another_tenant
+xUnit TenantIsolationTests.Update_cannot_relocate_a_row_to_another_tenant",,
+Authentication & Tenant Security,Tenant Isolation,F-TEN-10,"Per-tenant isolation of sessions (refresh tokens, users with same email)",Implemented,n/a,"login, refresh, logout",AuthService (explicit TenantId predicates),Anonymous/Authenticated,"Users (unique per tenant), RefreshTokens",9,"AUTH-LOGIN-030, AUTH-LOGIN-031, AUTH-LOGIN-037, AUTH-REFRESH-011, AUTH-REFRESH-020, AUTH-PWD-SET-005, AUTH-PWD-FORGOT-015, TENANT-HOST-020, TENANT-HOST-027",7,"xUnit AuthEndpointsTests.Both_tenants_can_sign_in_concurrently_and_each_sees_only_itself
+xUnit AuthEndpointsTests.Refresh_is_refused_at_another_organizations_address
+xUnit AuthServiceLoginTests.Login_rejects_valid_credentials_presented_at_another_organizations_address
+xUnit AuthServiceLoginTests.Login_resolves_the_user_belonging_to_the_addressed_organization
+xUnit AuthServiceRefreshTests.Logout_cannot_revoke_another_tenants_session
+xUnit AuthServiceRefreshTests.Refresh_rejects_a_token_presented_at_another_organizations_address
+xUnit PasswordRecoveryServiceTests.Tenant_context_prevents_a_challenge_from_being_used_for_another_tenant",,
+Authentication & Tenant Security,Tenant Isolation,F-TEN-11,Shard mismatch handling and neutral refusal message,Implemented,session ends on 401,Every authorized endpoint,ShardMismatchAuthorizationResultHandler,Authenticated,none,3,"AUTHZ-PERM-010, AUTHZ-PERM-011, TENANT-HOST-023",3,"xUnit TokenHostAgreementTests.A_missing_permission_at_the_right_host_is_still_forbidden
+xUnit TokenHostAgreementTests.A_token_is_refused_at_another_organizations_host_on_a_permission_guarded_route
+xUnit TokenHostAgreementTests.The_refusal_tells_the_client_to_sign_in_again_and_names_no_organization",,
+Authentication & Tenant Security,Platform Authentication,F-PLT-01,Platform login,Implemented,platform.localhost /platform/login (PlatformLoginPage),POST /api/platform/auth/login,PlatformAuthService.LoginAsync,Anonymous (NOT rate limited),"PlatformUsers (LastLoginAtUtc), PlatformRefreshTokens, PlatformUserRoles",5,"PLATFORM-AUTH-001, PLATFORM-AUTH-002, PLATFORM-AUTH-003, PLATFORM-AUTH-005, PLATFORM-AUTH-025",1,xUnit PlatformTenantAuthorizationTests,,
+Authentication & Tenant Security,Platform Authentication,F-PLT-02,Platform refresh rotation (no family revocation on replay),Implemented,platformAuth.ts platformRefresh,POST /api/platform/auth/refresh,PlatformAuthService.RefreshAsync,Anonymous,PlatformRefreshTokens,3,"PLATFORM-AUTH-006, PLATFORM-AUTH-007, PLATFORM-AUTH-008",0,,,
+Authentication & Tenant Security,Platform Authentication,F-PLT-03,Platform logout,Implemented,PlatformTenantsPage sign-out,POST /api/platform/auth/logout,PlatformAuthService.LogoutAsync,PlatformAuthenticated policy,PlatformRefreshTokens.RevokedAtUtc,2,"PLATFORM-AUTH-009, PLATFORM-AUTH-010",0,,,
+Authentication & Tenant Security,Platform Authentication,F-PLT-04,Platform current user and security revision,Implemented,PlatformAuthProvider.platformMe,GET /api/platform/auth/me,PlatformAuthService.GetCurrentUserAsync; PlatformPermissionHandler,PlatformAuthenticated policy,"PlatformUsers (IsActive, SecurityRevision)",4,"PLATFORM-AUTH-011, PLATFORM-AUTH-012, PLATFORM-AUTH-013, PLATFORM-AUTH-018",0,,,
+Authentication & Tenant Security,Platform Authentication,F-PLT-05,"Platform token validation (separate issuer, audience, key, scope)",Implemented,platformClient 401 handling,Any /api/platform/* authorized endpoint,PlatformBearer scheme; PlatformJwtSettings,Platform,none,1,PLATFORM-AUTH-014,0,,,
+Authentication & Tenant Security,Platform Authentication,F-PLT-06,Platform permission enforcement (PlatformTenant.View/Create/UpdateStatus),Implemented,PlatformTenantsPage actions,GET|POST|PUT /api/platform/tenants...,PlatformPermissionAttribute; PlatformPermissionHandler,PlatformTenant.*,"PlatformRolePermissions, PlatformUserRoles",4,"PLATFORM-AUTH-017, PLATFORM-AUTH-018, PLATFORM-AUTH-024, PLATFORM-AUTH-025",2,"xUnit PlatformTenantAuthorizationTests.Platform_permissions_are_granted_only_to_super_admin_seed_role
+xUnit PlatformTenantAuthorizationTests.Tenant_metadata_update_contract_excludes_provisioning_identity_and_credentials",,
+Authentication & Tenant Security,Platform vs Tenant,F-PLT-07,Platform versus tenant token separation (both directions),Implemented,n/a,tenant endpoints with platform token; platform endpoints with tenant token,Two JwtBearer schemes; default policy uses tenant scheme,n/a,none,3,"PLATFORM-AUTH-004, PLATFORM-AUTH-015, PLATFORM-AUTH-016",0,,,
+Authentication & Tenant Security,Platform Authentication,F-PLT-08,Platform frontend session and route protection,Implemented,/platform/login; /platform/tenants; RequirePlatformAuth; platformSession.ts,platform auth endpoints,PlatformAuthProvider; platformClient interceptor,Platform,none,3,"PLATFORM-AUTH-019, PLATFORM-AUTH-020, PLATFORM-AUTH-021",4,"Vitest auth/PlatformAuthProvider.test.tsx :: becomes anonymous when the stored platform session cannot be refreshed
+Vitest auth/RequirePlatformAuth.test.tsx :: redirects an anonymous platform session to login
+Vitest auth/RequirePlatformAuth.test.tsx :: renders protected content after restoration
+Vitest auth/RequirePlatformAuth.test.tsx :: waits for restoration before rendering or redirecting",,
+Authentication & Tenant Security,Authorization,F-AZ-01,"Permission-guarded endpoints ([HasPermission] policy per permission, AND semantics)",Implemented,n/a,"Sample: GET /api/employees, POST /api/employees, POST /api/employees/personal-details, GET /api/departments",HasPermissionAttribute; AddAuthorization (Permissions.All policies),"Employee.View, Employee.Create, EmployeeSensitive.Edit, Department.View",none,6,"AUTHZ-PERM-001, AUTHZ-PERM-002, AUTHZ-PERM-003, AUTHZ-PERM-004, AUTHZ-PERM-019, TENANT-HOST-021",4,"xUnit AuthEndpointsTests.Every_permission_has_a_registered_authorization_policy
+xUnit AuthEndpointsTests.Me_returns_the_signed_in_user_for_a_token_the_api_issued
+xUnit AuthorizationMatrixTests.Canonical_role_matrix_has_explicit_business_boundaries
+xUnit AuthorizationMatrixTests.IT_and_accounts_do_not_receive_leave_or_attendance_business_permissions",,
+Authentication & Tenant Security,Authorization,F-AZ-02,Fallback deny-by-default and explicit anonymous surface,Implemented,n/a,"All routes; anonymous list: login, refresh, set-password, forgot-password*, branding, platform login/refresh, /health, /ready, /api/system/info",AuthorizationOptions.FallbackPolicy; [AllowAnonymous],n/a,none,2,"AUTHZ-PERM-005, AUTHZ-PERM-006",2,"xUnit AuthEndpointsTests.An_endpoint_that_declares_no_authorization_is_closed_by_default
+xUnit SystemControllerTests",,
+Authentication & Tenant Security,Authorization,F-AZ-03,"Roles, multiple roles and permission union",Implemented,Sidebar visibility,Role assignment then login/refresh,AuthService.LoadAuthorizationAsync; RoleResolutionService,RoleManagement.*,"UserRoles (effective-dated), RolePermissions",7,"AUTH-LOGIN-006, AUTH-LOGIN-007, AUTH-LOGIN-008, AUTH-TOKEN-027, AUTH-TOKEN-028, AUTHZ-PERM-007, AUTHZ-PERM-008",5,"xUnit AuthEndpointsTests.Me_returns_the_signed_in_user_for_a_token_the_api_issued
+xUnit AuthServiceLoginTests.Login_grants_exactly_the_permissions_of_the_assigned_role
+xUnit AuthServiceRefreshTests.Refresh_reflects_a_role_change_made_since_sign_in
+xUnit AuthorizationMatrixTests.Employee_and_manager_roles_do_not_receive_role_administration
+xUnit AuthorizationMatrixTests.IT_and_accounts_do_not_receive_leave_or_attendance_business_permissions",,
+Authentication & Tenant Security,Authorization,F-AZ-04,401 versus 403 semantics and response envelope,Implemented,/forbidden; 401 -> refresh,Any protected endpoint,JwtBearerEvents; ShardMismatchAuthorizationResultHandler; FailureResponse,n/a,none,4,"AUTH-TOKEN-002, AUTHZ-PERM-009, AUTHZ-PERM-010, AUTHZ-PERM-011",5,"xUnit AuthEndpointsTests.An_endpoint_that_declares_no_authorization_is_closed_by_default
+xUnit AuthEndpointsTests.Me_requires_a_bearer_token
+xUnit TokenHostAgreementTests.A_missing_permission_at_the_right_host_is_still_forbidden
+xUnit TokenHostAgreementTests.A_token_is_refused_at_another_organizations_host_on_a_permission_guarded_route
+xUnit TokenHostAgreementTests.The_refusal_tells_the_client_to_sign_in_again_and_names_no_organization",,
+Authentication & Tenant Security,Authorization,F-AZ-05,"Frontend guards versus backend enforcement (RequireAuth, RequirePermission, navigation)",Implemented,RequireAuth; RequirePermission; Sidebar/navigation.ts; /forbidden; direct URL,GET /api/auth/navigation and guarded APIs,AuthProvider.can; PageAccessService.GetNavigationAsync,Various,none,5,"AUTH-ME-013, AUTHZ-PERM-012, AUTHZ-PERM-013, AUTHZ-PERM-014, AUTHZ-PERM-015",7,"Vitest auth/guards.test.tsx :: admits a user who holds any one of several
+Vitest auth/guards.test.tsx :: explains rather than showing a screen full of 403s
+Vitest auth/guards.test.tsx :: refuses a user who holds none of them
+Vitest auth/guards.test.tsx :: sends an anonymous visitor to the sign-in screen
+Vitest layout/Sidebar.test.tsx
+Vitest layout/navigation.test.ts
+Vitest pages/LoginPage.test.tsx :: redirects away from the form when the session is already good",,
+Authentication & Tenant Security,Authorization,F-AZ-06,Post-login redirect target (returnTo) safety,Implemented,LoginPage.redirectTarget,n/a,RequireAuth state.from,n/a,none,1,AUTHZ-PERM-016,0,,,
+Authentication & Tenant Security,Authorization,F-AZ-07,"Self-service and scoped endpoints authorization sample (CR-02, CR-03)",Needs clarification,n/a,GET /api/attendance/comp-off/operations; GET /api/payroll/adjustments; GET /api/me/payroll-adjustments,CompOffService.BuildOperationalScopeAsync; PayrollAdjustmentService,"Attendance.CompOffView*, Payroll.AdjustmentsView",none,2,"AUTHZ-PERM-017, AUTHZ-PERM-018",0,,,
+Authentication & Tenant Security,Transport Security,F-SEC-01,"Authentication rate limiting (auth policy, fixed window per tenant+IP)",Implemented,429 message surfaced by LoginPage,"login, refresh, set-password, branding",RateLimitingServiceCollectionExtensions; AuthenticationRateLimitSettings,Anonymous,none,6,"AUTH-RATE-001, AUTH-RATE-002, AUTH-RATE-003, AUTH-RATE-004, AUTH-RATE-005, AUTH-RATE-007",2,"xUnit AuthEndpointsTests.Repeated_sign_in_attempts_are_throttled
+xUnit ForwardedHeadersTests.The_rate_limiter_partitions_on_the_forwarded_client_address",,
+Authentication & Tenant Security,Transport Security,F-SEC-02,Password-recovery rate limiting,Implemented,ForgotPasswordPage,forgot-password*,PasswordRecoveryRateLimitSettings,Anonymous,none,1,AUTH-RATE-006,1,xUnit PasswordRecoveryRateLimitTests.All_forgot_password_endpoints_use_the_password_recovery_policy,,
+Authentication & Tenant Security,Transport Security,F-SEC-03,"CORS policy (exact origins, workspace templates, credentials, preflight)",Implemented,browser cross-origin calls,Any endpoint (OPTIONS preflight),CorsOriginPolicy; WorkspaceOriginPattern; HrmsCorsServiceCollectionExtensions,n/a,none,8,"AUTH-CORS-001, AUTH-CORS-002, AUTH-CORS-003, AUTH-CORS-004, AUTH-CORS-005, AUTH-CORS-006, AUTH-CORS-007, AUTH-CORS-008",5,"xUnit CorsOriginPolicyTests.A_label_may_be_as_long_as_dns_allows_and_no_longer
+xUnit CorsPolicyTests.A_refused_preflight_grants_nothing
+xUnit CorsPolicyTests.A_request_with_no_origin_is_untouched_by_the_policy
+xUnit CorsPolicyTests.Content_disposition_is_exposed_so_the_export_keeps_its_filename
+xUnit CorsPolicyTests.Preflight_from_the_dev_client_is_allowed_with_credentials",,
+Authentication & Tenant Security,Transport Security,F-SEC-04,Security response headers,Needs clarification,n/a,Any endpoint,Program.cs response-header middleware (after UseAuthorization),n/a,none,2,"AUTH-SEC-003, AUTH-SEC-004",0,,,
+Authentication & Tenant Security,Transport Security,F-SEC-05,"Error handling and information disclosure (500 envelope, Development leak, Swagger)",Implemented,n/a,Any endpoint,ExceptionHandlingMiddleware; Program.cs (UseSwagger in Development),n/a,none,2,"AUTH-SEC-001, AUTH-SEC-002",0,,,
+Authentication & Tenant Security,Transport Security,F-SEC-06,"Anonymous operational endpoints (/health, /ready, /api/system/info)",Implemented,n/a,GET /health; GET /ready; GET /api/system/info,Program.cs; SystemController,Anonymous,Catalog reachable (ready),4,"AUTH-SEC-005, AUTH-SEC-006, AUTH-SEC-007, AUTH-SEC-008",3,"xUnit SystemControllerTests.Info_reports_an_unreachable_shard_as_zero_rather_than_failing
+xUnit SystemControllerTests.Info_reports_every_organization_in_development_even_at_the_apex
+xUnit SystemControllerTests.Info_reports_only_liveness_outside_development",,
+Authentication & Tenant Security,Frontend Session,F-SEC-07,"Frontend session storage, remember-me and cross-tab behaviour",Implemented,session.ts; AuthProvider (storage event); LoginPage remember-me,login/refresh/logout,session; refreshSession single-flight,n/a,none,4,"AUTH-REFRESH-025, AUTH-REFRESH-026, AUTH-REFRESH-027, PLATFORM-AUTH-020",5,"Vitest auth/AuthProvider.test.tsx :: goes anonymous when another tab signs out
+Vitest auth/AuthProvider.test.tsx :: ignores unrelated storage keys
+Vitest auth/AuthProvider.test.tsx :: restores a stored session with exactly one refresh
+Vitest auth/PlatformAuthProvider.test.tsx :: becomes anonymous when the stored platform session cannot be refreshed
+Vitest pages/LoginPage.test.tsx :: keeps Remember Me behavior unchanged",,
+Authentication & Tenant Security,Frontend Session,F-SEC-08,Frontend host-aware API origin and workspace picker,Implemented,/ (apex WorkspacePickerPage); apiOrigin.ts; workspaceHost.ts,n/a,resolveApiBaseUrl; isApexHost; toWorkspaceLabel,n/a,none,2,"AUTH-FE-005, AUTH-FE-006",2,"Vitest lib/apiOrigin.test.ts
+Vitest pages/WorkspacePickerPage.test.tsx",,
+Authentication & Tenant Security,Frontend Session,F-SEC-09,"Frontend login page behaviour (validation, submit-once, branding states, remembered identifier)",Implemented,/login,GET /api/tenants/current/branding; POST /api/auth/login,LoginPage; useTenantBranding,Anonymous,none,4,"AUTH-FE-001, AUTH-FE-002, AUTH-FE-003, AUTH-FE-004",6,"Vitest pages/LoginPage.test.tsx :: asks for the credentials only - never for an organization
+Vitest pages/LoginPage.test.tsx :: cannot be submitted twice while a sign-in is in flight
+Vitest pages/LoginPage.test.tsx :: puts validation failures under the fields they belong to
+Vitest pages/LoginPage.test.tsx :: renders the login page when the server supplies fallback branding
+Vitest pages/LoginPage.test.tsx :: shows an error when branding fetch fails
+Vitest pages/LoginPage.test.tsx :: shows the workspace-unavailable state when branding is neutral",,
+Authentication & Tenant Security,Provider Parity,F-SEC-10,Auth persistence parity across database providers (MySQL / SQL Server),Implemented,n/a,"login, refresh (ExecuteUpdate), logout",Infrastructure providers; conditional UPDATE semantic,n/a,RefreshTokens across providers,2,"AUTH-LOGIN-043, AUTH-REFRESH-028",3,"xUnit AuthServiceRefreshTests.Refresh_cannot_consume_the_same_token_twice_when_two_callers_race
+xUnit MySqlTenantRuntimeIntegrationTests
+xUnit SqlServerProviderParityTests",,

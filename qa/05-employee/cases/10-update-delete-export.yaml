@@ -1,0 +1,350 @@
+sheet: Employee_Core
+submodule: Employee Update, Delete, Export, Import
+defaults:
+  role: HR_ADMIN
+  perm: "Employee.Edit"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (Employee.Edit, Employee.Delete, Employee.Export, Employee.Import, EmployeeSensitive.Edit)."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: EMP-UPD-001
+    func: [F-EMP-107]
+    sc: An unrelated field update does not force re-validation of an unchanged reference
+    t: An employee already assigned to a now-retired department, or reporting to a now-departed manager, keeps that assignment when other fields change
+    src: ["EmployeeService.ValidateReferencesAsync"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    pre: "Employee's departmentId points at a department that has since been deactivated; reportingManagerId points at a manager who has since left."
+    steps:
+      - "[PUT /api/employees/{id}] departmentId and reportingManagerId UNCHANGED, only phone updated => [200] accepted - the stale references are left alone"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Update_may_keep_a_department_that_has_since_been_retired", "xU:EmployeeServiceTests.Update_keeps_an_existing_manager_who_has_since_left"]
+
+  - id: EMP-UPD-002
+    func: [F-EMP-108]
+    sc: Update rejects moving INTO a retired department even though keeping one already assigned is allowed
+    t: Changing departmentId to a DIFFERENT, now-inactive department is rejected
+    src: ["EmployeeService.ValidateReferencesAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}] departmentId changed to a DIFFERENT department that is inactive => [400] department is inactive"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Update_rejects_a_move_into_a_retired_department"]
+
+  - id: EMP-UPD-003
+    func: [F-EMP-109]
+    sc: Update rejects self-reporting and rejects a manager who already reports up through the employee; accepts a hierarchy-preserving change
+    t: Cycle prevention on the legacy full-edit ReportingManagerId path
+    src: ["EmployeeService.WouldCreateReportingCycleAsync"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    smoke: true
+    pre: "Chain: A manages B."
+    steps:
+      - "[PUT /api/employees/{A id}] reportingManagerId = A's own id => [400] 'An employee cannot report to themselves.'"
+      - "[PUT /api/employees/{A id}] reportingManagerId = B (B already reports to A - would create a cycle) => [400] 'The selected manager would create a reporting cycle.'"
+      - "[PUT /api/employees/{A id}] reportingManagerId = a THIRD employee C, unrelated to A/B's chain => [200] accepted - the tree stays valid"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Update_rejects_an_employee_reporting_to_themselves", "xU:EmployeeServiceTests.Update_rejects_a_manager_who_reports_up_through_the_employee", "xU:EmployeeServiceTests.Update_accepts_a_manager_change_that_keeps_the_hierarchy_a_tree"]
+
+  - id: EMP-UPD-004
+    func: [F-EMP-110]
+    sc: Update rejects an Employee Code already used by a DIFFERENT employee, but allows saving the record's own unchanged code
+    t: The uniqueness check on update excludes the record itself
+    src: ["EmployeeService.FindConflictAsync (excludeId)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}] employeeCode = a DIFFERENT employee's existing code => [409] 'This employee code is already in use.'"
+      - "[PUT /api/employees/{id}] employeeCode = this employee's OWN current code, unchanged => [200] accepted"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Update_rejects_an_employee_code_another_employee_already_uses"]
+
+  - id: EMP-UPD-005
+    func: [F-EMP-111]
+    sc: Update stamps ModifiedDate and fully replaces the legacy field set without touching sub-resources
+    t: A full PUT updates ModifiedDate and leaves Contact/Address/Bank/Employment/Supervisor untouched
+    src: ["EmployeeService.UpdateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}] Full EmployeeRequest with changed firstName => [200] accepted"
+      - "[GET /api/employees/{id}] Call => [200] modifiedDate is newer than before the update"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Update_replaces_the_record_and_stamps_a_modified_date"]
+
+  - id: EMP-UPD-006
+    func: [F-EMP-112]
+    sc: Update/Delete on a cross-tenant employee id is a 404 and mutates nothing
+    t: Neither operation succeeds or partially applies against another tenant's record
+    src: ["EmployeeService.UpdateAsync/DeleteAsync (tenant-filtered)"]
+    type: Tenant-Isolation
+    pri: P0
+    smoke: true
+    tenant: A+B
+    steps:
+      - "[PUT /api/employees/{Tenant A id}] As Tenant B => [404] Not Found"
+      - "[DELETE /api/employees/{Tenant A id}] As Tenant B => [404] Not Found"
+      - "[GET /api/employees/{Tenant A id}] As Tenant A, immediately after => [200] the record is completely unchanged"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Update_of_another_tenants_employee_is_not_found_and_changes_nothing", "xU:EmployeeServiceTests.Delete_of_another_tenants_employee_is_not_found"]
+
+  - id: EMP-UPD-007
+    func: [F-EMP-113]
+    sc: Delete is a hard delete, refused with 409 while the employee still has direct reports
+    t: Reassign direct reports before deletion is possible
+    src: ["EmployeeService.DeleteAsync"]
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    smoke: true
+    perm: Employee.Delete
+    steps:
+      - "[DELETE /api/employees/{id}] Employee has 2 direct reports (legacy ReportingManagerId) => [409] '2 employee(s) report to this person. Reassign them to another manager first.'"
+      - "[PUT /api/employees/{report1 id}] Reassign both reports to a different manager => [200] accepted"
+      - "[DELETE /api/employees/{id}] Retry => [200] deleted"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Delete_refuses_an_employee_who_still_has_direct_reports", "xU:EmployeeServiceTests.Delete_removes_an_employee_nobody_reports_to"]
+
+  - id: EMP-UPD-008
+    func: [F-EMP-113]
+    sc: The direct-reports delete guard only checks the legacy ReportingManagerId FK, not EmploymentHistory.ManagerId
+    t: An employee who is a manager ONLY via a history-only or future-dated Employment record (legacy column not synced) is deleted without the guard blocking it, silently nulling the historical ManagerId reference
+    src: ["EmployeeService.DeleteAsync (ReportingManagerId-only guard)", "EmployeeEmploymentHistoryConfiguration.cs (ManagerId FK OnDelete(SetNull))"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    pre: "Employee MGR-X is the manager on a report's EmployeeEmploymentHistory record only (a future-dated ManagerChange has not yet synced onto the legacy ReportingManagerId column)."
+    steps:
+      - "[DELETE /api/employees/{MGR-X id}] Call => [200] deletion SUCCEEDS - the app-level guard never saw MGR-X as a manager"
+      - "[GET /api/employees/{report id}/employment-history] Call => [200] the historical record's managerId is now null - silently orphaned, not blocked or warned about"
+    auto: API
+    cr: [CR-56]
+
+  - id: EMP-UPD-009
+    func: [F-EMP-114]
+    sc: Delete on an employee with referencing sub-resource data is a handled Conflict, not a raw 500
+    t: A DbUpdateException from any other FK reference (bank details, addresses, linked portal account, etc.) is caught and reported as 409
+    src: ["EmployeeService.DeleteAsync (catch DbUpdateException)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[DELETE /api/employees/{id}] Employee has a linked portal account (AccountEmployeeCurrentLink) that blocks deletion at the DB level => [409] 'This employee record is still referenced and cannot be deleted.' (not a 500)"
+    auto: API
+
+  - id: EMP-UPD-010
+    func: [F-EMP-115]
+    sc: Deleting a nonexistent or already-deleted employee id is a 404 both times
+    t: A repeated DELETE on the same id is never a repeated 200
+    src: ["EmployeeService.DeleteAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[DELETE /api/employees/{random guid}] Call => [404] Not Found"
+      - "[DELETE /api/employees/{id}] Delete a real employee, then delete the SAME id again => [200] first call, [404] second call"
+    auto: API
+
+  - id: EMP-UPD-011
+    func: [F-EMP-117]
+    sc: The Delete row-action renders only for a caller holding Employee.Delete
+    t: A caller without Employee.Delete never sees the control - it is absent, not disabled
+    src: ["EmployeesPage row actions (canDelete gate)"]
+    type: Authorization
+    pri: P1
+    role: HR_MANAGER
+    perm: "Employee.View/.Edit/.Export (no Delete)"
+    steps:
+      - "[UI] Open the Employees list as HRManager (no Employee.Delete) => the Delete action is not rendered on any row"
+    auto: UI
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::gives an HR Manager everything except the delete"]
+
+  - id: EMP-UPD-012
+    func: [F-EMP-118]
+    sc: The Delete confirm dialog names the employee and code, and the list is re-read afterward
+    t: The UI confirms before deleting and refreshes the visible page
+    src: ["EmployeesPage ConfirmDialog"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Click Delete on a row => the confirm dialog shows the employee's name and code"
+      - "[UI] Confirm => the row disappears and a success message is shown; the list is re-fetched"
+    auto: UI
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::deletes an employee after naming them, then says so and re-reads the list"]
+
+  - id: EMP-EXP-001
+    func: [F-EMP-119]
+    sc: Export produces a well-formed CSV - BOM, CRLF separators, header + unpaged rows
+    t: The raw byte content of the export matches the documented CSV format
+    src: ["EmployeeService.ExportAsync / CsvBuilder"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: Employee.Export
+    steps:
+      - "[GET /api/employees/export] Call on a tenant with 3 employees and page-size-irrelevant paging in the query => [200] file begins with a UTF-8 BOM, rows are CRLF-separated, header row is followed by all 3 employees regardless of any page/pageSize params"
+    auto: API
+    ex: ["xU:EmployeeExportTests.Export_leads_with_a_byte_order_mark_then_the_header_row", "xU:EmployeeExportTests.Export_separates_rows_with_a_carriage_return_and_line_feed", "xU:EmployeeExportTests.Export_ignores_paging"]
+
+  - id: EMP-EXP-002
+    func: [F-EMP-120]
+    sc: CSV-quoting and formula-injection neutralization
+    t: Values with a comma/quote/line-break are quoted correctly; a leading =/+/-/@ is neutralized
+    src: ["CsvBuilder"]
+    type: Security
+    tags: [Boundary]
+    pri: P1
+    perm: Employee.Export
+    steps:
+      - "[GET /api/employees/export] An employee whose Address contains a comma and a double-quote => [200] that field is properly CSV-quoted with the quote escaped"
+      - "[GET /api/employees/export] An employee whose Address begins with '=SUM(A1)' => [200] the leading '=' is neutralized so no spreadsheet would execute it as a formula"
+    auto: API
+    ex: ["xU:EmployeeExportTests.Export_quotes_values_containing_a_comma_a_quote_or_a_line_break", "xU:EmployeeExportTests.Export_neutralizes_values_a_spreadsheet_would_execute"]
+
+  - id: EMP-EXP-003
+    func: [F-EMP-121]
+    sc: Export masks statutory identifiers exactly as the API projection does
+    t: The raw Aadhaar/PAN/PF/UAN/ESIC/Mediclaim values never appear in the exported file
+    src: ["EmployeeService.ExportAsync"]
+    type: Security
+    pri: P0
+    smoke: true
+    perm: Employee.Export
+    steps:
+      - "[GET /api/employees/export] An employee with a stored Aadhaar number => [200] the Aadhaar column in the CSV is masked, matching the masked value from GET /api/employees/{id}"
+    auto: API
+    ex: ["xU:EmployeeExportTests.Export_masks_statutory_identifiers_and_never_contains_the_raw_values"]
+
+  - id: EMP-EXP-004
+    func: [F-EMP-122]
+    sc: An export exceeding the row cap is refused with 400, not truncated
+    t: MaxExportRows=10,000 is a hard refusal, never a silent partial file
+    src: ["EmployeeService.ExportAsync"]
+    type: Boundary
+    pri: P1
+    perm: Employee.Export
+    steps:
+      - "[GET /api/employees/export] A filter matching more than 10,000 employees => [400] 'This export would contain {n} rows, above the limit of 10000. Narrow the filter...'"
+      - "[GET /api/employees/export] A filter narrowed to 9,999 or fewer => [200] the file is produced in full"
+    auto: API
+    ex: ["xU:EmployeeExportTests.Export_refuses_a_result_set_above_the_row_limit"]
+
+  - id: EMP-EXP-005
+    func: [F-EMP-123]
+    sc: The export filename is timestamped for the moment it was generated
+    t: Content-Disposition carries a UTC-timestamped filename matching the documented pattern
+    src: ["EmployeeService.ExportAsync"]
+    type: Positive
+    pri: P2
+    perm: Employee.Export
+    steps:
+      - "[GET /api/employees/export] Call => [200] Content-Disposition filename matches 'employees-yyyyMMdd-HHmmss.csv' for the moment of generation"
+    auto: API
+    ex: ["xU:EmployeeExportTests.Export_is_named_for_the_moment_it_was_generated", "V:api/employees.test.ts::returns the file with the name the API chose"]
+
+  - id: EMP-EXP-006
+    func: [F-EMP-124]
+    sc: Export and List can disagree on the same filter because they read different data sources
+    t: When an employee's legacy snapshot columns diverge from their current Employment History, filtering both endpoints by the same Department can produce different results
+    src: ["EmployeeService.ExportAsync (ApplyFilters) vs GetAsync (ApplyEffectiveFilters)"]
+    type: Negative
+    tags: [Integration-Concurrency]
+    pri: P1
+    pre: "Employee's Employees.DepartmentId (legacy) still reads Engineering while their current Employment History resolves Department=Finance."
+    steps:
+      - "[GET /api/employees?departmentId=Finance] Call => [200] the employee DOES appear (list uses the effective/history-aware value)"
+      - "[GET /api/employees/export?departmentId=Finance] Call => [200] the SAME employee does NOT appear in the file (export uses the stale legacy column)"
+    auto: API
+    cr: [CR-47]
+
+  - id: EMP-EXP-007
+    func: [F-EMP-125]
+    sc: Export bypasses the row-level access-scope predicate that List/Get apply
+    t: A scope-restricted role (e.g. a Manager scoped to self+direct-reports) holding Employee.Export can export the WHOLE tenant, not just their own scope
+    src: ["EmployeeService.ExportAsync (no _accessScope.BuildPredicateAsync call)"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    sev: Critical
+    role: MANAGER
+    perm: "Employee.View + Employee.Export"
+    steps:
+      - "[GET /api/employees] As a scoped Manager => [200] only self + direct reports"
+      - "[GET /api/employees/export] As the SAME scoped Manager => [200] the file contains EVERY employee in the tenant, not just self + direct reports"
+    auto: API
+    cr: [CR-48]
+
+  - id: EMP-EXP-008
+    func: [F-EMP-144]
+    sc: Export is still tenant-isolated even though it is not scope-isolated
+    t: Only the caller's own tenant's employees ever appear in the exported file
+    src: ["EmployeeService.ExportAsync (EF global TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P1
+    perm: Employee.Export
+    tenant: A+B
+    steps:
+      - "[GET /api/employees/export] As Tenant A => [200] the file contains only Tenant A's employees, none of Tenant B's"
+    auto: API
+    ex: ["xU:EmployeeExportTests.Export_contains_only_the_callers_own_employees"]
+
+  - id: EMP-EXP-009
+    func: [F-EMP-119]
+    sc: Export applies the same filters as the current query and honors sort order
+    t: departmentId/designationId/status/search/sortBy on the export endpoint behave consistently with each other
+    src: ["EmployeeService.ExportAsync"]
+    type: Positive
+    pri: P2
+    perm: Employee.Export
+    steps:
+      - "[GET /api/employees/export?status=Active&sortBy=lastName] Call => [200] only Active employees, ordered by last name"
+    auto: API
+    ex: ["xU:EmployeeExportTests.Export_applies_the_same_filters_as_the_list", "xU:EmployeeExportTests.Export_uses_the_same_ordering_as_the_list"]
+
+  - id: EMP-EXP-010
+    func: [F-EMP-119]
+    sc: Export of an empty result is a header row and nothing else
+    t: A filter matching zero employees still produces a valid CSV with just the header
+    src: ["EmployeeService.ExportAsync"]
+    type: Boundary
+    pri: P3
+    perm: Employee.Export
+    steps:
+      - "[GET /api/employees/export?status=Terminated] On a tenant with zero Terminated employees => [200] file contains only the BOM + header row, zero data rows"
+    auto: API
+    ex: ["xU:EmployeeExportTests.Export_of_an_empty_result_is_a_header_and_nothing_else", "xU:EmployeeExportTests.Export_writes_an_empty_field_where_a_value_is_absent"]
+
+  - id: EMP-IMP-001
+    func: [F-EMP-126]
+    sc: Employee Import is scaffolding-only - creating a batch never imports any employee
+    t: POST /api/import creates a Pending batch row with TotalRows=0 and no Employee is ever created or updated by this call
+    src: ["ImportBatchService.ImportAsync"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    perm: Employee.Import
+    steps:
+      - "[POST /api/import?fileName=employees.csv] Upload a well-formed CSV of 10 employees => [200 or 201] an ImportBatch is created, status=Pending, totalRows=0"
+      - "[GET /api/employees] Call immediately after => [200] no new employees were created by the import"
+    auto: API
+    cr: [CR-50]
+
+  - id: EMP-IMP-002
+    func: [F-EMP-126]
+    sc: Employee Import requires the Employee.Import permission
+    t: A caller without Employee.Import is refused
+    src: ["ImportBatchController"]
+    type: Authorization
+    pri: P2
+    role: HR_MANAGER
+    perm: "no Employee.Import"
+    steps:
+      - "[POST /api/import?fileName=employees.csv] As HRManager (no Employee.Import) => [403] Forbidden"
+    auto: API

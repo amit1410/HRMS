@@ -1,0 +1,300 @@
+sheet: Payroll_Adjustments
+submodule: Recalculation triggers - Payroll Adjustments (reasons, lifecycle, self-service), Off-Cycle Runs, and Reversals
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Adjustments.Create"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, with an active Employee, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-ADJ-001
+    func: [F-PAY-121]
+    sc: Create and list adjustment reason codes
+    t: A reason code with a unique Code+Name is created and appears in the list
+    src: ["PayrollAdjustmentService.CreateReasonAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/payroll/adjustments/reasons] Code=RETRO-INCR, Name=Retro increment => [200/201] created"
+      - "[GET /api/payroll/adjustments/reasons] => [200] RETRO-INCR present"
+    auto: API
+
+  - id: PAY-ADJ-002
+    func: [F-PAY-123]
+    sc: Create a valid payroll adjustment
+    t: A well-formed earning adjustment is created in Draft
+    src: ["PayrollAdjustmentService.CreateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/adjustments] EmployeeId, SourceType=Manual, Amount=2000, Description='One-time bonus', Direction=Earning, EffectiveDate=today => [200/201] Status=Draft"
+    auto: API
+
+  - id: PAY-ADJ-003
+    func: [F-PAY-123]
+    sc: Create validation
+    t: Amount<=0, blank Description, and default EffectiveDate are each rejected
+    src: ["PayrollAdjustmentService.CreateAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/adjustments] Amount=0 => [400] Amount must be greater than zero."
+      - "[POST /api/payroll/adjustments] Description='' => [400] Description is required."
+      - "[POST /api/payroll/adjustments] EffectiveDate=default => [400] Effective date is required."
+    auto: API
+
+  - id: PAY-ADJ-004
+    func: [F-PAY-124]
+    sc: One adjustment per source identity
+    t: A second create against the same SourceType+SourceId is Conflict
+    src: ["PayrollAdjustmentService.CreateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/payroll/adjustments] SourceType=Manual, SourceReferenceId=<guid X> first attempt => [200/201]"
+      - "[POST /api/payroll/adjustments] SourceType=Manual, SourceReferenceId=<guid X> second attempt => [409] An adjustment already exists for this source."
+    auto: API
+
+  - id: PAY-ADJ-005
+    func: [F-PAY-125]
+    sc: Adjustment numbers allocate uniquely under concurrency
+    t: Two concurrent creates never collide on the same AdjustmentNumber
+    src: ["PayrollAdjustmentService.NextNumberAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire two concurrent POST /api/payroll/adjustments via Task.WhenAll => both succeed [200/201] with two distinct sequential AdjustmentNumbers, no duplicate and no gap left unexplained"
+    auto: DB-assisted
+
+  - id: PAY-ADJ-006
+    func: [F-PAY-126]
+    sc: A correction snapshot is captured immutably at creation
+    t: Creating an adjustment against OriginalPayrollResultId writes a PayrollCorrectionSnapshot that a later recalculation of the original does not alter
+    src: ["PayrollAdjustmentService.CreateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/adjustments] OriginalPayrollResultId=<a finalized result>, Amount=500, Direction=Earning => [200/201] a PayrollCorrectionSnapshot row is written with CorrectedNet = OriginalNet + 500"
+    auto: API
+
+  - id: PAY-ADJ-007
+    func: [F-PAY-127]
+    sc: Submit/Approve/Reject lifecycle
+    t: Draft->Submitted->Approved succeeds; Reject requires a reason and only fires from Submitted
+    src: ["PayrollAdjustmentService.SubmitAsync / ApproveAsync / RejectAsync"]
+    type: Positive
+    pri: P0
+    perm: "Payroll.Adjustments.Submit"
+    steps:
+      - "[POST /api/payroll/adjustments/{id}/submit] => [200] Status=Submitted"
+      - "[POST /api/payroll/adjustments/{id}/reject] no reason => [400] A rejection reason is required."
+      - "[POST /api/payroll/adjustments/{id}/approve] as a DIFFERENT user than the submitter => [200] Status=Approved"
+    auto: API
+
+  - id: PAY-ADJ-008
+    func: [F-PAY-127]
+    sc: Approve blocks self-approval
+    t: The submitting user cannot approve their own adjustment when self-approval is disabled
+    src: ["PayrollAdjustmentService.ApproveAsync -> PayrollApprovalGuard"]
+    type: Security
+    pri: P0
+    steps:
+      - "[Setup] PayrollControlConfiguration.PreventSelfApproval=true => precondition established"
+      - "[POST /api/payroll/adjustments/{id}/approve] as the same user who submitted it => [400] SelfApprovalNotAllowed: the user who created this payroll action cannot approve it."
+    auto: API
+
+  - id: PAY-ADJ-009
+    func: [F-PAY-128]
+    sc: Cancel is uniquely permissive - allowed from Draft or Submitted
+    t: A Draft adjustment and a Submitted adjustment can both be cancelled with a reason
+    src: ["PayrollAdjustmentService.CancelAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/adjustments/{id}/cancel] on a Draft adjustment, reason='No longer needed' => [200] Status=Cancelled"
+      - "[POST /api/payroll/adjustments/{id2}/cancel] on a Submitted adjustment, reason='Duplicate entry' => [200] Status=Cancelled"
+      - "[POST /api/payroll/adjustments/{id3}/cancel] no reason => [400] A cancellation reason is required."
+    auto: API
+
+  - id: PAY-ADJ-010
+    func: [F-PAY-129]
+    sc: History is append-only across the full lifecycle
+    t: Created/Submitted/Approved (or Rejected/Cancelled) each append a distinct row
+    src: ["PayrollAdjustmentService.AddHistory"]
+    type: Positive
+    pri: P2
+    perm: "Payroll.Adjustments.ViewHistory"
+    steps:
+      - "[GET /api/payroll/adjustments/{id}/history] => [200] one row per lifecycle event, newest first"
+    auto: API
+
+  - id: PAY-ADJ-011
+    func: [F-PAY-130]
+    sc: Self-service my-adjustments is scoped strictly to the caller's own employee
+    t: An employee sees only their own adjustments; requesting another employee's id by number is NotFound
+    src: ["PayrollAdjustmentsController.My / MyDetail"]
+    type: Security
+    pri: P0
+    role: EMPLOYEE
+    perm: "Payroll.Adjustments.View"
+    steps:
+      - "[GET /api/me/payroll-adjustments] => [200] only the caller's own EmployeeId's adjustments"
+      - "[GET /api/me/payroll-adjustments/{anotherEmployeesAdjustmentId}] => [404] not the caller's own adjustment - no cross-employee leak"
+    auto: API
+
+  - id: PAY-ADJ-012
+    func: [F-PAY-131]
+    sc: An unlinked account cannot use self-service adjustments
+    t: A user account with no AccountEmployeeCurrentLink gets Unauthorized, not another employee's data
+    src: ["PayrollAdjustmentsController.My"]
+    type: Security
+    pri: P0
+    role: EMPLOYEE
+    perm: "Payroll.Adjustments.View"
+    steps:
+      - "[GET /api/me/payroll-adjustments] As an unlinked account => [401] no employee identity linked"
+    auto: API
+
+  - id: PAY-ADJ-013
+    func: [F-PAY-132]
+    sc: Off-cycle run creation requires a valid RunType
+    t: RunType=Regular is rejected for the off-cycle endpoint
+    src: ["PayrollAdjustmentService.CreateOffCycleRunAsync"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.OffCycle.Create"
+    steps:
+      - "[POST /api/payroll/off-cycle-runs] RunType=Regular => [400] Only off-cycle or supplementary runs are supported."
+    auto: API
+
+  - id: PAY-ADJ-014
+    func: [F-PAY-133]
+    sc: Off-cycle creation validates every selected adjustment atomically
+    t: One AdjustmentId already scheduled to another run blocks the whole creation, and no run is left orphaned
+    src: ["PayrollAdjustmentService.CreateOffCycleRunAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    perm: "Payroll.OffCycle.Create"
+    steps:
+      - "[Setup] One of the two AdjustmentIds passed is already TargetPayrollRunId=<some other run> => precondition established"
+      - "[POST /api/payroll/off-cycle-runs] AdjustmentIds=[A, B] => [409] Every selected adjustment must be approved, outstanding, and unscheduled."
+      - "[GET /api/payroll/runs?runType=OffCycle] => [200] no partially-created run exists from the failed attempt"
+    auto: API
+
+  - id: PAY-ADJ-015
+    func: [F-PAY-134]
+    sc: Preview is a read-only alias, not a distinct computation
+    t: Preview returns the identical payload as GetById for the same run
+    src: ["PayrollAdjustmentService.PreviewOffCycleRunAsync"]
+    type: Contract
+    pri: P2
+    perm: "Payroll.OffCycle.View"
+    steps:
+      - "[POST /api/payroll/off-cycle-runs/{id}/preview] => [200] payload"
+      - "[GET /api/payroll/runs/{id}] => [200] identical payload - Preview computes nothing beyond a plain read"
+    auto: API
+
+  - id: PAY-ADJ-016
+    func: [F-PAY-136, F-PAY-135]
+    sc: Process orchestrates the full pipeline from Draft in one call
+    t: A single Process call on a freshly-created Draft off-cycle run advances it through Prepare, Calculate, Approve, and Finalize
+    src: ["PayrollAdjustmentService.ProcessOffCycleRunAsync"]
+    type: Positive
+    pri: P0
+    perm: "Payroll.OffCycle.Process"
+    steps:
+      - "[POST /api/payroll/off-cycle-runs/{id}/process] on a Draft run with scheduled adjustments => [200] Status=Finalized, PayrollResults produced for every scheduled adjustment's employee"
+    auto: API
+
+  - id: PAY-ADJ-017
+    func: [F-PAY-137]
+    sc: Cancel un-schedules every targeted adjustment
+    t: Cancelling an off-cycle run reverts each scheduled adjustment to Approved with TargetPayrollRunId cleared
+    src: ["PayrollAdjustmentService.CancelOffCycleRunAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.OffCycle.Cancel"
+    steps:
+      - "[POST /api/payroll/off-cycle-runs/{id}/cancel] reason='Wrong period selected' => [200] run Status=Cancelled"
+      - "[GET /api/payroll/adjustments/{adjustmentId}] => [200] Status=Approved, TargetPayrollRunId=null"
+    auto: API
+
+  - id: PAY-ADJ-018
+    func: [F-PAY-138]
+    sc: Reversal is one-per-run, not one-per-result
+    t: "Requesting a reversal against a run that already has ANY reversal - even one scoped to a different employee via OriginalPayrollResultId - is rejected"
+    src: ["PayrollAdjustmentService.RequestReversalAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Payroll.Adjustments.Reverse"
+    steps:
+      - "[POST /api/payroll/reversals] OriginalPayrollRunId=X, OriginalPayrollResultId=<employee A's result>, reason='Wrong PF rate' => [200/201] Status=Requested"
+      - "[POST /api/payroll/reversals] OriginalPayrollRunId=X, OriginalPayrollResultId=<employee B's DIFFERENT result>, reason='Also wrong' => [409] A reversal already exists for this payroll run."
+    auto: API
+    cr: [CR-180]
+
+  - id: PAY-ADJ-019
+    func: [F-PAY-138]
+    sc: Reversal requires a Finalized original run and a non-blank reason
+    t: A non-Finalized run and a blank reason are both rejected
+    src: ["PayrollAdjustmentService.RequestReversalAsync"]
+    type: Negative
+    pri: P1
+    perm: "Payroll.Adjustments.Reverse"
+    steps:
+      - "[POST /api/payroll/reversals] OriginalPayrollRunId=<a Calculated, not-yet-Finalized run> => [409] Only finalized payroll runs can be reversed."
+      - "[POST /api/payroll/reversals] reason='' => [400] A reversal reason is required."
+    auto: API
+
+  - id: PAY-ADJ-020
+    func: [F-PAY-139]
+    sc: Reversal approve blocks self-approval and only fires from Requested
+    t: The requester cannot approve their own reversal
+    src: ["PayrollAdjustmentService.ApproveReversalAsync"]
+    type: Security
+    pri: P1
+    perm: "Payroll.Adjustments.Reverse"
+    steps:
+      - "[POST /api/payroll/reversals/{id}/approve] as the same user who requested it => [400] SelfApprovalNotAllowed: the user who created this payroll action cannot approve it."
+    auto: API
+
+  - id: PAY-ADJ-021
+    func: [F-PAY-140, F-PAY-141]
+    sc: Processing an approved reversal creates negating pre-scheduled adjustments
+    t: Each non-zero component of the original result gets a direction-flipped PayrollAdjustment already Scheduled to a fresh Off-Cycle run
+    src: ["PayrollAdjustmentService.ProcessReversalAsync"]
+    type: Positive
+    pri: P1
+    perm: "Payroll.Adjustments.Reverse"
+    steps:
+      - "[POST /api/payroll/reversals/{id}/process] => [200] Status=Processed, ReversalRunId set"
+      - "[GET /api/payroll/adjustments?employeeId={employeeId}] => [200] one Scheduled adjustment per original non-zero component, each with Direction flipped relative to the original (IsEarning<->IsDeduction) and TargetPayrollRunId=ReversalRunId"
+    auto: API
+
+  - id: PAY-ADJ-022
+    func: [F-PAY-142]
+    sc: Cross-tenant adjustment/off-cycle-run/reversal ids are not reachable
+    t: Tenant B's ids are NotFound on every relevant endpoint as Tenant A
+    src: ["PayrollAdjustmentService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    steps:
+      - "[GET /api/payroll/adjustments/{tenantBAdjustmentId}] As Tenant A => [404] Payroll adjustment not found."
+    auto: API
+
+  - id: PAY-ADJ-023
+    func: [F-PAY-122]
+    sc: List/filter adjustments
+    t: GetAll respects employeeId/status/adjustmentType/direction filters
+    src: ["PayrollAdjustmentService.GetAsync"]
+    type: Positive
+    pri: P1
+    role: EMPLOYEE
+    perm: "Payroll.Adjustments.View"
+    steps:
+      - "[GET /api/payroll/adjustments?status=Approved&direction=Earning] => [200] only matching adjustments"
+    auto: API

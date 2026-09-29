@@ -1,0 +1,152 @@
+sheet: AccountLink_History
+submodule: Account-Employee Link history, replacement audit trail, uniqueness constraints
+defaults:
+  role: ACCOUNT_LINK_ADMIN
+  perm: "AccountEmployeeLink.ViewHistory"
+  tenant: A
+  pre: "Tenant A signed in; roles/permissions per case."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: RBAC-LINKHIST-001
+    func: [F-RBAC-150]
+    sc: Link history is append-only and sequence-numbered
+    t: Every mutation for a subject user appends a new event with an incrementing Sequence, never mutating a prior row
+    src: ["AccountEmployeeLinkService.GetHistoryAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] Link => [200] Sequence=1"
+      - "[POST /api/account-employee-links/users/{userId}/unlink] Unlink => [200] Sequence=2"
+      - "[POST /api/account-employee-links/users/{userId}/link] Re-link => [200] Sequence=3"
+      - "[GET /api/account-employee-links/users/{userId}/history] Call => [200] 3 events, sequence 1/2/3, ordered by Sequence descending (newest first)"
+    auto: API
+
+  - id: RBAC-LINKHIST-002
+    func: [F-RBAC-150]
+    sc: Every history event records actor, reason, before/after employee and a correlation id
+    t: Each of the three operations (Link/Unlink/Replace) writes a complete, distinct audit row
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/account-employee-links/users/{userId}/history] Call after a Link event => [200] operation='Link', actorUserId=the caller, beforeEmployeeId=null, afterEmployeeId=<linked employee>, reason present"
+    auto: API
+
+  - id: RBAC-LINKHIST-003
+    func: [F-RBAC-151]
+    sc: Replace event records both before and after employees
+    t: A Replace history row is distinguished from Link/Unlink by carrying non-null values in BOTH beforeEmployeeId and afterEmployeeId
+    src: ["AccountEmployeeLinkService.MutateAsync (evt construction per operation)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/replace] newEmployeeId=<eligible, different> => [200]"
+      - "[GET /api/account-employee-links/users/{userId}/history] Call => [200] the newest event: operation='Replace', beforeEmployeeId=<old employee>, afterEmployeeId=<new employee>"
+      - "[UI] Open the 'Link history' section for this account => renders 'Replace: <reason>' for this row"
+    auto: API + UI
+
+  - id: RBAC-LINKHIST-004
+    func: [F-RBAC-153]
+    sc: History access is itself permission-gated
+    t: A caller without AccountEmployeeLink.ViewHistory gets 403 on the history endpoint even if they hold View
+    src: ["AccountEmployeeLinksController.History"]
+    type: Authorization
+    pri: P1
+    role: ACCOUNT_LINK_ADMIN
+    perm: "AccountEmployeeLink.View + AccountEmployeeLink.Manage (no ViewHistory)"
+    steps:
+      - "[GET /api/account-employee-links/users/{userId}/history] As a caller holding View+Manage but NOT ViewHistory => [403] Forbidden"
+      - "[UI] Select this account as the caller => renders 'History is not available because your account lacks AccountEmployeeLink.ViewHistory.'"
+    auto: API + UI
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::does not request history when ViewHistory is absent and explains the permission"]
+
+  - id: RBAC-LINKHIST-005
+    func: [F-RBAC-154, F-RBAC-166]
+    sc: Cross-tenant history access is blocked
+    t: A Tenant B userId's link history is unreachable from a Tenant A session
+    src: ["AccountEmployeeLinkService.GetHistoryAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    smoke: true
+    tenant: A+B
+    steps:
+      - "[GET /api/account-employee-links/users/{tenantBUserId}/history] As Tenant A => [404 or an empty result set] no Tenant B history rows are ever returned to a Tenant A caller"
+    auto: API
+    cr: [CR-76]
+
+  - id: RBAC-LINKHIST-006
+    func: [F-RBAC-166]
+    sc: "GetHistoryAsync's query has no explicit TenantId filter, unlike the equivalent Role Assignment history query"
+    t: Document the structural difference from RoleAssignmentService.GetAssignmentHistoryAsync as a defense-in-depth gap, even though no concrete cross-tenant leak is reachable through the single existing call site
+    src: ["AccountEmployeeLinkService.GetHistoryAsync vs RoleAssignmentService.GetAssignmentHistoryAsync"]
+    type: Contract
+    tags: [Tenant-Isolation]
+    pri: P2
+    steps:
+      - "[GET /api/account-employee-links/users/{userId}/history] Call => [200] confirm the query is `AccountEmployeeLinkEvents.Where(x => x.SubjectUserId == userId)` with no accompanying TenantId predicate, contrasted with RoleAssignmentService's explicit `x.TenantId == tenantId` on the equivalent history query"
+    auto: Manual only
+    cr: [CR-76]
+
+  - id: RBAC-LINKHIST-007
+    func: [F-RBAC-151]
+    sc: History is paged
+    t: A long link history (many link/unlink/replace cycles) is paged correctly, newest-sequence-first
+    src: ["AccountEmployeeLinkService.GetHistoryAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/account-employee-links/users/{userId}/history?page=1&pageSize=25] Call after 30+ accumulated events => [200] 25 items, totalCount=30+"
+      - "[GET /api/account-employee-links/users/{userId}/history?page=2&pageSize=25] Call => [200] remaining items"
+    auto: API
+
+  - id: RBAC-LINKHIST-008
+    func: [F-RBAC-079, F-RBAC-156]
+    sc: Concurrent link attempts on the same employee, from two different admins
+    t: Two admins simultaneously linking the same unlinked employee to two different accounts - exactly one succeeds
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userA}/link] and [POST /api/account-employee-links/users/{userB}/link], both employeeId=X, fired concurrently => exactly one call returns [200], the other returns [409] Employee is already linked"
+      - "[GET /api/account-employee-links/employees/{employeeIdX}] Call => [200] linked to exactly one of userA/userB, never both, never neither"
+    auto: API
+
+  - id: RBAC-LINKHIST-009
+    func: [F-RBAC-155]
+    sc: Concurrent link attempts on the same never-linked account
+    t: Two simultaneous first-time Link calls for the same account (both with null revision) - exactly one succeeds
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] Fired twice concurrently, different employeeId targets, both expectedRevision=null => exactly one [200], the other [409] The account is already linked"
+    auto: API
+
+  - id: RBAC-LINKHIST-010
+    func: [F-RBAC-157]
+    sc: Concurrent replace vs. unlink on the same account
+    t: A Replace racing an Unlink on the same current link - the loser's stale revision is rejected
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/replace] and [POST /api/account-employee-links/users/{userId}/unlink], both built from the SAME pre-race revision, fired concurrently => exactly one succeeds [200], the other [409] Link state changed"
+      - "[GET /api/account-employee-links/users/{userId}] Call => [200] the final state matches whichever operation committed - either Unlinked or Linked-to-the-new-employee, never a mixed state"
+    auto: API
+
+  - id: RBAC-LINKHIST-011
+    func: [F-RBAC-089]
+    sc: Uniqueness - a user and an employee can each be current-linked to only one counterpart
+    t: The AccountEmployeeCurrentLinks table enforces one active link per user and per employee (confirmed via a direct duplicate-insert probe, not just application logic)
+    src: ["AccountEmployeeCurrentLink entity (LinkId keyed uniquely per UserId and per EmployeeId in application logic)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[GET /api/account-employee-links/users/{linkedUserId}] Call => [200] exactly one currentLink"
+      - "[GET /api/account-employee-links/employees/{linkedEmployeeId}] Call => [200] resolves to exactly one user - confirming the 1:1 invariant holds from both directions"
+    auto: API

@@ -1,0 +1,1286 @@
+# Functionality registry for Module 16 - GL / Accounting Integration (phase "Payroll Accounting GL
+# Posting"): GL chart-of-accounts master data, effective-dated accounting configuration
+# versions, GL mapping rules (salary component / statutory / loan / reimbursement / gratuity /
+# leave-encashment / notice-pay sources), payroll-to-GL journal generation from an
+# approved/finalized payroll run, a SEPARATE final-settlement journal generation path (gratuity,
+# leave encashment, notice pay/recovery, loan final-settlement recovery, reimbursement), the
+# Generated->Validated->Approved->Posted lifecycle, CSV export, append-only (but API-invisible)
+# history, the payroll-analytics reconciliation integration boundary, Authorization/Scope, Tenant
+# Isolation, Concurrency/Idempotency, SQL Server/MySQL Provider Parity, Large Data/Paging, and
+# Frontend. Every test case references one or more of these ids; the builder fails the build if a
+# functionality has zero cases or a case references an unknown id. IDs are allocated in one global
+# sequence (F-GLACC-001...) in the order the groups below were authored - group boundaries are
+# noted with a comment banner.
+#
+# SCOPE NOTE (read before extending this module): this module covers exactly
+# Backend/HRMS.Application/Services/PayrollAccountingService.cs (interface
+# IPayrollAccountingService) and its controller (PayrollAccountingController in
+# Backend/HRMS.API/Controllers/PayrollOutputsController.cs, route prefix api/payroll/accounting),
+# plus the 6 GL-specific reconciliation findings that
+# Backend/HRMS.Application/Services/PayrollAnalyticsService.cs independently re-derives about it
+# (tested here only as an integration-boundary check, not as full coverage of the
+# analytics/reconciliation engine itself - that engine, together with the general
+# PayrollReconciliation/PayrollVarianceControls/PayrollAnomalyFlags surface and the non-GL
+# dimension-summary/control-totals endpoints on PayrollAnalyticsService, has no dedicated qa module
+# yet and is explicitly out of scope here, following the qa/15 precedent for BankAdvice's own
+# reconciliation-boundary scoping). Also explicitly out of scope: payroll-run creation/
+# calculation/approval itself (qa/10-payroll's own surface - this module only tests the
+# Approved/Finalized status GATE that Generate reads), final-settlement case creation/calculation/
+# approval/finalization itself (owned by PayrollRetroSettlementController/
+# IPayrollRetroSettlementService - this module only tests the Finalized status GATE that
+# GenerateFinalSettlementAsync reads, and reads the already-persisted LoanRepayments/
+# ReimbursementSettlements/GratuityCalculations/LeaveEncashmentCalculations/
+# NoticeSettlementCalculations rows those other modules produce, purely as source data), bank
+# advice / salary disbursement (BankAdviceService/BankAdviceController - a separate,
+# already-distinct service with no PayrollAccounting/Journal reference of any kind, confirmed by
+# qa/15's own scope note), and loan/reimbursement/gratuity/leave-encashment/notice-settlement
+# CALCULATION itself (owned by their respective services - this module only tests that GL mapping
+# and journal generation correctly consumes their already-persisted, already-finalized output rows).
+#
+# Discovered implementation (authoritative source, read directly - not assumed from any design doc;
+# no docs/phase-*.md file specifically describing GL accounting was found in this repository at
+# authoring time - current code is the sole source of truth here, per CLAUDE.md):
+#   Backend/HRMS.API/Controllers/PayrollOutputsController.cs (PayrollAccountingController, every
+#     route under api/payroll/accounting plus the two /accounting/generate routes nested under
+#     api/payroll/runs/{runId} and api/payroll/final-settlements/{id} - every action read)
+#   Backend/HRMS.Application/Abstractions/IPayrollAccountingService.cs (read in full, 17 methods)
+#   Backend/HRMS.Application/Services/PayrollAccountingService.cs (read in full, all ~200 lines)
+#   Backend/HRMS.Application/DTOs/Payroll/PayrollAccountingDtos.cs (read in full)
+#   Backend/HRMS.Domain/Entities/PayrollAccounting.cs (PayrollGLAccount/PayrollAccountingConfiguration/
+#     PayrollAccountingConfigurationVersion/PayrollGLMapping/PayrollJournalBatch/PayrollJournalLine/
+#     PayrollJournalLineSource/PayrollJournalHistory - 8 entities, read in full)
+#   Backend/HRMS.Domain/Enums/PayrollEnums.cs (PayrollGLAccountType, PayrollAccountingConfiguration
+#     VersionStatus, PayrollGLMappingType [23 members], PayrollJournalAggregationMode,
+#     PayrollJournalStatus, PayrollJournalHistoryChangeType, PayrollControlScope.Accounting,
+#     PayrollControlMetric.GLTotal, FinalSettlementStatus)
+#   Backend/HRMS.Infrastructure/Persistence/Configurations/PayrollAccountingConfiguration.cs (all 8
+#     EF configurations, every index and FK, read in full)
+#   Backend/HRMS.Application/Services/PayrollApprovalGuard.cs (the shared opt-in
+#     self-approval/reason-required guard, re-read for its RequireMakerChecker/PreventSelfApproval
+#     fields, used here by Approve and Post)
+#   Migration pair AddPayrollAccountingGLPosting confirmed present in both
+#     Backend/HRMS.Infrastructure/Persistence/Migrations (SQL Server, 20260920033921) and
+#     Backend/HRMS.Infrastructure.MySqlMigrations/Migrations (MySQL, 20260920033934); migration pair
+#     AddFinalSettlementAccountingJournalSql/MySql confirmed present in both chains (SQL Server
+#     20260921030615, MySQL 20260921030628)
+#   Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll.Accounting* block, 8 permissions,
+#     read in full)
+#   Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (full-file grep for all 8 Accounting
+#     permission constants and RolePermissionMap arrays for SuperAdmin/TenantAdmin/HRAdmin/
+#     HRManager/SuperHR/Accounts/IT/Manager/Employee, every role read)
+#   Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (AddSourceFindingsAsync's 6
+#     GL-specific findings, lines ~193-216, read in full for the integration-boundary group; the
+#     overview/summary endpoints' AccountingDebitTotal/AccountingCreditTotal/GLTotal wiring, lines
+#     ~13-42, read for the integration-boundary group only)
+#   Backend/HRMS.Application/Services/SeparationService.cs (full grep for "Accounting"/"Journal"/
+#     "GL" - zero matches; final-settlement accounting is instead driven entirely from
+#     PayrollAccountingService's own GenerateFinalSettlementAsync reading FinalSettlementCases/
+#     LoanRepayments/ReimbursementSettlements/GratuityCalculations/LeaveEncashmentCalculations/
+#     NoticeSettlementCalculations directly)
+#   Frontend/HRMS.Web/src/pages/payroll/PayrollAccountingPage.tsx (no .test.tsx exists for this
+#     page - confirmed by directory listing), PayrollAccountingConfigurationPage.tsx (+ its
+#     .test.tsx, read in full), src/api/payroll.ts's Accounting section (read in full, lines
+#     392-408), src/auth/permissions.ts's mirror (read in full); App.tsx and layout/navigation.ts
+#     grepped for route/nav registration
+#   Existing xUnit inventory (PayrollAccountingTests, SqlServerPayrollAccountingIntegrationTests,
+#     MySqlPayrollAccountingIntegrationTests, PayrollAccountingProviderAcceptance,
+#     PayrollFinalSettlementAccountingTests, ReimbursementAccountingTests - 6 files, referenced
+#     narratively per the qa/8-15 precedent, not individually classified; test method names surveyed
+#     but not read in full)
+#
+# -- Headline findings that shape this whole module's cases (see clarifications.yaml for full detail) --
+# CR-274: a full grep of SeedData.cs's RolePermissionMap for all 8 Payroll.Accounting* constants
+# returns zero matches in any role array except the blanket Permissions.All grant to
+# SuperAdmin/TenantAdmin - identical shape to qa/15's CR-263 for BankAdvice.
+# CR-275: CONFIRMED - PayrollJournalStatus.Cancelled/PayrollJournalHistoryChangeType.Cancelled are
+# declared, and GenerateAsync's own active-journal guard explicitly excludes Cancelled status
+# (implying a cancel-then-regenerate design), but IPayrollAccountingService has no CancelAsync (or
+# any reversal) method anywhere - a generated journal can never be cancelled or regenerated for the
+# same payroll run/final settlement, full stop.
+# CR-276: CONFIRMED - PayrollJournalStatus.Exported/PayrollJournalHistoryChangeType.Exported are
+# declared and ExportAsync's own precondition explicitly allows status Exported, but ExportAsync
+# never transitions status to Exported, stamps ExportedAtUtc/ExportedByUserId, or records an
+# Exported history event - export is a stateless read-only CSV download.
+# CR-277: CONFIRMED - PayrollJournalHistoryChangeType.Reversed is declared with zero corresponding
+# functionality; PayrollAnalyticsService's own BrokenAccountingReversalLinkage finding looks for a
+# PayrollJournalLineSource.SourceType containing "Reversal", a value AddLine can never produce
+# (only "EmployeeLoan"/"FinalSettlement").
+# CR-278: CONFIRMED - PayrollJournalDto carries no History field at all, and neither
+# GetAsync nor ListAsync ever Include(x => x.History) - journal history is captured (and, unlike
+# qa/15's BankAdvice CR-272, its ActorUserId IS populated) but is completely unreachable through
+# any exposed API, despite a dedicated Payroll.Accounting.ViewHistory permission being declared and
+# seeded.
+functionalities:
+  # =========================== A. GL ACCOUNT MASTER DATA ===========================
+  - id: F-GLACC-001
+    name: ListAccountsAsync requires an authenticated tenant context, else Unauthorized
+    group: GL Account Master Data
+    status: Implemented
+    api: "GET /api/payroll/accounting/accounts"
+    service: "PayrollAccountingService.ListAccountsAsync"
+    permission: "Payroll.Accounting.View"
+    db: "n/a"
+
+  - id: F-GLACC-002
+    name: CreateAccountAsync requires a non-blank Code and Name, else Invalid
+    group: GL Account Master Data
+    status: Implemented
+    api: "POST /api/payroll/accounting/accounts"
+    service: "PayrollAccountingService.CreateAccountAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollGLAccounts.Code, Name
+
+  - id: F-GLACC-003
+    name: "Account Code is upper-cased and trimmed before persistence/duplicate checking; the tenant-scoped unique (TenantId, Code) index blocks a duplicate code with Conflict, but an identical code is allowed for a different tenant"
+    group: GL Account Master Data
+    status: Implemented
+    service: "PayrollAccountingService.CreateAccountAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: "PayrollGLAccounts unique (TenantId, Code)"
+
+  - id: F-GLACC-004
+    name: UpdateAccountAsync requires the account to exist in the tenant, else NotFound
+    group: GL Account Master Data
+    status: Implemented
+    api: "PUT /api/payroll/accounting/accounts/{id}"
+    service: "PayrollAccountingService.UpdateAccountAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollGLAccounts (TenantId filter)
+
+  - id: F-GLACC-005
+    name: UpdateAccountAsync re-checks the unique code constraint excluding the account's own row, else Conflict
+    group: GL Account Master Data
+    status: Implemented
+    service: "PayrollAccountingService.UpdateAccountAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: "PayrollGLAccounts unique (TenantId, Code)"
+
+  - id: F-GLACC-006
+    name: AccountType is one of exactly Expense, Liability, Asset, Clearing (PayrollGLAccountType, stored as int)
+    group: GL Account Master Data
+    status: Implemented
+    service: "PayrollGLAccountConfiguration (HasConversion<int>)"
+    permission: "n/a"
+    db: PayrollGLAccounts.AccountType
+
+  - id: F-GLACC-007
+    name: ListAccountsAsync is ordered by Code ascending and follows the shared PagedQuery paging contract (page size clamped to MaxPageSize=100)
+    group: GL Account Master Data
+    status: Implemented
+    service: "PayrollAccountingService.ListAccountsAsync"
+    permission: "Payroll.Accounting.View"
+    db: PayrollGLAccounts.Code
+
+  - id: F-GLACC-008
+    name: "CONFIRMED GAP - there is no delete/deactivate endpoint for a PayrollGLAccount itself (only IsActive can be toggled false via UpdateAccountAsync); an account already referenced by posted journal lines can still have IsActive flipped to false through the same UpdateAccountAsync path used for any other edit, with no reference-check guarding it"
+    group: GL Account Master Data
+    status: Implemented
+    service: "Backend/HRMS.Application/Abstractions/IPayrollAccountingService.cs (full interface - no DeleteAccount/DeactivateAccount method)"
+    permission: "n/a"
+    db: PayrollGLAccounts.IsActive
+
+  # =========================== B. ACCOUNTING CONFIGURATION & VERSIONING ===========================
+  - id: F-GLACC-009
+    name: ListConfigurationsAsync eagerly includes each configuration's Versions, newest EffectiveFrom first, on every page row
+    group: Accounting Configuration & Versioning
+    status: Implemented
+    api: "GET /api/payroll/accounting/configurations"
+    service: "PayrollAccountingService.ListConfigurationsAsync"
+    permission: "Payroll.Accounting.View"
+    db: PayrollAccountingConfigurations, PayrollAccountingConfigurationVersions
+
+  - id: F-GLACC-010
+    name: CreateConfigurationAsync requires non-blank Code/Name and a tenant-unique upper-cased Code, else Invalid/Conflict
+    group: Accounting Configuration & Versioning
+    status: Implemented
+    api: "POST /api/payroll/accounting/configurations"
+    service: "PayrollAccountingService.CreateConfigurationAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: "PayrollAccountingConfigurations unique (TenantId, Code)"
+
+  - id: F-GLACC-011
+    name: CreateVersionAsync requires the parent configuration to exist and be IsActive=true in the tenant, else NotFound
+    group: Accounting Configuration & Versioning
+    status: Implemented
+    api: "POST /api/payroll/accounting/configurations/{id}/versions"
+    service: "PayrollAccountingService.CreateVersionAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollAccountingConfigurations (TenantId, IsActive filter)
+
+  - id: F-GLACC-012
+    name: CreateVersionAsync rejects EffectiveTo earlier than EffectiveFrom, else Invalid
+    group: Accounting Configuration & Versioning
+    status: Implemented
+    service: "PayrollAccountingService.CreateVersionAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollAccountingConfigurationVersions.EffectiveFrom, EffectiveTo
+
+  - id: F-GLACC-013
+    name: "CreateVersionAsync rejects a date range that overlaps any other Active version of the same configuration (open-ended EffectiveTo treated as DateOnly.MaxValue), else Conflict"
+    group: Accounting Configuration & Versioning
+    status: Implemented
+    service: "PayrollAccountingService.CreateVersionAsync (overlap AnyAsync)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollAccountingConfigurationVersions.EffectiveFrom, EffectiveTo, Status
+
+  - id: F-GLACC-014
+    name: A new version always starts at Status=Active (there is no Draft-first workflow for versions themselves, unlike journals)
+    group: Accounting Configuration & Versioning
+    status: Implemented
+    service: "PayrollAccountingService.CreateVersionAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollAccountingConfigurationVersions.Status
+
+  - id: F-GLACC-015
+    name: AggregationMode (Account/AccountAndCostCenter/EmployeeDetail) is stored verbatim on the version as requested
+    group: Accounting Configuration & Versioning
+    status: Implemented
+    service: "PayrollAccountingService.CreateVersionAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollAccountingConfigurationVersions.AggregationMode
+
+  - id: F-GLACC-016
+    name: "CONFIRMED DEAD CONFIGURATION FIELD - AggregationMode is never read anywhere in GenerateAsync or GenerateFinalSettlementAsync (full grep of PayrollAccountingService.cs); every journal is generated at one fixed per-employee, per-component, per-account granularity regardless of which of the 3 aggregation modes is configured"
+    group: Accounting Configuration & Versioning
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (GenerateAsync, GenerateFinalSettlementAsync - full grep for AggregationMode, zero references outside CreateVersionAsync/the DTO)"
+    permission: "n/a"
+    db: PayrollAccountingConfigurationVersions.AggregationMode
+
+  - id: F-GLACC-017
+    name: "The active configuration version used by Generate is resolved by EffectiveFrom<=PeriodEndDate/SettlementDate AND (EffectiveTo IS NULL OR EffectiveTo>=that date) AND Status=Active, taking the single row with the latest EffectiveFrom - if none matches, Generate is Conflict (\"No active accounting configuration applies\")"
+    group: Accounting Configuration & Versioning
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync, GenerateFinalSettlementAsync (version resolution query)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollAccountingConfigurationVersions.EffectiveFrom, EffectiveTo, Status
+
+  - id: F-GLACC-018
+    name: "CONFIRMED GAP - there is no endpoint to retire/deactivate a PayrollAccountingConfiguration or a PayrollAccountingConfigurationVersion once created (IPayrollAccountingService's full interface has no such method); PayrollAccountingConfigurationVersionStatus.Retired is a declared enum member with no code path that ever assigns it"
+    group: Accounting Configuration & Versioning
+    status: Implemented
+    service: "Backend/HRMS.Application/Abstractions/IPayrollAccountingService.cs (full interface, no retire/deactivate-configuration or deactivate-version method); PayrollAccountingService.cs (full grep for PayrollAccountingConfigurationVersionStatus.Retired - zero assignments)"
+    permission: "n/a"
+    db: PayrollAccountingConfigurationVersions.Status
+
+  # =========================== C. GL MAPPING RULES ===========================
+  - id: F-GLACC-019
+    name: CreateMappingAsync/UpdateMappingAsync both funnel through one private SaveMappingAsync; the target configuration version must exist, be Active status, and belong to the tenant, else NotFound
+    group: GL Mapping Rules
+    status: Implemented
+    api: "POST /api/payroll/accounting/versions/{id}/mappings, PUT /api/payroll/accounting/mappings/{id}"
+    service: "PayrollAccountingService.SaveMappingAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollAccountingConfigurationVersions (TenantId, Status filter)
+
+  - id: F-GLACC-020
+    name: "A mapping must specify at least one of: SalaryComponentId, StatutoryType, MappingType=NetPayable, or one of 15 explicitly-supported non-component MappingType values (loan/reimbursement/gratuity/leave/notice sources) - else Invalid (\"A salary component, statutory type, or supported source is required.\")"
+    group: GL Mapping Rules
+    status: Implemented
+    service: "PayrollAccountingService.SaveMappingAsync (supportedMapping check)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollGLMappings.SalaryComponentId, StatutoryType, MappingType
+
+  - id: F-GLACC-021
+    name: Every non-null account id on the request (Debit/Credit/EmployerContribution) must reference an Active PayrollGLAccount belonging to the tenant, else Conflict ("All mapped GL accounts must be active and belong to the tenant.")
+    group: GL Mapping Rules
+    status: Implemented
+    service: "PayrollAccountingService.SaveMappingAsync (accountIds validation)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollGLAccounts (TenantId, IsActive filter)
+
+  - id: F-GLACC-022
+    name: "A duplicate ACTIVE mapping (same ConfigurationVersionId+SalaryComponentId+StatutoryType+MappingType, excluding the row being updated) is rejected with Conflict (\"Duplicate accounting mapping.\")"
+    group: GL Mapping Rules
+    status: Implemented
+    service: "PayrollAccountingService.SaveMappingAsync (duplicate AnyAsync)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollGLMappings (TenantId, ConfigurationVersionId, SalaryComponentId, StatutoryType, MappingType, IsActive)
+
+  - id: F-GLACC-023
+    name: Priority is stored verbatim and is the ordering key GenerateAsync uses to pick among multiple active candidate mappings for the same component (OrderBy(Priority).FirstOrDefault)
+    group: GL Mapping Rules
+    status: Implemented
+    service: "PayrollAccountingService.SaveMappingAsync, GenerateAsync (OrderBy Priority)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollGLMappings.Priority
+
+  - id: F-GLACC-024
+    name: DeactivateMappingAsync sets IsActive=false on the mapping (tenant-scoped, NotFound if absent) - this is the ONLY way to remove a mapping from consideration; there is no hard-delete endpoint
+    group: GL Mapping Rules
+    status: Implemented
+    api: "DELETE /api/payroll/accounting/mappings/{id}"
+    service: "PayrollAccountingService.DeactivateMappingAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollGLMappings.IsActive
+
+  - id: F-GLACC-025
+    name: "The 23-member PayrollGLMappingType enum spans ordinary salary-component earnings/deductions (Earnings/EmployeeDeduction/EmployerContribution/StatutoryLiability/NetPayable) and 18 special-purpose source types for loans, reimbursements, gratuity, leave encashment, and notice pay/recovery"
+    group: GL Mapping Rules
+    status: Implemented
+    service: "Backend/HRMS.Domain/Enums/PayrollEnums.cs (PayrollGLMappingType)"
+    permission: "n/a"
+    db: PayrollGLMappings.MappingType
+
+  - id: F-GLACC-026
+    name: A mapping's DebitAccountId/CreditAccountId/EmployerContributionAccountId are each independently optional at save time - only Generate-time mapping RESOLUTION enforces which of the three must be non-null for a given usage
+    group: GL Mapping Rules
+    status: Implemented
+    service: "PayrollAccountingService.SaveMappingAsync (no per-MappingType required-account validation)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollGLMappings.DebitAccountId, CreditAccountId, EmployerContributionAccountId
+
+  - id: F-GLACC-027
+    name: "CONFIRMED GAP - EmployerContributionAccountId is a settable field on every mapping request/DTO, but a full grep of GenerateAsync/GenerateFinalSettlementAsync/AddLine shows the field is NEVER read anywhere in journal generation - only DebitAccountId/CreditAccountId ever produce a line; a separately-designated employer-contribution account has no effect on the generated journal"
+    group: GL Mapping Rules
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (full grep for EmployerContributionAccountId - only ever read into the accountIds resolution set, never used to choose a line's account)"
+    permission: "n/a"
+    db: PayrollGLMappings.EmployerContributionAccountId
+
+  - id: F-GLACC-028
+    name: A cross-tenant configuration version id on CreateMapping is NotFound, not Forbidden
+    group: GL Mapping Rules
+    status: Implemented
+    service: "PayrollAccountingService.SaveMappingAsync (TenantId filter)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollAccountingConfigurationVersions (TenantId filter)
+
+  - id: F-GLACC-029
+    name: UpdateMappingAsync resolves the mapping's own ConfigurationVersionId from the existing row - the caller cannot move a mapping to a different configuration version via update
+    group: GL Mapping Rules
+    status: Implemented
+    service: "PayrollAccountingService.SaveMappingAsync (target?.ConfigurationVersionId ?? versionId)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollGLMappings.ConfigurationVersionId
+
+  - id: F-GLACC-030
+    name: Cost-center/department/location dimensions have no representation anywhere in the mapping model - PayrollGLMappingRequest/PayrollGLMapping have no CostCenterId, DepartmentId, or LocationId field of any kind
+    group: GL Mapping Rules
+    status: Implemented
+    service: "Backend/HRMS.Application/DTOs/Payroll/PayrollAccountingDtos.cs, Backend/HRMS.Domain/Entities/PayrollAccounting.cs (PayrollGLMapping, full field list)"
+    permission: "n/a"
+    db: PayrollGLMappings (full column list)
+
+  # =========================== D. JOURNAL GENERATION FROM PAYROLL RUN ===========================
+  - id: F-GLACC-031
+    name: GenerateAsync requires an authenticated tenant context, else Unauthorized
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    api: "POST /api/payroll/runs/{runId}/accounting/generate"
+    service: "PayrollAccountingService.GenerateAsync"
+    permission: "Payroll.Accounting.Generate"
+    db: "n/a"
+
+  - id: F-GLACC-032
+    name: GenerateAsync requires the target PayrollRun (with its PayrollPeriod) to exist in the tenant, else NotFound
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollRuns, PayrollPeriods (TenantId filter)
+
+  - id: F-GLACC-033
+    name: GenerateAsync requires PayrollRun.Status to be Approved or Finalized, else Conflict - Draft/Prepared/Processing/Calculated/Cancelled are all rejected
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollRuns.Status
+
+  - id: F-GLACC-034
+    name: "GenerateAsync blocks a second generation while a non-Cancelled journal already exists for the same PayrollRunId, else Conflict - but since Cancelled is unreachable (CR-275), this guard in practice permanently blocks any second Generate call for a run once one has ever succeeded"
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync (AnyAsync guard)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalBatches (TenantId, PayrollRunId, Status)
+    cr: [CR-275]
+
+  - id: F-GLACC-035
+    name: GenerateAsync sources rows strictly from PayrollResults where IsCurrent=true AND Status=Calculated for the run, including each result's Components collection - Failed or superseded rows never contribute a line
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollResults.IsCurrent, Status; PayrollResultComponents
+
+  - id: F-GLACC-036
+    name: GenerateAsync requires at least one eligible PayrollResult row, else Conflict ("No calculated payroll results are available.")
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollResults
+
+  - id: F-GLACC-037
+    name: "Each PayrollResultComponent with CalculatedAmount != 0 is mapped to a candidate PayrollGLMapping by CalculationSource: \"LoanRecovery\" -> LoanPayrollRecovery mapping type; \"TaxableReimbursement\"/\"NonTaxableReimbursement\" -> TaxableReimbursementExpense/ReimbursementExpense; everything else -> the active mapping whose SalaryComponentId matches the component's own SalaryComponentId, chosen by lowest Priority"
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync (mapping selection)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollGLMappings.MappingType, SalaryComponentId, Priority
+
+  - id: F-GLACC-038
+    name: 'A component with no matching mapping, or a matching mapping missing a required Debit/Credit account, or referencing an inactive/nonexistent account, is Conflict ("MissingGLMapping for component {code}.") - no journal is persisted'
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollGLMappings, PayrollGLAccounts
+
+  - id: F-GLACC-039
+    name: "For an ordinary (non-LoanRecovery) component: IsEarning or IsEmployerContribution produces a Debit line on the mapping's DebitAccountId; IsDeduction or IsEmployerContribution produces a Credit line on the CreditAccountId - a component flagged as employer-contribution therefore produces BOTH a debit and a credit line on the same amount"
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync (AddLine calls)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalLines.Debit, Credit
+
+  - id: F-GLACC-040
+    name: 'A LoanRecovery-sourced component produces a single Credit-only line on the mapping''s CreditAccountId, sourced/traced to the LoanInstallmentId (falling back to EmployeeLoanId, then the component''s own Id) via a "LoanRepayment" PayrollJournalLineSource'
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync (LoanRecovery branch)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalLines, PayrollJournalLineSources (SourceType=LoanRepayment)
+
+  - id: F-GLACC-041
+    name: 'Every eligible PayrollResult additionally produces exactly one Net-Payable Credit line for result.NetPay (rounded to 2dp, AwayFromZero), on the mapping whose MappingType=NetPayable - absent that mapping/account, Conflict ("MissingGLMapping for net salary payable.")'
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync (NetPayable line)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollGLMappings.MappingType=NetPayable, PayrollJournalLines
+
+  - id: F-GLACC-042
+    name: "The generated journal's TotalDebit/TotalCredit/LineCount are computed by summing the in-memory Lines collection; if TotalDebit != TotalCredit the WHOLE journal is Conflict (\"Generated journal is unbalanced.\") and nothing is persisted (the check runs before db.SaveChangesAsync)"
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync (balance check before SaveChangesAsync)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalBatches.TotalDebit, TotalCredit
+
+  - id: F-GLACC-043
+    name: "JournalNumber is deterministic: PJ/{PayDate:yyyyMM}/{RunId:N}/1 - the trailing version segment is a HARD-CODED literal \"1\", never computed from any prior attempt count (unlike qa/15 BankAdvice's own MaxAsync(Version)+1 pattern)"
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync (JournalNumber string)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalBatches.JournalNumber
+
+  - id: F-GLACC-044
+    name: A newly generated journal always starts at Status=Generated (never Draft - see F-GLACC-016's sibling CR-279 on Draft's unreachability), with GeneratedAtUtc/GeneratedByUserId stamped and a Generated history event recorded
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync -> History(Generated)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalBatches.Status, GeneratedAtUtc, GeneratedByUserId; PayrollJournalHistories
+    cr: [CR-279]
+
+  - id: F-GLACC-045
+    name: A cross-tenant PayrollRunId on Generate is NotFound, not Forbidden
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync (TenantId filter)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollRuns (TenantId filter)
+
+  - id: F-GLACC-046
+    name: GenerateAsync is a source-only read against PayrollResults - it never writes to, recalculates, or otherwise mutates any PayrollResult or PayrollResultComponent row; payroll remains authoritative
+    group: Journal Generation from Payroll Run
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync (AsNoTracking source query)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollResults, PayrollResultComponents (read-only)
+
+  # =========================== E. FINAL SETTLEMENT ACCOUNTING ===========================
+  - id: F-GLACC-047
+    name: GenerateFinalSettlementAsync requires the target FinalSettlementCase to exist in the tenant, else NotFound
+    group: Final Settlement Accounting
+    status: Implemented
+    api: "POST /api/payroll/final-settlements/{id}/accounting/generate"
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync"
+    permission: "Payroll.Accounting.Generate"
+    db: FinalSettlementCases (TenantId filter)
+
+  - id: F-GLACC-048
+    name: GenerateFinalSettlementAsync requires FinalSettlementCase.Status=Finalized, else Conflict
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync"
+    permission: "Payroll.Accounting.Generate"
+    db: FinalSettlementCases.Status
+
+  - id: F-GLACC-049
+    name: "GenerateFinalSettlementAsync blocks a second generation while a non-Cancelled journal already exists for the same FinalSettlementCaseId - AND a DB-level unique (TenantId, FinalSettlementCaseId) index makes this permanent for the life of the row regardless of the application-level guard, since Cancelled is unreachable (CR-275)"
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (AnyAsync guard); PayrollJournalBatchConfiguration (unique index)"
+    permission: "Payroll.Accounting.Generate"
+    db: "PayrollJournalBatches unique (TenantId, FinalSettlementCaseId)"
+    cr: [CR-275]
+
+  - id: F-GLACC-050
+    name: GenerateFinalSettlementAsync resolves its own accounting configuration version independently, gated on SettlementDate rather than a payroll period's EndDate
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (version resolution)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollAccountingConfigurationVersions.EffectiveFrom, EffectiveTo
+
+  - id: F-GLACC-051
+    name: "Up to 5 independent source collections are read: LoanRepayments (RepaymentType=FinalSettlement, SourceType=\"FinalSettlement\", Reference=finalSettlementId, Amount>0), ReimbursementSettlements (SettlementType=FinalSettlement, matching FinalSettlementId, Amount>0), a single Finalized GratuityCalculation with FinalGratuityAmount>0, LeaveEncashmentCalculations with GrossAmount>0, and a single NoticeSettlementCalculation with Amount>0 - if ALL FIVE are empty/absent, Conflict (\"No finalized separation benefit or recovery is available\")"
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync"
+    permission: "Payroll.Accounting.Generate"
+    db: LoanRepayments, ReimbursementSettlements, GratuityCalculations, LeaveEncashmentCalculations, NoticeSettlementCalculations
+
+  - id: F-GLACC-052
+    name: "A missing required mapping/account for whichever of the 5 source types is actually present returns a source-specific Conflict (\"MissingGLMapping for final settlement loan recovery/reimbursement/gratuity/leave encashment/notice pay/notice recovery\") - sources that are absent for this case do not require their mapping to exist at all"
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (per-source mapping checks)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollGLMappings
+
+  - id: F-GLACC-053
+    name: "Each loan repayment produces up to 3 lines: a Debit on the settlement/recovery account for the full amount, a Credit for principal on the receivable account, and (if interest>0) a Credit for interest either on a dedicated LoanInterestRecovery credit account (if mapped) or falling back to the same receivable account - interest is capped at min(InterestAmount, amount) and principal is the remainder"
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (loan repayment loop)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalLines
+
+  - id: F-GLACC-054
+    name: "Each reimbursement settlement produces a Debit (expense) + Credit (payable settled) pair for its full Amount, traced via a \"FinalSettlement\" PayrollJournalLineSource to the finalSettlementId"
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (reimbursement loop)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalLines, PayrollJournalLineSources
+
+  - id: F-GLACC-055
+    name: A Finalized gratuity calculation produces a Debit (GratuityExpense)+Credit (GratuityPayable) pair for FinalGratuityAmount
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (gratuity branch)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalLines
+
+  - id: F-GLACC-056
+    name: Each leave-encashment calculation with GrossAmount>0 produces a Debit (LeaveEncashmentExpense)+Credit (the shared FinalSettlementBenefitPayable account) pair
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (leave encashment loop)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalLines
+
+  - id: F-GLACC-057
+    name: "A NoticeSettlementCalculation of Type=NoticePay produces a Debit (NoticePayExpense)+Credit (FinalSettlementBenefitPayable) pair; Type=NoticeRecovery instead produces a Debit+Credit pair both on the dedicated NoticeRecoveryReceivable mapping's own two accounts - the two notice types use entirely different account pairs"
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (notice branch)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalLines
+
+  - id: F-GLACC-058
+    name: The final settlement journal's TotalDebit/TotalCredit/LineCount are recomputed and balance-checked identically to the payroll-run path - Conflict ("Generated journal is unbalanced.") if they disagree, before any persistence
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (balance check)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalBatches.TotalDebit, TotalCredit
+
+  - id: F-GLACC-059
+    name: "JournalNumber for a final-settlement journal follows a distinct pattern, FSJ/{SettlementDate:yyyyMM}/{finalSettlementId:N}/1 (versus PJ/... for payroll-run journals) - both share the same hard-coded trailing \"1\" (CR mirrors F-GLACC-043)"
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (JournalNumber string)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalBatches.JournalNumber
+
+  - id: F-GLACC-060
+    name: A cross-tenant finalSettlementId on GenerateFinalSettlement is NotFound, not Forbidden
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (TenantId filter)"
+    permission: "Payroll.Accounting.Generate"
+    db: FinalSettlementCases (TenantId filter)
+
+  # =========================== F. JOURNAL LIFECYCLE (VALIDATE / APPROVE / POST) ===========================
+  - id: F-GLACC-061
+    name: ValidateAsync requires Status=Generated exactly, else Conflict ("Invalid journal transition from {status} to Validated.")
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    api: "POST /api/payroll/accounting/{id}/validate"
+    service: "PayrollAccountingService.TransitionAsync(Validated, ..., Generated)"
+    permission: "Payroll.Accounting.Validate"
+    db: PayrollJournalBatches.Status
+
+  - id: F-GLACC-062
+    name: "CONFIRMED - ValidateAsync performs NO independent balance or mapping re-check of its own beyond the current-status gate; it is a bare status flip to Validated. Because GenerateAsync itself already refuses to persist an unbalanced journal, every journal reaching Generated status is already guaranteed balanced by construction, so Validate cannot discover anything Generate did not already guarantee"
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    service: "PayrollAccountingService.TransitionAsync (shared with Approve/Post, no extra logic branch for Validated)"
+    permission: "Payroll.Accounting.Validate"
+    db: "n/a"
+    cr: [CR-280]
+
+  - id: F-GLACC-063
+    name: ApproveAsync requires Status=Validated exactly, else Conflict
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    api: "POST /api/payroll/accounting/{id}/approve"
+    service: "PayrollAccountingService.TransitionAsync(Approved, ..., Validated)"
+    permission: "Payroll.Accounting.Approve"
+    db: PayrollJournalBatches.Status
+
+  - id: F-GLACC-064
+    name: ApproveAsync and PostAsync both additionally require TotalDebit==TotalCredit on the current row, else Conflict ("Unbalanced journals cannot be approved or posted.") - a defense-in-depth re-check beyond the status gate
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    service: "PayrollAccountingService.TransitionAsync (balance re-check)"
+    permission: "Payroll.Accounting.Approve, Post"
+    db: PayrollJournalBatches.TotalDebit, TotalCredit
+
+  - id: F-GLACC-065
+    name: "ApproveAsync and PostAsync both run PayrollApprovalGuard.ValidateAsync(row.GeneratedByUserId, \"approve\"/\"post\") - an OPT-IN self-approval block only enforced when the tenant's PayrollControlConfiguration has BOTH RequireMakerChecker AND PreventSelfApproval set"
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    service: "PayrollAccountingService.TransitionAsync -> PayrollApprovalGuard.ValidateAsync"
+    permission: "Payroll.Accounting.Approve, Post"
+    db: PayrollControlConfigurations
+
+  - id: F-GLACC-066
+    name: ApproveAsync stamps ApprovedAtUtc (no ApprovedByUserId column is ever set by ExecuteUpdateAsync's setters, despite the entity declaring one) and is guarded by a ConcurrencyVersion compare-and-swap
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    service: "PayrollAccountingService.TransitionAsync (Approved branch ExecuteUpdateAsync)"
+    permission: "Payroll.Accounting.Approve"
+    db: PayrollJournalBatches.ApprovedAtUtc, ConcurrencyVersion
+
+  - id: F-GLACC-067
+    name: "CONFIRMED GAP - PayrollJournalBatch.ApprovedByUserId/PostedByUserId/GeneratedByUserId (the latter set at Generate time) are declared entity fields, but TransitionAsync's ExecuteUpdateAsync setters for the Approved and Posted branches set ONLY Status/ApprovedAtUtc/ConcurrencyVersion and Status/PostedAtUtc/ConcurrencyVersion respectively - ApprovedByUserId and PostedByUserId are never populated by any code path"
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (TransitionAsync, full grep for ApprovedByUserId/PostedByUserId assignment - zero matches)"
+    permission: "n/a"
+    db: PayrollJournalBatches.ApprovedByUserId, PostedByUserId
+
+  - id: F-GLACC-068
+    name: PostAsync requires Status=Approved exactly, else Conflict; on success stamps PostedAtUtc and is guarded by the same compare-and-swap pattern
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    api: "POST /api/payroll/accounting/{id}/post"
+    service: "PayrollAccountingService.TransitionAsync(Posted, ..., Approved)"
+    permission: "Payroll.Accounting.Post"
+    db: PayrollJournalBatches.Status, PostedAtUtc
+
+  - id: F-GLACC-069
+    name: 'PostAsync''s own history message is literally "Payroll journal posted within HRMS." - confirming (per the message text itself, not an external doc) that Post represents an internal-ledger-only close, with no external ERP/GL system integration of any kind anywhere in this codebase'
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    service: "PayrollAccountingService.PostAsync (message string)"
+    permission: "Payroll.Accounting.Post"
+    db: "n/a"
+
+  - id: F-GLACC-070
+    name: Every transition (Validate/Approve/Post) is guarded by ExecuteUpdateAsync scoped by Id+TenantId+Status(expected)+ConcurrencyVersion, incrementing ConcurrencyVersion by 1 - a lost race (changed != 1) surfaces as Conflict ("Payroll journal was changed by another operation."), never a 500
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    service: "PayrollAccountingService.TransitionAsync (ExecuteUpdateAsync)"
+    permission: "Payroll.Accounting.Validate, Approve, Post"
+    db: PayrollJournalBatches.ConcurrencyVersion
+
+  - id: F-GLACC-071
+    name: A history event is appended (Validated/Approved/Posted ChangeType, with ActorUserId populated from tenant.UserId) after every successful transition, and the response DTO is rebuilt from a freshly-reloaded row via db.ClearChangeTracker()
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    service: "PayrollAccountingService.TransitionAsync (History Add, db.ClearChangeTracker())"
+    permission: "Payroll.Accounting.Validate, Approve, Post"
+    db: PayrollJournalHistories
+
+  - id: F-GLACC-072
+    name: "The full reachable lifecycle sequence is strictly linear (Generated -> Validated -> Approved -> Posted); there is no skip-ahead path (e.g. Generated directly to Approved) and no backward transition of any kind"
+    group: Journal Lifecycle - Validate, Approve & Post
+    status: Implemented
+    service: "PayrollAccountingService.ValidateAsync, ApproveAsync, PostAsync (each hard-codes its own single expected predecessor status)"
+    permission: "Payroll.Accounting.Validate, Approve, Post"
+    db: PayrollJournalBatches.Status
+
+  # =========================== G. REVERSAL, CANCELLATION & REGENERATION (CONFIRMED GAPS) ===========================
+  - id: F-GLACC-073
+    name: "CONFIRMED GAP (headline) - IPayrollAccountingService's full 17-method interface has no CancelAsync, ReverseAsync, or any other method that could ever set PayrollJournalStatus.Cancelled; a journal, once Generated, can never be cancelled through any exposed API"
+    group: Reversal, Cancellation & Regeneration
+    status: Implemented
+    service: "Backend/HRMS.Application/Abstractions/IPayrollAccountingService.cs (full interface, 17 methods, no Cancel/Reverse method)"
+    permission: "n/a"
+    db: PayrollJournalBatches.Status
+    cr: [CR-275]
+
+  - id: F-GLACC-074
+    name: "CONFIRMED GAP - because Cancel does not exist, and the active-journal guards on both Generate paths (F-GLACC-034, F-GLACC-049) permanently exclude only the unreachable Cancelled status, there is NO regeneration path in this whole module - a payroll run or final settlement that already has ANY journal (in any status, including one that failed later validation of its own accounts) can never have accounting regenerated, ever"
+    group: Reversal, Cancellation & Regeneration
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync, GenerateFinalSettlementAsync (AnyAsync guards)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalBatches
+    cr: [CR-275]
+
+  - id: F-GLACC-075
+    name: "CONFIRMED DEAD ENUM MEMBER - PayrollJournalHistoryChangeType.Reversed is declared with zero corresponding functionality; a full grep of PayrollAccountingService.cs finds no assignment of it anywhere"
+    group: Reversal, Cancellation & Regeneration
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (full grep for PayrollJournalHistoryChangeType.Reversed - zero matches)"
+    permission: "n/a"
+    db: PayrollJournalHistories.ChangeType
+    cr: [CR-277]
+
+  - id: F-GLACC-076
+    name: "CONFIRMED - PayrollAnalyticsService's own BrokenAccountingReversalLinkage reconciliation finding filters PayrollJournalLineSource rows whose SourceType Contains(\"Reversal\", OrdinalIgnoreCase) - but AddLine (the sole construction site for PayrollJournalLineSource) can only ever emit SourceType=\"EmployeeLoan\" or \"FinalSettlement\"; this finding can never fire against real data this service is capable of generating"
+    group: Reversal, Cancellation & Regeneration
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync (BrokenAccountingReversalLinkage); PayrollAccountingService.AddLine (full grep for SourceType assignment - only EmployeeLoan/FinalSettlement)"
+    permission: "n/a"
+    db: PayrollJournalLineSources.SourceType
+    cr: [CR-277]
+
+  - id: F-GLACC-077
+    name: "CONFIRMED GAP - PayrollJournalStatus.Exported and PayrollJournalHistoryChangeType.Exported are declared, and ExportAsync's own precondition explicitly permits Status=Exported as an ALREADY-exported state, but no code path anywhere ever transitions a journal TO Exported - the state is permanently unreachable, and by extension the corresponding clause in ExportAsync's precondition is dead"
+    group: Reversal, Cancellation & Regeneration
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (full grep for PayrollJournalStatus.Exported assignment - zero matches outside the ExportAsync precondition read)"
+    permission: "n/a"
+    db: PayrollJournalBatches.Status
+    cr: [CR-276]
+
+  - id: F-GLACC-078
+    name: ExportAsync itself never mutates the journal in any way (no status change, no ExportedAtUtc/ExportedByUserId stamp, no history event) - it is purely a read-and-render-CSV operation, in contrast with qa/15 BankAdvice's own stateful first-export transition
+    group: Reversal, Cancellation & Regeneration
+    status: Implemented
+    service: "PayrollAccountingService.ExportAsync (full method - no db write of any kind)"
+    permission: "Payroll.Accounting.Export"
+    db: PayrollJournalBatches (unchanged by export)
+    cr: [CR-276]
+
+  - id: F-GLACC-079
+    name: "CONFIRMED DEAD ENUM MEMBER - PayrollJournalStatus.Draft is the entity's declared default value, but GenerateAsync (the sole construction site for PayrollJournalBatch) always explicitly sets Status=Generated; Draft is never observable via any exposed API"
+    group: Reversal, Cancellation & Regeneration
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (GenerateAsync, GenerateFinalSettlementAsync - both explicitly set Status=Generated; full grep confirms no other construction site)"
+    permission: "n/a"
+    db: PayrollJournalBatches.Status
+    cr: [CR-279]
+
+  # =========================== H. CONCURRENCY & IDEMPOTENCY ===========================
+  - id: F-GLACC-080
+    name: The unique index (TenantId, JournalNumber) on PayrollJournalBatches prevents duplicate journal numbers tenant-wide
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollJournalBatchConfiguration (unique index)"
+    permission: "n/a"
+    db: "PayrollJournalBatches unique (TenantId, JournalNumber)"
+
+  - id: F-GLACC-081
+    name: The unique index (TenantId, FinalSettlementCaseId) on PayrollJournalBatches enforces at most one journal row EVER for a given final settlement (nullable-safe - payroll-run journals leave this column null and are unaffected)
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollJournalBatchConfiguration (unique index)"
+    permission: "n/a"
+    db: "PayrollJournalBatches unique (TenantId, FinalSettlementCaseId)"
+
+  - id: F-GLACC-082
+    name: "CONFIRMED UNCAUGHT-RACE SHAPE - GenerateAsync's own active-journal AnyAsync pre-check has no surrounding try/catch around SaveChangesAsync; two concurrent Generate calls for the same run that both pass the pre-check before either commits will both compute the IDENTICAL hard-coded JournalNumber (...\"/1\", since it is a literal, not a MaxAsync-derived version), and the unique (TenantId, JournalNumber) index makes the race loser's SaveChangesAsync throw an unhandled DbUpdateException instead of a graceful Conflict - a stronger version of qa/15 BankAdvice's own CR-269, since the number here is not even versioned"
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync, GenerateFinalSettlementAsync (no try/catch DbUpdateException around SaveChangesAsync)"
+    permission: "Payroll.Accounting.Generate"
+    db: "PayrollJournalBatches unique (TenantId, JournalNumber)"
+
+  - id: F-GLACC-083
+    name: CreateAccountAsync's own tenant-unique-code check has the identical unguarded-race shape (AnyAsync pre-check, no try/catch around SaveChangesAsync) backed by the same unique (TenantId, Code) index
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAccountingService.CreateAccountAsync"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: "PayrollGLAccounts unique (TenantId, Code)"
+
+  - id: F-GLACC-084
+    name: Every mutating lifecycle action re-loads via db.ClearChangeTracker() plus a fresh read before building its response DTO, so a caller never observes a stale in-memory snapshot after a transition
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAccountingService.TransitionAsync (db.ClearChangeTracker())"
+    permission: "Payroll.Accounting.Validate, Approve, Post"
+    db: "n/a"
+
+  - id: F-GLACC-085
+    name: "CreateMappingAsync's duplicate-active-mapping guard (F-GLACC-022) has the same unguarded pre-check-then-insert race shape, with no unique DB index backing it (PayrollGLMappingConfiguration's only index is a non-unique lookup index) - unlike the account/journal-number cases, a genuine concurrent duplicate insert here would NOT be caught by the database at all"
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAccountingService.SaveMappingAsync; PayrollGLMappingConfiguration (index, not unique)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: "PayrollGLMappings (non-unique index only)"
+
+  - id: F-GLACC-086
+    name: CreateVersionAsync's overlap-prevention guard (F-GLACC-013) likewise has no unique DB index backing it - PayrollAccountingConfigurationVersionConfiguration's index on (TenantId, ConfigurationId, EffectiveFrom) is not unique, so a genuine concurrent overlapping insert is not caught by the database
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAccountingService.CreateVersionAsync; PayrollAccountingConfigurationVersionConfiguration (index, not unique)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: "PayrollAccountingConfigurationVersions (non-unique index only)"
+
+  - id: F-GLACC-087
+    name: GenerateAsync/GenerateFinalSettlementAsync are each a single db.SaveChangesAsync call persisting the journal batch and all of its lines/sources/first history row together - there is no partial-commit window where a journal could be observed with some but not all of its lines
+    group: Concurrency & Idempotency
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync, GenerateFinalSettlementAsync (single SaveChangesAsync per method)"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollJournalBatches, PayrollJournalLines, PayrollJournalLineSources, PayrollJournalHistories
+
+  # =========================== I. EXPORT ===========================
+  - id: F-GLACC-088
+    name: ExportAsync requires Status to be Approved, Posted, or Exported, else Conflict ("Only an approved or posted journal can be exported.") - Generated/Validated/Cancelled cannot be exported
+    group: Export
+    status: Implemented
+    api: "GET /api/payroll/accounting/{id}/export"
+    service: "PayrollAccountingService.ExportAsync"
+    permission: "Payroll.Accounting.Export"
+    db: PayrollJournalBatches.Status
+
+  - id: F-GLACC-089
+    name: 'The export format is one provider-neutral CSV with header row "JournalNumber,JournalDate,AccountCode,AccountName,Description,Debit,Credit,Currency,SourceType,SourceId", one data row per line ordered by Sequence'
+    group: Export
+    status: Implemented
+    service: "PayrollAccountingService.ExportAsync"
+    permission: "Payroll.Accounting.Export"
+    db: "n/a (generated file)"
+
+  - id: F-GLACC-090
+    name: "CSV values are escaped per RFC4180-style rules (quoted when containing comma/quote/newline, embedded quotes doubled) by the private Csv() helper - identical algorithm to qa/15 BankAdvice's own Csv() helper, duplicated rather than shared"
+    group: Export
+    status: Implemented
+    service: "PayrollAccountingService.Csv"
+    permission: "Payroll.Accounting.Export"
+    db: "n/a (generated file)"
+
+  - id: F-GLACC-091
+    name: "ExportAsync internally calls GetAsync (its own permission-independent helper) to load the journal, so the export route's actual data-fetch is identical to a normal Get - re-exporting a journal repeatedly (any number of times, in any of the 3 eligible statuses) always returns byte-identical CSV content with zero side effects, a stronger idempotency guarantee than qa/15 BankAdvice's own first-export-is-special-cased pattern"
+    group: Export
+    status: Implemented
+    service: "PayrollAccountingService.ExportAsync (delegates to GetAsync)"
+    permission: "Payroll.Accounting.Export"
+    db: "n/a"
+
+  - id: F-GLACC-092
+    name: The exported filename is payroll-journal-{JournalNumber with / replaced by -}.csv, content-type text/csv; charset=utf-8
+    group: Export
+    status: Implemented
+    service: "PayrollAccountingService.ExportAsync (PayrollOutputFile)"
+    permission: "Payroll.Accounting.Export"
+    db: "n/a"
+
+  - id: F-GLACC-093
+    name: The CSV export materializes every line into one in-memory StringBuilder/byte array with no streaming or chunking, for a journal of any size
+    group: Export
+    status: Implemented
+    service: "PayrollAccountingService.ExportAsync (StringBuilder over j.Lines)"
+    permission: "Payroll.Accounting.Export"
+    db: PayrollJournalLines
+
+  # =========================== J. AUDIT & HISTORY ===========================
+  - id: F-GLACC-094
+    name: "Every lifecycle transition (Generated/Validated/Approved/Posted) appends exactly one PayrollJournalHistory row with ChangeType/ChangedAtUtc/ActorUserId/Message - unlike qa/15 BankAdvice's own dead ActorUserId (CR-272), ActorUserId IS populated here from tenant.UserId at every call site"
+    group: Audit & History
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync, GenerateFinalSettlementAsync, TransitionAsync (History Add calls)"
+    permission: "Payroll.Accounting.ViewHistory"
+    db: PayrollJournalHistories
+
+  - id: F-GLACC-095
+    name: History is append-only - a full grep of PayrollAccountingService.cs shows no Update/Remove call against PayrollJournalHistories, only .Add
+    group: Audit & History
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (full grep for db.PayrollJournalHistories - Add-only)"
+    permission: "n/a"
+    db: PayrollJournalHistories
+
+  - id: F-GLACC-096
+    name: "CONFIRMED DEFECT (headline) - PayrollJournalDto carries no History field of any kind, and neither GetAsync nor ListAsync ever call Include(x => x.History) - there is NO way to view a journal's history through ANY exposed API endpoint, regardless of which permission is held"
+    group: Audit & History
+    status: Implemented
+    service: "Backend/HRMS.Application/DTOs/Payroll/PayrollAccountingDtos.cs (PayrollJournalDto, full field list - no History); PayrollAccountingService.GetAsync, ListAsync, ToDto (no History Include/mapping)"
+    permission: "Payroll.Accounting.ViewHistory"
+    db: PayrollJournalHistories
+    cr: [CR-278]
+
+  - id: F-GLACC-097
+    name: "CONFIRMED DEAD PERMISSION (consequence of F-GLACC-096) - Payroll.Accounting.ViewHistory is declared/seeded/mirrored on the frontend, but since history is unreachable through any endpoint for ANY permission, holding or lacking this specific permission has literally zero observable effect on any response"
+    group: Audit & History
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (PayrollAccountingController, full route grep - no [HasPermission(Permissions.Payroll.AccountingViewHistory)] anywhere)"
+    permission: "Payroll.Accounting.ViewHistory (declared, unused)"
+    db: "n/a"
+    cr: [CR-278]
+
+  - id: F-GLACC-098
+    name: History rows persist in the database (proven via direct DB query, since no API surfaces them) with correct ChangeType/ChangedAtUtc/ActorUserId/Message ordering, confirming the data itself is sound even though it is unreachable through the product
+    group: Audit & History
+    status: Implemented
+    service: "PayrollAccountingService (History persistence, verified via direct DbContext query)"
+    permission: "n/a"
+    db: PayrollJournalHistories
+    cr: [CR-278]
+
+  # =========================== K. PAYROLL-ANALYTICS RECONCILIATION INTEGRATION ===========================
+  - id: F-GLACC-099
+    name: PayrollAnalyticsService's post-payroll reconciliation independently raises a Warning "MissingPayrollJournal" finding when a run has persisted PayrollResults but zero active (non-Cancelled) PayrollJournalBatch
+    group: Payroll-Analytics Reconciliation Integration
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "Payroll.AnalyticsReconcile (out of this module's own permission surface)"
+    db: PayrollJournalBatches, PayrollResults
+
+  - id: F-GLACC-100
+    name: PayrollAnalyticsService raises a Critical "AccountingUnbalanced" finding when any active journal's own TotalDebit differs from its TotalCredit (a state Generate itself should already prevent, so this is a defense-in-depth check against data drift)
+    group: Payroll-Analytics Reconciliation Integration
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "n/a"
+    db: PayrollJournalBatches.TotalDebit, TotalCredit
+
+  - id: F-GLACC-101
+    name: PayrollAnalyticsService raises a Critical "DuplicatePayrollJournal" finding when more than one active journal exists for the same PayrollRunId (a state the service's own active-journal guard, F-GLACC-034, is supposed to prevent at generation time)
+    group: Payroll-Analytics Reconciliation Integration
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "n/a"
+    db: PayrollJournalBatches.PayrollRunId
+
+  - id: F-GLACC-102
+    name: 'PayrollAnalyticsService raises a Critical "AccountingPayrollTotalMismatch" finding when all active journals for a run ARE internally balanced but their summed TotalCredit differs from the run''s own persisted net-pay total'
+    group: Payroll-Analytics Reconciliation Integration
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    permission: "n/a"
+    db: PayrollJournalBatches.TotalCredit, PayrollResults.NetPay
+
+  - id: F-GLACC-103
+    name: '"BrokenAccountingReversalLinkage" and "BrokenAccountingAdjustmentLinkage" findings check PayrollJournalLineSource rows whose SourceType contains "Reversal"/"Adjustment" against PayrollReversals/PayrollAdjustments respectively - PayrollAdjustments IS a real, reachable SourceType-adjacent linkage in principle, but no code path in PayrollAccountingService ever actually emits a PayrollJournalLineSource with SourceType containing "Adjustment" either (only "EmployeeLoan"/"FinalSettlement" are ever produced, per F-GLACC-076), so BOTH linkage findings are permanently unreachable against real generated data'
+    group: Payroll-Analytics Reconciliation Integration
+    status: Implemented
+    service: "PayrollAnalyticsService.AddSourceFindingsAsync (BrokenAccountingReversalLinkage, BrokenAccountingAdjustmentLinkage)"
+    permission: "n/a"
+    db: PayrollJournalLineSources.SourceType
+    cr: [CR-277]
+
+  - id: F-GLACC-104
+    name: PayrollAnalyticsOverviewDto and PayrollRunSummaryDto both independently expose AccountingDebitTotal/AccountingCreditTotal (summed from active journals for the run) alongside the BankAdvice total, as read-only analytics fields separate from the accounting module's own journal DTO
+    group: Payroll-Analytics Reconciliation Integration
+    status: Implemented
+    service: "PayrollAnalyticsService.GetOverviewAsync, GetRunSummaryAsync"
+    permission: "Payroll.AnalyticsReconcile (out of this module's own permission surface)"
+    db: PayrollJournalBatches.TotalDebit, TotalCredit
+
+  - id: F-GLACC-105
+    name: "OUT OF SCOPE (confirmed, not a gap) - this module does not own the general payroll-reconciliation/variance-control/analytics engine (PayrollReconciliation, PayrollVarianceControls, PayrollAnomalyFlags, control-totals/dimension-summary endpoints, PayrollAnalyticsSnapshot); only the 6 GL-specific findings (F-GLACC-099..103) and the 2 GL-specific overview fields (F-GLACC-104) are exercised here, as an integration-boundary check"
+    group: Payroll-Analytics Reconciliation Integration
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (full file, out of this module's own surface beyond the GL-specific block)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-GLACC-106
+    name: "OUT OF SCOPE (confirmed, not a gap) - a full grep of SeparationService.cs for \"Accounting\"/\"Journal\"/\"GL\" returns zero matches; final settlement accounting integration is driven entirely by PayrollAccountingService's own GenerateFinalSettlementAsync reading already-finalized rows directly, not by any push/event from SeparationService"
+    group: Payroll-Analytics Reconciliation Integration
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/SeparationService.cs (full grep - zero matches)"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== L. AUTHORIZATION & SCOPE ===========================
+  - id: F-GLACC-107
+    name: "8 distinct permissions gate the module: Accounting.View, .Generate, .Validate, .Approve, .Post, .Export, .ViewHistory (dead, F-GLACC-096/097), .ManageConfiguration (covers accounts+configurations+versions+mappings, all sharing ONE permission despite being 4 distinct sub-resources)"
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.Domain/Authorization/Permissions.cs (Payroll.Accounting* block)"
+    permission: "Payroll.Accounting.*"
+    db: "n/a"
+
+  - id: F-GLACC-108
+    name: "CONFIRMED (headline) - a full grep of SeedData.cs's RolePermissionMap for all 8 Accounting permission constants returns zero matches in any seeded role array; only SuperAdmin/TenantAdmin hold any of them, via the blanket Permissions.All grant. HRAdmin (which otherwise holds the full Payroll.SalaryComponent*/SalaryStructure*/EmployeeSalary*/Period*/Controls*/Run*/TaxDeclaration*/YearEndTax* surface), HRManager, SuperHR, and the role literally named \"Accounts\" (whose entire seeded grant is Employee.View) all hold zero, out of the box"
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, full-file grep for the 8 Accounting permission constants - zero matches outside the id-assignment dictionary)"
+    permission: "Payroll.Accounting.*"
+    db: "n/a"
+    cr: [CR-274]
+
+  - id: F-GLACC-109
+    name: "ManageConfiguration is a SINGLE shared permission across GL-account CRUD, configuration CRUD, version creation, and mapping create/update/deactivate - there is no way to grant, e.g., \"can manage GL accounts but not mapping rules\" or vice versa"
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (PayrollAccountingController - 7 distinct routes all sharing [HasPermission(Permissions.Payroll.AccountingManageConfiguration)])"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: "n/a"
+
+  - id: F-GLACC-110
+    name: Generate is a single permission shared by BOTH the payroll-run and final-settlement generation routes - there is no way to grant "can post payroll accounting" without also granting "can post final-settlement accounting"
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (both /accounting/generate routes share Permissions.Payroll.AccountingGenerate)"
+    permission: "Payroll.Accounting.Generate"
+    db: "n/a"
+
+  - id: F-GLACC-111
+    name: There is no /api/me/... self-service surface for accounting at all - every route requires an explicit Accounting permission and no seeded role other than SuperAdmin/TenantAdmin has one
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (PayrollAccountingController - single controller, no /api/me variant)"
+    permission: "Payroll.Accounting.*"
+    db: "n/a"
+
+  - id: F-GLACC-112
+    name: A cross-tenant journal id on any id-scoped route is NotFound (via the TenantId-filtered query in each method), not Forbidden
+    group: Authorization & Scope
+    status: Implemented
+    service: "PayrollAccountingService.GetAsync, TransitionAsync, ExportAsync (TenantId filter)"
+    permission: "Payroll.Accounting.View, Validate, Approve, Post, Export"
+    db: PayrollJournalBatches (TenantId filter)
+
+  - id: F-GLACC-113
+    name: No route on PayrollAccountingController carries [AllowAnonymous] - every action requires authentication
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (PayrollAccountingController, full grep for [AllowAnonymous] - zero matches)"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-GLACC-114
+    name: "Approve and Post are each their own dedicated permission, separate from Validate and from each other - matching the \"separate action = separate permission\" pattern, in contrast with qa/15 BankAdvice's own CR-273 Validate/Prepare permission-sharing gap"
+    group: Authorization & Scope
+    status: Implemented
+    service: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (PayrollAccountingController.Approve, .Post)"
+    permission: "Payroll.Accounting.Approve, Payroll.Accounting.Post"
+    db: "n/a"
+
+  # =========================== M. TENANT ISOLATION ===========================
+  - id: F-GLACC-115
+    name: GenerateAsync's PayrollRun lookup is TenantId-filtered - a cross-tenant runId is NotFound
+    group: Tenant Isolation
+    status: Implemented
+    service: "PayrollAccountingService.GenerateAsync"
+    permission: "Payroll.Accounting.Generate"
+    db: PayrollRuns (TenantId filter)
+
+  - id: F-GLACC-116
+    name: GenerateFinalSettlementAsync's FinalSettlementCase lookup, and all 5 of its source-row queries (LoanRepayments/ReimbursementSettlements/GratuityCalculations/LeaveEncashmentCalculations/NoticeSettlementCalculations), are every one independently TenantId-filtered
+    group: Tenant Isolation
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync"
+    permission: "Payroll.Accounting.Generate"
+    db: FinalSettlementCases, LoanRepayments, ReimbursementSettlements, GratuityCalculations, LeaveEncashmentCalculations, NoticeSettlementCalculations (TenantId filter)
+
+  - id: F-GLACC-117
+    name: GetAsync/ListAsync/TransitionAsync/ExportAsync are all TenantId-filtered at their source query - a journal id from another tenant is NotFound for every action alike
+    group: Tenant Isolation
+    status: Implemented
+    service: "PayrollAccountingService.GetAsync, ListAsync, TransitionAsync, ExportAsync"
+    permission: "Payroll.Accounting.View, Validate, Approve, Post, Export"
+    db: PayrollJournalBatches (TenantId filter)
+
+  - id: F-GLACC-118
+    name: PayrollGLAccounts/PayrollAccountingConfigurations/PayrollAccountingConfigurationVersions/PayrollGLMappings are each independently TenantId-filtered on every read and write path, so accounts/configurations/mappings belonging to another tenant are never visible or resolvable during mapping save or journal generation
+    group: Tenant Isolation
+    status: Implemented
+    service: "PayrollAccountingService (all account/configuration/mapping methods)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: PayrollGLAccounts, PayrollAccountingConfigurations, PayrollAccountingConfigurationVersions, PayrollGLMappings (TenantId filter)
+
+  - id: F-GLACC-119
+    name: "The composite FK pattern (TenantId+PayrollAccountingConfigurationId / TenantId+ConfigurationVersionId / TenantId+DebitAccountId / TenantId+PayrollRunId / TenantId+PayrollGLAccountId / etc.) is used on every relationship across all 8 PayrollAccounting* EF configurations - no relationship is keyed by a bare cross-tenant-unsafe Guid"
+    group: Tenant Isolation
+    status: Implemented
+    service: "Backend/HRMS.Infrastructure/Persistence/Configurations/PayrollAccountingConfiguration.cs (all 8 configurations, full read)"
+    permission: "n/a"
+    db: PayrollGLAccounts, PayrollAccountingConfigurations, PayrollAccountingConfigurationVersions, PayrollGLMappings, PayrollJournalBatches, PayrollJournalLines, PayrollJournalLineSources, PayrollJournalHistories (composite FKs)
+
+  - id: F-GLACC-120
+    name: "The tenant's own PayrollControlConfiguration (self-approval opt-in for Approve/Post) is itself TenantId-scoped, identical to qa/15 BankAdvice's F-BANKADV-092 - one tenant's maker-checker policy never affects another tenant's Approve/Post calls"
+    group: Tenant Isolation
+    status: Implemented
+    service: "PayrollApprovalGuard.ValidateAsync (SingleOrDefaultAsync TenantId filter)"
+    permission: "Payroll.Accounting.Approve, Post"
+    db: PayrollControlConfigurations (TenantId filter)
+
+  - id: F-GLACC-121
+    name: An identical journal-generation-eligible payroll run/final settlement in a second tenant produces its own independently-numbered journal with no cross-tenant JournalNumber collision risk, since the unique index is itself TenantId-scoped
+    group: Tenant Isolation
+    status: Implemented
+    service: "PayrollJournalBatchConfiguration (unique index scoped by TenantId)"
+    permission: "Payroll.Accounting.Generate"
+    db: "PayrollJournalBatches unique (TenantId, JournalNumber)"
+
+  # =========================== N. REPORTS, LISTING & LARGE DATA/PAGING ===========================
+  - id: F-GLACC-122
+    name: "ListAsync (journals) supports NO filter at all beyond the shared PagedQuery paging contract - there is no Status, PayrollRunId, FinalSettlementCaseId, or date-range filter on the journal list endpoint, a narrower surface than qa/15 BankAdvice's own single-Status filter (CR-270)"
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    api: "GET /api/payroll/accounting"
+    service: "PayrollAccountingService.ListAsync"
+    permission: "Payroll.Accounting.View"
+    db: PayrollJournalBatches
+
+  - id: F-GLACC-123
+    name: Paging follows the shared PagedQuery contract on every list endpoint (accounts, configurations, journals) - page size is clamped to PagedQuery.MaxPageSize=100 even if a larger value is requested
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    service: "PayrollAccountingService.ListAccountsAsync, ListConfigurationsAsync, ListAsync"
+    permission: "Payroll.Accounting.View"
+    db: "n/a"
+
+  - id: F-GLACC-124
+    name: The journal list is ordered by CreatedDate descending (most recently generated journal first), with no alternate sort option
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    service: "PayrollAccountingService.ListAsync (OrderByDescending CreatedDate)"
+    permission: "Payroll.Accounting.View"
+    db: PayrollJournalBatches.CreatedDate
+
+  - id: F-GLACC-125
+    name: "ListAsync (journals) eagerly Includes Lines on EVERY page row - a page of N journals pulls all of their line rows in one query, not just summary counts (mirroring qa/15 BankAdvice's own F-BANKADV-096 pattern)"
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    service: "PayrollAccountingService.ListAsync (Include Lines)"
+    permission: "Payroll.Accounting.View"
+    db: PayrollJournalBatches, PayrollJournalLines
+
+  - id: F-GLACC-126
+    name: There is no server-side paging within a single journal's own Lines collection - GetAsync always returns EVERY line row for a journal in one response regardless of how many thousand employees/components it covers
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    service: "PayrollAccountingService.GetAsync, ToDto (unbounded Lines list)"
+    permission: "Payroll.Accounting.View"
+    db: PayrollJournalLines
+
+  - id: F-GLACC-127
+    name: ListConfigurationsAsync eagerly Includes every configuration's full Versions collection on every page row, with no cap on version count per configuration
+    group: Reports, Listing & Large Data/Paging
+    status: Implemented
+    service: "PayrollAccountingService.ListConfigurationsAsync (Include Versions)"
+    permission: "Payroll.Accounting.View"
+    db: PayrollAccountingConfigurations, PayrollAccountingConfigurationVersions
+
+  # =========================== O. SQL SERVER/MYSQL PROVIDER PARITY ===========================
+  - id: F-GLACC-128
+    name: "Migration pair AddPayrollAccountingGLPosting is present in both the SQL Server chain (20260920033921) and the MySQL tenant chain (20260920033934); migration pair AddFinalSettlementAccountingJournalSql/MySql is present in both chains (20260921030615 SQL Server, 20260921030628 MySQL)"
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "Backend/HRMS.Infrastructure/Persistence/Migrations, Backend/HRMS.Infrastructure.MySqlMigrations/Migrations"
+    permission: "n/a"
+    db: PayrollGLAccounts, PayrollAccountingConfigurations, PayrollAccountingConfigurationVersions, PayrollGLMappings, PayrollJournalBatches, PayrollJournalLines, PayrollJournalLineSources, PayrollJournalHistories (schema)
+
+  - id: F-GLACC-129
+    name: "SqlServerPayrollAccountingIntegrationTests / MySqlPayrollAccountingIntegrationTests / PayrollAccountingProviderAcceptance exist as a dedicated 3-file provider-parity inventory (a SqlServer*/MySql*-pair plus a shared acceptance helper) alongside 3 more general accounting xUnit classes (PayrollAccountingTests, PayrollFinalSettlementAccountingTests, ReimbursementAccountingTests) - all opt-in and skip silently per the repository-wide convention when their env vars are absent"
+    group: SQL Server/MySQL Provider Parity
+    status: Implemented
+    service: "Backend/HRMS.Tests/SqlServerPayrollAccountingIntegrationTests.cs, MySqlPayrollAccountingIntegrationTests.cs, PayrollAccountingProviderAcceptance.cs, PayrollAccountingTests.cs, PayrollFinalSettlementAccountingTests.cs, ReimbursementAccountingTests.cs"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== P. FRONTEND ===========================
+  - id: F-GLACC-130
+    name: PayrollAccountingPage.tsx renders the journal batch list and, once one is selected, a detail header with a lines table (account/description/debit/credit)
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/PayrollAccountingPage.tsx"
+    permission: "Payroll.Accounting.View"
+    db: "n/a"
+
+  - id: F-GLACC-131
+    name: "CONFIRMED FRONTEND GAP (headline) - there is NO client function in src/api/payroll.ts for generating a journal from a payroll run, generating a final-settlement journal, creating/updating a version, or creating/updating/deactivating a mapping - a full grep of the Accounting section (lines 392-408) shows only list/get/validate/approve/post/export/list-accounts/create-account/list-configurations/create-configuration; the actual \"post payroll to GL\" action, and all GL-mapping configuration beyond raw accounts/configurations, has NO UI path of any kind"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/api/payroll.ts (Accounting section, full read - no generate/version/mapping functions)"
+    permission: "Payroll.Accounting.Generate, Payroll.Accounting.ManageConfiguration"
+    db: "n/a"
+    cr: [CR-284]
+
+  - id: F-GLACC-132
+    name: "CONFIRMED FRONTEND GAP - PayrollAccountingConfigurationPage.tsx only wires Create-account and Create-configuration; it never calls (and no client function even exists for) create-version or create/update/deactivate-mapping, so a configuration can be created but never given a single usable mapping rule through the UI"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/PayrollAccountingConfigurationPage.tsx (full component - no version/mapping form of any kind)"
+    permission: "Payroll.Accounting.ManageConfiguration"
+    db: "n/a"
+    cr: [CR-284]
+
+  - id: F-GLACC-133
+    name: Validate/Approve/Post/Export ARE all correctly wired and reachable from PayrollAccountingPage.tsx, each conditioned on the selected journal's current Status
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/PayrollAccountingPage.tsx (action buttons)"
+    permission: "Payroll.Accounting.Validate, Approve, Post, Export"
+    db: "n/a"
+
+  - id: F-GLACC-134
+    name: "CONFIRMED (low severity, same shape as qa/15's CR-268) - neither PayrollAccountingPage.tsx nor PayrollAccountingConfigurationPage.tsx has any useAuth()/can() permission gating on any control; every button/form renders unconditionally for any user who can reach the page at all"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/PayrollAccountingPage.tsx, PayrollAccountingConfigurationPage.tsx (full components - no useAuth/can() usage)"
+    permission: "n/a"
+    db: "n/a"
+    cr: [CR-285]
+
+  - id: F-GLACC-135
+    name: "Both pages ARE discoverable through normal navigation - navigation.ts has entries for both (/payroll/accounting, /payroll/accounting/configuration, group 'administration') and App.tsx gates both routes on their respective real permissions (accountingView, accountingManageConfiguration)"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/layout/navigation.ts, App.tsx"
+    permission: "Payroll.Accounting.View, Payroll.Accounting.ManageConfiguration"
+    db: "n/a"
+
+  - id: F-GLACC-136
+    name: The frontend permissions.ts mirror lists all 8 Accounting permission constants including the dead accountingViewHistory, matching the backend's own declared (but unused) constant 1:1
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/auth/permissions.ts"
+    permission: "n/a"
+    db: "n/a"
+
+  - id: F-GLACC-137
+    name: "CONFIRMED TEST-COVERAGE GAP - PayrollAccountingPage.tsx (the journal-lifecycle page) has NO .test.tsx of any kind, confirmed by a directory listing of Frontend/HRMS.Web/src/pages/payroll/; PayrollAccountingConfigurationPage.test.tsx exists but its single test only covers the initial render/empty-state path - it never exercises the create-account or create-configuration form submission, let alone any accounting action"
+    group: Frontend
+    status: Implemented
+    service: "Frontend/HRMS.Web/src/pages/payroll/ (directory listing - PayrollAccountingPage.test.tsx absent); PayrollAccountingConfigurationPage.test.tsx (full file - 1 test, render-only)"
+    permission: "n/a"
+    db: "n/a"
+    cr: [CR-286]
+
+  - id: F-GLACC-138
+    name: "OUT OF SCOPE (confirmed, not a gap) - no live/external ERP or GL system connector (SAP, Oracle Financials, Tally, QuickBooks, a generic accounting-export SFTP/API integration) is implemented anywhere in this codebase; PostAsync's own history message (\"posted within HRMS\", F-GLACC-069) and the single internal CSV export (F-GLACC-089) are the only real accounting outputs that exist"
+    group: Frontend
+    status: Implemented
+    service: "Backend/HRMS.Application/Services/PayrollAccountingService.cs (full file, full grep for any external system integration - none)"
+    permission: "n/a"
+    db: "n/a"
+
+  # =========================== CR-289 ADDENDUM - VARIABLE PAY/BONUS OMITTED FROM FINAL SETTLEMENT ACCOUNTING ===========================
+  - id: F-GLACC-139
+    name: "CONFIRMED DEFECT - a Variable Pay/Bonus settlement recorded against a final settlement (VariablePaySettlement.SettlementType=FinalSettlement) is silently excluded from journal generation: GenerateFinalSettlementAsync never queries VariablePaySettlements/VariablePayAwards at all, so when combined with any of the 5 supported sources the journal generates successfully (200) with no line, no PayrollJournalLineSource, and no MissingGLMapping error for the settled bonus amount - contrast with F-GLACC-052, where every one of the 5 supported sources DOES get a source-specific Conflict when unmapped"
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (full method - full grep for VariablePay, zero matches)"
+    permission: "Payroll.Accounting.Generate"
+    db: "VariablePaySettlements, VariablePayAwards (never read)"
+    cr: [CR-289]
+
+  - id: F-GLACC-140
+    name: "CONFIRMED DEFECT - when a Variable Pay/Bonus settlement is the ONLY eligible source for a finalized final settlement, GenerateFinalSettlementAsync's all-5-sources-empty guard still fires, returning a misleading Conflict (\"No finalized separation benefit or recovery is available for this final settlement\") despite a real settled bonus amount existing for that case - because the guard's own source list (repayments/reimbursements/gratuity/leave/notice) was never extended to include variable pay"
+    group: Final Settlement Accounting
+    status: Implemented
+    service: "PayrollAccountingService.GenerateFinalSettlementAsync (all-5-sources-empty guard)"
+    permission: "Payroll.Accounting.Generate"
+    db: "VariablePaySettlements (never read); FinalSettlementCases"
+    cr: [CR-289]

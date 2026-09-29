@@ -1,0 +1,109 @@
+sheet: Employee_Employment
+submodule: Employment (joining / contractual details, 1:1 per employee)
+defaults:
+  role: HR_ADMIN
+  perm: "EmploymentHistory.Change"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (EmploymentHistory.View, EmploymentHistory.Change); employee EMP-JOIN-001 already has an Initial Employment record."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: EMP-JOIN-001
+    func: [F-EMP-067]
+    sc: Read and upsert the 1:1 Employment (joining/contractual) record
+    t: PUT creates the single EmployeeEmployment row on first call and updates it in place afterward
+    src: ["EmployeeEmploymentService.GetEmploymentAsync/UpsertEmploymentAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[PUT /api/employees/{id}/employment] firstHiredDate, dateOfJoining, jobStatus, probationPeriod+unit, noticePeriod+unit => [200] created"
+      - "[GET /api/employees/{id}/employment] Call => [200] every submitted field reads back correctly"
+      - "[PUT /api/employees/{id}/employment] Change jobStatus only => [200] the SAME row is updated"
+    auto: API
+    ex: ["V:pages/employees/EmploymentSectionForm.test.tsx::loads and independently saves joining and contractual employment details"]
+
+  - id: EMP-JOIN-002
+    func: [F-EMP-068]
+    sc: Cross-field date rules - joining vs. first-hired, group-joining vs. joining, confirmation vs. joining
+    t: Each of the three date-ordering rules is enforced
+    src: ["EmployeeEmploymentRequestValidator", "EmployeeEmploymentService.ValidateEmploymentDetailsRequest"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/employment] dateOfJoining earlier than firstHiredDate => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] groupDateOfJoining later than dateOfJoining => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] confirmationDate earlier than dateOfJoining => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] All three dates in valid order => [200] accepted"
+    auto: API
+
+  - id: EMP-JOIN-003
+    func: [F-EMP-069]
+    sc: Probation/notice period and unit must be supplied together, and units are restricted per field
+    t: A number without its unit (or vice versa) is rejected; probation allows Days/Months/Years, notice allows only Days/Months
+    src: ["EmployeeEmploymentRequestValidator"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/employment] probationPeriod=90, probationPeriodUnit omitted => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] probationPeriodUnit='Years', probationPeriod omitted => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] noticePeriodUnit='Years' (not allowed for notice) => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] noticePeriod=30, noticePeriodUnit='Days' => [200] accepted"
+    auto: API
+
+  - id: EMP-JOIN-004
+    func: [F-EMP-070]
+    sc: Notice Start Date required while NoticeStatus=Active; Notice End Date cannot precede Notice Start Date
+    t: Cross-field notice-period date rules
+    src: ["EmployeeEmploymentRequestValidator"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/employment] noticeStatus='Active', noticeStartDate omitted => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] noticeStartDate set, noticeEndDate earlier than it => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] noticeStatus='Active', noticeStartDate + noticeEndDate in valid order => [200] accepted"
+    auto: API
+
+  - id: EMP-JOIN-005
+    func: [F-EMP-071]
+    sc: The referring employee must exist, be Active, belong to the same tenant, and cannot be the employee themselves
+    t: An invalid referrer id is rejected on every axis
+    src: ["EmployeeEmploymentService.UpsertEmploymentAsync"]
+    type: Negative
+    tags: [Tenant-Isolation]
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[PUT /api/employees/{id}/employment] referredByEmployeeId = the employee's own id => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] referredByEmployeeId = a Terminated employee => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] referredByEmployeeId = a Tenant B employee id => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] referredByEmployeeId = a valid Active same-tenant employee => [200] accepted"
+    auto: API
+    ex: ["xU:EmployeeEmploymentHardeningTests.Joining_details_validate_dates_units_and_referrer_tenant_state"]
+
+  - id: EMP-JOIN-006
+    func: [F-EMP-072]
+    sc: Upserting Employment also syncs Employee.DateOfJoining/JobStatus/GroupDateOfJoining
+    t: A change to the joining/contractual record is reflected on the main Employee record's own columns
+    src: ["EmployeeEmploymentService.UpsertEmploymentAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[PUT /api/employees/{id}/employment] dateOfJoining and jobStatus changed => [200] accepted"
+      - "[GET /api/employees/{id}] Call => [200] dateOfJoining and jobStatus match the values just submitted through Employment"
+    auto: API
+
+  - id: EMP-JOIN-007
+    func: [F-EMP-067]
+    sc: Employment endpoints reject a cross-tenant employee id
+    t: Tenant isolation for the joining/contractual record
+    src: ["EmployeeEmploymentService (tenant-filtered)"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[GET /api/employees/{Tenant A id}/employment] As Tenant B => [404] Not Found"
+      - "[PUT /api/employees/{Tenant A id}/employment] As Tenant B => [404] Not Found"
+    auto: API

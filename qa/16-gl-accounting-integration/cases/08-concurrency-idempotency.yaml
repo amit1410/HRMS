@@ -1,0 +1,160 @@
+sheet: GLAcc_Concurrency_Idempotency
+submodule: Concurrency & Idempotency
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-CONC-001
+    func: [F-GLACC-080]
+    sc: Unique journal number index
+    t: The database rejects two journal rows sharing (TenantId, JournalNumber)
+    src: "PayrollJournalBatchConfiguration (unique index)"
+    type: Integration-Concurrency
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a (schema-level assertion)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[DB] attempt to directly insert 2 PayrollJournalBatches rows with identical TenantId+JournalNumber => the second insert fails a unique constraint violation"
+    auto: DB-assisted
+    db: "Unique (TenantId, JournalNumber) index enforced"
+
+  - id: GLACC-CONC-002
+    func: [F-GLACC-081]
+    sc: Unique final-settlement-case index, null-safe for payroll-run journals
+    t: The database enforces at most one journal per FinalSettlementCaseId, while allowing unlimited payroll-run journals (FinalSettlementCaseId=null)
+    src: "PayrollJournalBatchConfiguration (unique index)"
+    type: Integration-Concurrency
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a (schema-level assertion)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[DB] insert 2 PayrollJournalBatches rows with the same TenantId+FinalSettlementCaseId => second insert fails"
+      - "[DB] insert 2 PayrollJournalBatches rows both with FinalSettlementCaseId=null (payroll-run journals) but distinct JournalNumbers => both succeed"
+    auto: DB-assisted
+    db: "Unique (TenantId, FinalSettlementCaseId) index enforced, nullable-safe"
+
+  - id: GLACC-CONC-003
+    func: [F-GLACC-082]
+    sc: Concurrent Generate for the same run can throw an unhandled DbUpdateException
+    t: Two concurrent Generate calls for the same payroll run that both pass the active-journal pre-check surface as an unhandled 500 for the race loser, not a graceful Conflict
+    src: "PayrollAccountingService.GenerateAsync (no try/catch DbUpdateException)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "RUN7 (Approved) has one fully-mapped eligible employee, no prior journal"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN7}/accounting/generate] fired twice concurrently => [200] one call succeeds; the other call surfaces an unhandled DbUpdateException (likely [500]), NOT a graceful [409] Conflict"
+    auto: DB-assisted
+    db: "Assert exactly 1 PayrollJournalBatches row exists for RUN7 after the race"
+    cr: [CR-282]
+
+  - id: GLACC-CONC-004
+    func: [F-GLACC-083]
+    sc: Concurrent duplicate-code account creation has the same unguarded race shape
+    t: Two concurrent CreateAccountAsync calls with the same code produce an unhandled exception for the loser, backed by the unique (TenantId, Code) index
+    src: "PayrollAccountingService.CreateAccountAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: "code='9999'"
+    steps:
+      - "[POST /api/payroll/accounting/accounts] {code:'9999', name:'A'} and {code:'9999', name:'B'} fired concurrently => [200] one succeeds; the other surfaces an unhandled DbUpdateException rather than a graceful [409] Conflict"
+    auto: DB-assisted
+    db: "Assert exactly 1 PayrollGLAccounts row with code '9999' exists after the race"
+
+  - id: GLACC-CONC-005
+    func: [F-GLACC-084]
+    sc: Fresh read after every transition
+    t: The response DTO after Validate/Approve/Post always reflects a freshly-reloaded row, never a stale in-memory snapshot
+    src: "PayrollAccountingService.TransitionAsync (db.ClearChangeTracker())"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "J16 is Generated"
+    role: HRAdmin (custom role holding Accounting.Validate)
+    perm: Payroll.Accounting.Validate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/{J16}/validate] => [200] response ConcurrencyVersion matches the freshly-persisted row's value, not a cached pre-transition value"
+    auto: API
+
+  - id: GLACC-CONC-006
+    func: [F-GLACC-085]
+    sc: Concurrent duplicate mapping creation is not caught by the database
+    t: Two concurrent CreateMappingAsync calls with an identical discriminator can both succeed, since the duplicate-check index is not unique
+    src: "PayrollAccountingService.SaveMappingAsync; PayrollGLMappingConfiguration (non-unique index)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "V1 is an Active version with no existing mapping for SalaryComponentId=BASIC/MappingType=Earnings"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/versions/{V1}/mappings] fired twice concurrently with identical salaryComponentId=BASIC, mappingType=Earnings => [200] both calls can succeed, producing 2 duplicate active mapping rows (no unique DB constraint prevents it)"
+    auto: DB-assisted
+    db: "Assert whether 2 PayrollGLMappings rows exist for the same discriminator after the race"
+
+  - id: GLACC-CONC-007
+    func: [F-GLACC-086]
+    sc: Concurrent overlapping version creation is not caught by the database
+    t: Two concurrent CreateVersionAsync calls with overlapping date ranges can both succeed, since the overlap-check index is not unique
+    src: "PayrollAccountingService.CreateVersionAsync; PayrollAccountingConfigurationVersionConfiguration (non-unique index)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "CFG1 has no existing version yet"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/accounting/configurations/{CFG1}/versions] fired twice concurrently with identical/overlapping effectiveFrom dates => [200] both calls can succeed, producing 2 overlapping Active version rows"
+    auto: DB-assisted
+    db: "Assert whether 2 overlapping PayrollAccountingConfigurationVersions rows exist after the race"
+
+  - id: GLACC-CONC-008
+    func: [F-GLACC-087]
+    sc: Journal, lines, and history persist atomically in one SaveChanges call
+    t: There is no window where a journal batch row exists in the DB without all of its lines/sources/first history row
+    src: "PayrollAccountingService.GenerateAsync, GenerateFinalSettlementAsync (single SaveChangesAsync)"
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: "RUN8 (Approved) has 50 fully-mapped eligible employees, multiple components each"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN8}/accounting/generate] => [200] journal created"
+      - "[Manual] immediately query PayrollJournalBatches/PayrollJournalLines/PayrollJournalHistories for the new journal => the batch row, ALL of its line rows, and its Generated history row are all present together (single atomic commit)"
+    auto: DB-assisted
+    db: "Assert batch, lines, and Generated history row all present in one read immediately after the 200 response"

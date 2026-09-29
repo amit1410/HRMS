@@ -1,0 +1,136 @@
+sheet: PYA_Frontend
+submodule: Frontend - PayrollAnalyticsPage
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-FE-001
+    func: [F-PYA-137]
+    sc: Route registration and permission gate
+    t: /payroll/analytics is registered behind RequirePermission(analyticsView); a user lacking Payroll.Analytics.View is redirected/blocked rather than shown the page
+    src: "Frontend/HRMS.Web/src/App.tsx"
+    type: Authorization
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "A logged-in user without payroll.analyticsView navigates to /payroll/analytics?runId=RUN1"
+    role: Employee (no Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "url=/payroll/analytics?runId=RUN1"
+    steps:
+      - "[UI] navigate to /payroll/analytics?runId=RUN1 without the permission => RequirePermission blocks rendering of PayrollAnalyticsPage (standard guard behavior, matching every other permission-gated route)"
+    auto: UI
+
+  - id: PYA-FE-002
+    func: [F-PYA-138]
+    sc: No runId renders an instructional message, not an error
+    t: Visiting /payroll/analytics with no ?runId= query string renders a plain instructional paragraph instead of calling the API or erroring
+    src: "PayrollAnalyticsPage.tsx"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "User holds Payroll.Analytics.View"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "url=/payroll/analytics (no runId)"
+    steps:
+      - "[UI] navigate to /payroll/analytics with no query string => page renders 'Choose a payroll run with ?runId=... to inspect its persisted analytics.' and issues no API call"
+    auto: UI
+
+  - id: PYA-FE-003
+    func: [F-PYA-139]
+    sc: 7-tile summary grid renders overview data, nothing else
+    t: With a valid ?runId=, the page renders exactly the 7 documented tiles (Employees/Gross/Deductions/Net pay/Open findings/Critical findings/Anomalies) and nothing beyond them
+    src: "PayrollAnalyticsPage.tsx"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 has a valid overview (employeeCount=2, grossTotal=100, deductionTotal=10, netPayTotal=90, openFindings=1, criticalFindings=0, anomalyCount=0)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "url=/payroll/analytics?runId=RUN1"
+    steps:
+      - "[UI] navigate to /payroll/analytics?runId=RUN1 => 7 tiles render with the exact overview values; no variance table, findings list, reconciliation-generate button, or export link is present anywhere on the page"
+    auto: UI
+
+  - id: PYA-FE-004
+    func: [F-PYA-140]
+    sc: A query failure renders the raw error message with no retry and no status-specific handling
+    t: A 404/403/500 from the overview call all render identically via role=alert with the raw error message, with no retry button
+    src: "PayrollAnalyticsPage.tsx"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN-MISSING does not exist for this tenant"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "url=/payroll/analytics?runId=RUN-MISSING"
+    steps:
+      - "[UI] navigate to /payroll/analytics?runId=RUN-MISSING => a role=alert element renders the raw 'Payroll run not found.' text; no retry action, no distinct 404-vs-500 UI treatment"
+    auto: UI
+
+  - id: PYA-FE-005
+    func: [F-PYA-141, F-PYA-142]
+    sc: getPayrollVariance and generatePayrollReconciliation are dead exports
+    t: A full-repo grep confirms getPayrollVariance and generatePayrollReconciliation are exported from payrollAnalytics.ts but called from zero other files in the frontend
+    src: "Frontend/HRMS.Web/src/api/payrollAnalytics.ts (full-repo grep for both function names)"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a (static source review)
+    perm: "n/a"
+    tenant: "n/a"
+    data: none
+    steps:
+      - "[Manual] grep the full Frontend/HRMS.Web/src tree for 'getPayrollVariance(' and 'generatePayrollReconciliation(' outside of payrollAnalytics.ts itself => zero call sites found; both functions are exported but dead code from the UI's perspective"
+    auto: Manual only
+    cr: [CR-296]
+
+  - id: PYA-FE-006
+    func: [F-PYA-143]
+    sc: No sidebar entry links to the page
+    t: layout/navigation.ts has zero entries for Analytics/Reconciliation/Exceptions under Payroll, and no other page in the frontend links to /payroll/analytics
+    src: "Frontend/HRMS.Web/src/layout/navigation.ts; full-repo grep for the route path"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a (static source review)
+    perm: "n/a"
+    tenant: "n/a"
+    data: none
+    steps:
+      - "[Manual] grep layout/navigation.ts for 'Analytics'/'Reconciliation'/'Exceptions' (Payroll section) => zero matches"
+      - "[Manual] grep the full frontend source tree for the literal string 'payroll/analytics' => matches only App.tsx's own route registration and payrollAnalytics.ts's own API paths - no other page constructs a link to this route"
+    auto: Manual only
+    cr: [CR-296]
+
+  - id: PYA-FE-007
+    func: [F-PYA-139]
+    sc: Frontend unit test confirms the rendered summary tiles
+    t: The existing Vitest component test for this page asserts the title and the 'Open findings' tile render from a mocked useApiQuery result
+    src: "Frontend/HRMS.Web/src/pages/payroll/PayrollAnalyticsPage.test.tsx"
+    type: Positive
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a (existing automated test)
+    perm: "n/a"
+    tenant: "n/a"
+    data: none
+    steps:
+      - "[npx vitest run src/pages/payroll/PayrollAnalyticsPage.test.tsx] => PASS; asserts the page title 'Payroll Analytics & Controls' and the 'Open findings' tile both render"
+    auto: UI
+    ui: "Referenced narratively per the qa/10-16 Payroll-phase precedent, not individually classified via ex:"

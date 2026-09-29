@@ -1,0 +1,208 @@
+sheet: Leave_Calendar
+submodule: Team Leave Calendar (own + authorized team events, new-vs-legacy visibility divergence) and the HR Leave Dashboard (KPIs, aging, scope)
+defaults:
+  role: EMPLOYEE
+  perm: "Leave.RequestViewOwn"
+  tenant: A
+  pre: "Tenant A signed in."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LEAVE-CAL-001
+    func: [F-LEAVE-234]
+    sc: The calendar always includes the caller's own events
+    t: A plain Employee sees their own Approved and PendingApproval requests on GET /api/leave-calendar
+    src: ["LeaveCalendarService.GetAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/leave-calendar?from=2027-06-01&to=2027-06-30] As the requesting employee, with one Approved and one PendingApproval request of their own in range => [200] both of the caller's own events are present"
+    auto: API
+
+  - id: LEAVE-CAL-002
+    func: [F-LEAVE-235]
+    sc: from/to are validated before any query runs
+    t: from>to and a span exceeding 366 days are both rejected Invalid; missing params 400 at the model-binding layer
+    src: ["LeaveCalendarService.GetAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/leave-calendar?from=2027-06-30&to=2027-06-01] => [400] 'Invalid' - from after to"
+      - "[GET /api/leave-calendar?from=2026-01-01&to=2027-06-01] Span > 366 days => [400] 'Invalid'"
+      - "[GET /api/leave-calendar] Both params omitted => [400] ASP.NET model-binding failure, not a domain Result"
+    auto: API
+
+  - id: LEAVE-CAL-003
+    func: [F-LEAVE-236, F-LEAVE-238]
+    sc: "New path (authorization service wired): a direct report's PendingApproval events are ALSO visible to the manager"
+    t: With ILeaveAuthorizationService active, a manager sees a direct report's still-pending request on the team calendar, not just their approved ones
+    src: ["LeaveCalendarService.GetAsync (authorizationEnabled branch)"]
+    type: Contract
+    pri: P0
+    role: MANAGER
+    steps:
+      - "[GET /api/leave-calendar?from=&to=] As a manager, one direct report has a PendingApproval request in range => [200] the direct report's PendingApproval event IS included"
+      - "[GET /api/leave-calendar?from=&to=] Same manager, an UNRELATED employee elsewhere also has a PendingApproval request in range => [200] the unrelated employee's event is NOT included, whatever its status"
+    auto: API
+    cr: [CR-83]
+
+  - id: LEAVE-CAL-004
+    func: [F-LEAVE-237]
+    sc: "Legacy fallback (no authorization service wired): PendingApproval visibility requires Leave.Approve AND resolves ONLY via direct-manager relationship, never role-scope"
+    t: Constructing LeaveCalendarService without ILeaveAuthorizationService changes PendingApproval visibility rules materially
+    src: ["LeaveCalendarService.GetAsync (legacy branch)"]
+    type: Contract
+    pri: P1
+    role: HRBP
+    steps:
+      - "[Manual/DB] Construct/exercise LeaveCalendarService with ILeaveAuthorizationService = null (legacy path), as an HRBP scoped to the employee's Department but NOT their direct manager => the legacy path's own role-scope-less logic means this HRBP sees ONLY this employee's Approved events, never PendingApproval - contrast directly with LEAVE-CAL-003's new-path outcome for an equivalent HRBP scope"
+    auto: DB-assisted
+    cr: [CR-83]
+
+  - id: LEAVE-CAL-005
+    func: [F-LEAVE-238]
+    sc: An unrelated employee's events are never visible under either path
+    t: No manager/role-scope relationship means zero visibility regardless of request status
+    src: ["LeaveCalendarService.GetAsync"]
+    type: Negative
+    pri: P0
+    role: MANAGER
+    steps:
+      - "[GET /api/leave-calendar?from=&to=] As a manager with no relationship whatsoever to a given employee (not a direct report, no matching role-scope) => [200] that employee's events, Approved or Pending, never appear"
+    auto: API
+
+  - id: LEAVE-CAL-006
+    func: [F-LEAVE-239]
+    sc: Calendar events carry no reason/private field
+    t: The response shape exposes only employee/leaveType/date-range/quantity/status, nothing else
+    src: ["LeaveCalendarService.GetAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[GET /api/leave-calendar?from=&to=] => [200] each event has exactly {requestId, employeeId, employeeCode, employeeName, leaveTypeCode, leaveTypeName, startDate, endDate, chargeableQuantity, status} - no 'reason' or free-text field is ever present"
+    auto: API
+
+  - id: LEAVE-CAL-007
+    func: [F-LEAVE-240]
+    sc: Tenant isolation on the calendar
+    t: Tenant B's calendar never includes Tenant A's employees or requests
+    src: ["LeaveCalendarService.GetAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[GET /api/leave-calendar?from=&to=] As a Tenant B user => [200] only Tenant B employees/events ever appear"
+    auto: API
+
+  - id: LEAVE-DASH-001
+    func: [F-LEAVE-241]
+    sc: The dashboard defaults its window to the current Leave Period when no dates are given
+    t: Omitting from/to resolves the current LeavePeriod's own StartDate/EndDate; with no resolvable period, falls back to [today-30, today+30]
+    src: ["HrLeaveDashboardService.GetSummaryAsync"]
+    type: Boundary
+    pri: P1
+    role: HRADMIN
+    perm: "Leave.DashboardViewAll"
+    steps:
+      - "[GET /api/leave-dashboard/hr-summary] No from/to supplied, a current LeavePeriod resolves for today => [200] from/to in the response equal that period's own StartDate/EndDate"
+      - "[GET /api/leave-dashboard/hr-summary] No from/to, and NO LeavePeriod currently resolves => [200] from/to equal [today-30, today+30]"
+    auto: API
+
+  - id: LEAVE-DASH-002
+    func: [F-LEAVE-242]
+    sc: Every dashboard facet is populated from a consistent underlying dataset
+    t: KPIs, status breakdown, leave-type usage, balances, approval aging, pending/upcoming lists, org groupings, and trend are all present and mutually consistent for the same window
+    src: ["HrLeaveDashboardService.GetSummaryAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: HRADMIN
+    perm: "Leave.DashboardViewAll"
+    steps:
+      - "[GET /api/leave-dashboard/hr-summary?from=2027-01-01&to=2027-01-31] With a mix of Pending/Approved/Rejected requests in range => [200] kpis.pendingApprovalRequests equals the count of PendingApproval rows in statusBreakdown; leaveTypeUsage's sum of chargeable quantities matches balances-derived consumption for the same types"
+    auto: API
+
+  - id: LEAVE-DASH-003
+    func: [F-LEAVE-243]
+    sc: leaveTypeId/departmentId/workLocationId filters narrow every widget consistently
+    t: Filtering by a single LeaveType changes leaveTypeUsage, statusBreakdown, and KPIs together, not just one widget
+    src: ["HrLeaveDashboardService.GetSummaryAsync"]
+    type: Positive
+    pri: P1
+    role: HRADMIN
+    perm: "Leave.DashboardViewAll"
+    steps:
+      - "[GET /api/leave-dashboard/hr-summary?leaveTypeId={clId}] => [200] every widget's underlying counts reflect ONLY Casual Leave requests, not the whole tenant's Leave activity"
+    auto: API
+
+  - id: LEAVE-DASH-004
+    func: [F-LEAVE-244]
+    sc: An HRBP's dashboard is scoped to their role-scope, with no manager-path inclusion
+    t: An HRBP scoped to Department=Finance sees dashboard numbers computed only from Finance, and includeManager=false means being someone's manager grants no EXTRA dashboard visibility
+    src: ["HrLeaveDashboardService.GetSummaryAsync (BuildEmployeePredicateAsync, includeManager:false)"]
+    type: Boundary
+    pri: P1
+    role: HRBP
+    perm: "Leave.DashboardViewAll"
+    steps:
+      - "[GET /api/leave-dashboard/hr-summary] As an HRBP scoped to Department=Finance who ALSO happens to be a direct manager of an Engineering employee => [200] the dashboard reflects ONLY Finance department data - the manager relationship to the Engineering employee contributes nothing here, unlike Approvals/Calendar which DO include the manager path"
+    auto: API
+
+  - id: LEAVE-DASH-005
+    func: [F-LEAVE-245]
+    sc: HRAdmin sees the full unscoped tenant; HRManager cannot open the dashboard at all
+    t: Two similarly-named HR roles have opposite dashboard access in the seeded matrix
+    src: ["SeedData.RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    steps:
+      - "[GET /api/leave-dashboard/hr-summary] As HRAdmin => [200] full tenant-wide numbers, no scope narrowing"
+      - "[GET /api/leave-dashboard/hr-summary] As HRManager => [403] HRManager holds no Leave.DashboardViewAll permission at all"
+    auto: API
+    cr: [CR-79]
+
+  - id: LEAVE-DASH-006
+    func: [F-LEAVE-246]
+    sc: An empty result window returns a well-formed zeroed summary, not an error
+    t: A far-future date window with zero matching requests returns all-zero counts and empty arrays
+    src: ["HrLeaveDashboardService.GetSummaryAsync"]
+    type: Boundary
+    pri: P1
+    role: HRADMIN
+    perm: "Leave.DashboardViewAll"
+    steps:
+      - "[GET /api/leave-dashboard/hr-summary?from=2099-01-01&to=2099-01-31] => [200] every KPI is 0, every array is empty - no 500, no null-reference"
+    auto: API
+
+  - id: LEAVE-DASH-007
+    func: [F-LEAVE-247]
+    sc: Large tenant volume within the 366-day cap still responds correctly
+    t: A 200+ pending-request tenant's dashboard aggregates without truncation
+    src: ["HrLeaveDashboardService.GetSummaryAsync"]
+    type: Boundary
+    pri: P2
+    tags: [Boundary]
+    role: HRADMIN
+    perm: "Leave.DashboardViewAll"
+    steps:
+      - "[Setup] 200+ LeaveRequests of varying status across the full 366-day window => test preconditions are established for the steps below"
+      - "[GET /api/leave-dashboard/hr-summary?from=&to=] Full 366-day span => [200] KPI totals match the true underlying counts, top-10 pending / top-20 upcoming lists are capped as documented rather than erroring"
+    auto: API
+
+  - id: LEAVE-DASH-008
+    func: [F-LEAVE-248]
+    sc: Tenant isolation on the dashboard
+    t: Tenant B's HRAdmin never sees Tenant A's dashboard numbers
+    src: ["HrLeaveDashboardService.GetSummaryAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    role: HRADMIN
+    perm: "Leave.DashboardViewAll"
+    steps:
+      - "[GET /api/leave-dashboard/hr-summary] As Tenant B's HRAdmin => [200] all numbers reflect only Tenant B"
+    auto: API
+    ex: ["xU:MySqlHrLeaveDashboardIntegrationTests.MySql_hr_dashboard_aggregates_operational_data_and_keeps_tenant_scope", "xU:HrLeaveDashboardAuthorizationTests.Summary_endpoint_requires_the_dedicated_view_all_permission"]

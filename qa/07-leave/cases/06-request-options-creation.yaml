@@ -1,0 +1,361 @@
+sheet: Leave_Requests
+submodule: Leave Request options (available types) and the Preview/Submit creation pipeline
+defaults:
+  role: EMPLOYEE
+  perm: "Leave.RequestCreate"
+  tenant: A
+  pre: "Tenant A signed in as an active, linked employee with a resolvable manager unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LEAVE-OPT-001
+    func: [F-LEAVE-135]
+    sc: Available LeaveTypes lists only IsActive=true types for the current identity
+    t: GET /api/leave-types/available is a static Active-type list, not itself policy/balance-filtered
+    src: ["LeaveRequestOptionsController.GetLeaveTypes"]
+    type: Positive
+    pri: P1
+    perm: "Leave.TypeViewAvailable"
+    steps:
+      - "[GET /api/leave-types/available] => [200] returns every IsActive=true LeaveType, page=1/pageSize=100"
+    auto: API
+
+  - id: LEAVE-OPT-002
+    func: [F-LEAVE-136, F-LEAVE-137]
+    sc: An inactive LeaveType is excluded from options; an active-but-unresolvable-policy LeaveType is NOT pre-filtered out
+    t: The options list only checks IsActive, never real per-employee eligibility - discovering unavailability is deferred to Preview
+    src: ["LeaveConfigurationService.GetLeaveTypesAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Leave.TypeViewAvailable"
+    steps:
+      - "[GET /api/leave-types/available] => [200] a deactivated LeaveType is absent"
+      - "[GET /api/leave-types/available] => [200] an Active LeaveType with NO applicable Published policy for this employee is STILL present"
+      - "[POST /api/leave-requests/preview] {leaveTypeId: <that unresolvable type>} => [404] NoPolicy - the unavailability surfaces only now, not in the options list"
+    auto: API
+
+  - id: LEAVE-OPT-003
+    func: [F-LEAVE-138]
+    sc: The options endpoint requires a resolvable employee identity
+    t: An unlinked account's call fails with an identity error, not an empty list
+    src: ["LeaveRequestOptionsController.GetLeaveTypes"]
+    type: Boundary
+    pri: P1
+    perm: "Leave.TypeViewAvailable"
+    steps:
+      - "[GET /api/leave-types/available] As an authenticated but Unlinked account => [401/403] identity resolution failure"
+    auto: API
+
+  - id: LEAVE-OPT-004
+    func: [F-LEAVE-139]
+    sc: "Preview IS the de facto availability check - there is no separate pre-computed options endpoint"
+    t: Confirm no endpoint besides Preview reports per-LeaveType balance/period/notice availability ahead of a specific date range
+    src: ["LeaveRequestValidationService.ValidateAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[POST /api/leave-requests/preview] {leaveTypeId, startDate, endDate} => [200/4xx] this call, not the options list, is where balance/eligibility/notice availability is actually determined"
+    auto: API
+
+  - id: LEAVE-REQ-001
+    func: [F-LEAVE-140]
+    sc: Preview runs the full pipeline with no side effects
+    t: Repeated identical Preview calls never create a request/event/balance row
+    src: ["LeaveRequestValidationService.ValidateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/leave-requests/preview] {leaveTypeId, startDate, endDate, idempotencyKey} => [200] validation result returned"
+      - "[POST /api/leave-requests/preview] Repeat the SAME call => [200] identical result; GET /api/leave-requests confirms no request was created by either call"
+    auto: API
+
+  - id: LEAVE-REQ-002
+    func: [F-LEAVE-141]
+    sc: Submit re-validates twice; a change between the two checks fails inside the transaction
+    t: Retiring the resolved policy version between Preview and the second internal validation causes Submit to fail cleanly, with no partial row persisted
+    src: ["LeaveRequestSubmissionService.SubmitAttemptAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[POST /api/leave-requests/preview] => [200] resolves policy v1"
+      - "[Setup] Retire v1 (or otherwise invalidate the resolution) between Preview and Submit => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests] Submit with the SAME payload => [4xx] the re-validation inside the transaction fails; GET /api/leave-requests confirms no row was created"
+    auto: API
+
+  - id: LEAVE-REQ-003
+    func: [F-LEAVE-142]
+    sc: "Half-day is entirely unreachable - a HalfDayAllowed policy fails every request (CR-81)"
+    t: PartialDayMode=HalfDayAllowed on the resolved rule makes Preview fail UnsupportedConfiguration for every date range, single-day or otherwise
+    src: ["LeaveRequestValidationService.ValidateSupportedPolicy"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Setup] Publish a policy with RequestRule.PartialDayMode=HalfDayAllowed for LeaveType CL => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {leaveTypeId: clId, startDate: today, endDate: today} => [400] 'UnsupportedConfiguration: The resolved Request Rule requires half-day or partial-day runtime support'"
+    auto: API
+    cr: [CR-81]
+
+  - id: LEAVE-REQ-004
+    func: [F-LEAVE-143]
+    sc: A single-day request charges exactly one day, or zero if excluded
+    t: A working-day single date charges 1.000; a weekly-off/holiday single date (excluded) charges 0 and is rejected as no-working-days
+    src: ["LeaveRequestValidationService.BuildDayResults"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/leave-requests/preview] {startDate: <a Tuesday working day>, endDate: <same>} => [200] chargeableQuantity=1.000"
+      - "[POST /api/leave-requests/preview] {startDate: <a Sunday weekly-off>, endDate: <same>}, HolidayTreatment/WeekOffTreatment=Exclude => [400] 'The selected date range contains no working days'"
+    auto: API
+
+  - id: LEAVE-REQ-005
+    func: [F-LEAVE-144]
+    sc: A multi-day request creates one LeaveRequestDay row per calendar day
+    t: A 5-calendar-day span (with one weekly-off inside) creates 5 day rows, 4 chargeable
+    src: ["LeaveRequestSubmissionService.SubmitAttemptAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/leave-requests] {startDate: Monday, endDate: Friday} spanning one holiday => [201] requestDays.length=5, chargeableQuantity = 4 (holiday excluded)"
+    auto: API
+
+  - id: LEAVE-REQ-006
+    func: [F-LEAVE-145]
+    sc: Allocated entitlement reserves the exact chargeable quantity atomically on submit
+    t: Available decreases and Reserved increases by exactly the chargeable quantity, in the SAME transaction as request creation
+    src: ["LeaveRequestSubmissionService.SubmitAttemptAsync", "LeaveBalanceAccountingService.ReserveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/leave-balances/mine] Before => Available=12"
+      - "[POST /api/leave-requests] {leaveTypeId, startDate, endDate} for 2 chargeable days => [201]"
+      - "[GET /api/leave-balances/mine] After => Available=10, Reserved=2"
+    auto: API
+
+  - id: LEAVE-REQ-007
+    func: [F-LEAVE-146]
+    sc: Insufficient balance rejects the whole submission with no partial reservation
+    t: Requesting more days than Available fails Conflict and creates no request row
+    src: ["LeaveBalanceAccountingService.ApplyGrantAllocationsAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/leave-requests] Requesting 5 chargeable days with Available=3 => [409] 'InsufficientLeaveBalance'"
+      - "[GET /api/leave-requests] => [200] no new request row was created; GET /api/leave-balances/mine => balance unchanged"
+    auto: API
+
+  - id: LEAVE-REQ-008
+    func: [F-LEAVE-147]
+    sc: A new request overlapping an existing Pending/Approved request (even one day) is rejected
+    t: A one-day overlap within a longer new range blocks the whole submission
+    src: ["LeaveRequestSubmissionService.HasBlockingOverlapAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] An existing Approved request for Wed-Fri => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests] {startDate: Mon, endDate: Thu} (overlaps Wed-Thu) => [409] 'Overlap: The request overlaps an active Leave request'"
+    auto: API
+
+  - id: LEAVE-REQ-009
+    func: [F-LEAVE-148]
+    sc: Duplicate submission replays; a mismatched payload under the same key is rejected
+    t: The identical key+payload returns 200 with the original result; the same key with different dates returns Conflict
+    src: ["LeaveRequestSubmissionService.FindExistingAsync/ReplayOrConflictAsync"]
+    type: Contract
+    tags: [Idempotency]
+    pri: P0
+    steps:
+      - "[POST /api/leave-requests] {idempotencyKey:'k1', startDate:'2027-06-01', endDate:'2027-06-01'} => [201] created"
+      - "[POST /api/leave-requests] {idempotencyKey:'k1', startDate:'2027-06-01', endDate:'2027-06-01'} (identical repeat) => [200] isReplay=true, same requestId"
+      - "[POST /api/leave-requests] {idempotencyKey:'k1', startDate:'2027-07-01', endDate:'2027-07-01'} (same key, different payload) => [409] 'IdempotencyConflict'"
+    auto: API
+
+  - id: LEAVE-REQ-010
+    func: [F-LEAVE-149]
+    sc: A past date is accepted only per the resolved BackdatedRequestMode
+    t: NotAllowed rejects any past date; AllowedUpToDays rejects beyond the configured limit and accepts within it
+    src: ["LeaveRequestValidationService.ValidateRequestTiming"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Setup] BackdatedRequestMode=NotAllowed => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate: yesterday} => [400] 'BackdatedRequestNotAllowed'"
+      - "[Setup] BackdatedRequestMode=AllowedUpToDays, MaximumBackdatedDays=5 => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate: today-5days} => [200] eligible (exactly at the limit)"
+      - "[POST /api/leave-requests/preview] {startDate: today-6days} => [400] 'BackdateLimitExceeded'"
+    auto: API
+
+  - id: LEAVE-REQ-011
+    func: [F-LEAVE-150]
+    sc: MinimumAdvanceNoticeDays gates same-day/near-term requests
+    t: 0 imposes no restriction; a positive value rejects a request inside the notice window
+    src: ["LeaveRequestValidationService.ValidateRequestTiming"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] MinimumAdvanceNoticeDays=3 => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate: today} => [400] 'AdvanceNoticeNotMet'"
+      - "[POST /api/leave-requests/preview] {startDate: today+3days} => [200] eligible (exactly at the boundary)"
+      - "[Setup] MinimumAdvanceNoticeDays=0 => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate: today} => [200] eligible"
+    auto: API
+
+  - id: LEAVE-REQ-012
+    func: [F-LEAVE-151]
+    sc: A far-future date is always accepted on the timing dimension
+    t: No maximum-advance-booking limit exists anywhere in the runtime
+    src: ["LeaveRequestValidationService.ValidateRequestTiming"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/leave-requests/preview] {startDate: today+3years} => [200] no timing rejection (though a policy version this far out may itself fail to resolve - NoPolicy is a SEPARATE concern from timing)"
+    auto: API
+
+  - id: LEAVE-REQ-013
+    func: [F-LEAVE-152]
+    sc: EndDate before StartDate is rejected before any lookup
+    t: The shape-validation stage catches an inverted date range immediately
+    src: ["LeaveRequestValidationService.ValidateShape"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/leave-requests/preview] {startDate:'2027-06-10', endDate:'2027-06-01'} => [400] 'StartDate must be on or before EndDate'"
+    auto: API
+
+  - id: LEAVE-REQ-014
+    func: [F-LEAVE-153]
+    sc: A date range with zero chargeable days is rejected
+    t: A range consisting entirely of weekly-off/holiday days fails 'no working days' even though everything else resolves fine
+    src: ["LeaveRequestValidationService.ValidateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/leave-requests/preview] {startDate: Sat, endDate: Sun} both weekly-off, Exclude treatment => [400] 'The selected date range contains no working days'"
+    auto: API
+
+  - id: LEAVE-REQ-015
+    func: [F-LEAVE-154]
+    sc: Min/Max request quantity bound the CHARGEABLE total, not the raw calendar span
+    t: A calendar span within [min,max] whose chargeable total (after exclusions) falls OUTSIDE the range is still rejected
+    src: ["LeaveRequestValidationService.ValidateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] MinimumRequestQuantity=2, MaximumRequestQuantity=10 => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] A 3-calendar-day span with 2 holidays inside (chargeable=1) => [400] 'MinimumRequestQuantityNotMet' - despite the raw 3-day span being 'in range'"
+    auto: API
+
+  - id: LEAVE-REQ-016
+    func: [F-LEAVE-155]
+    sc: MaximumConsecutiveQuantity bounds the longest unbroken chargeable run
+    t: A weekly-off in the middle resets the run count, so two shorter runs each under the limit still pass even if their combined total exceeds it
+    src: ["LeaveRequestValidationService.MaximumConsecutiveQuantity"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] MaximumConsecutiveQuantity=5 => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] A 12-calendar-day span with a weekly-off exactly in the middle, giving two 5-day+1-day runs => [200] neither run exceeds 5"
+      - "[POST /api/leave-requests/preview] A 6-calendar-day span with NO break (all chargeable) => [400] 'MaximumConsecutiveLeaveExceeded'"
+    auto: API
+
+  - id: LEAVE-REQ-017
+    func: [F-LEAVE-156]
+    sc: Monthly per-period caps aggregate the candidate with other pending/approved requests in the SAME month(s)
+    t: A candidate spanning two months is checked against EACH month's own cap independently
+    src: ["LeaveRequestValidationService.ValidatePeriodLimitsAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] RequestLimitPeriod=Month, MaximumQuantityPerPeriod=5; an existing Approved request already uses 4 days in June => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate:'2027-06-29', endDate:'2027-07-02'} (2 days in June, 2 in July) => [400] 'RequestQuantityLimitExceeded' - June's own total (4+2=6) exceeds 5, even though July alone (2) would not"
+    auto: API
+
+  - id: LEAVE-REQ-018
+    func: [F-LEAVE-157]
+    sc: LeavePeriod-scoped caps aggregate across the whole resolved period instead of per-month
+    t: MaximumRequestsPerPeriod=3 with RequestLimitPeriod=LeavePeriod blocks a 4th request anywhere within the SAME LeavePeriod
+    src: ["LeaveRequestValidationService.ValidatePeriodLimitsAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] RequestLimitPeriod=LeavePeriod, MaximumRequestsPerPeriod=3; 3 Approved requests already exist in FY27 for this LeaveType => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] A 4th request anywhere within FY27 => [400] 'RequestCountLimitExceeded'"
+    auto: API
+
+  - id: LEAVE-REQ-019
+    func: [F-LEAVE-158]
+    sc: Revalidating the SAME idempotency key excludes its own prior rows from period-limit counting
+    t: Re-previewing an already-submitted request (same key) never double-counts itself against the period cap
+    src: ["LeaveRequestValidationService.ValidatePeriodLimitsAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] A request already submitted with idempotencyKey='k1', counting toward the period cap => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {idempotencyKey:'k1', <same payload>} => [200] the cap check excludes k1's own existing row from the aggregate, so re-previewing it never fails purely due to double-counting itself"
+    auto: API
+
+  - id: LEAVE-REQ-020
+    func: [F-LEAVE-159]
+    sc: "There is no reason/comment/attachment field anywhere in the submission payload"
+    t: LeaveRequestSubmissionRequest accepts exactly {leaveTypeId, startDate, endDate, idempotencyKey} - any extra field is ignored, not stored
+    src: ["LeaveRequestSubmissionRequest"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[POST /api/leave-requests] {leaveTypeId, startDate, endDate, idempotencyKey, reason:'Family emergency'} => [201] created; GET /api/leave-requests/{id} => [200] no 'reason' field appears anywhere in the response"
+    auto: API
+
+  - id: LEAVE-REQ-021
+    func: [F-LEAVE-160]
+    sc: LeavePeriod has no distinct 'closed' status - only IsActive and date containment gate resolution
+    t: A request against a period that has been period-closed (but is still IsActive=true and date-in-range) does NOT fail with a 'period closed' error
+    src: ["LeavePeriodResolver.ResolveAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Run LeavePeriodCloseProcessor for FY27, but leave FY27's own IsActive=true and its date range unchanged => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {startDate: <a date still within FY27's range>} => [200/409 per balance] resolves normally - period-close leaves no 'closed' flag for the resolver to check"
+    auto: API
+
+  - id: LEAVE-REQ-022
+    func: [F-LEAVE-161]
+    sc: A request against an inactive policy or a Draft/Retired-only version resolves NoPolicy
+    t: Both cases are indistinguishable from having no policy configured at all
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Deactivate the otherwise-Published, in-range policy (IsActive=false) => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] => [404] NoPolicy"
+      - "[Setup] Retire the only Published version instead, leaving only a Draft => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] => [404] NoPolicy"
+    auto: API
+
+  - id: LEAVE-REQ-023
+    func: [F-LEAVE-162]
+    sc: Non-Active employment status at the request date is rejected regardless of every other check
+    t: An employee whose effective employment resolves to a non-Active EmploymentStatus is Forbidden
+    src: ["LeaveRequestValidationService.ValidateEmploymentContext"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] EmployeeEmploymentHistory.EmploymentStatus != Active for the resolved snapshot on the request date => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] => [403] 'InactiveEmployment'"
+    auto: API
+
+  - id: LEAVE-REQ-024
+    func: [F-LEAVE-163]
+    sc: Submission never resolves or requires a manager - it succeeds even with no manager assigned
+    t: An employee with zero resolvable current manager still submits successfully; the request simply never surfaces in any inbox
+    src: ["LeaveRequestSubmissionService.SubmitAttemptAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee has no ManagerId set on their current effective employment row => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests] => [201] created successfully, PendingApproval"
+      - "[GET /api/leave-approvals] As every role in the tenant with Leave.Approve => [200] this request never appears in ANY inbox"
+    auto: API

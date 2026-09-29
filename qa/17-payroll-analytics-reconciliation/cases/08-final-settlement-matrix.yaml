@@ -1,0 +1,173 @@
+sheet: PYA_Final_Settlement_Matrix
+submodule: Final Settlement Reconciliation Matrix
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-FS-001
+    func: [F-PYA-062]
+    sc: Final settlement case-level total mismatch
+    t: A FinalSettlementCase whose own lines do not sum (earnings positive, deductions negative) to its persisted NetSettlement raises Critical FinalSettlementSourceMismatch
+    src: "PayrollAnalyticsService.AddFinalSettlementFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "A FinalSettlementCase with NetSettlement=9000 has one Gratuity line for 100 only (sums to 100, not 9000)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1 (linked to the settlement)"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] => [200] Findings contains ControlCode=FinalSettlementSourceMismatch, ExpectedValue=9000, ActualValue=100"
+    auto: API
+
+  - id: PYA-FS-002
+    func: [F-PYA-063]
+    sc: Duplicate final settlement source
+    t: 2 FinalSettlementLines for the same case sharing an identical (SourceType, SourceId) pair raise Critical DuplicateFinalSettlementSource
+    src: "PayrollAnalyticsService.AddFinalSettlementFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "A FinalSettlementCase has 2 Gratuity-type lines both citing the same SourceType/SourceId"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN2"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN2}/post] => [200] Findings contains ControlCode=DuplicateFinalSettlementSource"
+    auto: API
+
+  - id: PYA-FS-003
+    func: [F-PYA-062, F-PYA-063]
+    sc: A single exact settlement line reconciles cleanly first, then a duplicate is added and detected
+    t: One exact Gratuity line raises no findings; adding a second line citing the identical source afterward raises DuplicateFinalSettlementSource on the next regeneration
+    src: "PayrollAnalyticsService.AddFinalSettlementFindingsAsync"
+    type: Positive
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "A FinalSettlementCase with NetSettlement=9000 has exactly one Gratuity line for 9000, citing SourceId=S1"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN3"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN3}/post] (first, exact) => [200] Findings does not contain FinalSettlementSourceMismatch or DuplicateFinalSettlementSource"
+      - "[DB] add a second FinalSettlementLine to the same case with the identical SourceId=S1 => row inserted directly, bypassing the API"
+      - "[POST /api/payroll/reconciliation/runs/{RUN3}/post] (second, after duplicate added) => [200] Findings now contains DuplicateFinalSettlementSource"
+    auto: DB-assisted
+    db: "Insert the duplicate FinalSettlementLine directly between the two generation calls"
+
+  - id: PYA-FS-004
+    func: [F-PYA-064]
+    sc: Gratuity category missing and mismatch
+    t: A persisted GratuityCalculation with no matching Final Settlement line raises MissingFinalSettlementGratuity; a mismatched amount raises FinalSettlementGratuityMismatch
+    src: "PayrollAnalyticsService.AddFinalSettlementCategoryFindingsAsync, AddCategoryFinding"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "Case A: a persisted GratuityCalculation (FinalGratuityAmount=100) with zero Gratuity-type lines. Case B: a persisted GratuityCalculation (FinalGratuityAmount=100) with one Gratuity line for 99"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN4 (Case A), runId=RUN5 (Case B)"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN4}/post] (Case A) => [200] Findings contains MissingFinalSettlementGratuity"
+      - "[POST /api/payroll/reconciliation/runs/{RUN5}/post] (Case B) => [200] Findings contains FinalSettlementGratuityMismatch, ExpectedValue=100, ActualValue=99"
+    auto: API
+
+  - id: PYA-FS-005
+    func: [F-PYA-065]
+    sc: Leave encashment category missing
+    t: A persisted LeaveEncashmentCalculation with no matching LeaveEncashment-type line raises MissingFinalSettlementLeaveEncashment
+    src: "PayrollAnalyticsService.AddFinalSettlementCategoryFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Critical
+    pre: "A persisted LeaveEncashmentCalculation (GrossAmount=200) exists with zero LeaveEncashment-type lines on the case"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN6"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN6}/post] => [200] Findings contains ControlCode=MissingFinalSettlementLeaveEncashment"
+    auto: API
+
+  - id: PYA-FS-006
+    func: [F-PYA-066]
+    sc: Notice pay and notice recovery are checked independently by Type
+    t: A NoticeSettlementCalculation with Type=NoticePay routes to MissingFinalSettlementNoticePay when missing; Type=NoticeRecovery routes to MissingFinalSettlementNoticeRecovery, independently
+    src: "PayrollAnalyticsService.AddFinalSettlementCategoryFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Critical
+    pre: "A case has a persisted NoticeSettlementCalculation(Type=NoticePay, Amount=300) and a persisted NoticeSettlementCalculation(Type=NoticeRecovery, Amount=150), neither represented in the case's own lines"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN7"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN7}/post] => [200] Findings contains both MissingFinalSettlementNoticePay and MissingFinalSettlementNoticeRecovery"
+    auto: API
+
+  - id: PYA-FS-007
+    func: [F-PYA-067]
+    sc: Persisted-category cross-source mismatch and missing-source for reimbursement/loan/variable-pay/adjustment lines
+    t: A Final Settlement line whose SourceId does not resolve to its own already-verified persisted source raises Missing{Source}; a resolved-but-unequal amount raises {Source}Mismatch, sign-adjusted for IsDeduction
+    src: "PayrollAnalyticsService.AddPersistedSettlementCategoryFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "Case A has 4 lines (Reimbursement/Loan/VariablePay/Adjustment) each citing a SourceId with no matching persisted row. Case B has the same 4 lines each citing a valid SourceId but with a 1-unit amount discrepancy"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN8 (Case A), runId=RUN9 (Case B)"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN8}/post] (Case A) => [200] Findings contains MissingFinalSettlementReimbursement, MissingFinalSettlementLoan, MissingFinalSettlementVariablePay, MissingFinalSettlementAdjustment"
+      - "[POST /api/payroll/reconciliation/runs/{RUN9}/post] (Case B) => [200] Findings contains FinalSettlementReimbursementMismatch, FinalSettlementLoanMismatch, FinalSettlementVariablePayMismatch, FinalSettlementAdjustmentMismatch"
+    auto: API
+
+  - id: PYA-FS-008
+    func: [F-PYA-068]
+    sc: Cross-source composition of all 8 categories reconciles cleanly in one settlement
+    t: A single Final Settlement case composed of gratuity, leave encashment, reimbursement, variable-pay/bonus, notice pay, notice recovery, loan recovery, and payroll adjustment lines, each with an exact matching persisted source, raises zero category findings
+    src: "PayrollAnalyticsService.AddFinalSettlementCategoryFindingsAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "A FinalSettlementCase with all 8 line categories present, each with an exactly matching persisted source amount, NetSettlement equal to the true net of all 8 lines"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN10"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN10}/post] => [200] Findings contains no FinalSettlement*/MissingFinalSettlement* ControlCode for any of the 8 categories"
+    auto: API
+
+  - id: PYA-FS-009
+    func: [F-PYA-069]
+    sc: Category matching falls back to a SourceType substring match when LineType alone would not resolve it
+    t: A line tagged with an unexpected/generic LineType but a SourceType string clearly matching a known category (e.g. containing 'Reimbursement') is still picked up by the persisted-category helper
+    src: "PayrollAnalyticsService.AddPersistedSettlementCategoryFindingsAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Medium
+    pre: "A case has a line with LineType=Recovery but SourceType='ReimbursementAdjustment', citing a valid, exactly-matching ReimbursementSettlements SourceId"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN11"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN11}/post] => [200] Findings does not contain MissingFinalSettlementReimbursement or FinalSettlementReimbursementMismatch - the substring match still resolved it"
+    auto: API

@@ -1,0 +1,159 @@
+sheet: GLAcc_Account_Master
+submodule: GL Account Master Data
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-ACCT-001
+    func: [F-GLACC-001]
+    sc: Unauthenticated tenant context cannot list accounts
+    t: ListAccountsAsync returns Unauthorized when no tenant is resolved on the request context
+    src: "PayrollAccountingService.ListAccountsAsync"
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: High
+    pre: none
+    role: n/a (no tenant context)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/accounts] with a request bearing no resolvable tenant => [401] Unauthorized"
+    auto: API
+
+  - id: GLACC-ACCT-002
+    func: [F-GLACC-002]
+    sc: Blank code or name is rejected
+    t: CreateAccountAsync returns Invalid when Code or Name is blank
+    src: "PayrollAccountingService.CreateAccountAsync"
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: "code='', name='Payroll Expense'"
+    steps:
+      - "[POST /api/payroll/accounting/accounts] {code:'', name:'Payroll Expense', accountType:'Expense'} => [400] Invalid (code required)"
+      - "[POST /api/payroll/accounting/accounts] {code:'6000', name:'', accountType:'Expense'} => [400] Invalid (name required)"
+    auto: API
+
+  - id: GLACC-ACCT-003
+    func: [F-GLACC-003]
+    sc: Duplicate code within a tenant is blocked, same code in another tenant is allowed
+    t: Account codes are upper-cased/trimmed, tenant-unique, but reusable across tenants
+    src: "PayrollAccountingService.CreateAccountAsync"
+    type: Negative
+    tags: [Tenant-Isolation, Boundary]
+    pri: P0
+    sev: High
+    pre: "T1 already has an account with code '6000'"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: "code=' 6000 ' (whitespace, lower not applicable), name='Duplicate Expense'"
+    steps:
+      - "[POST /api/payroll/accounting/accounts] {code:' 6000 ', name:'Duplicate Expense', accountType:'Expense'} in T1 => [409] Conflict (GL account code already exists)"
+      - "[POST /api/payroll/accounting/accounts] {code:'6000', name:'Same Code Other Tenant', accountType:'Expense'} in T2 (DEMO02) => [200] created successfully"
+    auto: API
+    secc: true
+
+  - id: GLACC-ACCT-004
+    func: [F-GLACC-004]
+    sc: Update on nonexistent account id
+    t: UpdateAccountAsync for an account id that does not exist in the tenant returns NotFound
+    src: "PayrollAccountingService.UpdateAccountAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: "id = a fresh random guid"
+    steps:
+      - "[PUT /api/payroll/accounting/accounts/{randomGuid}] {code:'7000', name:'X', accountType:'Expense'} => [404] NotFound"
+    auto: API
+
+  - id: GLACC-ACCT-005
+    func: [F-GLACC-005]
+    sc: Update to a code already used by another account is blocked
+    t: UpdateAccountAsync rejects a code collision with a different account row, excluding itself
+    src: "PayrollAccountingService.UpdateAccountAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "T1 has account A (code '6000') and account B (code '6100')"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[PUT /api/payroll/accounting/accounts/{accountB}] {code:'6000', name:'B renamed', accountType:'Expense'} => [409] Conflict"
+      - "[PUT /api/payroll/accounting/accounts/{accountB}] {code:'6100', name:'B renamed', accountType:'Expense'} => [200] update succeeds (same code as itself is allowed)"
+    auto: API
+
+  - id: GLACC-ACCT-006
+    func: [F-GLACC-006]
+    sc: All 4 account types are accepted and round-trip correctly
+    t: AccountType accepts exactly Expense, Liability, Asset, Clearing
+    src: "PayrollGLAccountConfiguration"
+    type: Contract
+    tags: [Positive]
+    pri: P2
+    sev: Low
+    pre: none
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: "4 accounts, one per AccountType value"
+    steps:
+      - "[POST /api/payroll/accounting/accounts] one account per type (Expense/Liability/Asset/Clearing) => [200] all 4 created, each AccountType echoed back verbatim"
+      - "[GET /api/payroll/accounting/accounts] => [200] all 4 accounts listed with correct AccountType"
+    auto: API
+
+  - id: GLACC-ACCT-007
+    func: [F-GLACC-007]
+    sc: List ordering and paging clamp
+    t: ListAccountsAsync is ordered by Code ascending and clamps an oversized pageSize to 100
+    src: "PayrollAccountingService.ListAccountsAsync"
+    type: Boundary
+    tags: [Contract]
+    pri: P2
+    sev: Low
+    pre: "T1 has accounts with codes 9000, 1000, 5000"
+    role: HRAdmin (custom role holding Accounting.View)
+    perm: Payroll.Accounting.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/accounts?page=1&pageSize=9999] => [200] pageSize clamped to 100, items ordered 1000, 5000, 9000"
+    auto: API
+
+  - id: GLACC-ACCT-008
+    func: [F-GLACC-008]
+    sc: An account can be deactivated even while referenced by a posted journal line
+    t: No reference-check guards UpdateAccountAsync's IsActive=false against accounts already used by posted journal lines
+    src: "PayrollAccountingService.UpdateAccountAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: "Account ACC1 is the DebitAccount on a line of an already-Posted journal J1"
+    role: HRAdmin (custom role holding Accounting.ManageConfiguration)
+    perm: Payroll.Accounting.ManageConfiguration
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[PUT /api/payroll/accounting/accounts/{ACC1}] {code:'6000', name:'Payroll Expense', accountType:'Expense', isActive:false} => [200] succeeds with no reference-check error"
+      - "[GET /api/payroll/accounting/{J1}] => [200] J1's line snapshot (AccountCodeSnapshot/AccountNameSnapshot) is unchanged despite the account now being inactive"
+    auto: DB-assisted
+    db: "Assert PayrollGLAccounts.IsActive=false while PayrollJournalLines.AccountCodeSnapshot is unchanged"
+    cm: "There is no delete/deactivate-with-reference-check endpoint for GL accounts (F-GLACC-008)."
+    cr: [CR-281]

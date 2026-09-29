@@ -1,0 +1,382 @@
+sheet: AccountLink_Current
+submodule: Account <-> Employee Linking (current state, link/unlink/replace, candidates, permission carve-out)
+defaults:
+  role: ACCOUNT_LINK_ADMIN
+  perm: "AccountEmployeeLink.View + AccountEmployeeLink.Manage"
+  tenant: A
+  pre: "Tenant A signed in as AccountLinkAdministrator unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: RBAC-LINK-001
+    func: [F-RBAC-071]
+    sc: Get current link state by user
+    t: An unlinked, linked, and invalid account each report a distinct Status with the correct payload shape
+    src: ["AccountEmployeeLinkService.GetUserAsync/ReadStateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/account-employee-links/users/{unlinkedUserId}] Call => [200] status='Unlinked', currentLink=null, revision=null (no prior events) or the latest event id if one exists"
+      - "[GET /api/account-employee-links/users/{linkedUserId}] Call => [200] status='Linked', currentLink={linkId, employeeId, displayName, employeeCode, originalActorUserId, originalOccurredAtUtc}"
+    auto: API
+
+  - id: RBAC-LINK-002
+    func: [F-RBAC-072]
+    sc: Reverse lookup by employee id
+    t: GET by employeeId resolves the same link state without requiring the userId
+    src: ["AccountEmployeeLinkService.GetEmployeeAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/account-employee-links/employees/{linkedEmployeeId}] Call => [200] resolves to the linked user's current state"
+      - "[GET /api/account-employee-links/employees/{unlinkedEmployeeId}] Call => [200] status='Unlinked', with no user context (employeeId echoed, userId absent/default)"
+    auto: API
+
+  - id: RBAC-LINK-003
+    func: [F-RBAC-073]
+    sc: Invalid link state (orphaned link)
+    t: A current-link row whose EmployeeId no longer resolves reports 'Invalid', not a 404 or crash
+    src: ["AccountEmployeeLinkService.ReadStateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/account-employee-links/users/{orphanLinkUserId}] Call for an account whose linked employee row has been hard-deleted out from under it (Module 5's Employee delete path) => [200] status='Invalid'"
+      - "[UI] Open AccountEmployeeLinksPage and select the orphan-linked account => renders 'The saved link points to an unavailable employee.'"
+    auto: API + UI
+
+  - id: RBAC-LINK-004
+    func: [F-RBAC-074, F-RBAC-075]
+    sc: List link candidates
+    t: User candidates include already-linked users; employee candidates exclude already-linked employees
+    src: ["AccountEmployeeLinkService.GetUserCandidatesAsync/GetEmployeeCandidatesAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/account-employee-links/candidates/users] Call => [200] an already-linked active user still appears in the list"
+      - "[GET /api/account-employee-links/candidates/employees] Call => [200] an already-linked employee is ABSENT from the list; each remaining item is flagged Eligible or Ineligible"
+    auto: API
+    ex: ["xU:AccountEmployeeLinkServiceTests.Linked_accounts_remain_selectable_while_linked_employees_leave_new_link_candidates"]
+
+  - id: RBAC-LINK-005
+    func: [F-RBAC-076]
+    sc: Candidate search bounds
+    t: A 1-character search is rejected as Invalid; pageSize above 50 is rejected
+    src: ["AccountEmployeeLinkService.CandidatesAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[GET /api/account-employee-links/candidates/users?search=a] Call => [400] Search must contain at least two characters"
+      - "[GET /api/account-employee-links/candidates/users?pageSize=100] Call => [400] Page values are out of range"
+    auto: API
+
+  - id: RBAC-LINK-006
+    func: [F-RBAC-077]
+    sc: Link an unlinked account
+    t: A valid link call with a mandatory reason and null revision succeeds for a never-linked account
+    src: ["AccountEmployeeLinkService.LinkAsync/MutateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] employeeId=<eligible>, expectedRevision=null, reason='onboarding' => [200] status='Linked', currentLink populated"
+    auto: API
+    ex: ["xU:AccountEmployeeLinkServiceTests.Link_unlink_and_relink_append_events_and_require_the_current_revision"]
+
+  - id: RBAC-LINK-007
+    func: [F-RBAC-078]
+    sc: Employee eligibility for a new link
+    t: A future-joining Active employee is eligible; a current employee needs exactly one current Active history row; a Terminated/no-history employee is rejected
+    src: ["AccountEmployeeLinkService.EligibleForNewLinkAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] employeeId=<DateOfJoining in the future, Status=Active> => [200] eligible, link succeeds"
+      - "[POST /api/account-employee-links/users/{userId2}/link] employeeId=<Status=Terminated> => [409] Employee is not eligible for a new link"
+      - "[POST /api/account-employee-links/users/{userId3}/link] employeeId=<Active, but zero current EmployeeEmploymentHistory rows> => [409] Employee is not eligible for a new link"
+    auto: API
+
+  - id: RBAC-LINK-008
+    func: [F-RBAC-079]
+    sc: Link race - employee already linked elsewhere
+    t: Linking to an employee who already has a current link (any user) is rejected Conflict
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userA}/link] employeeId=X => [200] links successfully"
+      - "[POST /api/account-employee-links/users/{userB}/link] employeeId=X (same, already linked) => [409] Employee is already linked"
+    auto: API
+
+  - id: RBAC-LINK-009
+    func: [F-RBAC-080]
+    sc: Link an already-linked account
+    t: A second Link call for an account that already has a current link is rejected Conflict
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] Already linked, attempt Link again (not Replace) => [409] The account is already linked"
+    auto: API
+
+  - id: RBAC-LINK-010
+    func: [F-RBAC-081]
+    sc: Re-link to the SAME employee
+    t: Linking a user to the exact employee they are already linked to is rejected the same as any other already-linked case
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] employeeId = the SAME employee currently linked => [409] The account is already linked"
+    auto: API
+
+  - id: RBAC-LINK-011
+    func: [F-RBAC-082]
+    sc: Invalid user or employee id
+    t: A nonexistent userId or employeeId is reported NotFound distinctly
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{randomGuid}/link] Call => [404] Account not found"
+      - "[POST /api/account-employee-links/users/{userId}/link] employeeId=<randomGuid> => [404] Employee not found"
+    auto: API
+
+  - id: RBAC-LINK-012
+    func: [F-RBAC-083, F-RBAC-165]
+    sc: Cross-tenant employee id
+    t: A Tenant B employeeId supplied while authenticated to Tenant A resolves as not-found
+    src: ["AccountEmployeeLinkService.MutateAsync (tenant-filtered Employees lookup)"]
+    type: Tenant-Isolation
+    pri: P0
+    smoke: true
+    tenant: A+B
+    steps:
+      - "[POST /api/account-employee-links/users/{tenantAUserId}/link] employeeId=<Tenant B employee> => [404] Employee not found"
+    auto: API
+
+  - id: RBAC-LINK-013
+    func: [F-RBAC-084, F-RBAC-164]
+    sc: Cross-tenant user id
+    t: A Tenant B userId supplied while authenticated to Tenant A resolves as not-found
+    src: ["AccountEmployeeLinkService.MutateAsync (tenant-filtered Users lookup)"]
+    type: Tenant-Isolation
+    pri: P0
+    smoke: true
+    tenant: A+B
+    steps:
+      - "[POST /api/account-employee-links/users/{tenantBUserId}/link] As Tenant A => [404] Account not found"
+    auto: API
+
+  - id: RBAC-LINK-014
+    func: [F-RBAC-085]
+    sc: Inactive user as link subject
+    t: An inactive User cannot be the subject of a link mutation
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{inactiveUserId}/link] Call => [409] The account is inactive"
+    auto: API
+
+  - id: RBAC-LINK-015
+    func: [F-RBAC-086]
+    sc: Self-service prohibition - operator cannot change their own link
+    t: An AccountLinkAdministrator cannot link, unlink or replace their OWN account, and the UI hides the option
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "[UI] As the signed-in AccountLinkAdministrator, open the account <select> on AccountEmployeeLinksPage => the caller's own name/id is absent from the options"
+      - "[POST /api/account-employee-links/users/{ownUserId}/link] Direct API call, employeeId=<eligible> => [403] Operators cannot change their own account link"
+      - "[POST /api/account-employee-links/users/{ownUserId}/unlink] Direct API call => [403] Operators cannot change their own account link"
+    auto: API + UI
+
+  - id: RBAC-LINK-016
+    func: [F-RBAC-087]
+    sc: Unlink requires the exact current linkId/employeeId/revision
+    t: A stale or mismatched linkId, employeeId or revision is rejected Conflict, never applied against the wrong link
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/unlink] expectedLinkId=<stale, from before a Replace happened>, expectedEmployeeId=<stale> => [409] Link state changed"
+      - "[POST /api/account-employee-links/users/{userId}/unlink] expectedRevision=<one event behind the latest> => [409] Link state changed"
+      - "[POST /api/account-employee-links/users/{userId}/unlink] With the CURRENT linkId/employeeId/revision => [200] succeeds"
+    auto: API
+    ex: ["xU:AccountEmployeeLinkServiceTests.Link_unlink_and_relink_append_events_and_require_the_current_revision"]
+
+  - id: RBAC-LINK-017
+    func: [F-RBAC-088]
+    sc: Unlinked employee reappears as a candidate
+    t: After unlink, the employee is selectable again for a NEW link and the account reports Unlinked
+    src: ["AccountEmployeeLinkService"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/unlink] Call => [200] Unlinked"
+      - "[GET /api/account-employee-links/candidates/employees] Call => [200] the just-unlinked employee is present again"
+    auto: API
+
+  - id: RBAC-LINK-018
+    func: [F-RBAC-089]
+    sc: Replace atomically swaps the link in one call
+    t: A successful Replace removes the old current-link row and adds the new one in the same save - never a transiently-unlinked state
+    src: ["AccountEmployeeLinkService.MutateAsync (ReplaceAsync)"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/replace] expectedLinkId/expectedEmployeeId/expectedRevision=<current>, newEmployeeId=<a different eligible employee>, reason='org correction' => [200] currentLink now points to the NEW employee"
+      - "[GET /api/account-employee-links/employees/{oldEmployeeId}] Call => [200] Unlinked - the old employee is free again"
+      - "[GET /api/account-employee-links/employees/{newEmployeeId}] Call => [200] Linked to the same user"
+    auto: API
+    ex: ["xU:AccountEmployeeLinkServiceTests.Replacement_is_atomic_rejects_occupied_targets_and_preserves_the_original_link"]
+
+  - id: RBAC-LINK-019
+    func: [F-RBAC-090]
+    sc: Replace to an occupied target
+    t: Replacing to an employee already linked elsewhere is rejected Conflict, and the ORIGINAL link is untouched
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/replace] newEmployeeId=<already linked to a different user> => [409] Employee is already linked"
+      - "[GET /api/account-employee-links/users/{userId}] Call => [200] currentLink is UNCHANGED - still the original employee"
+    auto: API
+    ex: ["xU:AccountEmployeeLinkServiceTests.Replacement_is_atomic_rejects_occupied_targets_and_preserves_the_original_link"]
+
+  - id: RBAC-LINK-020
+    func: [F-RBAC-091]
+    sc: Replace to the same employee
+    t: Replacing with newEmployeeId equal to the current link's employeeId is rejected Conflict
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/replace] newEmployeeId = the current link's own employeeId => [409] Replacement target must differ"
+    auto: API
+
+  - id: RBAC-LINK-021
+    func: [F-RBAC-092]
+    sc: Reason is mandatory for every mutation
+    t: A blank or oversized (>500 char) reason is rejected for Link, Unlink and Replace alike
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/link] reason='' => [400] A reason between 1 and 500 characters is required"
+      - "[POST /api/account-employee-links/users/{userId}/link] reason=<501 characters> => [400] A reason between 1 and 500 characters is required"
+      - "[POST /api/account-employee-links/users/{userId}/unlink] reason='   ' (whitespace only) => [400] A reason between 1 and 500 characters is required"
+    auto: API
+
+  - id: RBAC-LINK-022
+    func: [F-RBAC-093]
+    sc: Unlinking a terminated employee's account is permitted
+    t: EligibleForNewLinkAsync gates only NEW links - an existing link to a since-terminated employee can be unlinked normally
+    src: ["AccountEmployeeLinkService.MutateAsync (Unlink branch never calls EligibleForNewLinkAsync)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{employeeId}] As HR, set the linked employee's Status=Terminated => [200]"
+      - "[POST /api/account-employee-links/users/{userId}/unlink] Unlink the now-terminated employee's account, reason='offboarding cleanup' => [200] succeeds - eligibility rules do not apply to Unlink"
+    auto: API
+    cr: [CR-53]
+
+  - id: RBAC-LINK-023
+    func: [F-RBAC-094, F-RBAC-097]
+    sc: Mutating actions require BOTH View AND Manage (stacked policies)
+    t: Manage alone, without View, is insufficient for link/unlink/replace/candidates
+    src: ["AccountEmployeeLinksController (stacked [HasPermission] attributes)"]
+    type: Authorization
+    pri: P0
+    sev: Critical
+    steps:
+      - "[PUT /api/page-access/roles/{customRoleId}] As TenantAdmin, grant a role ONLY AccountEmployeeLink.Manage (no View) => [200]"
+      - "[POST /api/account-employee-links/users/{userId}/link] As a user holding only that Manage-only role => [403] Forbidden - View is also required by the stacked attribute"
+    auto: API
+
+  - id: RBAC-LINK-024
+    func: [F-RBAC-095]
+    sc: View-only role (AccountLinkAuditor) can read but not mutate
+    t: AccountLinkAuditor (View+ViewHistory) reads current state and history successfully but gets 403 on link/unlink/replace/candidates
+    src: ["AccountEmployeeLinkService"]
+    type: Authorization
+    pri: P0
+    smoke: true
+    role: ACCOUNT_LINK_AUDITOR
+    perm: "AccountEmployeeLink.View + AccountEmployeeLink.ViewHistory"
+    steps:
+      - "[GET /api/account-employee-links/users/{userId}] As AccountLinkAuditor => [200] succeeds"
+      - "[GET /api/account-employee-links/users/{userId}/history] As AccountLinkAuditor => [200] succeeds"
+      - "[POST /api/account-employee-links/users/{userId}/link] As AccountLinkAuditor => [403] Forbidden"
+      - "[UI] Open AccountEmployeeLinksPage as AccountLinkAuditor => 'Eligible employees'/'Link / replace' section is entirely absent"
+    auto: API + UI
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::hides mutation controls without Manage even when View is present"]
+
+  - id: RBAC-LINK-025
+    func: [F-RBAC-096]
+    sc: History endpoint is gated on ViewHistory alone, not stacked with View
+    t: Unlike the mutating actions, GET history requires only AccountEmployeeLink.ViewHistory
+    src: ["AccountEmployeeLinksController.History"]
+    type: Authorization
+    pri: P1
+    steps:
+      - "[PUT /api/page-access/roles/{customRoleId}] Grant a role ONLY AccountEmployeeLink.ViewHistory (no View) => [200]"
+      - "[GET /api/account-employee-links/users/{userId}/history] As a user holding only that role => [200] succeeds - ViewHistory alone is sufficient here"
+    auto: API
+
+  - id: RBAC-LINK-026
+    func: [F-RBAC-098]
+    sc: No AccountEmployeeLink permission at all
+    t: A role with none of the three permissions is 403 on every route and never sees the nav item
+    src: ["AccountEmployeeLinksController"]
+    type: Authorization
+    pri: P1
+    role: MANAGER
+    perm: "n/a (Manager holds none of the AccountEmployeeLink.* permissions)"
+    steps:
+      - "[GET /api/account-employee-links/users/{userId}] As Manager => [403] Forbidden"
+      - "[UI] Manager's navigation sidebar => 'Account–Employee Links' item is absent"
+    auto: API + UI
+
+  - id: RBAC-LINK-027
+    func: [F-RBAC-099, F-RBAC-148]
+    sc: "SuperAdmin/TenantAdmin are excluded from AccountEmployeeLink.* - the carve-out holds via the normal role-assignment path"
+    t: SuperAdmin gets 403 on every account-employee-link route despite holding almost every other permission
+    src: ["SeedData.RolePermissionMap[SuperAdmin]"]
+    type: Authorization
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    smoke: true
+    role: SUPER_ADMIN
+    perm: "n/a"
+    steps:
+      - "[GET /api/account-employee-links/users/{userId}] As SuperAdmin => [403] Forbidden"
+      - "[POST /api/account-employee-links/users/{userId}/link] As SuperAdmin => [403] Forbidden"
+      - "[UI] SuperAdmin's navigation sidebar => 'Account–Employee Links' item is absent"
+    auto: API + UI
+    ex: ["xU:AccountEmployeeLinkEndpointTests.Broad_admin_claims_do_not_bypass_live_link_grants", "xU:AccountEmployeeLinkServiceTests.View_history_and_manage_are_independent_and_broad_admin_roles_do_not_gain_link_grants"]
+
+  - id: RBAC-LINK-028
+    func: [F-RBAC-100]
+    sc: "PRIVILEGE ESCALATION: the carve-out is a seed-data convention, not a structural guarantee - Page Access Management bypasses it entirely"
+    t: PageAccessService.UpdateAsync has no AccountEmployeeLink.* exclusion, unlike RolePermissionMap
+    src: ["PageAccessService.UpdateAsync"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    sev: Critical
+    role: HR_ADMIN
+    perm: "PageAccess.Manage"
+    steps:
+      - "[PUT /api/page-access/roles/{superAdminRoleId}] As any caller holding PageAccess.Manage, add AccountEmployeeLink.View + AccountEmployeeLink.Manage to SuperAdmin's own role => [200] succeeds - no server-side guard prevents re-adding the very permissions RolePermissionMap deliberately excludes"
+      - "[POST /api/account-employee-links/users/{userId}/link] As SuperAdmin, after the grant above => [200] now succeeds - the carve-out has been defeated"
+    auto: API
+    cr: [CR-66]

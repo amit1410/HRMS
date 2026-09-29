@@ -1,0 +1,447 @@
+sheet: Attendance_Frontend
+submodule: Attendance frontend pages - loading/empty/error states, permission-gated UI, navigation, client validation
+defaults:
+  role: EMPLOYEE
+  perm: "Attendance.View"
+  tenant: A
+  pre: "Tenant A signed in via the web app, unless stated."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: ATT-FE-001
+    func: [F-ATT-293]
+    sc: My Attendance page renders KPI tiles and calendar, with a distinct 403 banner
+    t: A permission-denied caller sees a dedicated unavailable message, not a generic error
+    src: ["MyAttendancePage.tsx"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/UI] Navigate to /attendance/my-attendance as a linked employee with Attendance.View => calendar and KPI tiles render with server data"
+      - "[Manual/UI] Simulate a 403 from GET /api/attendance/me/calendar => the page shows the dedicated 'Attendance data unavailable / you do not have permission' banner and KPI tiles show '—'/'Unavailable', not a generic error Notice"
+    auto: UI
+
+  - id: ATT-FE-002
+    func: [F-ATT-293]
+    sc: Month navigation has no future upper bound
+    t: A user can page arbitrarily far into the future with no warning
+    src: ["MyAttendancePage.tsx"]
+    type: Boundary
+    pri: P3
+    steps:
+      - "[Manual/UI] Click 'Next month' repeatedly, 24+ times => no cap is reached, each future month simply shows the empty-state message, no explicit 'this is a future month' warning is ever shown"
+    auto: UI
+
+  - id: ATT-FE-003
+    func: [F-ATT-294]
+    sc: Manager/Team Attendance page does not validate fromDate<=toDate client-side
+    t: An inverted date range is submitted to the server unvalidated
+    src: ["ManagerAttendancePage.tsx"]
+    type: Negative
+    pri: P2
+    role: MANAGER
+    steps:
+      - "[Manual/UI] Set From=2026-07-31, To=2026-07-01 (inverted) and apply filters => no client-side error is shown; the request is sent to the server as-is; confirm the server's own validation response is surfaced usably, not as a raw/unstyled error"
+    auto: UI
+
+  - id: ATT-FE-004
+    func: [F-ATT-295]
+    sc: The manager approvals card is correctly hidden for a caller without approve permissions
+    t: A positive permission-gating check
+    src: ["AttendanceRequestsPage.tsx"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/UI] As an employee holding Regularization.Request but NOT Regularization.Approve/OnDuty.Approve => the 'Manager approvals' card is entirely absent from the page, not merely disabled"
+    auto: UI
+
+  - id: ATT-FE-005
+    func: [F-ATT-295]
+    sc: The Regularization form only supports correcting an OUT punch
+    t: There is no UI field for proposedInAtUtc or for RequestType values other than MissingOutPunch
+    src: ["AttendanceRequestsPage.tsx"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Manual/UI] Open the Regularization submission form => only a 'Corrected out' datetime field is present; there is no field for a corrected IN time, and no way to select MissingInPunch/MissingBothPunches/CorrectInTime/CorrectInOutTime as RequestType - every submission from this UI hardcodes requestType='MissingOutPunch'"
+      - "[Manual] Confirm via direct API call that POST /api/attendance/me/regularizations DOES accept the other RequestType values and proposedInAtUtc - this is a UI gap, not a backend limitation => confirmed"
+    auto: UI
+    cr: [CR-127]
+
+  - id: ATT-FE-006
+    func: [F-ATT-296]
+    sc: Reject always sends a hardcoded comment
+    t: There is no field to type an actual rejection reason
+    src: ["AttendanceRequestsPage.tsx"]
+    type: Negative
+    pri: P2
+    role: MANAGER
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[Manual/UI] Click 'Reject' on a pending Regularization request in the manager approvals card => a window.confirm dialog appears, no text-entry field for a reason; confirming sends the API call with comment='Rejected by manager' regardless of the actual circumstance"
+    auto: UI
+    cr: [CR-127]
+
+  - id: ATT-FE-007
+    func: [F-ATT-297]
+    sc: The Overtime page is reachable only by direct URL
+    t: No nav entry or in-app link leads to /attendance/overtime
+    src: ["navigation.ts / App.tsx"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/UI] Search the entire left navigation menu for an 'Overtime' entry => none exists"
+      - "[Manual/UI] Navigate directly to /attendance/overtime as a user holding Attendance.Overtime.Request => [200] the page loads and functions normally despite having no discoverable entry point"
+    auto: UI
+    cr: [CR-126]
+
+  - id: ATT-FE-008
+    func: [F-ATT-298]
+    sc: The Overtime page's Team Overtime Approve/Reject buttons do nothing when clicked
+    t: The buttons render (correctly permission-gated) but have no effect
+    src: ["OvertimePage.tsx"]
+    type: Negative
+    pri: P1
+    role: TIMEMANAGER
+    perm: "Attendance.Overtime.Approve"
+    steps:
+      - "[Manual/UI] As a caller holding Attendance.Overtime.Approve, navigate to /attendance/overtime => the 'Team Overtime' card and its Approve selected/Reject selected buttons render and are enabled"
+      - "[Manual/UI] Click 'Approve selected' => nothing happens: no API call is fired, no confirmation, no error - the button has no onClick handler at all; confirm via network inspection that zero requests are sent"
+    auto: UI
+    cr: [CR-105]
+
+  - id: ATT-FE-009
+    func: [F-ATT-299]
+    sc: The Overtime create form's Employee ID is free-text, not a picker
+    t: A typo produces no client-side warning before submission
+    src: ["OvertimePage.tsx"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/UI] Type a malformed/nonexistent GUID into the Employee ID field and submit => no client-side existence check fires; the request is sent to the server as-is, which then returns its own 404/400"
+    auto: UI
+
+  - id: ATT-FE-010
+    func: [F-ATT-300]
+    sc: The Comp-Off Ledger history table has no permission gate
+    t: Any caller reaching the page sees the ledger unconditionally
+    src: ["CompOffPage.tsx"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/UI] As a caller holding only CompOffViewSelf (the minimum to reach the route) => the Ledger history table renders fully, with no additional permission check gating its visibility, unlike the redundantly-gated Earnings table above it"
+    auto: UI
+
+  - id: ATT-FE-011
+    func: [F-ATT-300]
+    sc: A brief '0 minutes' flash appears before real balance data loads
+    t: No explicit loading indicator distinguishes 'loading' from 'genuinely zero'
+    src: ["CompOffPage.tsx"]
+    type: Boundary
+    pri: P3
+    steps:
+      - "[Manual/UI] On a slow/throttled connection, load /attendance/comp-off => the balance briefly shows '0 minutes' before the real value resolves, with no spinner/skeleton distinguishing this from an actual zero balance"
+    auto: UI
+
+  - id: ATT-FE-012
+    func: [F-ATT-301]
+    sc: The Comp-Off Operations page is reachable only by direct URL
+    t: No nav entry or link leads to /attendance/comp-off/operations
+    src: ["navigation.ts / App.tsx"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/UI] Search the entire nav menu for a Comp-Off Operations entry => none exists"
+      - "[Manual/UI] Navigate directly to /attendance/comp-off/operations as a caller holding CompOffApprove => [200] the page loads and functions"
+    auto: UI
+    cr: [CR-126]
+
+  - id: ATT-FE-013
+    func: [F-ATT-301]
+    sc: Comp-Off Operations Approve/Reject are functional but have no confirmation dialog
+    t: A click immediately fires the API call with no confirm step
+    src: ["CompOffOperationsPage.tsx"]
+    type: Boundary
+    pri: P2
+    role: MANAGER
+    perm: "Attendance.CompOff.Approve"
+    steps:
+      - "[Manual/UI] Click Approve on a pending Comp-Off credit => the API call fires IMMEDIATELY with no window.confirm/in-page confirmation step, unlike Cancel/Approve/Reject on the Attendance Requests page which do confirm"
+    auto: UI
+
+  - id: ATT-FE-014
+    func: [F-ATT-302]
+    sc: All 5 Foundation nav items render the identical full page
+    t: Clicking a different nav item changes only the URL
+    src: ["AttendanceFoundationPage.tsx"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/UI] Navigate to /attendance/shifts, then /attendance/applicability, then /attendance/roster => the exact same full page (Shift Master, Breaks, Applicability, Roster Upload, Roster Grid, Roster Assignment, all sections) renders identically at each URL, with no scroll-to or tab-highlight differentiation"
+    auto: UI
+
+  - id: ATT-FE-015
+    func: [F-ATT-302]
+    sc: The Shift form's Create/Update button is never disabled for blank required fields
+    t: Client-side validation is absent on this form, unlike Applicability/Roster
+    src: ["AttendanceFoundationPage.tsx"]
+    type: Negative
+    pri: P2
+    role: HRADMIN
+    perm: "Attendance.ShiftManage"
+    steps:
+      - "[Manual/UI] Leave Shift Code and Shift Name blank and click 'Create Shift' => the button is NOT disabled and the submission proceeds to the server, which rejects with 'Shift code is required.' - the client itself never blocked the attempt"
+    auto: UI
+
+  - id: ATT-FE-016
+    func: [F-ATT-303]
+    sc: CONFIRMED - Applicability Rules Edit/Delete buttons are visible and clickable for a plain Attendance.View holder
+    t: The primary confirmed frontend permission-gating defect in this module
+    src: ["AttendanceFoundationPage.tsx"]
+    type: Security
+    pri: P0
+    smoke: true
+    steps:
+      - "[Manual/UI] Log in as a user holding ONLY Attendance.View (no PatternManage/ShiftManage), navigate to /attendance/applicability => the Applicability Rules table's Edit and Delete buttons render and are ENABLED for every rule, with no visual gating whatsoever"
+      - "[Manual/UI] Click 'Delete' on a rule => a window.confirm appears (client-side only); confirming triggers a real DELETE /api/attendance/shift-applicability/{id} call, which the server correctly rejects with 403 - the UI's only defense is a post-hoc error toast, not hiding the control"
+    auto: UI
+    cr: [CR-125]
+
+  - id: ATT-FE-017
+    func: [F-ATT-304]
+    sc: The Applicability save button is gated on the wrong frontend permission constant
+    t: A user with PatternManage but not ShiftManage cannot see the save button even though their API call would succeed
+    src: ["AttendanceFoundationPage.tsx"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/UI] Log in as a user holding Attendance.PatternManage but explicitly NOT Attendance.ShiftManage, navigate to /attendance/applicability => the 'Save Applicability Rule' button is HIDDEN (gated on canManage=ShiftManage in the frontend), even though a direct API call with this user's token would succeed since the backend enforces PatternManage, not ShiftManage, for this action"
+    auto: UI
+    cr: [CR-93]
+
+  - id: ATT-FE-018
+    func: [F-ATT-305]
+    sc: Shift Patterns Create button has zero permission gate and zero field validation
+    t: Any Attendance.View holder sees an always-enabled Create button
+    src: ["ShiftPatternsPage.tsx"]
+    type: Security
+    pri: P1
+    steps:
+      - "[Manual/UI] Log in as a user holding ONLY Attendance.View, navigate to /attendance/shift-patterns => 'Create Pattern' is visible and ENABLED, with no reference anywhere to Attendance.PatternManage"
+      - "[Manual/UI] Leave Code/Name blank and click Create => no client-side block; the request goes to the server, which enforces validation server-side"
+    auto: UI
+    cr: [CR-93]
+
+  - id: ATT-FE-019
+    func: [F-ATT-306]
+    sc: Shift Patterns page has no loading indicator and no empty-state message
+    t: A tenant with zero configured patterns shows a bare, unexplained empty table
+    src: ["ShiftPatternsPage.tsx"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/UI] With zero patterns configured for the tenant, load /attendance/shift-patterns => 'Configured patterns' table renders with zero rows and no explanatory empty-state text, and no loading indicator was shown while the initial fetch was in flight"
+    auto: UI
+
+  - id: ATT-FE-020
+    func: [F-ATT-307]
+    sc: My Attendance Exceptions page's empty and error states are untested but implemented - verify manually
+    t: Confirm the implemented Spinner/EmptyState/Notice pattern actually works, since no automated test exercises it
+    src: ["MyAttendanceExceptionsPage.tsx"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/UI] With zero exceptions for the caller => the EmptyState component renders 'No attendance exceptions' / 'Your current Attendance data has no actionable exceptions.'"
+      - "[Manual/UI] Simulate an API failure => a <Notice tone='error'> renders the error message, page does not crash"
+      - "[Manual/UI] With more than one page of exceptions => Previous/Next controls appear and correctly page server-side"
+    auto: UI
+
+  - id: ATT-FE-021
+    func: [F-ATT-308]
+    sc: My Monthly Attendance page shows a silent blank table during initial load
+    t: No visible loading affordance distinguishes 'loading' from 'no data'
+    src: ["MyMonthlyAttendancePage.tsx"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/UI] On a slow/throttled connection, load /attendance/my-monthly => during the initial fetch, the table renders with an empty <tbody> and NO loading text/spinner - a user could believe the page is broken before data appears"
+    auto: UI
+
+  - id: ATT-FE-022
+    func: [F-ATT-308]
+    sc: An employee with more than 50 monthly summaries cannot reach later rows
+    t: The fixed pageSize=50 has no page-changing UI on this screen at all
+    src: ["MyMonthlyAttendancePage.tsx"]
+    type: Boundary
+    pri: P3
+    steps:
+      - "[Setup] An employee with 4+ years of tenure (51+ monthly summaries) => precondition established for the steps below"
+      - "[Manual/UI] Load /attendance/my-monthly => only the most recent 50 summaries are ever shown; there is no Next/pagination control anywhere on this page to reach older rows"
+    auto: UI
+
+  - id: ATT-FE-023
+    func: [F-ATT-309]
+    sc: Monthly Finalization's Process/Finalize/Reopen buttons are correctly state-aware and permission-gated
+    t: A positive pattern check across period lifecycle states
+    src: ["AttendanceMonthlyFinalizationPage.tsx"]
+    type: Positive
+    pri: P1
+    role: HRADMIN
+    steps:
+      - "[Manual/UI] With an Open period => Process is visible (if MonthlyProcess held), Finalize/Reopen are appropriately hidden"
+      - "[Manual/UI] With a ReadyToClose period whose close-preview.canClose=false => Finalize is visible but DISABLED"
+      - "[Manual/UI] With a Closed period => only Reopen is visible; typing a blank reason keeps the Reopen button disabled"
+    auto: UI
+
+  - id: ATT-FE-024
+    func: [F-ATT-310]
+    sc: CONFIRMED - the periods-table pagination control is a dead no-op
+    t: Clicking Previous/Next on the periods table (not the summaries table) does nothing
+    src: ["AttendanceMonthlyFinalizationPage.tsx"]
+    type: Negative
+    pri: P1
+    role: HRADMIN
+    perm: "Attendance.Monthly.ViewAll"
+    steps:
+      - "[Setup] The tenant has 51+ months of Attendance period history, so the periods table's Pagination control renders a functional-looking Next button => precondition established for the steps below"
+      - "[Manual/UI] Click 'Next' on the Attendance periods table's pagination control => NOTHING happens - the displayed page of periods does not change, confirming onPageChange is wired to a no-op"
+      - "[Manual/UI] Click 'Next' on the separate 'Finalization preview' summaries table below it => this ONE correctly advances to the next page, confirming the bug is specific to the periods table's own pagination instance"
+    auto: UI
+    cr: [CR-128]
+
+  - id: ATT-FE-025
+    func: [F-ATT-311]
+    sc: The bulk-correction textarea rejects malformed input with only a generic error
+    t: Extra pipes, non-integer version, and over-100-line input all fail with the same generic message
+    src: ["AttendanceOperationsPage.tsx"]
+    type: Negative
+    pri: P2
+    role: HRADMIN
+    perm: "Attendance.AdminCorrection.Manage"
+    steps:
+      - "[Manual/UI] Enter a line with an extra pipe: 'EMP1 | 2026-07-10 | 1 | extra' => a generic format-error message appears, with no indication of WHICH line or WHAT part is wrong"
+      - "[Manual/UI] Enter exactly 100 valid lines => submission succeeds (boundary allowed)"
+      - "[Manual/UI] Enter 101 lines => 'A bulk correction request is limited to 100 items.' blocks submission client-side before any API call"
+    auto: UI
+
+  - id: ATT-FE-026
+    func: [F-ATT-312]
+    sc: Acknowledge/Waive/Bulk-reject rely on native window.prompt for reason capture
+    t: Cancelling or leaving the prompt blank aborts the action client-side
+    src: ["AttendanceOperationsPage.tsx"]
+    type: Boundary
+    pri: P2
+    role: HRADMIN
+    steps:
+      - "[Manual/UI] Click 'Waive' on an exception row, then cancel the native prompt dialog => no API call is made, the exception remains unresolved"
+      - "[Manual/UI] Click 'Waive', enter a blank string in the prompt, confirm => no API call is made (blank comment blocked client-side before submission)"
+    auto: UI
+
+  - id: ATT-FE-027
+    func: [F-ATT-313]
+    sc: Acknowledge/Waive are visible to any Exception.View holder, matching the backend's own design
+    t: Confirm the client and server gates agree, and flag as a design question, not an automatic defect
+    src: ["AttendanceOperationsPage.tsx"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/UI] As a caller holding ONLY Attendance.Exception.View (no AdminCorrection.Manage/Regularization.Approve) => Acknowledge/Waive buttons on individual exception rows are visible and enabled, matching backend F-ATT-192's identical permission choice"
+    auto: UI
+
+  - id: ATT-FE-028
+    func: [F-ATT-314]
+    sc: A maker cannot select their own submitted request in the bulk queue
+    t: The checkbox is omitted, not merely disabled
+    src: ["AttendanceOperationsPage.tsx"]
+    type: Positive
+    pri: P1
+    role: HRADMIN
+    perm: "Attendance.Regularization.Approve"
+    steps:
+      - "[Setup] The current HR user submitted a manual attendance request that is now pending in the maker-checker queue => precondition established for the steps below"
+      - "[Manual/UI] View the queue => this specific row shows 'Maker cannot approve own request' with NO selection checkbox present at all (not a disabled checkbox) - it cannot be included in a bulk action"
+    auto: UI
+
+  - id: ATT-FE-029
+    func: [F-ATT-315]
+    sc: Internal navigation links on the Operations page cause a full page reload
+    t: Plain <a> tags trigger a full SPA re-bootstrap, unlike AttendanceReportsPage's <Link>-based navigation
+    src: ["AttendanceOperationsPage.tsx"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/UI] Click the 'Open correction workflow' link inside the exception table => the browser performs a FULL PAGE RELOAD (visible flash/re-bootstrap), not a client-side SPA transition; confirm this does not cause a visible re-login prompt given the in-memory-only access token"
+    auto: UI
+
+  - id: ATT-FE-030
+    func: [F-ATT-316]
+    sc: The Exceptions report route requires both reportView AND exceptionView
+    t: Holding only one of the two permissions denies access at the route boundary
+    src: ["App.tsx"]
+    type: Authorization
+    pri: P1
+    role: HRADMIN
+    perm: "Attendance.Report.View"
+    steps:
+      - "[Manual/UI] As a caller holding Report.View but NOT Exception.View, navigate to /attendance/reports/exceptions => redirected/denied at the route boundary by the nested RequirePermission - the only doubly-gated route in the module"
+    auto: UI
+
+  - id: ATT-FE-031
+    func: [F-ATT-317]
+    sc: The Month filter field's min/max attributes are cosmetic only, not enforced
+    t: Non-numeric text can be typed into a field that looks numerically constrained
+    src: ["AttendanceReportsPage.tsx"]
+    type: Boundary
+    pri: P3
+    steps:
+      - "[Manual/UI] Type 'abc' into the Month filter field on the Monthly report => the field accepts it (min/max have no effect on this non-numeric input type); on Apply Filters, confirm the resulting request either sends NaN gracefully-handled by the server, or the UI itself catches the conversion failure before sending"
+    auto: UI
+
+  - id: ATT-FE-032
+    func: [F-ATT-318]
+    sc: Device Integration page's permission gates hide the correct actions for a view-only user
+    t: The strongest permission-gating pattern in the module, verified end to end
+    src: ["AttendanceDevicesPage.tsx"]
+    type: Positive
+    pri: P1
+    perm: "Attendance.Device.View"
+    steps:
+      - "[Manual/UI] As a caller holding ONLY Attendance.Device.View => 'Add device', row Edit/Activate/Deactivate, 'Sync now', and mapping-administration controls are all ABSENT across all 5 tabs, not merely disabled"
+      - "[Manual/UI] Edit a device that has a configured credential => the credential field is never pre-filled and the raw value never appears anywhere in the DOM, including the Audit history tab"
+    auto: UI
+
+  - id: ATT-FE-033
+    func: [F-ATT-321]
+    sc: CompOffPage's route does not enforce RequireEmployeeIdentity despite its nav entry requiring it
+    t: An unlinked account hitting the URL directly is not redirected the way other 'My ...' pages are
+    src: ["App.tsx"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/UI] As an authenticated but UNLINKED account (no Employee identity), navigate directly to /attendance/comp-off (bypassing the hidden nav link) => unlike /attendance/my-attendance (which redirects to /forbidden via RequireEmployeeIdentity), this route does not enforce the same guard - document the actual observed behavior (likely an API-level 404/error surfaced within the page rather than a route-level redirect)"
+    auto: UI
+
+  - id: ATT-FE-034
+    func: [F-ATT-322]
+    sc: All Attendance page state resets on browser refresh
+    t: Filter/tab/page selections are never restored after a reload
+    src: ["all Attendance pages"]
+    type: Boundary
+    pri: P3
+    steps:
+      - "[Manual/UI] On the Device Integration page, switch to the 'Sync runs' tab, apply a filter, and navigate to page 2 => refresh the browser => the page returns to the default 'Devices' tab with default filters and page 1, none of the prior selections are preserved"
+    auto: UI
+
+  - id: ATT-FE-035
+    func: [F-ATT-319, F-ATT-320]
+    sc: Superficially-tested pages and untested API clients are flagged for prioritized manual QA
+    t: A directed exploratory pass on the three thinnest-covered pages
+    src: ["ShiftPatternsPage.test.tsx / MyAttendanceExceptionsPage.test.tsx / MyMonthlyAttendancePage.test.tsx"]
+    type: Boundary
+    pri: P2
+    tags: [Boundary]
+    steps:
+      - "[Manual/UI] Exercise ShiftPatternsPage's actual create-submission flow (not just render) => confirm the createPattern API call fires with the correct payload and success/error states both render correctly, since the single automated test never does this"
+      - "[Manual/UI] Exercise MyMonthlyAttendancePage's and MyAttendanceExceptionsPage's error states by simulating an API failure => confirm both render usable error messaging, since neither is covered by the single existing automated test per page"
+    auto: UI

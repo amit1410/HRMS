@@ -1,0 +1,126 @@
+sheet: BankAdv_Cancellation_Regeneration
+submodule: Cancellation & Regeneration
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-CANCEL-001
+    func: [F-BANKADV-053]
+    sc: Cancellable statuses vs blocked statuses
+    t: Cancel succeeds from Draft, Prepared, and Approved; is Conflict from Exported and Cancelled
+    src: "BankAdviceService.CancelAsync"
+    type: Negative
+    tags: [Boundary, Positive]
+    pri: P0
+    sev: High
+    pre: "One batch per status: BATCH_DRAFT, BATCH_PREP, BATCH_APPR, BATCH_EXP (Exported), BATCH_CANC (already Cancelled)"
+    role: HRAdmin (custom role holding BankAdvice.Cancel)
+    perm: Payroll.BankAdvice.Cancel
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH_DRAFT}/cancel] => [200] Status=\"Cancelled\""
+      - "[POST /api/payroll/bank-advice/{BATCH_PREP}/cancel] => [200] Status=\"Cancelled\""
+      - "[POST /api/payroll/bank-advice/{BATCH_APPR}/cancel] => [200] Status=\"Cancelled\""
+      - "[POST /api/payroll/bank-advice/{BATCH_EXP}/cancel] => [409] Conflict (\"This bank advice batch cannot be cancelled.\")"
+      - "[POST /api/payroll/bank-advice/{BATCH_CANC}/cancel] => [409] Conflict, same message"
+    auto: API
+
+  - id: BANKADV-CANCEL-002
+    func: [F-BANKADV-054]
+    sc: Opt-in cancellation-reason requirement
+    t: A missing reason is only rejected when the tenant's PayrollControlConfiguration.RequireReasonForCancellation is enabled
+    src: "BankAdviceService.CancelAsync -> PayrollApprovalGuard.ValidateAsync"
+    type: Negative
+    tags: [Configuration, Positive]
+    pri: P1
+    sev: Medium
+    pre: "BATCH1 is Draft; tenant PayrollControlConfiguration.RequireReasonForCancellation=true"
+    role: HRAdmin (custom role holding BankAdvice.Cancel)
+    perm: Payroll.BankAdvice.Cancel
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/cancel] with no reason in the body => [400] Invalid (\"A cancellation reason is required.\")"
+      - "[POST /api/payroll/bank-advice/{BATCH1}/cancel] with {\"reason\":\"duplicate run\"} => [200] cancelled"
+      - "[Manual] with RequireReasonForCancellation=false (default), a cancel call with no reason => [200] cancelled without a reason"
+    auto: API
+
+  - id: BANKADV-CANCEL-003
+    func: [F-BANKADV-055, F-BANKADV-056]
+    sc: CONFIRMED - cancellation never updates child payment rows
+    t: After a batch is cancelled, its BankAdvicePayment rows keep their pre-cancellation PaymentStatus (Ready/Failed), never becoming "Cancelled"
+    src: "BankAdviceService.CancelAsync (ExecuteUpdateAsync scoped to BankAdviceBatches only)"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "BATCH1 (Prepared) has 2 payments, both PaymentStatus=Ready"
+    role: HRAdmin (custom role holding BankAdvice.Cancel)
+    perm: Payroll.BankAdvice.Cancel
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/cancel] => [200] batch Status=\"Cancelled\""
+      - "[GET /api/payroll/bank-advice/{BATCH1}] => [200] both payments still show PaymentStatus==\"Ready\" (NOT \"Cancelled\")"
+      - "[Manual] full grep of BankAdviceService.cs for BankAdvicePaymentStatus.Cancelled assignment => zero matches anywhere in the codebase"
+    auto: API
+    cr: [CR-265]
+    secc: true
+
+  - id: BANKADV-CANCEL-004
+    func: [F-BANKADV-057]
+    sc: Successful cancellation stamps and records history
+    t: Cancel stamps CancelledAtUtc/CancelledByUserId and records a Cancelled history event
+    src: "BankAdviceService.CancelAsync -> History(Cancelled)"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "BATCH1 is Draft"
+    role: HRAdmin (custom role holding BankAdvice.Cancel)
+    perm: Payroll.BankAdvice.Cancel
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/bank-advice/{BATCH1}/cancel] with {\"reason\":\"duplicate run\"} => [200] CancelledAtUtc set, CancelledByUserId set"
+      - "[GET /api/payroll/bank-advice/{BATCH1}] => [200] History contains a Cancelled-type event with the reason in its Message"
+    auto: API
+
+  - id: BANKADV-CANCEL-005
+    func: [F-BANKADV-058, F-BANKADV-059]
+    sc: Regeneration after cancellation gets a higher version
+    t: A batch generated after a prior batch for the same run was cancelled gets Version = priorVersion+1 and a new, distinct BatchNumber
+    src: "BankAdviceService.GenerateAsync (MaxAsync over Version)"
+    type: Positive
+    tags: [Idempotency]
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (Approved) previously had a batch at Version=1, since Cancelled"
+    role: HRAdmin (custom role holding BankAdvice.Generate, Cancel)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] new batch created with Version==2 and a BatchNumber ending in \"/2\", distinct from the cancelled batch's \"/1\""
+    auto: API
+
+  - id: BANKADV-CANCEL-006
+    func: [F-BANKADV-060]
+    sc: No per-payment edit endpoint
+    t: There is no route to edit a single BankAdvicePayment row directly - only cancel-and-regenerate can correct one bad row
+    src: "Backend/HRMS.Application/Abstractions/IBankAdviceService.cs (full interface)"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of IBankAdviceService.cs and BankAdviceController for any PUT/PATCH route addressing an individual payment id => zero matches; the only remedy for a single bad row is CancelAsync followed by GenerateAsync"
+    auto: Manual only
+    cr: [CR-271]

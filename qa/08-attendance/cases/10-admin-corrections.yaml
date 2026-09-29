@@ -1,0 +1,241 @@
+sheet: Attendance_Admin
+submodule: HR/Admin Corrections to effective attendance (append-only, immutable raw-punch history)
+defaults:
+  role: HRADMIN
+  perm: "Attendance.AdminCorrection.Manage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin holding Attendance.AdminCorrection.Manage, unless stated."
+  data: "n/a unless stated."
+  sev: Critical
+  reg: true
+
+cases:
+  - id: ATT-CORR-001
+    func: [F-ATT-126]
+    sc: Create a valid admin correction with both in and out times
+    t: A correction with CorrectedInAtUtc/CorrectedOutAtUtc and a Reason succeeds
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/admin-corrections] EmployeeId=E1, BusinessDate=2026-07-10, CorrectedInAtUtc=09:00, CorrectedOutAtUtc=18:00, Reason='Device outage, manual correction' => [200/201] correction created, CorrectionVersion=1"
+    auto: API
+
+  - id: ATT-CORR-002
+    func: [F-ATT-126]
+    sc: At least one of CorrectedIn/CorrectedOut is required
+    t: A correction with neither field set is rejected
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/admin-corrections] CorrectedInAtUtc=null, CorrectedOutAtUtc=null => [400] at least one correction time is required"
+    auto: API
+
+  - id: ATT-CORR-003
+    func: [F-ATT-126]
+    sc: Corrected Out cannot precede Corrected In
+    t: An inverted correction range is rejected
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/admin-corrections] CorrectedInAtUtc=18:00, CorrectedOutAtUtc=09:00 (same date, inverted) => [400] Out must not precede In"
+    auto: API
+
+  - id: ATT-CORR-004
+    func: [F-ATT-126]
+    sc: Reason is mandatory and length-capped
+    t: A blank Reason, and a Reason over 2000 characters, are both rejected
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/admin-corrections] Reason='' => [400] Reason is required"
+      - "[POST /api/attendance/admin-corrections] Reason=<2001 chars> => [400] Reason exceeds 2000 characters"
+    auto: API
+
+  - id: ATT-CORR-005
+    func: [F-ATT-127]
+    sc: A correction never mutates raw punches - it is a new, additional row
+    t: The original AttendancePunches rows remain byte-for-byte unchanged after a correction
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] Raw punches for E1/2026-07-10: In 09:30, Out 17:30 => note original punch timestamps"
+      - "[POST /api/attendance/admin-corrections] EmployeeId=E1, BusinessDate=2026-07-10, CorrectedInAtUtc=09:00, CorrectedOutAtUtc=18:00, Reason='Correction' => [200] correction created"
+      - "[Manual/DB] Inspect AttendancePunches for E1/2026-07-10 => [200] the original 09:30/17:30 raw punches are UNCHANGED; the correction exists as a separate row"
+      - "[GET /api/attendance/me/days/2026-07-10] => [200] the EFFECTIVE in/out now reflect 09:00/18:00 (the correction), while the raw punches list still shows 09:30/17:30"
+    auto: DB-assisted
+
+  - id: ATT-CORR-006
+    func: [F-ATT-128]
+    sc: If reprocessing fails after the correction row is inserted, the whole correction rolls back
+    t: A failure in the synchronous day-reprocess step means the correction row itself is never committed
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Force IAttendanceDayProcessor.ProcessAsync to fail for this employee/date (e.g. inject a failure) => forced condition established"
+      - "[POST /api/attendance/admin-corrections] valid payload => [409/503] fails; the correction row is NOT persisted (no orphaned correction without a matching effective-day update)"
+    auto: DB-assisted
+
+  - id: ATT-CORR-007
+    func: [F-ATT-129]
+    sc: An admin correction outranks an earlier approved Regularization for the same date once reprocessed
+    t: v1 correction wins over the regularization, and a later v2 correction wins over v1
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Approved Regularization sets effective 09:00-18:00 for E1/2026-07-10 => precondition established for the steps below"
+      - "[POST /api/attendance/admin-corrections] CorrectedInAtUtc=08:55, CorrectedOutAtUtc=18:05, Reason='v1 correction' => [200] v1 created"
+      - "[GET /api/attendance/me/days/2026-07-10] => [200] effective in/out is v1's 08:55/18:05, NOT the regularization's 09:00/18:00"
+      - "[POST /api/attendance/admin-corrections] CorrectedInAtUtc=08:50, CorrectedOutAtUtc=18:10, Reason='v2 correction' => [200] v2 created (CorrectionVersion=2)"
+      - "[GET /api/attendance/me/days/2026-07-10] => [200] effective in/out is now v2's 08:50/18:10"
+    auto: API
+
+  - id: ATT-CORR-008
+    func: [F-ATT-130]
+    sc: An out-of-scope target employee returns NotFound, not Forbidden
+    t: A manager without access to a given employee gets a 404 on create and get, hiding the record's existence
+    src: ["AttendanceAdminCorrectionService.CanAccessTargetAsync"]
+    type: Security
+    pri: P1
+    role: MANAGER
+    steps:
+      - "[POST /api/attendance/admin-corrections] EmployeeId=<employee outside caller's scope>, otherwise valid => [404] not Forbidden"
+      - "[GET /api/attendance/admin-corrections/{correctionIdForOutOfScopeEmployee}] => [404]"
+    auto: API
+
+  - id: ATT-CORR-009
+    func: [F-ATT-131]
+    sc: A correction is rejected when an approved Leave already covers the date
+    t: An approved-leave date cannot be admin-corrected
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Approved Leave covers E1/2026-07-15 => precondition established"
+      - "[POST /api/attendance/admin-corrections] EmployeeId=E1, BusinessDate=2026-07-15, valid times/reason => [409] 'Approved Leave applies to this attendance date.'"
+    auto: API
+
+  - id: ATT-CORR-010
+    func: [F-ATT-131]
+    sc: A correction is rejected when an approved On-Duty already covers the date
+    t: An approved-on-duty date cannot be admin-corrected
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Approved On-Duty covers E1/2026-07-16 => precondition established"
+      - "[POST /api/attendance/admin-corrections] EmployeeId=E1, BusinessDate=2026-07-16, valid times/reason => [409] 'Approved On Duty applies to this attendance date.'"
+    auto: API
+
+  - id: ATT-CORR-011
+    func: [F-ATT-132]
+    sc: A correction is blocked on a closed Attendance period
+    t: The period-lock guard applies identically to corrections
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Setup] Close the period covering 2026-07 => [200] Closed"
+      - "[POST /api/attendance/admin-corrections] BusinessDate=2026-07-10 => [409] period-lock Conflict"
+    auto: API
+
+  - id: ATT-CORR-012
+    func: [F-ATT-133]
+    sc: A correction on an already-processed month makes its monthly summary stale, blocking Close until reprocessed
+    t: The full reopen -> correct -> stale-summary -> reprocess -> reclose lifecycle
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Period is Closed => [200]"
+      - "[POST /api/attendance/periods/{id}/reopen] Reason='Correction needed' => [200] Open, DataVersion bumped"
+      - "[POST /api/attendance/admin-corrections] BusinessDate inside the period => [200] correction created"
+      - "[GET /api/attendance/periods/{id}/close-preview] => [200] SummariesCurrent=false (stale relative to the bumped DataVersion)"
+      - "[POST /api/attendance/periods/{id}/process] => [200] summaries refreshed, SourceDataVersion now current"
+      - "[POST /api/attendance/periods/{id}/close] => [200] Closed again, now with the correction reflected"
+    auto: API
+
+  - id: ATT-CORR-013
+    func: [F-ATT-134]
+    sc: Repeated corrections on the same employee/date create a full, undeleted version chain
+    t: Three consecutive corrections leave three distinct rows with versions 1, 2, 3
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/attendance/admin-corrections] first correction for E1/date D => [200] version=1"
+      - "[POST /api/attendance/admin-corrections] second correction, same E1/D => [200] version=2"
+      - "[POST /api/attendance/admin-corrections] third correction, same E1/D => [200] version=3"
+      - "[GET /api/attendance/admin-corrections?employeeId=E1&date=D] => [200] all three versions [1,2,3] are still present and readable, none deleted"
+    auto: API
+
+  - id: ATT-CORR-014
+    func: [F-ATT-135]
+    sc: Concurrent same-day corrections produce distinct, gapless version numbers
+    t: Two simultaneous correction submissions for the same employee/date never collide
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire two POST /api/attendance/admin-corrections calls CONCURRENTLY for the same EmployeeId/BusinessDate from independent contexts => both succeed [200] (or one Conflicts and is retried), and the resulting CorrectionVersion values are exactly [1,2] - no gap, no duplicate version, no lost row"
+    auto: DB-assisted
+
+  - id: ATT-CORR-015
+    func: [F-ATT-136]
+    sc: Tenant isolation for admin corrections
+    t: A Tenant B caller cannot read or reference a Tenant A correction/employee
+    src: ["AttendanceAdminCorrectionService.ListAsync/GetAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/attendance/admin-corrections/{tenantACorrectionId}] As Tenant B => [404] NotFound"
+      - "[POST /api/attendance/admin-corrections] As Tenant B, EmployeeId=<Tenant A's employee id> => [400/404] rejected - cross-tenant employee reference is invalid"
+      - "[GET /api/attendance/admin-corrections] As Tenant A => [200] Tenant B's corrections never appear"
+    auto: API
+
+  - id: ATT-CORR-016
+    func: [F-ATT-137]
+    sc: The correction list's default scope date is evaluated against today, not the queried historical range
+    t: A manager reassigned since the correction date gets scope evaluated as of today, not as of the correction's own date
+    src: ["AttendanceAdminCorrectionService.ListAsync"]
+    type: Boundary
+    pri: P2
+    role: MANAGER
+    steps:
+      - "[Setup] Manager M managed Employee E1 on 2026-05-10 (correction date) but has since been reassigned away from E1 as of today => precondition established"
+      - "[GET /api/attendance/admin-corrections?employeeId=E1] (no FromDate supplied) As Manager M => [200 or 403/empty] scope is resolved using TODAY's manager relationship (no longer M->E1), not the historical 2026-05-10 relationship, even though the correction being queried is from that historical date - document the actual observed result"
+    auto: API
+    cr: [CR-104]
+
+  - id: ATT-CORR-017
+    func: [F-ATT-138]
+    sc: Role-scope access over an employee does not substitute for the AdminCorrection.Manage permission itself
+    t: A manager with scope over a direct report but no AdminCorrection.Manage permission is forbidden
+    src: ["AttendanceAdminCorrectionService.CreateAsync"]
+    type: Authorization
+    pri: P0
+    role: MANAGER
+    perm: "Attendance.View"
+    steps:
+      - "[POST /api/attendance/admin-corrections] As a manager who IS the direct report's effective manager but holds no Attendance.AdminCorrection.Manage permission => [403] Forbidden"
+    auto: API
+
+  - id: ATT-CORR-018
+    func: [F-ATT-126]
+    sc: List and get-by-id are paged and return the expected correction detail
+    t: The happy-path list/detail read
+    src: ["AttendanceAdminCorrectionService.ListAsync/GetAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/attendance/admin-corrections?page=1&pageSize=25] => [200] paged list of corrections"
+      - "[GET /api/attendance/admin-corrections/{id}] => [200] full correction detail including Reason, CorrectionVersion, CorrectedBy, timestamps"
+    auto: API

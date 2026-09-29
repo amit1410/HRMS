@@ -1,0 +1,158 @@
+sheet: TaxDcl_Audit_Resolver
+submodule: Declaration Audit & Approved-Input Resolution
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-AUDIT-001
+    func: [F-TAXDCL-055]
+    sc: GetAuditAsync returns the full chronological trail
+    t: Audit events are returned in OccurredAtUtc ascending order, tenant-scoped
+    src: "TaxDeclarationService.cs GetAuditAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Declaration has Created, LineAdded, Submitted, LineApproved events"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.ViewAudit
+    tenant: "T1 (DEMO01)"
+    data: 4 audit events
+    steps:
+      - "[GET /api/payroll/tax-declarations/{id}/audit] => [200] 4 events, ordered oldest-first: Created, LineAdded, Submitted, LineApproved"
+    auto: API
+
+  - id: TAXDCL-AUDIT-002
+    func: [F-TAXDCL-056]
+    sc: Audit is append-only
+    t: No audit event is ever updated or deleted once written
+    src: "TaxDeclarationService.cs (AddAudit is the sole write path)"
+    type: Contract
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Declaration undergoes create -> line add -> submit -> review -> approve"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.ViewAudit
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of TaxDeclarationService.cs for db.TaxDeclarationAuditEvents => only .Add call sites, zero .Update/.Remove"
+      - "[GET /api/payroll/tax-declarations/{id}/audit] before and after the full lifecycle => earlier events remain present, byte-identical, never overwritten"
+    auto: API
+
+  - id: TAXDCL-AUDIT-003
+    func: [F-TAXDCL-057]
+    sc: Audit never logs proof file contents
+    t: A ProofUploaded audit event's NewValue is the file name only, never file bytes or storage path contents
+    src: "TaxDeclarationService.cs AddProofOwnAsync -> AddAudit(ProofUploaded)"
+    type: Security
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "A proof is uploaded"
+    role: HRAdmin (reviewer)
+    perm: Payroll.TaxDeclaration.ViewAudit
+    tenant: "T1 (DEMO01)"
+    data: "FileName=investment.pdf"
+    steps:
+      - "[GET /api/payroll/tax-declarations/{id}/audit] => ProofUploaded event's NewValue == 'investment.pdf' (filename only), no file bytes or secret material present"
+    auto: API
+    secc: true
+
+  - id: TAXDCL-AUDIT-004
+    func: [F-TAXDCL-058]
+    sc: ResolveApprovedAsync selects the latest-Version eligible declaration and filters lines correctly
+    t: Only Approved/PartiallyApproved lines with ApprovedAmount>0, from the most-recent-Version Approved/PartiallyApproved/Locked declaration, are returned
+    src: "TaxDeclarationService.cs ResolveApprovedAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Declaration Version=3, Status=PartiallyApproved; one line Approved with ApprovedAmount=75000, one line Rejected with ApprovedAmount=0"
+    role: n/a (Application-layer method under test)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: "employeeId, financialYear=2026, asOfDate=2026-09-30"
+    steps:
+      - "[Manual] ITaxDeclarationService.ResolveApprovedAsync(employeeId, 2026, 2026-09-30) => returns exactly 1 ApprovedTaxDeclarationInput (the Approved line, 75000); the Rejected line (ApprovedAmount=0) is excluded"
+    auto: DB-assisted
+
+  - id: TAXDCL-AUDIT-005
+    func: [F-TAXDCL-059]
+    sc: "CONFIRMED - ResolveApprovedAsync has no route and no production caller"
+    t: The method is unreachable from any HTTP route and uncalled by any Application-layer production code
+    src: "Backend/HRMS.Application, HRMS.API (full grep for ResolveApprovedAsync outside Backend/HRMS.Tests)"
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of TaxDeclarationsController.cs and MyTaxDeclarationsController.cs for ResolveApprovedAsync => zero route matches"
+      - "[Manual] full grep of Backend/HRMS.Application (excluding Backend/HRMS.Tests) for ResolveApprovedAsync call sites => zero matches beyond the interface/implementation themselves"
+    auto: Manual only
+    cr: [CR-247]
+
+  - id: TAXDCL-AUDIT-006
+    func: [F-TAXDCL-060]
+    sc: "CONFIRMED - design doc claims YearEndTax reads via the declaration service; code reads EmployeeTaxDeclarations directly instead"
+    t: docs/phase-7w states approved declarations are read 'through the existing declaration service'; YearEndTaxService.CalculateAsync's own code queries the DbContext directly
+    src: "docs/phase-7w-year-end-tax-processing.md 'Sources and reconciliation'; YearEndTaxService.cs CalculateAsync line ~53"
+    type: Contract
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] read docs/phase-7w-year-end-tax-processing.md 'Sources and reconciliation' section => states approved declarations/proofs are read 'through the existing declaration service'"
+      - "[Manual] read YearEndTaxService.CalculateAsync => queries db.EmployeeTaxDeclarations directly, never calls ITaxDeclarationService.ResolveApprovedAsync - CLAUDE.md: current code wins over the doc"
+    auto: Manual only
+    cr: [CR-247]
+
+  - id: TAXDCL-AUDIT-007
+    func: [F-TAXDCL-061]
+    sc: Proof-acceptance filter divergence between the resolver and YearEndTax's inline logic
+    t: ResolveApprovedAsync includes a line whenever ANY proof exists on a proof-required item; YearEndTaxService's inline logic specifically requires an Accepted-status proof
+    src: "TaxDeclarationService.cs ResolveApprovedAsync vs YearEndTaxService.cs CalculateAsync (proof filter comparison)"
+    type: Boundary
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: "A proof-required line has exactly one proof, Status=Submitted (never reviewed/accepted)"
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: "Line with a Submitted (not Accepted) proof, ApprovedAmount=50000, Status=Approved"
+    steps:
+      - "[Manual] ITaxDeclarationService.ResolveApprovedAsync(employeeId, 2026, asOfDate) => includes the line (any proof present satisfies its own filter)"
+      - "[Manual] YearEndTaxService.CalculateAsync's own inline ApprovedProofAmount computation for the same line => EXCLUDES it (its own filter requires proof Status=Accepted specifically) - the two approved-input computations diverge for this exact scenario"
+    auto: DB-assisted
+
+  - id: TAXDCL-AUDIT-008
+    func: [F-TAXDCL-062]
+    sc: ResolveApprovedAsync returns an empty list, not an error, for a cross-tenant employee
+    t: A cross-tenant employeeId yields Success([]) rather than NotFound/Forbidden
+    src: "TaxDeclarationService.cs ResolveApprovedAsync (TenantId filter, FirstOrDefaultAsync -> null -> empty list)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: "employeeId belongs to tenant T2"
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: "employeeId from T2"
+    steps:
+      - "[Manual] ITaxDeclarationService.ResolveApprovedAsync(<T2 employeeId>, 2026, asOfDate) invoked in T1 context => Success([]), empty list - no error signal distinguishes 'no data' from 'wrong tenant'"
+    auto: DB-assisted
+    secc: true

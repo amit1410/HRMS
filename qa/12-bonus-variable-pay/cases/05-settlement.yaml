@@ -1,0 +1,135 @@
+sheet: VPay_Settlement
+submodule: Payroll/manual settlement recording, outstanding-balance guard, and the missing calculation-engine integration
+defaults:
+  role: HRADMIN
+  perm: "Payroll.VariablePay.Approve"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.VariablePay.Approve granted and an Approved award exists, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: VPAY-SETL-001
+    func: [F-VPAY-063]
+    sc: The Calculation Engine never automatically settles a Variable Pay award
+    t: A full source grep confirms PayrollCalculationEngine.cs has zero VariablePay references - approved awards are never auto-included as a payslip earning
+    src: ["PayrollCalculationEngine.cs (full grep for 'VariablePay')"]
+    type: Boundary
+    pri: P1
+    tags: [Configuration]
+    cr: [CR-205]
+    steps:
+      - "[Manual/Code] Grep Backend/HRMS.Application/Services/PayrollCalculationEngine.cs for 'VariablePay' => zero matches"
+      - "[POST /api/payroll/runs/{id}/calculate] a payroll run for an employee with an Approved, unsettled variable-pay award => [200] the calculated payslip includes no earning component for the award; PayrollResultComponents has no CalculationSource='VariablePay' row"
+    auto: DB-assisted
+
+  - id: VPAY-SETL-002
+    func: [F-VPAY-064]
+    sc: Settle requires Approved, Scheduled or PartiallyPaid
+    t: Settling a Calculated, Submitted, Rejected, or Cancelled award is Conflict
+    src: ["VariablePayService.SettleAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{calculatedId}/settle] award Status=Calculated, SettlementType=Payroll, Amount=100 => [409] Only approved awards can be settled."
+    auto: API
+
+  - id: VPAY-SETL-003
+    func: [F-VPAY-065]
+    sc: Settlement amount must be positive and cannot exceed outstanding
+    t: Amount<=0 or Amount>outstanding is rejected
+    src: ["VariablePayService.SettleAsync"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] award ApprovedAmount=1000, SettledAmount=0, Amount=0 => [400] Settlement must be positive and cannot exceed outstanding approved amount."
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] award ApprovedAmount=1000, SettledAmount=0, Amount=1001 => [400] Settlement must be positive and cannot exceed outstanding approved amount."
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] award ApprovedAmount=1000, Amount=1000 => [200] SettledAmount=1000, Status=Paid"
+    auto: API
+
+  - id: VPAY-SETL-004
+    func: [F-VPAY-066]
+    sc: A duplicate settlement (same source keys) is rejected
+    t: A second Settle call carrying the identical SettlementType/PayrollRunId/FinalSettlementId is Conflict
+    src: ["VariablePayService.SettleAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] SettlementType=Payroll, PayrollRunId=runX, Amount=400 => [200] SettledAmount=400, Status=PartiallyPaid"
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] SettlementType=Payroll, PayrollRunId=runX (same), Amount=300 => [409] This settlement has already been recorded."
+    auto: API
+
+  - id: VPAY-SETL-005
+    func: [F-VPAY-067]
+    sc: A partial settlement's tax split is proportional to the award's own taxable ratio
+    t: A 400-of-1000 settlement on a 40%-taxable award splits 160 taxable / 240 non-taxable
+    src: ["VariablePayService.TaxAmount"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] award ApprovedAmount=1000, TaxableAmount=400 (40%), Amount=400 => [200] settlement TaxableAmount=160, NonTaxableAmount=240"
+    auto: API
+
+  - id: VPAY-SETL-006
+    func: [F-VPAY-068]
+    sc: Settlement transitions to PartiallyPaid or Paid based on outstanding clearance
+    t: A settlement short of the outstanding balance transitions PartiallyPaid; one that exactly clears it transitions Paid
+    src: ["VariablePayService.SettleAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] ApprovedAmount=1000, Amount=600 => [200] Status=PartiallyPaid, SettledAmount=600, OutstandingAmount=400"
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] Amount=400 (clears the remainder) => [200] Status=Paid, SettledAmount=1000, OutstandingAmount=0"
+    auto: API
+
+  - id: VPAY-SETL-007
+    func: [F-VPAY-069]
+    sc: The settlement history event reflects source type and outstanding clearance
+    t: FinalSettlement produces FinalSettlementSettled; a Payroll/ManualRecorded settlement clearing the balance produces PayrollSettled, otherwise PartiallyPaid
+    src: ["VariablePayService.SettleAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] SettlementType=ManualRecorded, Amount=400 (of 1000 outstanding) => [200] history event=PartiallyPaid (not a distinct ManualRecorded event)"
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] SettlementType=Payroll, Amount=600 (clears the remainder) => [200] history event=PayrollSettled"
+    auto: API
+
+  - id: VPAY-SETL-008
+    func: [F-VPAY-070]
+    sc: Settle shares the Approve permission, with no dedicated Settle permission
+    t: A role holding Approve (but no separate settlement permission, since none exists) can call Settle
+    src: ["VariablePayController.Settle"]
+    type: Authorization
+    pri: P2
+    tags: [Authorization, Configuration]
+    cr: [CR-215]
+    steps:
+      - "[Manual/Code] Grep Backend/HRMS.Domain/Authorization/Permissions.cs's Payroll.VariablePay* block => no Settle-specific constant declared; VariablePayController.Settle carries [HasPermission(Permissions.Payroll.VariablePayApprove)]"
+    auto: Manual only
+
+  - id: VPAY-SETL-009
+    func: [F-VPAY-071]
+    sc: A cross-tenant award id on settle is NotFound
+    t: Settling a Tenant A award while signed in as Tenant B is NotFound, not Forbidden
+    src: ["VariablePayService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{tenantAAwardId}/settle] signed in as Tenant B HRAdmin, Amount=100 => [404] Variable-pay award not found."
+    auto: API
+
+  - id: VPAY-SETL-010
+    func: [F-VPAY-072]
+    sc: SettlementDate defaults to the current UTC date when omitted
+    t: A settlement request with no SettlementDate persists today's date
+    src: ["VariablePayService.SettleAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] Amount=100, SettlementDate omitted => [200] settlement.SettlementDate=today's UTC date"
+    auto: API

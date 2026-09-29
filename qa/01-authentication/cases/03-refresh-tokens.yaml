@@ -1,0 +1,481 @@
+sheet: Auth_Refresh
+submodule: Refresh Tokens
+defaults:
+  role: A_EMP
+  perm: "None (anonymous endpoint, auth rate-limit policy)"
+  tenant: A
+  pre: "QA stack running; Tenant A active; a fresh login performed to obtain a refresh token."
+  data: "Refresh token from POST /api/auth/login."
+  sev: High
+  reg: true
+
+cases:
+  - id: AUTH-REFRESH-001
+    func: [F-AUTH-09]
+    sc: Normal refresh
+    t: A valid refresh token exchanges for a new, different token pair
+    src: ["AuthService.RefreshAsync"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "[POST /api/auth/login] Sign in as A_EMP => [200] token pair T1"
+      - "[POST /api/auth/refresh] Send T1.refreshToken => [200] message 'Token refreshed.'"
+      - "Compare new pair T2 with T1 => T2.accessToken differs from T1.accessToken; T2.refreshToken differs from T1.refreshToken"
+      - "[GET /api/auth/me] Call with T2.accessToken => [200] same user id as T1"
+    db: "RefreshTokens: T1's row RevokedAtUtc set, ReplacedByTokenHash = hash(T2.refreshToken); T2's row inserted, RevokedAtUtc NULL."
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Refresh_rotates_the_pair_and_the_old_token_stops_working", "xU:AuthServiceRefreshTests.Refresh_issues_a_new_pair_and_consumes_the_presented_token"]
+
+  - id: AUTH-REFRESH-002
+    func: [F-AUTH-09]
+    sc: Single-use enforcement
+    t: The old refresh token stops working immediately after rotation
+    src: ["AuthService.RefreshAsync (ExecuteUpdate ... WHERE RevokedAtUtc == null)"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/auth/login] Sign in => [200] T1"
+      - "[POST /api/auth/refresh] Refresh with T1.refreshToken => [200] T2"
+      - "[POST /api/auth/refresh] Refresh again with T1.refreshToken (the already-used token) => [401] 'The session is no longer valid. Please sign in again.'"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Refresh_rotates_the_pair_and_the_old_token_stops_working"]
+
+  - id: AUTH-REFRESH-003
+    func: [F-AUTH-10]
+    sc: Replay of a consumed token
+    t: Replaying a revoked refresh token revokes every active session for that user
+    src: ["AuthService.RevokeAllActiveTokensForUserAsync"]
+    type: Security
+    tags: [Negative, Integration-Concurrency]
+    pri: P0
+    sev: Critical
+    role: A_EMP4 (disposable)
+    steps:
+      - "[POST /api/auth/login] Sign in twice as A_EMP4 from two 'devices' => [200] session S1 (refresh R1) and S2 (refresh R2)"
+      - "[POST /api/auth/refresh] Rotate S1: refresh with R1 => [200] R1a issued; R1 now revoked"
+      - "[POST /api/auth/refresh] Replay R1 (already revoked) => [401]"
+      - "[POST /api/auth/refresh] Attempt to refresh S2 with R2 => [401] (R2 was also revoked as part of the replay response)"
+      - "[GET /api/auth/me] Use S2's original access token => record status (access token itself is unaffected until it expires; only refresh is blocked)"
+    db: "RefreshTokens: every row for the user with RevokedAtUtc NULL is revoked, including R1a and R2."
+    sec: "Models the 'stolen refresh token' scenario: replay ends all sessions, not just the replayed one."
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Refresh_rotates_the_pair_and_the_old_token_stops_working", "xU:AuthServiceRefreshTests.Refresh_replay_is_rejected_and_revokes_every_live_session"]
+
+  - id: AUTH-REFRESH-004
+    func: [F-AUTH-11]
+    sc: Concurrent refresh of the same token (race)
+    t: Two simultaneous refresh calls with the same token yield exactly one success
+    src: ["AuthService.RefreshAsync (conditional ExecuteUpdateAsync)"]
+    type: Integration-Concurrency
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/auth/login] Sign in => [200] T1"
+      - "[POST /api/auth/refresh] Fire two POST /api/auth/refresh calls with T1.refreshToken at the same time => exactly one returns [200] with a new pair; the other returns [401]"
+      - "Confirm the failing call's own attempt did not itself trigger a family-wide revocation beyond the normal replay handling => the winning pair remains usable"
+    db: "RefreshTokens: exactly one new row created for this exchange; T1's row revoked once."
+    sec: "No token family is issued twice from one presentation."
+    auto: API
+    ex: ["xU:AuthServiceRefreshTests.Refresh_cannot_consume_the_same_token_twice_when_two_callers_race"]
+
+  - id: AUTH-REFRESH-005
+    func: [F-AUTH-11]
+    sc: Frontend single-flight refresh
+    t: A burst of 401s from multiple in-flight requests triggers exactly one refresh call
+    src: ["api/client.ts refreshSession (refreshInFlight de-duplication)"]
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P1
+    role: A_EMP
+    steps:
+      - "In the browser, expire the in-memory access token (or force three API calls just after natural expiry) so three requests 401 nearly simultaneously => three requests fire"
+      - "Observe network calls to /api/auth/refresh => exactly one refresh call is made; the other two requests wait and are replayed with the renewed token"
+      - "All three original requests eventually succeed => [200] each"
+    auto: API + UI
+    ex: ["V:api/client.test.ts::collapses concurrent 401s onto a single refresh", "V:api/client.test.ts::starts a fresh refresh for a later 401 once the first has settled", "V:api/client.test.ts::replays only once, so a second 401 surfaces to the caller"]
+    cm: "Existing coverage is a mocked-adapter Vitest unit test; this case is the live-browser confirmation."
+
+  - id: AUTH-REFRESH-006
+    func: [F-AUTH-09]
+    sc: Unknown token
+    t: A syntactically plausible but unknown refresh token is rejected
+    src: ["AuthService.RefreshAsync (stored is null)"]
+    type: Negative
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/refresh] Send a random 43-character base64url string => [401] 'The session is no longer valid. Please sign in again.'"
+    auto: API
+    ex: ["xU:AuthServiceRefreshTests.Refresh_rejects_an_unknown_token"]
+
+  - id: AUTH-REFRESH-007
+    func: [F-AUTH-09, F-AUTH-03]
+    sc: Empty and whitespace token
+    t: An empty or whitespace-only refresh token is rejected by validation before any DB lookup
+    src: ["RefreshTokenRequestValidator.NotEmpty", "AuthService.RefreshAsync (presented.Length == 0)"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/refresh] Send {refreshToken: ''} => [400] field 'refreshToken' 'Refresh token is required.'"
+      - "[POST /api/auth/refresh] Send {refreshToken: '   '} => [400] same (or [401] if it reaches the service trim check; record actual)"
+      - "[POST /api/auth/refresh] Omit refreshToken entirely => [400]"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Refresh_with_an_empty_token_is_rejected_by_validation", "xU:AuthServiceRefreshTests.Refresh_rejects_an_empty_token"]
+
+  - id: AUTH-REFRESH-008
+    func: [F-AUTH-09, F-AUTH-03]
+    sc: Oversized token
+    t: A refresh token longer than 200 characters is rejected by validation
+    src: ["RefreshTokenRequestValidator.MaximumLength(200)"]
+    type: Boundary
+    tags: [Negative]
+    pri: P2
+    sev: Medium
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/refresh] Send a 200-character token string => passes validation, [401] as unknown token"
+      - "[POST /api/auth/refresh] Send a 201-character token string => [400] 'Refresh token is not valid.'"
+    auto: API
+
+  - id: AUTH-REFRESH-009
+    func: [F-AUTH-09]
+    sc: Expired refresh token
+    t: A refresh token past its ExpiresAtUtc is rejected
+    src: ["AuthService.RefreshAsync (stored.ExpiresAtUtc <= now)"]
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    pre: "DB-assisted: obtain a live refresh token then set its RefreshTokens.ExpiresAtUtc to the past."
+    steps:
+      - "[POST /api/auth/login] Sign in => [200] T1"
+      - "Set RefreshTokens.ExpiresAtUtc for T1's row to 1 minute in the past => row updated"
+      - "[POST /api/auth/refresh] Refresh with T1.refreshToken => [401]"
+    db: "RefreshTokens.ExpiresAtUtc edited directly."
+    auto: DB-assisted
+    ex: ["xU:AuthServiceRefreshTests.Refresh_rejects_an_expired_token"]
+
+  - id: AUTH-REFRESH-010
+    func: [F-AUTH-08]
+    sc: Refresh-token lifetime follows configuration
+    t: A new refresh token's ExpiresAtUtc equals now + Jwt:RefreshTokenDays
+    src: ["JwtSettings.RefreshTokenDays (default 7)"]
+    type: Positive
+    tags: [Configuration]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/auth/login] Sign in => [200]"
+      - "Inspect RefreshTokens row for the new token => ExpiresAtUtc is CreatedDate + 7 days (within a few seconds)"
+    db: "RefreshTokens.ExpiresAtUtc, CreatedDate."
+    auto: DB-assisted
+
+  - id: AUTH-REFRESH-011
+    func: [F-AUTH-12, F-TEN-10]
+    sc: Refresh presented at another organization's host
+    t: A Tenant A refresh token is refused when presented at the Tenant B host
+    src: ["AuthService.RefreshAsync (shard.TenantId != stored.TenantId)"]
+    type: Tenant-Isolation
+    tags: [Security, Negative]
+    pri: P0
+    sev: Critical
+    tenant: A/B
+    smoke: true
+    steps:
+      - "[POST /api/auth/login] Sign in at Tenant A => [200] T1 (refresh token for A)"
+      - "[POST /api/auth/refresh] Present T1.refreshToken at the Tenant B host => [401]"
+      - "[POST /api/auth/refresh] Present the same token again at the Tenant A host => [200] still valid (the B attempt did not consume it)"
+    db: "No RefreshTokens row created or revoked by the B attempt."
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Refresh_is_refused_at_another_organizations_address", "xU:AuthServiceRefreshTests.Refresh_rejects_a_token_presented_at_another_organizations_address"]
+
+  - id: AUTH-REFRESH-012
+    func: [F-AUTH-12]
+    sc: Bearer and refresh token from different tenants in the same call
+    t: Presenting a live bearer token from Tenant B alongside a Tenant A refresh token is refused
+    src: ["AuthService.RefreshAsync (_tenantContext.TenantId vs stored.TenantId)"]
+    type: Tenant-Isolation
+    tags: [Security, Negative]
+    pri: P1
+    tenant: A/B
+    steps:
+      - "[POST /api/auth/login] Sign in at Tenant A => [200] refresh token RA"
+      - "[POST /api/auth/login] Sign in at Tenant B => [200] access token AB"
+      - "[POST /api/auth/refresh] At the Tenant B host, send Authorization: Bearer AB and body {refreshToken: RA} => [401]"
+    auto: API
+    ex: ["xU:AuthServiceRefreshTests.Refresh_rejects_a_token_belonging_to_a_different_tenant_than_the_bearer"]
+
+  - id: AUTH-REFRESH-013
+    func: [F-AUTH-13]
+    sc: Refresh after account deactivation
+    t: Refresh is refused and the token revoked once the account is deactivated
+    src: ["AuthService.RefreshAsync (user is null || !user.IsActive)"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: A_EMP2 (disposable)
+    steps:
+      - "[POST /api/auth/login] Sign in as A_EMP2 => [200] T1"
+      - "Deactivate A_EMP2 => Users.IsActive = false"
+      - "[POST /api/auth/refresh] Refresh with T1.refreshToken => [401]"
+      - "[POST /api/auth/refresh] Refresh again with the same token => [401] (now revoked, so the message is identical, not a different one for 'already revoked')"
+    db: "RefreshTokens.RevokedAtUtc set on first refusal."
+    auto: DB-assisted
+    ex: ["xU:AuthServiceRefreshTests.Refresh_revokes_the_token_when_the_account_has_been_deactivated"]
+
+  - id: AUTH-REFRESH-014
+    func: [F-AUTH-13, F-TEN-03]
+    sc: Refresh after organization suspension
+    t: Refresh is refused and the token revoked once the tenant becomes inactive/suspended
+    src: ["AuthService.RefreshAsync (tenant.Status != Active)"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: S (disposable, will be suspended)
+    steps:
+      - "[POST /api/auth/login] Sign in to a disposable tenant S => [200] T1"
+      - "Suspend tenant S (catalog Status = Suspended) => suspended"
+      - "[POST /api/auth/refresh] Refresh with T1.refreshToken at the S host => [401] or [404] depending on whether host resolution already blocks it; record actual"
+    db: "RefreshTokens.RevokedAtUtc set if the request reaches AuthService."
+    auto: DB-assisted
+    ex: ["xU:AuthServiceRefreshTests.Refresh_revokes_the_token_when_the_organization_is_suspended"]
+    cm: "TenantShardResolutionMiddleware may already refuse the request with 404 before AuthService runs; record which layer answers."
+
+  - id: AUTH-REFRESH-015
+    func: [F-AUTH-13]
+    sc: Refresh re-reads roles and permissions
+    t: A role change since login is reflected in the token issued by the next refresh
+    src: ["AuthService.IssueTokensAsync (LoadAuthorizationAsync re-run)"]
+    type: Positive
+    tags: [Authorization]
+    pri: P0
+    role: A_EMP3
+    steps:
+      - "[POST /api/auth/login] Sign in as A_EMP3 (Employee only) => [200] T1, permissions P1 (no Leave.Approve)"
+      - "Admin assigns the Manager role to A_EMP3 => role assigned"
+      - "[POST /api/auth/refresh] Refresh with T1.refreshToken => [200] new token's permissions include Leave.Approve"
+    db: "UserRoles updated; new token's permission claims differ from T1's."
+    auto: API
+    ex: ["xU:AuthServiceRefreshTests.Refresh_reflects_a_role_change_made_since_sign_in"]
+
+  - id: AUTH-REFRESH-016
+    func: [F-AUTH-14]
+    sc: Refresh after logout
+    t: The refresh token cannot be used once logout has revoked it
+    src: ["AuthService.LogoutAsync then RefreshAsync"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "[POST /api/auth/login] Sign in => [200] T1"
+      - "[POST /api/auth/logout] Log out with T1.refreshToken => [200]"
+      - "[POST /api/auth/refresh] Refresh with T1.refreshToken => [401]"
+    auto: API
+    ex: ["xU:AuthServiceRefreshTests.Logout_makes_the_refresh_token_unusable"]
+
+  - id: AUTH-REFRESH-017
+    func: [F-AUTH-14]
+    sc: Logout idempotency
+    t: Logging out twice with the same token succeeds both times without error
+    src: ["AuthService.LogoutAsync (stored.RevokedAtUtc is null guard)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[POST /api/auth/login] Sign in => [200] T1"
+      - "[POST /api/auth/logout] Log out => [200] 'Signed out.'"
+      - "[POST /api/auth/logout] Log out again with the same (now-revoked) refresh token and a valid access token from another session, or the same expired access token => [200] 'Signed out.' (idempotent, no error)"
+    auto: API
+    ex: ["xU:AuthServiceRefreshTests.Logout_revokes_the_refresh_token_and_is_idempotent"]
+
+  - id: AUTH-REFRESH-018
+    func: [F-AUTH-14]
+    sc: Logout with no refresh token in the body
+    t: Logging out with an empty refresh token still succeeds (nothing to revoke)
+    src: ["AuthService.LogoutAsync (presented.Length == 0)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/auth/login] Sign in => [200] access token"
+      - "[POST /api/auth/logout] Send {refreshToken: ''} with a valid access token => [200] 'Signed out.'"
+    auto: API
+
+  - id: AUTH-REFRESH-019
+    func: [F-AUTH-14]
+    sc: Logout requires authentication
+    t: Logout without a bearer token is refused
+    src: ["AuthController.Logout [Authorize]"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/logout] Call with no Authorization header, any body => [401]"
+      - "[POST /api/auth/logout] Call with an expired access token => [401]"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Logout_requires_authentication_and_then_invalidates_the_session"]
+
+  - id: AUTH-REFRESH-020
+    func: [F-AUTH-14, F-TEN-10]
+    sc: Logout scope by tenant
+    t: A tenant's authenticated session cannot revoke another tenant's refresh token even with the same hash space
+    src: ["AuthService.LogoutAsync (query.Where(t => t.UserId == callerUserId), tenant filter via DbContext)"]
+    type: Tenant-Isolation
+    tags: [Security, Negative]
+    pri: P0
+    sev: Critical
+    tenant: A/B
+    steps:
+      - "[POST /api/auth/login] Sign in at Tenant B => [200] RB (refresh token for B)"
+      - "[POST /api/auth/login] Sign in at Tenant A => [200] access token AA"
+      - "[POST /api/auth/logout] At the Tenant A host, send Authorization: Bearer AA and body {refreshToken: RB} => [200] 'Signed out.' but RB is NOT revoked (query is tenant-filtered so it matches nothing)"
+      - "[POST /api/auth/refresh] Refresh with RB at the Tenant B host => [200] still valid, confirming it was not revoked"
+    db: "RefreshTokens row for RB unchanged."
+    auto: API
+    ex: ["xU:AuthServiceRefreshTests.Logout_cannot_revoke_another_tenants_session"]
+
+  - id: AUTH-REFRESH-021
+    func: [F-AUTH-14]
+    sc: Logout scope by user within the same tenant
+    t: One user cannot revoke another user's refresh token in the same tenant even if it were guessed
+    src: ["AuthService.LogoutAsync (UserId == callerUserId filter)"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    role: A_EMP and A_EMP2
+    steps:
+      - "[POST /api/auth/login] Sign in as A_EMP2 => [200] R2 (refresh token)"
+      - "[POST /api/auth/login] Sign in as A_EMP => [200] access token A1"
+      - "[POST /api/auth/logout] As A_EMP (bearer A1), send {refreshToken: R2} => [200] but R2 remains active (filtered to A1's own user id)"
+      - "[POST /api/auth/refresh] Refresh with R2 => [200] still valid"
+    auto: API
+    ex: ["xU:AuthServiceRefreshTests.Logout_cannot_revoke_another_users_session_in_the_same_tenant"]
+
+  - id: AUTH-REFRESH-022
+    func: [F-AUTH-09, F-AUTH-08]
+    sc: Refresh-token uniqueness and unpredictability
+    t: Refresh tokens are high-entropy and never repeat across many issuances
+    src: ["JwtTokenService.CreateRefreshToken (256-bit CSPRNG)"]
+    type: Security
+    tags: [Positive]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/auth/login] Sign in 50 times as A_EMP in sequence => [200] each; collect 50 refresh tokens"
+      - "Check for duplicates => zero duplicates; each token is 43 base64url characters (256 bits)"
+    auto: API
+    ex: ["xU:JwtTokenServiceTests.Refresh_tokens_are_random_and_never_repeat"]
+
+  - id: AUTH-REFRESH-023
+    func: [F-AUTH-08]
+    sc: Refresh-token storage
+    t: Only a SHA-256 hash of the refresh token is ever stored, and hashing is deterministic
+    src: ["JwtTokenService.HashRefreshToken"]
+    type: Security
+    tags: [Positive]
+    pri: P1
+    steps:
+      - "[POST /api/auth/login] Sign in => [200] keep the raw refresh token"
+      - "Inspect the RefreshTokens table (QA DB access) => TokenHash is a 64-character hex string; the raw refresh token string does not appear anywhere in the row"
+      - "Compute SHA-256 of the raw token locally => matches TokenHash exactly"
+    db: "RefreshTokens.TokenHash."
+    sec: "A database read alone cannot recover a usable refresh token."
+    auto: DB-assisted
+    ex: ["xU:JwtTokenServiceTests.Refresh_token_hashing_is_deterministic_and_one_way"]
+
+  - id: AUTH-REFRESH-024
+    func: [F-AUTH-09, F-AUTH-08]
+    sc: Refresh-token theft simulation end to end
+    t: A stolen-then-used refresh token causes the legitimate user's next refresh to also fail, forcing re-login
+    src: ["Rotation + replay-revocation combined"]
+    type: Security
+    tags: [Negative, Integration-Concurrency]
+    pri: P0
+    sev: Critical
+    role: A_EMP4 (disposable)
+    steps:
+      - "[POST /api/auth/login] Sign in as A_EMP4 (simulating the legitimate device) => [200] T1"
+      - "Simulate theft: an 'attacker' immediately refreshes with T1.refreshToken => [200] gets T2 first"
+      - "The legitimate device, unaware, also tries to refresh with T1.refreshToken (now already consumed) => [401] and, per AUTH-REFRESH-003, every active session for the user is revoked, including the attacker's T2"
+      - "[POST /api/auth/refresh] Attacker tries to use T2 => [401] (revoked)"
+      - "[POST /api/auth/login] Legitimate user must sign in again with the password => [200] fresh session"
+    sec: "Whoever refreshes second is treated as the intrusion signal and both are cut off; the account is not left compromised, but the legitimate user is also logged out (documented trade-off)."
+    auto: API
+    cm: "This is the practical consequence of AUTH-REFRESH-003; kept as its own end-to-end narrative for defect triage."
+
+  - id: AUTH-REFRESH-025
+    func: [F-AUTH-08, F-SEC-07]
+    sc: Session persistence via localStorage
+    t: A page reload restores the session using the stored refresh token exactly once
+    src: ["AuthProvider restoreSession effect", "session.getRefreshToken"]
+    type: Positive
+    tags: [Integration-Concurrency]
+    pri: P1
+    role: A_EMP
+    steps:
+      - "Sign in through the UI with Remember Me checked => authenticated, refresh token in localStorage"
+      - "Reload the page => status transitions restoring -> authenticated with exactly one network call to /api/auth/refresh (StrictMode double-invoke does not spend two tokens)"
+      - "Inspect localStorage after reload => a rotated refresh token is stored (not the original)"
+    auto: UI
+    ex: ["V:auth/AuthProvider.test.tsx::restores a stored session with exactly one refresh"]
+
+  - id: AUTH-REFRESH-026
+    func: [F-AUTH-08, F-SEC-07]
+    sc: Remember Me unchecked
+    t: Without Remember Me, the refresh token is not written to localStorage and a reload signs the user out
+    src: ["session.save (remember=false keeps the token in memory only)"]
+    type: Positive
+    tags: [Security]
+    pri: P1
+    role: A_EMP
+    steps:
+      - "Sign in through the UI with Remember Me unchecked => authenticated"
+      - "Inspect localStorage => no hrms.refreshToken.v1 key is written"
+      - "Reload the page => status becomes anonymous (nothing to restore); user must sign in again"
+    auto: UI
+    ex: ["V:pages/LoginPage.test.tsx::keeps Remember Me behavior unchanged"]
+
+  - id: AUTH-REFRESH-027
+    func: [F-AUTH-08, F-SEC-07]
+    sc: Cross-tab sign-out
+    t: Signing out in one tab signs out another open tab of the same session
+    src: ["AuthProvider storage event handler"]
+    type: Positive
+    tags: [Integration-Concurrency]
+    pri: P2
+    sev: Medium
+    role: A_EMP
+    steps:
+      - "Sign in with Remember Me checked, then open the app in a second browser tab on the same origin => both tabs show authenticated"
+      - "Sign out from tab 1 => tab 1 shows anonymous; localStorage refresh-token key removed"
+      - "Switch to tab 2 without any user action => tab 2 also becomes anonymous via the storage event"
+    auto: UI
+    ex: ["V:auth/AuthProvider.test.tsx::goes anonymous when another tab signs out", "V:auth/AuthProvider.test.tsx::ignores unrelated storage keys"]
+
+  - id: AUTH-REFRESH-028
+    func: [F-SEC-10, F-AUTH-09]
+    sc: Provider parity for rotation
+    t: Single-use rotation behaves identically on MySQL and SQL Server (conditional update semantics)
+    src: ["AuthService.RefreshAsync ExecuteUpdateAsync", "database-provider-adapter-design.md"]
+    type: Integration-Concurrency
+    pri: P1
+    tenant: "MySQL tenant / SQL Server tenant"
+    pre: "SQL Server leg requires HRMS_SQLSERVER_TEST_CONNECTION*; report 'NOT EXECUTED - environment unavailable' if absent."
+    steps:
+      - "[POST /api/auth/refresh] Repeat AUTH-REFRESH-004 (concurrent refresh race) against a MySQL-backed tenant => exactly one winner"
+      - "[POST /api/auth/refresh] Repeat against a SQL Server-backed tenant => exactly one winner (or NOT EXECUTED - environment unavailable)"
+    auto: DB-assisted
+    ex: ["xU:AuthServiceRefreshTests.Refresh_cannot_consume_the_same_token_twice_when_two_callers_race"]
+    cm: "The existing xUnit test runs on SQLite; this case is the provider-specific confirmation. Do not report a skipped SQL Server run as PASS."

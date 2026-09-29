@@ -1,0 +1,202 @@
+sheet: Leave_Reports
+submodule: Leave Reports (Requests/Employee History/Balances/Usage/Accounting/Pending/Organization/Calendar) and CSV export
+defaults:
+  role: HRADMIN
+  perm: "Leave.ReportsView"
+  tenant: A
+  pre: "Tenant A signed in."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: LEAVE-RPT-001
+    func: [F-LEAVE-249]
+    sc: All seven report kinds are independently reachable
+    t: Requests, Employee History, Balances, Usage, Accounting, Pending, Organization, and Calendar each return their own documented row shape
+    src: ["LeaveReportService"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/leave-reports/requests] => [200] paged request rows"
+      - "[GET /api/leave-reports/employees/{employeeId}/history] => [200] this employee's own request history"
+      - "[GET /api/leave-reports/balances] => [200] balance rows"
+      - "[GET /api/leave-reports/usage] => [200] unpaged usage rows"
+      - "[GET /api/leave-reports/accounting] => [200] paged accounting rows"
+      - "[GET /api/leave-reports/pending] => [200] paged pending rows with aging"
+      - "[GET /api/leave-reports/organization] => [200] unpaged grouped rows"
+      - "[GET /api/leave-reports/calendar] => [200] unpaged holiday/weekly-off configuration rows"
+    auto: API
+
+  - id: LEAVE-RPT-002
+    func: [F-LEAVE-250]
+    sc: Requests/Pending/Usage/Organization share one filtered source
+    t: The same FromDate/ToDate/LeaveTypeId/Status filter narrows all four reports consistently
+    src: ["LeaveReportService.RequestSource/ApplyRequestFilters"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/leave-reports/requests?leaveTypeId={clId}&status=Approved] => [200] only Approved Casual-Leave rows"
+      - "[GET /api/leave-reports/usage?leaveTypeId={clId}] => [200] usage totals reflect only Casual Leave"
+    auto: API
+
+  - id: LEAVE-RPT-003
+    func: [F-LEAVE-251]
+    sc: Sorting is supported only on the Requests report
+    t: sortBy/descending change Requests' row order; the same params on another report have no effect (or are ignored)
+    src: ["LeaveReportService.ApplyRequestSort"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/leave-reports/requests?sortBy=startDate&descending=true] => [200] rows ordered by startDate descending"
+      - "[GET /api/leave-reports/balances?sortBy=startDate&descending=true] => [200] Balances report ignores these params, using its own fixed server-side order"
+    auto: API
+
+  - id: LEAVE-RPT-004
+    func: [F-LEAVE-252]
+    sc: Paging bounds are validated on every paged report
+    t: page<1 and pageSize outside [1,100] are rejected Invalid before any query runs
+    src: ["LeaveReportService.ValidatePaging"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/leave-reports/requests?page=0] => [400] 'Invalid'"
+      - "[GET /api/leave-reports/requests?pageSize=101] => [400] 'Invalid'"
+    auto: API
+
+  - id: LEAVE-RPT-005
+    func: [F-LEAVE-253]
+    sc: The Balances report synthesizes a row for Unlimited types with no balance row yet
+    t: An Unlimited-mode LeaveType with zero EmployeeLeaveBalance rows still appears, with null quantities; an Allocated type with no balance row is simply absent
+    src: ["LeaveReportService.GetBalancesAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/leave-reports/balances] Employee has an Unlimited-mode LeaveType with no EmployeeLeaveBalance row => [200] a row for that LeaveType appears with granted/reserved/consumed/available all null"
+      - "[GET /api/leave-reports/balances] Same employee, an Allocated-mode LeaveType with no balance row (never accrued) => [200] NO row appears for that LeaveType"
+    auto: API
+
+  - id: LEAVE-RPT-006
+    func: [F-LEAVE-254]
+    sc: The Accounting report merges three independent sources into one timeline
+    t: Transactions, accrual occurrences, and period-close occurrences all appear correctly attributed for a date range spanning all three events
+    src: ["LeaveReportService.GetAccountingAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] One Accrual transaction, one AccrualOccurrence row, and one PeriodCloseOccurrence (carry+lapse pair) for the same employee/leaveType in range => test preconditions are established for the steps below"
+      - "[GET /api/leave-reports/accounting?employeeId=&leaveTypeId=&fromDate=&toDate=] => [200] rows for all three sources appear, each correctly labeled by its own source kind"
+    auto: DB-assisted
+
+  - id: LEAVE-RPT-007
+    func: [F-LEAVE-255]
+    sc: Pending report aging buckets match the dashboard's own bucket boundaries
+    t: 0-1/2-3/4-7/8+ day buckets are computed identically to the HR Dashboard's approvalAging
+    src: ["LeaveReportService.GetPendingAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[GET /api/leave-reports/pending] A request submitted 5 days ago => [200] agingBucket='4-7' - same bucket boundary the Dashboard's approvalAging widget would compute for the identical request"
+    auto: API
+
+  - id: LEAVE-RPT-008
+    func: [F-LEAVE-256]
+    sc: Organization report groups by the requested dimension
+    t: organizationDimension=department vs workLocation produce differently-grouped rows with the same underlying request set
+    src: ["LeaveReportService.GetOrganizationAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/leave-reports/organization?organizationDimension=department] => [200] rows grouped by Department, each with approvedEmployeeCount/totalRequests/pendingCount/approvedQuantity"
+      - "[GET /api/leave-reports/organization?organizationDimension=workLocation] Same underlying data => [200] rows grouped by WorkLocation instead"
+    auto: API
+
+  - id: LEAVE-RPT-009
+    func: [F-LEAVE-257]
+    sc: The Calendar report is unscoped by employee authorization
+    t: An HRBP scoped to one Department still sees the FULL tenant-wide Holidays/WeeklyOffConfigurations list, since neither entity carries an EmployeeId
+    src: ["LeaveReportService.GetCalendarAsync"]
+    type: Boundary
+    pri: P1
+    role: HRBP
+    steps:
+      - "[GET /api/leave-reports/calendar] As an HRBP scoped to Department=Engineering (not tenant-wide) => [200] ALL tenant Holidays and WeeklyOffConfigurations are returned, not narrowed by the HRBP's own department scope - this report has no employee dimension to scope by"
+    auto: API
+
+  - id: LEAVE-RPT-010
+    func: [F-LEAVE-258]
+    sc: CSV export reuses the interactive report's own filtered query
+    t: The same filters applied to the on-screen report produce a matching CSV export
+    src: ["LeaveReportService.ExportCsvAsync"]
+    type: Positive
+    pri: P1
+    perm: "Leave.ReportsExport"
+    steps:
+      - "[GET /api/leave-reports/requests?status=Approved] => [200] N rows"
+      - "[GET /api/leave-reports/requests/export.csv?status=Approved] => [200] text/csv with the SAME N rows, same filter applied"
+    auto: API
+
+  - id: LEAVE-RPT-011
+    func: [F-LEAVE-258]
+    sc: Exceeding MaxExportRows rejects the export rather than truncating
+    t: A filter matching more than 50,000 rows is rejected Invalid, not silently cut off
+    src: ["LeaveReportService.ExportCsvAsync"]
+    type: Boundary
+    pri: P2
+    perm: "Leave.ReportsExport"
+    steps:
+      - "[Manual/DB] Seed >50,000 matching request rows => the forced/simulated state is established for the steps below"
+      - "[GET /api/leave-reports/requests/export.csv] => [400] 'Invalid' - export refuses rather than returning a truncated CSV with no indication of the cut"
+    auto: DB-assisted
+
+  - id: LEAVE-RPT-012
+    func: [F-LEAVE-259]
+    sc: An unsupported report name is a clean Invalid, not a 404 or crash
+    t: GET .../not-a-real-report/export.csv fails predictably
+    src: ["LeaveReportService.ExportCsvAsync"]
+    type: Negative
+    pri: P1
+    perm: "Leave.ReportsExport"
+    steps:
+      - "[GET /api/leave-reports/not-a-real-report/export.csv] => [400] 'Invalid: unsupported report' - not 404, not 500"
+    auto: API
+
+  - id: LEAVE-RPT-013
+    func: [F-LEAVE-260]
+    sc: Reports scope excludes the manager path entirely
+    t: A Manager holding only Leave.Approve cannot open Reports; a Manager who ALSO holds Leave.ReportsView sees a role-scope-only view with no automatic direct-report inclusion
+    src: ["LeaveReportService.EnsureEmployeeAccessAsync (includeManager: false)"]
+    type: Contract
+    pri: P1
+    role: MANAGER
+    steps:
+      - "[GET /api/leave-reports/requests] As a Manager holding only Leave.Approve (not Leave.ReportsView) => [403]"
+      - "[GET /api/leave-reports/requests] As a Manager who ALSO holds Leave.ReportsView via a custom Page-Access-granted role, but no matching role-scope => [200] returns rows only within any role-scope this account separately holds - a direct report's request is NOT automatically included via the manager relationship, unlike Approvals/Calendar"
+    auto: API
+
+  - id: LEAVE-RPT-014
+    func: [F-LEAVE-261]
+    sc: Date-range validation applies to every interactive report
+    t: ToDate before FromDate, and a span exceeding 366 days, are both rejected Invalid
+    src: ["LeaveReportService.ResolveScopeAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/leave-reports/requests?fromDate=2027-06-01&toDate=2027-01-01] => [400] 'Invalid'"
+      - "[GET /api/leave-reports/requests?fromDate=2025-01-01&toDate=2027-06-01] Span > 366 days => [400] 'Invalid'"
+    auto: API
+
+  - id: LEAVE-RPT-015
+    func: [F-LEAVE-262]
+    sc: Tenant isolation across every report
+    t: Tenant B's reports never include Tenant A's requests, balances, transactions, occurrences, or holidays
+    src: ["LeaveReportService"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[GET /api/leave-reports/requests] As Tenant B => [200] only Tenant B rows"
+      - "[GET /api/leave-reports/calendar] As Tenant B => [200] only Tenant B's own Holidays/WeeklyOffConfigurations"
+    auto: API
+    ex: ["xU:MySqlLeaveReportsIntegrationTests.MySql_leave_reports_use_authoritative_rows_filters_and_safe_csv"]

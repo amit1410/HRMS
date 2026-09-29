@@ -1,0 +1,45 @@
+sheet: BankAdv_Provider_Parity
+submodule: SQL Server/MySQL Provider Parity
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-PROV-001
+    func: [F-BANKADV-099]
+    sc: Migration pair confirmed in both chains
+    t: AddBankAdvicePaymentProcessing exists in both the SQL Server tenant chain and the MySQL tenant chain
+    src: "Backend/HRMS.Infrastructure/Persistence/Migrations, Backend/HRMS.Infrastructure.MySqlMigrations/Migrations"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] check for 20260919202210_AddBankAdvicePaymentProcessing.cs under Backend/HRMS.Infrastructure/Persistence/Migrations => present (SQL Server)"
+      - "[Manual] check for 20260919202237_AddBankAdvicePaymentProcessing.cs under Backend/HRMS.Infrastructure.MySqlMigrations/Migrations => present (MySQL)"
+    auto: Manual only
+
+  - id: BANKADV-PROV-002
+    func: [F-BANKADV-100]
+    sc: Provider-parity test inventory exists and is opt-in
+    t: SqlServerBankAdviceIntegrationTests / MySqlBankAdviceIntegrationTests / BankAdviceProviderAcceptance exercise the full generate->prepare->approve->export lifecycle, masking, and cross-tenant denial on both providers, skipping silently without env vars
+    src: "Backend/HRMS.Tests/SqlServerBankAdviceIntegrationTests.cs, MySqlBankAdviceIntegrationTests.cs, BankAdviceProviderAcceptance.cs"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "HRMS_SQLSERVER_TEST_CONNECTION / HRMS_MYSQL_TEST_CONNECTION are set to disposable, non-production databases"
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] dotnet test --filter FullyQualifiedName~SqlServerBankAdviceIntegrationTests => PASS when HRMS_SQLSERVER_TEST_CONNECTION is set, skips silently when absent"
+      - "[Manual] dotnet test --filter FullyQualifiedName~MySqlBankAdviceIntegrationTests => PASS when HRMS_MYSQL_TEST_CONNECTION is set, skips silently when absent"
+      - "[Manual] check whether a green default-suite run (SQLite in-memory) counts as provider-parity evidence => it does NOT, per CLAUDE.md's repository-wide convention"
+    auto: Manual only

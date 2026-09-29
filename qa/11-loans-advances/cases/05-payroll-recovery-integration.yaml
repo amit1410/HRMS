@@ -1,0 +1,172 @@
+sheet: Loans_Payroll_Recovery
+submodule: Payroll Deduction Integration - LoanPayrollRecoveryResolver and PayrollCalculationEngine's loan-recovery block
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Run.Calculate"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, a prepared Payroll Run exists for an employee with an Active disbursed loan carrying due installments, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-PAY-001
+    func: [F-LOAN-044]
+    sc: ResolveAsync selects only due, unresolved installments on Active loans
+    t: A future-dated installment and a fully-Recovered installment are both excluded from the due set
+    src: ["LoanPayrollRecoveryResolver.ResolveAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Manual/DB] Employee has installment 1 (DueDate in the past, Status=Scheduled) and installment 2 (DueDate in the future, Status=Scheduled) => precondition established"
+      - "[Manual/Code] Call ResolveAsync(employeeId, payDate=today) => [200] only installment 1 is returned"
+    auto: DB-assisted
+
+  - id: LOAN-PAY-002
+    func: [F-LOAN-044]
+    sc: Due installments are ordered by product RecoveryPriority, then DueDate, then InstallmentNumber
+    t: Two loans with different RecoveryPriority resolve in priority order regardless of due-date order
+    src: ["LoanPayrollRecoveryResolver.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Loan A's product has RecoveryPriority=2 with an earlier due installment; Loan B's product has RecoveryPriority=1 with a later due installment => precondition established"
+      - "[Manual/Code] Call ResolveAsync => [200] Loan B's installment (RecoveryPriority=1) is returned before Loan A's, despite its later DueDate"
+    auto: DB-assisted
+
+  - id: LOAN-PAY-003
+    func: [F-LOAN-045]
+    sc: Calculation adds one LOAN-{loanNumber} deduction component per due installment
+    t: A prepared run's calculation produces a PayrollResultComponent tagged CalculationSource=LoanRecovery
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Payroll.Run.Calculate"
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] the employee's PayrollResult includes a component ComponentCode=LOAN-{loanNumber}, ComponentType=Deduction, CalculationSource=LoanRecovery"
+    auto: API
+
+  - id: LOAN-PAY-004
+    func: [F-LOAN-046]
+    sc: DeferInstallment skips recovery without failing calculation
+    t: An installment whose loan RecoveryPolicy=DeferInstallment is left un-recovered and does not appear as a deduction
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Set the loan's RecoveryPolicy=DeferInstallment => loan/product row updated, RecoveryPolicy=DeferInstallment"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] calculation succeeds; no LOAN-{loanNumber} deduction component is added; the installment remains Status=Scheduled"
+    auto: DB-assisted
+
+  - id: LOAN-PAY-005
+    func: [F-LOAN-047]
+    sc: RecoverFullOrFail fails the whole employee's calculation when net pay is insufficient
+    t: A due installment exceeding available net pay under RecoverFullOrFail aborts calculation with CalculationFailed
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Manual/DB] Set the loan's RecoveryPolicy=RecoverFullOrFail and its due installment amount to exceed the employee's computed net pay => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200/207] the employee's calculation fails with error code CalculationFailed, message contains 'Loan recovery {loanNumber} exceeds available net pay.'"
+    auto: API
+
+  - id: LOAN-PAY-006
+    func: [F-LOAN-048]
+    sc: PartialRecovery clips the deduction to available net pay instead of failing
+    t: A due installment exceeding net pay under PartialRecovery is recovered only up to the remaining net pay, floored at zero
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Set the loan's RecoveryPolicy=PartialRecovery, due installment TotalDue=2000, employee's computed net pay=1200 => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] calculation succeeds; the LOAN-{loanNumber} deduction component's CalculatedAmount=1200 (not 2000); resulting NetPay=0"
+    auto: DB-assisted
+
+  - id: LOAN-PAY-007
+    func: [F-LOAN-049]
+    sc: Multiple due installments across loans apply in priority order against a shrinking net pay
+    t: A second lower-priority loan's recovery sees the net pay already reduced by the first
+    src: ["PayrollCalculationEngine.CalculateEmployeeAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Employee has two Active loans due this cycle: Loan A (RecoveryPriority=1, due=500) and Loan B (RecoveryPriority=2, due=500), employee net pay before loans=800 => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] with Loan B set to PartialRecovery => [200] Loan A recovers its full 500; Loan B (evaluated second, remaining net pay=300) recovers only 300"
+    auto: DB-assisted
+
+  - id: LOAN-PAY-008
+    func: [F-LOAN-050]
+    sc: A successful calculation persists a LoanRepayment and updates the installment
+    t: PersistLoanRecoveriesAsync creates a Payroll-type LoanRepayment and stamps the installment's recovery fields
+    src: ["PayrollCalculationEngine.PersistLoanRecoveriesAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] calculation succeeds"
+      - "[Manual/DB] Query LoanRepayments for the loan => one row RepaymentType=Payroll, Amount=the recovered amount, PayrollRunId/PayrollResultId set; the LoanInstallment's RecoveredAmount/PayrollRunId/PayrollResultId/RecoveredAtUtc are all populated"
+    auto: DB-assisted
+
+  - id: LOAN-PAY-009
+    func: [F-LOAN-051]
+    sc: Recalculation does not double-record the same recovery
+    t: Recalculating the same PayrollResult after a successful recovery leaves exactly one LoanRepayment row for that installment
+    src: ["PayrollCalculationEngine.PersistLoanRecoveriesAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    perm: "Payroll.Run.Recalculate"
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] loan recovered once"
+      - "[POST /api/payroll/runs/{id}/recalculate] => [200] recalculation completes"
+      - "[Manual/DB] Query LoanRepayments for (LoanInstallmentId, PayrollResultId) => exactly ONE row, not two"
+    auto: DB-assisted
+
+  - id: LOAN-PAY-010
+    func: [F-LOAN-052]
+    sc: Installment status reflects full vs partial recovery
+    t: A fully-recovered installment becomes Recovered; a partially-recovered one becomes PartiallyRecovered
+    src: ["PayrollCalculationEngine.PersistLoanRecoveriesAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] (RecoveredAmount==InstallmentAmount case) => [200] installment Status=Recovered"
+      - "[POST /api/payroll/runs/{id}/calculate] (PartialRecovery clipped below InstallmentAmount) => [200] installment Status=PartiallyRecovered"
+    auto: API
+
+  - id: LOAN-PAY-011
+    func: [F-LOAN-053]
+    sc: Payroll recovery decrements the loan's own outstanding aggregates
+    t: After a successful recovery, OutstandingPrincipal/OutstandingInterest/OutstandingTotal all decrease by the recovered principal/interest split
+    src: ["PayrollCalculationEngine.PersistLoanRecoveriesAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] (installment principal=900, interest=100, fully recovered) => [200] loan.OutstandingPrincipal decreases by 900, loan.OutstandingInterest decreases by 100, loan.OutstandingTotal decreases by 1000"
+    auto: API
+
+  - id: LOAN-PAY-012
+    func: [F-LOAN-054]
+    sc: A loan fully recovered to zero via payroll is never auto-closed
+    t: A loan whose final due installment brings OutstandingTotal to zero purely through payroll recovery remains Status=Active
+    src: ["PayrollCalculationEngine.PersistLoanRecoveriesAsync"]
+    type: Boundary
+    pri: P0
+    sev: Critical
+    cr: [CR-184]
+    steps:
+      - "[Manual/DB] Set up a loan with exactly one remaining due installment whose recovery brings OutstandingPrincipal/OutstandingInterest/OutstandingTotal to zero => precondition established"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] the recovery succeeds, OutstandingTotal=0"
+      - "[Manual/DB] Read the loan's Status => still Active (NOT Closed), no ClosedAtUtc/ClosedByUserId/ClosureReason stamped, confirming CR-184"
+    auto: DB-assisted
+
+  - id: LOAN-PAY-013
+    func: [F-LOAN-050]
+    sc: A LoanHistory PayrollRecovery row is appended per recovered installment
+    t: Each successful payroll recovery produces a PayrollRecovery LoanHistory event with the PayrollResultId as source
+    src: ["PayrollCalculationEngine.PersistLoanRecoveriesAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] recovery succeeds"
+      - "[Manual/DB] Query LoanHistories for the loan => one row EventType=PayrollRecovery, SourceType=PayrollResult, SourceId={resultId}"
+    auto: DB-assisted

@@ -1,0 +1,233 @@
+sheet: Platform_Bootstrap_Authz
+submodule: Platform Bootstrap Tool and Cross-Endpoint Authorization
+defaults:
+  role: N/A (operator console tool, run outside the API)
+  perm: "n/a"
+  tenant: None (platform identity domain)
+  pre: "A disposable QA catalog database with the AddPlatformIdentity migration applied and PlatformUsers empty; run only via `dotnet run --project tools/PlatformAdminBootstrap -- --confirm-platform-bootstrap` against that catalog, never a shared or production catalog."
+  data: "Console-entered email/first name/last name/password; never written to any file this catalogue tracks."
+  sev: High
+  reg: true
+
+cases:
+  - id: PLAT-BOOT-001
+    func: [F-PLAT-26]
+    sc: First bootstrap succeeds
+    t: Running the tool against a fresh catalog with the required migrations creates the first PlatformSuperAdmin
+    src: ["tools/PlatformAdminBootstrap/Program.cs"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "Run the tool with --confirm-platform-bootstrap against the disposable QA catalog; enter a valid email, first/last name and matching passwords twice => console prints 'PlatformSuperAdmin created: <id> (<email>)'"
+      - "[POST /api/platform/auth/login] Sign in with those credentials at platform.localhost => [200] roles=['PlatformSuperAdmin'], permissions = PlatformPermissions.All (all 3)"
+    db: "Catalog PlatformUsers (1 row, IsActive=true, SecurityRevision=0), PlatformUserRoles (1 row -> PlatformSuperAdmin)."
+    auto: Manual only
+    cm: "The tool is an interactive console app with no scriptable non-interactive mode found in source; classify as manual/ops-runbook execution rather than automatable via Playwright."
+
+  - id: PLAT-BOOT-002
+    func: [F-PLAT-26]
+    sc: Refuses to run without the explicit confirmation flag
+    t: Omitting --confirm-platform-bootstrap aborts immediately with no database access
+    src: ["Program.cs (args.Contains check, first line)"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: High
+    steps:
+      - "Run the tool with no arguments (or any arguments not including --confirm-platform-bootstrap) => the tool throws immediately with 'Refusing to run without explicit --confirm-platform-bootstrap intent.'; no console prompts appear and no connection is attempted"
+    sec: "Prevents an accidental/scripted invocation from bootstrapping an unintended catalog."
+    auto: Manual only
+
+  - id: PLAT-BOOT-003
+    func: [F-PLAT-26]
+    sc: Refuses a non-catalog database
+    t: The tool verifies it is actually connected to a database named hrms_catalog before writing anything
+    src: ["Program.cs VerifyCatalogIdentityAsync"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    pre: "Point the tool's connection string at a disposable, non-catalog QA database (never a real tenant or production database) to exercise the refusal."
+    steps:
+      - "Configure ConnectionStrings:Catalog to point at a database not named hrms_catalog => run the tool with --confirm-platform-bootstrap => it throws 'Catalog database identity mismatch: expected hrms_catalog, received <name>.' before any write"
+    sec: "A misconfigured connection string cannot silently create a platform admin in the wrong database."
+    auto: Manual only
+
+  - id: PLAT-BOOT-004
+    func: [F-PLAT-26]
+    sc: Refuses to run without the required migrations applied
+    t: Missing or extra applied migrations on the catalog stop the tool before any write
+    src: ["Program.cs VerifyCatalogPrerequisitesAsync (SequenceEqual expectedMigrations)"]
+    type: Negative
+    pri: P1
+    sev: High
+    pre: "A disposable QA catalog with only a subset of the expected migrations applied."
+    steps:
+      - "Run the tool against that catalog => it throws 'Catalog migration prerequisites are not satisfied.' before creating any user"
+    auto: Manual only
+
+  - id: PLAT-BOOT-005
+    func: [F-PLAT-26]
+    sc: Refuses duplicate bootstrap
+    t: A catalog that already has any PlatformUsers row refuses a second bootstrap
+    src: ["Program.cs VerifyCatalogPrerequisitesAsync (PlatformUsers.CountAsync() != 0)"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: High
+    steps:
+      - "After PLAT-BOOT-001 has created the first platform user, run the tool again against the same catalog with a different email => it throws 'PlatformUsers is not empty; refusing duplicate bootstrap.'"
+    sec: "Cannot be used to add a second platform administrator; that must happen through some other, out-of-scope process (none exists in this repository - see F-PLAT-26 status)."
+    auto: Manual only
+
+  - id: PLAT-BOOT-006
+    func: [F-PLAT-26]
+    sc: Refuses a duplicate normalized email even against an empty PlatformUsers table
+    t: Guards against a race where PlatformUsers was emptied by mistake but a normalized-email collision would still violate the unique index
+    src: ["Program.cs (NormalizedEmail AnyAsync check)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P3
+    sev: Low
+    steps:
+      - "This condition is only reachable if PlatformUsers is non-empty, which PLAT-BOOT-005 already refuses first; document as unreachable in current code rather than execute redundantly => no separate run required"
+    auto: Manual only
+    cm: "Recorded for completeness of the source's own defence-in-depth; superseded in practice by PLAT-BOOT-005's earlier check."
+
+  - id: PLAT-BOOT-007
+    func: [F-PLAT-26]
+    sc: Password confirmation and shape
+    t: Mismatched passwords and an empty password are rejected before any database write
+    src: ["Program.cs (password/confirm equality; ReadSecret throws on empty)"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "Run the tool and enter two different values for password/confirm password => throws 'Passwords do not match.' before any write"
+      - "Run the tool and press Enter immediately at the password prompt => throws '<label> is required.'"
+    auto: Manual only
+
+  - id: PLAT-BOOT-008
+    func: [F-PLAT-26]
+    sc: Email validation
+    t: An invalid or oversized email is rejected before any database write
+    src: ["Program.cs ValidateEmail"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "Run the tool and enter 'not-an-email' at the email prompt => throws 'Platform administrator email is invalid.'"
+      - "Run the tool and enter a 257-character email-shaped string => throws 'Platform administrator email is too long.'"
+    auto: Manual only
+
+  - id: PLAT-BOOT-009
+    func: [F-PLAT-26]
+    sc: Password is scrubbed from memory variables after use
+    t: The plaintext password variables are cleared in the finally block regardless of outcome
+    src: ["Program.cs (the local password variables are reset to an empty value on both the try's end and the outer finally)"]
+    type: Security
+    pri: P3
+    sev: Low
+    steps:
+      - "Code-review confirmation only: verify the finally block clears both password and confirm on every exit path, success or failure => confirmed by inspection"
+    auto: Manual only
+    cm: ".NET strings are immutable, so this reduces but does not eliminate residual copies in memory; recorded as a defence-in-depth measure, not a guarantee."
+
+  - id: PLAT-BOOT-010
+    func: [F-PLAT-26, F-PLAT-27]
+    sc: Bootstrap works against both supported catalog providers
+    t: The tool succeeds against a MySQL catalog and a SQL Server catalog with equivalent results
+    src: ["Program.cs ConnectionProvider / catalogProvider handling"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    pre: "SQL Server leg requires a disposable SQL Server QA catalog; otherwise NOT EXECUTED - environment unavailable for that leg."
+    steps:
+      - "Run PLAT-BOOT-001 against a MySQL QA catalog => succeeds"
+      - "Run PLAT-BOOT-001 against a SQL Server QA catalog (with its own distinct expected migration list) => succeeds identically"
+    auto: Manual only
+
+  - id: PLAT-AUTHZ-001
+    func: [F-PLAT-24]
+    sc: Every platform tenant permission is distinct from every tenant-domain permission
+    t: PlatformTenant.* permissions never appear in the tenant Permissions.All list, and vice versa
+    src: ["PlatformTenantAuthorizationTests.Platform_permissions_are_granted_only_to_super_admin_seed_role"]
+    type: Contract
+    tags: [Security]
+    pri: P1
+    role: N/A (introspection)
+    tenant: A
+    steps:
+      - "Enumerate PlatformPermissions.All (3 values) and Permissions.All (281 values, Module 1's count) => no overlap in either direction"
+      - "[GET /api/employees] Attempt to use a tenant permission name as a platform policy (i.e. confirm PlatformPermissionHandler only recognises PlatformPermissions.All names) => a crafted platform token carrying a tenant permission claim instead of a platform one is refused [403] by any [PlatformPermission] endpoint"
+    auto: API
+    ex: ["xU:PlatformTenantAuthorizationTests.Platform_permissions_are_granted_only_to_super_admin_seed_role"]
+
+  - id: PLAT-AUTHZ-002
+    func: [F-PLAT-24]
+    sc: Tenant SuperAdmin cannot reach any platform tenant endpoint
+    t: A tenant role literally named SuperAdmin has no bearing on platform authorization
+    src: ["docs/platform-identity-tenant-onboarding.md 'PlatformSuperAdmin != TenantSuperAdmin'"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: A_ADMIN (tenant SuperAdmin/TenantAdmin)
+    tenant: A
+    steps:
+      - "[POST /api/auth/login] Sign in as A_ADMIN (tenant SuperAdmin) at Tenant A's host => [200] tenant access token"
+      - "[GET /api/platform/tenants] Present that tenant token at platform.localhost => [401] (wrong bearer scheme entirely, per Module 1 PLATFORM-AUTH-016)"
+    auto: API
+    ex: ["xU:PlatformTenantAuthorizationTests.Platform_permissions_are_granted_only_to_super_admin_seed_role"]
+    cm: "Cross-references Module 1 PLATFORM-AUTH-015/016; repeated here because tenant onboarding is where a real operator could most plausibly confuse the two SuperAdmin concepts."
+
+  - id: PLAT-AUTHZ-003
+    func: [F-PLAT-27]
+    sc: Catalog and tenant models never overlap on mapped tables
+    t: The catalog context maps only routing/platform-identity tables; the tenant context maps no catalog/platform tables
+    src: ["DatabaseInitializerTests.The_catalog_model_maps_routing_and_platform_identity_tables_but_no_tenant_tables", "The_tenant_model_does_not_map_branding"]
+    type: Contract
+    tags: [Security]
+    pri: P1
+    role: N/A (model introspection)
+    steps:
+      - "Inspect HrmsCatalogDbContext's model => maps Tenants, TenantBranding, PlatformUsers/Roles/Permissions/UserRoles/RolePermissions/RefreshTokens only; no Employees/Users/business tables"
+      - "Inspect HrmsDbContext's model => maps no TenantBranding, no Platform* tables"
+    auto: DB-assisted
+    ex: ["xU:DatabaseInitializerTests.The_catalog_model_maps_routing_and_platform_identity_tables_but_no_tenant_tables", "xU:DatabaseInitializerTests.The_tenant_model_does_not_map_branding"]
+
+  - id: PLAT-AUTHZ-004
+    func: [F-PLAT-24]
+    sc: A revoked platform role takes effect immediately, live, on the tenant endpoints too
+    t: PlatformPermissionHandler re-checks the database on every request for tenant-management endpoints as well
+    src: ["PlatformPermissionHandler.HandleRequirementAsync"]
+    type: Security
+    pri: P0
+    sev: High
+    role: PLATFORM_ADMIN2 (disposable, holds PlatformSuperAdmin)
+    steps:
+      - "[GET /api/platform/tenants] As PLATFORM_ADMIN2, with a valid unexpired token => [200]"
+      - "Revoke PLATFORM_ADMIN2's platform role (DB-assisted) => revoked"
+      - "[GET /api/platform/tenants] Call again with the SAME still-unexpired token => [403]"
+    db: "Catalog PlatformUserRoles row removed."
+    auto: DB-assisted
+    cm: "Cross-references Module 1 PLATFORM-AUTH-018, exercised here against the tenant-management surface specifically."
+
+  - id: PLAT-AUTHZ-005
+    func: [F-PLAT-24]
+    sc: A deactivated platform user's tokens fail every tenant-management call
+    t: PlatformPermissionHandler and the PlatformAuthenticated policy both check PlatformUsers.IsActive
+    src: ["PlatformPermissionHandler.HandleRequirementAsync (user is null || !user.IsActive)"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: High
+    role: PLATFORM_ADMIN2 (disposable)
+    steps:
+      - "[GET /api/platform/tenants] As PLATFORM_ADMIN2 with a valid token => [200]"
+      - "Deactivate PLATFORM_ADMIN2 (PlatformUsers.IsActive=false) => deactivated"
+      - "[GET /api/platform/tenants] Call again with the same token => [403]/[401]; record actual (PlatformPermissionHandler simply does not Succeed, so the policy falls through to a generic forbidden unless PlatformAuthenticated's own check answers first)"
+    db: "Catalog PlatformUsers.IsActive."
+    auto: DB-assisted

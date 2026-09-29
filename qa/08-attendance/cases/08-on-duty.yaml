@@ -1,0 +1,291 @@
+sheet: Attendance_OnDuty
+submodule: Employee On Duty requests and Manager approval workflow
+defaults:
+  role: EMPLOYEE
+  perm: "Attendance.OnDuty.Request"
+  tenant: A
+  pre: "Tenant A signed in as an active, linked Employee, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-OD-001
+    func: [F-ATT-156]
+    sc: Submit a valid single-day On Duty request
+    t: A one-day OD with reason succeeds
+    src: ["AttendanceWorkflowService.SubmitOnDutyAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/me/on-duty] StartDate=EndDate=2026-07-20, Reason='Client site visit', Purpose='Client demo', Location='Client HQ' => [200/201] Status=Pending"
+    auto: API
+
+  - id: ATT-OD-002
+    func: [F-ATT-156]
+    sc: Submit a valid multi-day On Duty request
+    t: A date-range OD spanning several days succeeds natively, with no time-of-day fields
+    src: ["AttendanceWorkflowService.SubmitOnDutyAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[POST /api/attendance/me/on-duty] StartDate=2026-07-20, EndDate=2026-07-24, Reason='Offsite training' => [200/201] Status=Pending covering all 5 dates - confirm no StartTime/EndTime fields exist on the request at all (whole-day-per-date only)"
+    auto: API
+
+  - id: ATT-OD-003
+    func: [F-ATT-156]
+    sc: Reason is mandatory; Purpose/Location are optional and length-capped
+    t: Blank Reason is rejected; Purpose over 1000 / Location over 500 chars are rejected
+    src: ["AttendanceWorkflowService.SubmitOnDutyAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/me/on-duty] Reason='' => [400] Reason required"
+      - "[POST /api/attendance/me/on-duty] Purpose=<1001 chars> => [400] Purpose exceeds max length"
+      - "[POST /api/attendance/me/on-duty] Location=<501 chars> => [400] Location exceeds max length"
+    auto: API
+
+  - id: ATT-OD-004
+    func: [F-ATT-157]
+    sc: StartDate after EndDate is rejected
+    t: An inverted date range fails validation
+    src: ["AttendanceWorkflowService.SubmitOnDutyAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/me/on-duty] StartDate=2026-07-25, EndDate=2026-07-20 => [400] Invalid date range"
+    auto: API
+
+  - id: ATT-OD-005
+    func: [F-ATT-157]
+    sc: On Duty submission is blocked for a separated employee, a range after DateOfLeaving, and a closed period intersecting the range
+    t: The same active-employment and period-lock guards as Regularization apply across the whole range
+    src: ["AttendanceWorkflowService.SubmitOnDutyAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Setup] Employee is separated (EmployeeStatus != Active) => precondition established"
+      - "[POST /api/attendance/me/on-duty] As the separated employee => [403] Forbidden"
+      - "[Setup] Close the period overlapping the requested range => [200] Closed"
+      - "[POST /api/attendance/me/on-duty] StartDate/EndDate inside the closed period => [409] period-lock Conflict"
+    auto: API
+    cr: [CR-53]
+
+  - id: ATT-OD-006
+    func: [F-ATT-158]
+    sc: Overlap against another PENDING On-Duty request for the same employee is blocked
+    t: Submitting an identical/overlapping range twice while the first is still Pending Conflicts
+    src: ["AttendanceWorkflowService.SubmitOnDutyAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/attendance/me/on-duty] StartDate=2026-07-20, EndDate=2026-07-22 (first) => [200/201] Pending"
+      - "[POST /api/attendance/me/on-duty] StartDate=2026-07-21, EndDate=2026-07-23 (overlapping, second) => [409] 'An overlapping pending On Duty request already exists'"
+    auto: API
+
+  - id: ATT-OD-007
+    func: [F-ATT-158]
+    sc: Overlap against an already-APPROVED On-Duty request is NOT blocked at submission
+    t: A second OD request over dates already covered by an Approved OD is silently accepted at submission time
+    src: ["AttendanceWorkflowService.SubmitOnDutyAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] An APPROVED On-Duty request already covers 2026-07-20..22 for this employee => precondition established for the steps below"
+      - "[POST /api/attendance/me/on-duty] StartDate=2026-07-20, EndDate=2026-07-22 (identical range, new request) => [200/201] Pending - the overlap check only inspects Pending requests, so this duplicate-over-Approved slips through submission validation entirely"
+    auto: API
+    cr: [CR-106]
+
+  - id: ATT-OD-008
+    func: [F-ATT-158]
+    sc: An On Duty request overlapping the employee's own approved Leave is accepted at submission - the conflict is only caught at approval time
+    t: Submission succeeds even though the range collides with approved Leave; only Approve later Conflicts
+    src: ["AttendanceWorkflowService.SubmitOnDutyAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Employee has APPROVED Leave for 2026-07-20..21 => precondition established for the steps below"
+      - "[POST /api/attendance/me/on-duty] StartDate=2026-07-20, EndDate=2026-07-21 => [200/201] Pending - submission does NOT check Leave overlap at all"
+    auto: API
+    cr: [CR-106]
+
+  - id: ATT-OD-009
+    func: [F-ATT-159]
+    sc: List and get own On Duty requests
+    t: An employee reads their own submitted requests
+    src: ["AttendanceWorkflowService"]
+    type: Positive
+    pri: P1
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/me/on-duty] => [200] includes the caller's own requests"
+      - "[GET /api/attendance/me/on-duty/{id}] => [200] full detail"
+    auto: API
+
+  - id: ATT-OD-010
+    func: [F-ATT-159]
+    sc: An employee cannot read another employee's On Duty request
+    t: A colleague's request is NotFound
+    src: ["AttendanceWorkflowService"]
+    type: Security
+    pri: P1
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/me/on-duty/{colleaguesRequestId}] => [404]"
+    auto: API
+
+  - id: ATT-OD-011
+    func: [F-ATT-160]
+    sc: Only the owning employee can cancel their own Pending On Duty request
+    t: The owner can cancel; only while Pending
+    src: ["AttendanceWorkflowService.CancelOnDutyAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/attendance/me/on-duty/{ownPendingRequestId}/cancel] => [200] Status=Cancelled, no adjustment/exception entity created"
+      - "[POST /api/attendance/me/on-duty/{id}/cancel] second call on the now-Cancelled request => [409] Conflict"
+    auto: API
+
+  - id: ATT-OD-012
+    func: [F-ATT-161]
+    sc: A single-day request approves normally for the currently-effective manager
+    t: Happy-path single-day approval
+    src: ["AttendanceWorkflowService.TransitionOnDuty"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: MANAGER
+    perm: "Attendance.OnDuty.Approve"
+    steps:
+      - "[POST /api/attendance/manager/on-duty/{id}/approve] As the current effective manager for that date => [200] Status=Approved"
+    auto: API
+
+  - id: ATT-OD-013
+    func: [F-ATT-161]
+    sc: A multi-day request spanning a manager-change boundary cannot be approved by either single manager
+    t: Neither the old nor the new manager alone satisfies the every-date authority requirement
+    src: ["AttendanceWorkflowService.TransitionOnDuty"]
+    type: Boundary
+    pri: P0
+    role: MANAGER
+    perm: "Attendance.OnDuty.Approve"
+    steps:
+      - "[Setup] Employee's manager changed from X to Y effective 2026-07-22; an On Duty request spans 2026-07-20..24 (crossing the boundary) => precondition established"
+      - "[POST /api/attendance/manager/on-duty/{id}/approve] As Manager X (old, authoritative only for 20-21) => [403] Forbidden - not authoritative for the full range"
+      - "[POST /api/attendance/manager/on-duty/{id}/approve] As Manager Y (new, authoritative only for 22-24) => [403] Forbidden - same reason"
+    auto: API
+
+  - id: ATT-OD-014
+    func: [F-ATT-162]
+    sc: Approval is rejected if any day in range already has approved Leave, and nothing is mutated
+    t: The Leave overlap guard runs before any DB write
+    src: ["AttendanceWorkflowService.TransitionOnDuty"]
+    type: Negative
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.OnDuty.Approve"
+    steps:
+      - "[Setup] Approved Leave covers one day inside the OD's date range (per ATT-OD-008's precondition) => precondition established for the steps below"
+      - "[POST /api/attendance/manager/on-duty/{id}/approve] => [409] 'Approved Leave overlaps this On Duty request'"
+      - "[GET /api/attendance/me/on-duty/{id}] => [200] Status still Pending"
+      - "[Manual/DB] Confirm the Leave request is still Approved and unchanged, and no EmployeeAttendanceDay was created/altered for any date in the range => confirmed"
+    auto: API
+
+  - id: ATT-OD-015
+    func: [F-ATT-163]
+    sc: On approve, every date in range is reprocessed and projected OnDuty
+    t: A clean multi-day approval projects OnDuty across all dates
+    src: ["AttendanceWorkflowService.TransitionOnDuty"]
+    type: Positive
+    pri: P0
+    role: MANAGER
+    perm: "Attendance.OnDuty.Approve"
+    steps:
+      - "[POST /api/attendance/manager/on-duty/{id}/approve] a clean 3-day request with no conflicts => [200] Status=Approved"
+      - "[GET /api/attendance/me/days/{day1}], [day2], [day3] => [200] all three days show Status=OnDuty"
+    auto: API
+
+  - id: ATT-OD-016
+    func: [F-ATT-163]
+    sc: If reprocessing fails for ANY date in a multi-day range, the whole approval rolls back across ALL dates
+    t: A mid-range processor failure leaves zero days projected, not a partial set
+    src: ["AttendanceWorkflowService.TransitionOnDuty"]
+    type: Integration-Concurrency
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.OnDuty.Approve"
+    steps:
+      - "[Manual/DB] Force IAttendanceDayProcessor.ProcessAsync to fail for the SECOND date of a 3-day range only => forced condition established"
+      - "[POST /api/attendance/manager/on-duty/{id}/approve] => [409/503] fails; ZERO EmployeeAttendanceDay rows for ANY of the 3 dates were projected OnDuty - not just the failing date"
+      - "[POST /api/attendance/manager/on-duty/{id}/approve] retry without the forced failure => [200] succeeds cleanly, all 3 days now OnDuty, exactly 2 Approved-type events total across the retry"
+    auto: DB-assisted
+
+  - id: ATT-OD-017
+    func: [F-ATT-164]
+    sc: Approving an On Duty over an already-Absent day removes it from active exceptions
+    t: The Absence exception disappears once the day is reprocessed OnDuty
+    src: ["AttendanceWorkflowService.TransitionOnDuty"]
+    type: Positive
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.OnDuty.Approve"
+    steps:
+      - "[Setup] date D is currently Status=Absent, appearing in the period's exception list => precondition established for the steps below"
+      - "[POST /api/attendance/manager/on-duty/{id}/approve] covering D => [200] Approved"
+      - "[GET /api/attendance/periods/{id}/exceptions] => [200] the Absent exception for D and this employee is no longer present"
+    auto: DB-assisted
+
+  - id: ATT-OD-018
+    func: [F-ATT-165]
+    sc: On Duty produces no separate adjustment-audit entity
+    t: Unlike Regularization's AttendanceAdjustment, approval writes only the day status projection
+    src: ["AttendanceWorkflowService.TransitionOnDuty"]
+    type: Contract
+    pri: P2
+    role: MANAGER
+    perm: "Attendance.OnDuty.Approve"
+    steps:
+      - "[POST /api/attendance/manager/on-duty/{id}/approve] => [200] Approved"
+      - "[Manual/DB] Inspect for an OnDuty-equivalent adjustment table/row => none exists; the OnDuty status on EmployeeAttendanceDay IS the entire record of this approval's effect"
+    auto: DB-assisted
+
+  - id: ATT-OD-019
+    func: [F-ATT-166]
+    sc: Reject is terminal and self-approval-guarded identically to approve
+    t: Reject stores comments; the owning employee cannot reject their own request
+    src: ["AttendanceWorkflowService.TransitionOnDuty"]
+    type: Positive
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.OnDuty.Approve"
+    steps:
+      - "[POST /api/attendance/manager/on-duty/{ownRequestId}/reject] As the request's own employee holding Approve => [403] Forbidden"
+      - "[POST /api/attendance/manager/on-duty/{id}/reject] Comment='Not eligible for OD' As the effective manager => [200] Status=Rejected"
+    auto: API
+
+  - id: ATT-OD-020
+    func: [F-ATT-167]
+    sc: The manager queue lists only in-scope Pending On Duty requests, and permission is required even with a genuine relationship
+    t: Same visibility/permission pattern as Regularization
+    src: ["AttendanceWorkflowService.GetManagerOnDutyAsync"]
+    type: Authorization
+    pri: P0
+    role: MANAGER
+    steps:
+      - "[GET /api/attendance/manager/on-duty] As the genuine effective manager, holding NO Attendance permissions => [403] Forbidden"
+      - "[GET /api/attendance/manager/on-duty] As the genuine effective manager, holding Attendance.OnDuty.Approve => [200] only in-scope reports' Pending requests appear"
+    auto: API
+
+  - id: ATT-OD-021
+    func: [F-ATT-168]
+    sc: Cross-tenant On Duty mutation attempts have zero side effects
+    t: A Tenant B caller referencing a Tenant A request id is denied with no data change
+    src: ["AttendanceWorkflowService"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/attendance/me/on-duty/{tenantARequestId}] As a Tenant B employee => [404]"
+      - "[POST /api/attendance/manager/on-duty/{tenantARequestId}/approve] As a Tenant B manager holding OnDuty.Approve => [404] - no side effect on Tenant A's request"
+    auto: API

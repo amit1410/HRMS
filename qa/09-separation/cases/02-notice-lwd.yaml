@@ -1,0 +1,363 @@
+sheet: Separation_Notice
+submodule: Notice period computation/waiver and Last Working Date (proposed, approved, and revision) mechanics
+defaults:
+  role: HRADMIN
+  perm: "Separation.HrReview"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: SEP-NOT-001
+    func: [F-SEP-039, F-SEP-040]
+    sc: Notice snapshot is captured only at HR approval, requiring a positive day-based notice period
+    t: HR approval reads EmployeeEmployment.NoticePeriod/Unit at approval time; a non-day-based or zero/negative period Conflicts
+    src: ["SeparationService.HrApproveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] EmployeeEmployment.NoticePeriod=30, NoticePeriodUnit='Days' => precondition established"
+      - "[POST /api/separation/{id}/hr-approve] => [200] NoticePeriodDays=30 stamped from EmployeeEmployment, not from creation-time value"
+      - "[Setup] a second case whose employment has NoticePeriod=0 => precondition established"
+      - "[POST /api/separation/{id2}/hr-approve] => [409] A positive day-based employment notice period is required before approval."
+    auto: API
+
+  - id: SEP-NOT-002
+    func: [F-SEP-040]
+    sc: A non-day-based notice unit is rejected at approval
+    t: NoticePeriodUnit='Months' fails the day-based requirement even with a positive number
+    src: ["SeparationService.HrApproveAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] EmployeeEmployment.NoticePeriod=1, NoticePeriodUnit='Months' => precondition established"
+      - "[POST /api/separation/{id}/hr-approve] => [409] A positive day-based employment notice period is required before approval."
+    auto: API
+
+  - id: SEP-NOT-003
+    func: [F-SEP-041, F-SEP-042, F-SEP-043]
+    sc: Notice start/end/served/shortfall/extension arithmetic
+    t: Standard 30-day notice with LWD short of requirement produces the expected served/shortfall numbers
+    src: ["SeparationService.HrApproveAsync", "GetNoticeAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] RequestDate=2026-10-01, NoticePeriod=30 days, ApprovedLastWorkingDate=2026-10-10 => precondition established"
+      - "[POST /api/separation/{id}/hr-approve] => [200] NoticeStartDate=2026-10-01, ExpectedNoticeEndDate=2026-10-30"
+      - "[GET /api/separation/{id}/notice] => [200] NoticeServedDays=10, NoticeShortfallDays=20, NoticeExtensionDays=0, NoticeDisposition=Recoverable"
+    auto: API
+
+  - id: SEP-NOT-004
+    func: [F-SEP-044]
+    sc: Zero-day / severely shortened notice is fully supported
+    t: An approved LWD equal to the notice start date produces ServedDays=1 with no special-case error
+    src: ["SeparationService.HrApproveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] NoticeStartDate=2026-10-01, ApprovedLastWorkingDate=2026-10-01 => precondition established"
+      - "[POST /api/separation/{id}/hr-approve] => [200] NoticeServedDays=1, NoticeShortfallDays=required-1"
+    auto: API
+
+  - id: SEP-NOT-005
+    func: [F-SEP-045]
+    sc: Extended notice (served beyond required) via post-approval LWD revision
+    t: Revising the approved LWD forward past the required notice period produces NoticeExtensionDays>0
+    src: ["SeparationService.ReviseApprovedLwdAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ReviseApprovedLastWorkingDate"
+    steps:
+      - "[Setup] Approved, 30-day notice, current ApprovedLastWorkingDate=NoticeStartDate+9 (10 served, 20 shortfall) => precondition established"
+      - "[POST /api/separation/{id}/revise-approved-lwd] NewLastWorkingDate=NoticeStartDate+39, Reason='Extended handover' => [200] NoticeServedDays=40, NoticeShortfallDays=0, NoticeExtensionDays=10, event=ApprovedLwdExtended"
+    auto: API
+
+  - id: SEP-NOT-006
+    func: [F-SEP-046, F-SEP-047]
+    sc: Partial and full notice waiver, validated bounds
+    t: Two partial waivers summing to the full shortfall succeed; a further waiver beyond zero remaining shortfall is Invalid
+    src: ["SeparationService.ApplyNoticeWaiverAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Separation.NoticeWaive"
+    steps:
+      - "[Setup] Approved, NoticeShortfallDays=20 => precondition established"
+      - "[POST /api/separation/{id}/notice/waive] WaiverDays=5, Reason='Partial waiver' => [200] WaivedNoticeDays=5, NoticeShortfallDays=15, NoticeDisposition=Waived"
+      - "[POST /api/separation/{id}/notice/waive] WaiverDays=15, Reason='Full waiver' => [200] WaivedNoticeDays=20, NoticeShortfallDays=0, NoticeDisposition=CompanyWaived"
+      - "[POST /api/separation/{id}/notice/waive] WaiverDays=1, Reason='Excess' => [400] Waiver cannot exceed the remaining notice shortfall."
+    auto: API
+
+  - id: SEP-NOT-007
+    func: [F-SEP-047]
+    sc: WaiverDays must be > 0
+    t: A zero or negative WaiverDays is Invalid
+    src: ["SeparationService.ApplyNoticeWaiverAsync"]
+    type: Negative
+    pri: P1
+    perm: "Separation.NoticeWaive"
+    steps:
+      - "[POST /api/separation/{id}/notice/waive] WaiverDays=0, Reason='x' => [400] Waiver days must be greater than zero."
+    auto: API
+
+  - id: SEP-NOT-008
+    func: [F-SEP-048]
+    sc: Waiver is Approved-status-only and requires an existing notice snapshot
+    t: Waiving before HR approval (no notice snapshot yet) Conflicts
+    src: ["SeparationService.ApplyNoticeWaiverAsync"]
+    type: Negative
+    pri: P1
+    perm: "Separation.NoticeWaive"
+    steps:
+      - "[Setup] Case is still HrReview (not yet Approved) => precondition established"
+      - "[POST /api/separation/{id}/notice/waive] WaiverDays=5, Reason='x' => [409] Separation must be in Approved status."
+    auto: API
+
+  - id: SEP-NOT-009
+    func: [F-SEP-049]
+    sc: NoticeDisposition transitions correctly across waiver states
+    t: No-shortfall is None, partial waiver is Waived, full waiver is CompanyWaived, unwaived shortfall is Recoverable
+    src: ["SeparationService.ApplyNoticeWaiverAsync"]
+    type: Boundary
+    pri: P2
+    perm: "Separation.NoticeWaive"
+    steps:
+      - "[Setup] Approved, no shortfall (served>=required) => precondition established"
+      - "[GET /api/separation/{id}/notice] => [200] NoticeDisposition=None"
+    auto: API
+
+  - id: SEP-NOT-010
+    func: [F-SEP-050]
+    sc: Notice waiver never creates a monetary/payroll side effect on its own
+    t: PayrollResults and FinalSettlementCases remain empty immediately after a waiver
+    src: ["SeparationService.ApplyNoticeWaiverAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.NoticeWaive"
+    steps:
+      - "[POST /api/separation/{id}/notice/waive] WaiverDays=5, Reason='x' => [200] Success"
+      - "[Manual/DB] Query PayrollResults, FinalSettlementCases for this employee => zero rows created by the waiver call"
+    auto: DB-assisted
+
+  - id: SEP-NOT-011
+    func: [F-SEP-051, F-SEP-154]
+    sc: Notice-pay/recovery money is computed downstream from EmployeeEmployments, not EmployeeSeparation's own snapshot
+    t: Diverging the two tracks proves the settlement's notice line reflects EmployeeEmployments, not the HR-visible separation notice fields
+    src: ["SeparationBenefitsService.CalculateNoticeAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    perm: "Payroll.SeparationBenefits.Calculate"
+    steps:
+      - "[Setup] EmployeeSeparation.NoticeShortfallDays=0 (fully waived) but EmployeeEmployments.NoticeStartDate/NoticeEndDate still reflect an UNSERVED shortfall (never synced by the waiver call) => precondition established"
+      - "[POST /api/payroll/separation-benefits/{employeeId}/calculate] => [200] the posted NoticeRecovery/NoticePay line amount is computed from EmployeeEmployments' values, NOT from EmployeeSeparation's zero-shortfall snapshot"
+    auto: DB-assisted
+    cr: [CR-154]
+
+  - id: SEP-NOT-012
+    func: [F-SEP-052]
+    sc: Get notice detail and notice history
+    t: Notice detail reflects the current snapshot; notice/history is identical to the general case history, not filtered
+    src: ["SeparationService.GetNoticeAsync", "GetNoticeHistoryAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ViewHistory"
+    steps:
+      - "[GET /api/separation/{id}/notice] => [200] SeparationNoticeDto with all snapshot fields"
+      - "[GET /api/separation/{id}/notice/history] => [200] identical event list to GET /api/separation/{id}/history"
+    auto: API
+
+  - id: SEP-NOT-013
+    func: [F-SEP-053]
+    sc: HR approval rejects LWD outside the employment interval or after DateOfLeaving
+    t: Approved LWD before DOJ, and after an existing DateOfLeaving, both fail
+    src: ["SeparationService.HrApproveAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] Employment.DateOfJoining=2020-01-01; ProposedLastWorkingDate predates it (data-corruption scenario) => precondition established"
+      - "[POST /api/separation/{id}/hr-approve] => [400] Approved last working date is outside the employment interval."
+      - "[Setup] Employee.DateOfLeaving already set to 2026-06-01; ProposedLastWorkingDate=2026-07-01 => precondition established"
+      - "[POST /api/separation/{id2}/hr-approve] => [400] Approved last working date is after the employment end date."
+    auto: API
+
+  - id: SEP-NOT-014
+    func: [F-SEP-053, F-SEP-063]
+    sc: Approved LWD before notice start is rejected
+    t: An approvedLwd earlier than the resolved notice start date fails
+    src: ["SeparationService.HrApproveAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] NoticeStartDate=RequestDate=2026-10-05; ProposedLastWorkingDate=2026-10-01 (before start) => precondition established"
+      - "[POST /api/separation/{id}/hr-approve] => [400] Approved last working date cannot precede the notice start date."
+    auto: API
+
+  - id: SEP-NOT-015
+    func: [F-SEP-054, F-SEP-055]
+    sc: Pre-approval LWD revision only checks lower bound (>=RequestDate), no upper bound or DateOfLeaving check
+    t: A backdated pre-approval revision earlier than an existing DateOfLeaving is silently accepted
+    src: ["SeparationService.ReviseLwdAsync"]
+    type: Negative
+    pri: P1
+    perm: "Separation.ReviseLastWorkingDate"
+    steps:
+      - "[Setup] Case is HrReview, Employee.DateOfLeaving already set to 2026-05-01 from an unrelated record => precondition established"
+      - "[POST /api/separation/{id}/revise-lwd] NewLastWorkingDate=2026-04-01, Reason='Earlier release' => [200] accepted despite predating DateOfLeaving - no such check exists in this path"
+    auto: DB-assisted
+    cr: [CR-133]
+
+  - id: SEP-NOT-016
+    func: [F-SEP-054]
+    sc: Pre-approval LWD revision requires a reason and new date >= RequestDate; is HrReview-status-only
+    t: Missing reason, an earlier-than-RequestDate date, and a non-HrReview status are all rejected
+    src: ["SeparationService.ReviseLwdAsync"]
+    type: Negative
+    pri: P1
+    perm: "Separation.ReviseLastWorkingDate"
+    steps:
+      - "[POST /api/separation/{id}/revise-lwd] NewLastWorkingDate=today+10, Reason='' => [400] A reason is required for an LWD revision."
+      - "[POST /api/separation/{id}/revise-lwd] NewLastWorkingDate=RequestDate-1, Reason='x' => [400] Last working date cannot precede the request date."
+      - "[Setup] Case already Approved => precondition established"
+      - "[POST /api/separation/{approvedId}/revise-lwd] NewLastWorkingDate=today+10, Reason='x' => [409] Separation must be in HrReview status."
+    auto: API
+
+  - id: SEP-NOT-017
+    func: [F-SEP-056]
+    sc: A far-future LWD is accepted with no maximum-notice cap
+    t: A LWD set months ahead of the required notice period passes creation, revision, and approval
+    src: ["SeparationService.cs"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/separation/me] ProposedLastWorkingDate=today+180 => [200/201] Draft"
+    auto: API
+
+  - id: SEP-NOT-018
+    func: [F-SEP-057]
+    sc: Requested LWD is mutable pre-approval, immutable in meaning post-approval
+    t: ProposedLastWorkingDate changes via ReviseLwdAsync pre-approval; ApprovedLastWorkingDate is a distinct, separately-stamped field
+    src: ["SeparationService.ReviseLwdAsync", "HrApproveAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ReviseLastWorkingDate"
+    steps:
+      - "[POST /api/separation/{id}/revise-lwd] NewLastWorkingDate=today+40, Reason='x' => [200] ProposedLastWorkingDate=today+40"
+      - "[POST /api/separation/{id}/hr-approve] => [200] ApprovedLastWorkingDate=today+40 (copied from the revised ProposedLastWorkingDate)"
+    auto: API
+
+  - id: SEP-NOT-019
+    func: [F-SEP-058]
+    sc: ApprovedLastWorkingDate becomes authoritative for every downstream module
+    t: Once approved, downstream reads (Attendance/Leave separation gates) key off ApprovedLastWorkingDate, not ProposedLastWorkingDate
+    src: ["SeparationService.HrApproveAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/separation/{id}/hr-approve] => [200] ApprovedLastWorkingDate set"
+      - "[GET /api/separation/{id}] => [200] ApprovedLastWorkingDate is the single authoritative field surfaced to downstream readiness checks"
+    auto: API
+
+  - id: SEP-NOT-020
+    func: [F-SEP-059]
+    sc: Post-approval LWD revision requires a reason and is idempotent no-op on the same value
+    t: Revising to the same date as the current ApprovedLastWorkingDate returns Success with no event and no transaction
+    src: ["SeparationService.ReviseApprovedLwdAsync"]
+    type: Boundary
+    pri: P1
+    smoke: true
+    perm: "Separation.ReviseApprovedLastWorkingDate"
+    steps:
+      - "[POST /api/separation/{id}/revise-approved-lwd] NewLastWorkingDate=<current ApprovedLastWorkingDate>, Reason='x' => [200] 'Approved LWD is already at the requested value.' - no new event recorded"
+    auto: API
+
+  - id: SEP-NOT-021
+    func: [F-SEP-060]
+    sc: Post-approval LWD revision is blocked once a Finalized settlement exists
+    t: A Finalized FinalSettlementCase for this employee/date blocks any further revision
+    src: ["SeparationService.ReviseApprovedLwdAsync"]
+    type: Negative
+    pri: P1
+    perm: "Separation.ReviseApprovedLastWorkingDate"
+    steps:
+      - "[Setup] Final settlement for this employee is already Finalized => precondition established"
+      - "[POST /api/separation/{id}/revise-approved-lwd] NewLastWorkingDate=today+5, Reason='x' => [409] SettlementAlreadyFinalized: approved LWD requires an existing Payroll correction workflow."
+    auto: DB-assisted
+    cr: [CR-137]
+
+  - id: SEP-NOT-022
+    func: [F-SEP-061]
+    sc: Post-approval LWD revision requires new date >= NoticeStartDate and <= DateOfLeaving if set; produces the correct extension/reduction event
+    t: Reducing the LWD produces ApprovedLwdReduced; extending produces ApprovedLwdExtended
+    src: ["SeparationService.ReviseApprovedLwdAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.ReviseApprovedLastWorkingDate"
+    steps:
+      - "[POST /api/separation/{id}/revise-approved-lwd] NewLastWorkingDate=<earlier than current>, Reason='Early release' => [200] event=ApprovedLwdReduced"
+      - "[POST /api/separation/{id}/revise-approved-lwd] NewLastWorkingDate=<later than current>, Reason='Extended handover' => [200] event=ApprovedLwdExtended"
+    auto: API
+
+  - id: SEP-NOT-023
+    func: [F-SEP-062, F-SEP-063]
+    sc: LWD before DOJ and before notice start are rejected at HR approval (repeat coverage under Group E, LWD-specific framing)
+    t: Both invalid-date-range checks fire during approval, distinct from creation-time validation
+    src: ["SeparationService.HrApproveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/separation/{id}/hr-approve] with a corrupted ProposedLastWorkingDate before DOJ => [400] Approved last working date is outside the employment interval."
+    auto: API
+
+  - id: SEP-NOT-024
+    func: [F-SEP-064]
+    sc: LWD after notice end is accepted, not rejected - it produces an extension instead
+    t: There is no upper-bound-against-notice-end validation anywhere in the approval or revision paths
+    src: ["SeparationService.HrApproveAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] 30-day required notice, ProposedLastWorkingDate = NoticeStartDate+60 (30 days beyond requirement) => precondition established"
+      - "[POST /api/separation/{id}/hr-approve] => [200] Approved - NoticeExtensionDays=30, no error"
+    auto: API
+
+  - id: SEP-NOT-025
+    func: [F-SEP-065]
+    sc: HR approval syncs EmployeeEmployment atomically with the separation row
+    t: A single DB transaction covers both writes - a forced mid-transaction failure rolls back both
+    src: ["SeparationService.HrApproveAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Force a DbUpdateException during HR approval's SavingChanges => [409/503] fails; Status not Approved, ApprovedLastWorkingDate null, employment.NoticeStatus still NotServing, zero HrApproved events"
+      - "[POST /api/separation/{id}/hr-approve] retry without the forced failure => [200] succeeds exactly once, HrApproved count=1"
+    auto: DB-assisted
+
+  - id: SEP-NOT-026
+    func: [F-SEP-066]
+    sc: Holiday/weekly-off interaction is not validated - all notice/LWD math is calendar-day arithmetic
+    t: A notice period spanning a company holiday computes served/shortfall using plain calendar days, not working days
+    src: ["SeparationService.HrApproveAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Notice period spans a declared company holiday => precondition established"
+      - "[POST /api/separation/{id}/hr-approve] => [200] NoticeServedDays counts the holiday as a normal calendar day, no special handling"
+    auto: DB-assisted
+
+  - id: SEP-NOT-027
+    func: [F-SEP-067]
+    sc: A future-dated LWD does not itself change Employee.Status
+    t: An employee with an Approved case and a future LWD remains fully Active until exit execution runs at/after the LWD
+    src: ["SeparationExitService.EvaluateAsync"]
+    type: Positive
+    pri: P0
+    perm: "Separation.ViewAll"
+    steps:
+      - "[Setup] Approved, ApprovedLastWorkingDate=today+20 => precondition established"
+      - "[GET /api/employees/{id}] => [200] Employee.Status=Active"
+      - "[GET /api/separation/exit/{id}/readiness] => [200] blockers include LwdNotReached"
+    auto: API

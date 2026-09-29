@@ -1,0 +1,220 @@
+sheet: Attendance_Events
+submodule: Punch / Time-Event Ingestion (device-originated only; no self-punch endpoint exists) and Business-Date/Timezone resolution
+defaults:
+  role: HRADMIN
+  perm: "Attendance.DeviceSync"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin holding Attendance.Device* permissions, with an active registered device mapped to a test employee, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-PUNCH-001
+    func: [F-ATT-068]
+    sc: There is no employee self-punch/portal-punch HTTP endpoint anywhere in the API
+    t: An employee attempting to punch in/out from the web app has no reachable endpoint to do so - confirm no undocumented route exists
+    src: ["AttendancePunchIngestionService.IngestAsync (only caller is AttendanceDeviceIntegrationService)"]
+    type: Contract
+    pri: P1
+    role: EMPLOYEE
+    perm: "Attendance.View"
+    steps:
+      - "[POST /api/attendance/punches] or any plausible self-punch route guessed from REST convention => [404] no such route is registered anywhere in the API surface"
+    auto: API
+    cr: [CR-96]
+
+  - id: ATT-PUNCH-002
+    func: [F-ATT-069]
+    sc: A device Sync call ingests a valid punch for a mapped, in-tenant employee
+    t: A well-formed sync payload with a resolvable shift creates an AttendancePunch
+    src: ["AttendancePunchIngestionService.IngestAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/devices/{deviceId}/sync] Direction=In, PunchAtUtc=2026-07-10T09:00:00Z, mapped EmployeeId, ExternalPunchId=EV-001 => [200] punch created, Source=Biometric"
+    auto: API
+
+  - id: ATT-PUNCH-003
+    func: [F-ATT-069]
+    sc: A punch for a nonexistent employee is rejected
+    t: EmployeeId not found in tenant fails ingestion
+    src: ["AttendancePunchIngestionService.IngestAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/devices/{deviceId}/sync] EmployeeId=<not in tenant> => [404] employee not found"
+      - "[POST /api/attendance/devices/{deviceId}/sync] EmployeeId=Guid.Empty => [400] field employeeId invalid"
+    auto: API
+
+  - id: ATT-PUNCH-004
+    func: [F-ATT-069]
+    sc: ExternalPunchId over 200 characters is rejected
+    t: An overlong ExternalPunchId fails validation before any DB write
+    src: ["AttendancePunchIngestionService.IngestAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/devices/{deviceId}/sync] ExternalPunchId=<201 chars> => [400] validation error, no punch created"
+    auto: API
+
+  - id: ATT-PUNCH-005
+    func: [F-ATT-070]
+    sc: A punch on a date with no resolvable shift is rejected with no row created
+    t: A date resolving to Holiday-without-override, WeeklyOff-without-override, or no shift at all each produce a distinct Conflict message and zero persisted punches
+    src: ["AttendancePunchIngestionService.IngestAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/attendance/devices/{deviceId}/sync] date is a Holiday with no roster override => [409] 'HolidayWithoutOverride: no effective working Shift applies.' - no punch persisted"
+      - "[POST /api/attendance/devices/{deviceId}/sync] date is a WeeklyOff with no override => [409] 'WeeklyOffWithoutOverride: no effective working Shift applies.' - no punch persisted"
+      - "[POST /api/attendance/devices/{deviceId}/sync] employee has no roster/applicability/default configured at all for the date => [409] 'NoEffectiveShift: no effective working Shift applies.' - no punch persisted"
+    auto: API
+
+  - id: ATT-PUNCH-006
+    func: [F-ATT-071]
+    sc: Punch source is checked against the effective shift's AllowedAttendanceSources
+    t: A punch whose source bit is not in the shift's allowed sources is Forbidden
+    src: ["AttendancePunchIngestionService.IngestAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] Shift S1.AllowedAttendanceSources = Biometric only => precondition established for the steps below"
+      - "[POST /api/attendance/devices/{deviceId}/import] PunchSource=Portal (would require Portal bit) via manual-import batch => [403] 'Punch source Portal is not enabled for the effective Shift.'"
+      - "[POST /api/attendance/devices/{deviceId}/sync] Source=Biometric (matches shift config) => [200] succeeds"
+    auto: API
+
+  - id: ATT-PUNCH-007
+    func: [F-ATT-072]
+    sc: Duplicate ExternalPunchId under the same tenant+source returns the existing punch, no new row
+    t: Re-ingesting the identical ExternalPunchId twice is idempotent
+    src: ["AttendancePunchIngestionService.IngestAsync"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/devices/{deviceId}/sync] ExternalPunchId=DUP-1 (first) => [200] punch created, note PunchId=X"
+      - "[POST /api/attendance/devices/{deviceId}/sync] ExternalPunchId=DUP-1 (second, identical) => [200] 'Duplicate punch ignored; existing punch returned.' - returned PunchId is still X, exactly one AttendancePunches row exists"
+    auto: API
+
+  - id: ATT-PUNCH-008
+    func: [F-ATT-073]
+    sc: The same ExternalPunchId under a DIFFERENT source, or a different tenant, is NOT a duplicate
+    t: Two independent punches are created when only the source or tenant differs
+    src: ["AttendancePunchIngestionService.IngestAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/devices/{deviceId}/sync] ExternalPunchId=SAME-1, Source=Biometric => [200] punch A created"
+      - "[POST /api/attendance/devices/{deviceId}/import] ExternalPunchId=SAME-1, Source=Manual (different source, same value) => [200] a SECOND, independent punch B created - not treated as a duplicate of A"
+    auto: API
+
+  - id: ATT-PUNCH-009
+    func: [F-ATT-073]
+    sc: Tenant isolation of the idempotency key
+    t: An identical ExternalPunchId in a different tenant is a fully independent punch
+    src: ["AttendancePunchIngestionService.IngestAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[POST /api/attendance/devices/{tenantBDeviceId}/sync] ExternalPunchId=<same string already used in Tenant A> => [200] a new, independent Tenant B punch is created, unrelated to Tenant A's row"
+    auto: API
+
+  - id: ATT-PUNCH-010
+    func: [F-ATT-074]
+    sc: Punches are never edited or deleted by any code path
+    t: There is no update/delete endpoint for AttendancePunch rows
+    src: ["AttendancePunchIngestionService / AttendanceDayProcessor"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[PUT /api/attendance/punches/{id}] or [DELETE /api/attendance/punches/{id}] (guessed at REST convention) => [404] no such route exists - punches are immutable, corrections happen via Regularization/AdminCorrection instead"
+    auto: API
+
+  - id: ATT-PUNCH-011
+    func: [F-ATT-075]
+    sc: Out-of-order/unmatched punches are recorded without rejection at ingestion time
+    t: An Out-before-In sequence, or two consecutive Ins, are both accepted by ingestion (sequence validation happens only at derivation)
+    src: ["AttendancePunchIngestionService.IngestAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/devices/{deviceId}/sync] Direction=Out first, then Direction=In (out-of-order) => [200] both punches are persisted without any sequence-related rejection at ingestion"
+    auto: API
+
+  - id: ATT-PUNCH-012
+    func: [F-ATT-076]
+    sc: Overnight backdating heuristic assigns a just-after-midnight punch to the previous day's crossing-midnight shift
+    t: A punch with no explicit BusinessDate, landing after midnight, is re-checked against yesterday's shift if it crosses midnight
+    src: ["AttendancePunchIngestionService.IngestAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Shift S1: StartTime=22:00, EndTime=06:00, CrossesMidnight=true, active on 2026-07-10; no shift resolves for 2026-07-11 for this employee => precondition established for the steps below"
+      - "[POST /api/attendance/devices/{deviceId}/sync] PunchAtUtc=2026-07-11T00:30:00Z (just after midnight), no explicit BusinessDate => [200] the punch is assigned against S1 (2026-07-10's shift), not rejected as NoEffectiveShift"
+    auto: API
+
+  - id: ATT-PUNCH-013
+    func: [F-ATT-077]
+    sc: Business-date resolution correctly rolls an overnight checkout back to the shift's start day
+    t: An In just before midnight and an Out just after midnight, both within the postShiftMinutes cutoff, land on the same business date
+    src: ["AttendanceBusinessDateResolver.Resolve"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Setup] Shift S1: StartTime=22:00, EndTime=06:00, CrossesMidnight=true, MaximumPostShiftMinutes=15 => precondition established for the steps below"
+      - "[POST /api/attendance/devices/{deviceId}/sync] In at 21:55 UTC on 2026-07-10 => [200] BusinessDate=2026-07-10"
+      - "[POST /api/attendance/devices/{deviceId}/sync] Out at 06:05 UTC on 2026-07-11 (within end+15min cutoff, before shiftStart) => [200] BusinessDate=2026-07-10 (same as the In)"
+    auto: API
+
+  - id: ATT-PUNCH-014
+    func: [F-ATT-077]
+    sc: A time after shiftStart on the crossing shift's own day does not roll back
+    t: The in-punch itself (occurring at/after shiftStart) keeps its own physical calendar day
+    src: ["AttendanceBusinessDateResolver.Resolve"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Shift S1: StartTime=22:00, EndTime=06:00, CrossesMidnight=true => precondition established for the steps below"
+      - "[POST /api/attendance/devices/{deviceId}/sync] Punch at 22:30 UTC on 2026-07-10 (after shiftStart, so >= shiftStart) => [200] BusinessDate=2026-07-10 - does not roll to 2026-07-09"
+    auto: API
+
+  - id: ATT-PUNCH-015
+    func: [F-ATT-077]
+    sc: A non-overnight shift's business date never rolls, regardless of local time
+    t: CrossesMidnight=false always returns the candidate date unchanged
+    src: ["AttendanceBusinessDateResolver.Resolve"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Shift S2: StartTime=09:00, EndTime=18:00, CrossesMidnight=false => precondition established for the steps below"
+      - "[POST /api/attendance/devices/{deviceId}/sync] Punch at 00:05 UTC on 2026-07-10 (attributed to that calendar date) => [200] BusinessDate=2026-07-10, unchanged - no overnight rollback logic applies"
+    auto: API
+
+  - id: ATT-PUNCH-016
+    func: [F-ATT-078]
+    sc: Tenant business timezone is hard-coded to UTC for every tenant
+    t: The overnight cutoff math is computed in UTC regardless of the tenant's actual business timezone
+    src: ["AttendanceBusinessTimeZoneProvider.GetTimeZone"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Tenant's real-world business timezone is IST (UTC+5:30); Shift S1 crosses midnight, EndTime=06:00, MaximumPostShiftMinutes=0 => precondition established for the steps below"
+      - "[POST /api/attendance/devices/{deviceId}/sync] A punch at 05:45 IST (00:15 UTC) on 2026-07-11, intended by the tenant as 'just after local shift end' => [200] the business-date cutoff is evaluated against UTC wall-clock time (00:15), not the tenant's local 05:45 - confirm the resulting BusinessDate against the documented UTC-only algorithm, not against IST expectations"
+    auto: API
+    cr: [CR-97]
+
+  - id: ATT-PUNCH-017
+    func: [F-ATT-069]
+    sc: Only device-management permissions can ingest punches; an employee cannot sync/import
+    t: A caller holding only Attendance.View is forbidden from device sync/import
+    src: ["AttendanceDevicesController"]
+    type: Authorization
+    pri: P0
+    role: EMPLOYEE
+    perm: "Attendance.View"
+    steps:
+      - "[POST /api/attendance/devices/{deviceId}/sync] As an Employee holding only Attendance.View => [403] Forbidden"
+    auto: API

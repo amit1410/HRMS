@@ -1,0 +1,170 @@
+sheet: PYA_Source_Matrix_Statutory_CrossModule
+submodule: Source Matrix - Statutory & Cross-Module Settlements
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-STAT-001
+    func: [F-PYA-054]
+    sc: Missing statutory return source
+    t: Persisted PayrollStatutoryResults with zero PayrollStatutoryReturnSources raises Warning MissingStatutorySource without recalculating any rate/basis
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: High
+    pre: "RUN1 has a persisted PF PayrollStatutoryResult (TotalAmount=2400) and zero PayrollStatutoryReturnSources"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] => [200] Findings contains ControlCode=MissingStatutorySource"
+    auto: DB-assisted
+    db: "Assert PayrollResults.GrossEarnings is unchanged - no rate/basis was recalculated"
+
+  - id: PYA-STAT-002
+    func: [F-PYA-055]
+    sc: Per-type statutory mismatch for all 4 types
+    t: PF/ESI/PT/TDS statutory results each mismatching their own return-source total raise 4 independent Critical {Type}StatutorySourceMismatch findings
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync, StatutorySourceMatches"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "RUN2 has persisted PF/ESI/PT/TDS statutory results (1200/600/200/700) each with a return source 1 higher than the result"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN2"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN2}/post] => [200] Findings contains ProvidentFundStatutorySourceMismatch, EsiStatutorySourceMismatch, ProfessionalTaxStatutorySourceMismatch, and IncomeTaxStatutorySourceMismatch - 4 separate findings, one per type"
+    auto: API
+
+  - id: PYA-STAT-003
+    func: [F-PYA-056]
+    sc: Exact PF/ESI/PT/TDS statutory match reconciles cleanly
+    t: All 4 statutory types with an exact persisted-result-to-return-source match raise zero statutory findings
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN3 has persisted PF/ESI/PT/TDS results each with an exactly matching return source amount"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN3"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN3}/post] => [200] Findings does not contain any ControlCode ending in 'StatutorySourceMismatch'"
+    auto: API
+
+  - id: PYA-XMOD-001
+    func: [F-PYA-057]
+    sc: Missing settlement source for each of the 4 cross-module sources
+    t: A persisted PayrollResultComponent tagged Reimbursement/LoanRecovery/VariablePay/PayrollAdjustment with no matching settlement/repayment/application row raises the source's own {Source}SourceMismatch finding
+    src: "PayrollAnalyticsService.AddSettlementSourceFindingAsync"
+    type: Negative
+    tags: []
+    pri: P0
+    sev: Critical
+    pre: "RUN4 has 4 PayrollResultComponents, one each tagged CalculationSource=Reimbursement/LoanRecovery/VariablePay/PayrollAdjustment (100 each), with zero corresponding settlement rows for any of them"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN4"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN4}/post] => [200] Findings contains ReimbursementSourceMismatch, LoanSourceMismatch, VariablePaySourceMismatch, and AdjustmentSourceMismatch"
+    auto: DB-assisted
+    db: "Assert PayrollResults.GrossEarnings is unchanged - no automatic correction is applied"
+
+  - id: PYA-XMOD-002
+    func: [F-PYA-058]
+    sc: Zero-vs-zero source comparison raises no finding
+    t: A source with neither a persisted component nor a persisted settlement (both legitimately absent) raises no mismatch finding for that source
+    src: "PayrollAnalyticsService.AddSettlementSourceFindingAsync"
+    type: Boundary
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "RUN5 has no Reimbursement-tagged component and no ReimbursementSettlements at all"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN5"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN5}/post] => [200] Findings does not contain ReimbursementSourceMismatch"
+    auto: API
+
+  - id: PYA-XMOD-003
+    func: [F-PYA-059]
+    sc: Duplicate reimbursement settlement
+    t: 2 ReimbursementSettlements for the run sharing the same ReimbursementClaimLineId raise Critical DuplicateReimbursementSettlement
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Critical
+    pre: "RUN6 has 2 ReimbursementSettlements both referencing the same ReimbursementClaimLineId"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN6"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN6}/post] => [200] Findings contains ControlCode=DuplicateReimbursementSettlement"
+    auto: API
+
+  - id: PYA-XMOD-004
+    func: [F-PYA-060]
+    sc: Duplicate variable-pay and loan-recovery settlements
+    t: 2 VariablePaySettlements sharing a VariablePayAwardId raise DuplicateVariablePaySettlement, and 2 LoanRepayments sharing a LoanInstallmentId raise DuplicateLoanRecovery, independently
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Critical
+    pre: "RUN7 has 2 VariablePaySettlements for the same award and, separately, 2 LoanRepayments for the same installment"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN7"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN7}/post] => [200] Findings contains both DuplicateVariablePaySettlement and DuplicateLoanRecovery"
+    auto: API
+
+  - id: PYA-XMOD-005
+    func: [F-PYA-061]
+    sc: Duplicate adjustment application and broken adjustment reversal linkage
+    t: 2 PayrollAdjustmentApplications sharing a PayrollAdjustmentId raise DuplicatePayrollAdjustmentApplication; a PayrollAdjustment sourced from 'PayrollReversal' with no valid, non-Cancelled PayrollReversal linking OriginalPayrollRunId to this run raises BrokenPayrollAdjustmentReversalLinkage
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Critical
+    pre: "RUN8 has 2 PayrollAdjustmentApplications for the same PayrollAdjustment, and separately a different PayrollAdjustment with SourceType='PayrollReversal' and no matching PayrollReversals row"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN8"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN8}/post] => [200] Findings contains both DuplicatePayrollAdjustmentApplication and BrokenPayrollAdjustmentReversalLinkage"
+    auto: API
+
+  - id: PYA-XMOD-006
+    func: [F-PYA-057, F-PYA-059, F-PYA-060, F-PYA-061]
+    sc: Exact persisted cross-module sources reconcile cleanly
+    t: A run with exact, non-duplicated Reimbursement/Loan/VariablePay/Adjustment sources for every persisted component raises zero cross-module findings
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync, AddSettlementSourceFindingAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN9 has one persisted, exactly-matching, non-duplicated source row for each of Reimbursement/Loan/VariablePay/Adjustment"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN9"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN9}/post] => [200] Findings contains none of: ReimbursementSourceMismatch, LoanSourceMismatch, VariablePaySourceMismatch, AdjustmentSourceMismatch, DuplicateReimbursementSettlement, DuplicateLoanRecovery, DuplicateVariablePaySettlement, DuplicatePayrollAdjustmentApplication"
+    auto: API

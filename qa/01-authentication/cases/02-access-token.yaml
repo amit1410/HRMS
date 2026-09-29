@@ -1,0 +1,527 @@
+# Access token (JWT bearer) validation. Crafted-token cases sign with the QA stack's own disposable
+# signing key supplied via environment variable QA_JWT_TEST_KEY - never stored in this catalogue.
+sheet: Auth_AccessToken
+submodule: Access Token
+defaults:
+  role: "A_EMP (valid session) unless stated"
+  perm: "Authenticated (probe endpoint GET /api/auth/me)"
+  tenant: A
+  pre: "QA stack running; Tenant A active; a valid access token obtained via login; crafted-token cases need env QA_JWT_TEST_KEY (disposable QA signing key)."
+  data: "Access token from POST /api/auth/login; crafted tokens built with the QA key; probe endpoint GET /api/auth/me."
+  sev: High
+  reg: true
+
+cases:
+  - id: AUTH-TOKEN-001
+    func: [F-AUTH-07]
+    sc: Valid token accepted
+    t: A freshly issued access token is accepted by the probe endpoint
+    src: ["AddJwtAuthentication", "AuthController.Me"]
+    type: Positive
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "[POST /api/auth/login] Sign in as A_EMP => [200] token pair issued"
+      - "[GET /api/auth/me] Send Authorization: Bearer <accessToken> => [200] success=true and data.id equals the login user id"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Me_returns_the_signed_in_user_for_a_token_the_api_issued"]
+
+  - id: AUTH-TOKEN-002
+    func: [F-AUTH-07, F-AZ-04]
+    sc: Missing token
+    t: A protected endpoint without an Authorization header returns the standard 401 envelope
+    src: ["JwtBearerEvents.OnChallenge", "FailureResponse"]
+    type: Negative
+    tags: [Security, Contract]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    smoke: true
+    steps:
+      - "[GET /api/auth/me] Call with no Authorization header => [401] success=false, message 'Authentication is required. Supply a valid bearer token.'"
+      - "[GET /api/employees] Call with no header => [401] same envelope"
+      - "Inspect headers => Content-Type application/json; no WWW-Authenticate detail leaking configuration"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Me_requires_a_bearer_token", "xU:AuthEndpointsTests.An_endpoint_that_declares_no_authorization_is_closed_by_default"]
+
+  - id: AUTH-TOKEN-003
+    func: [F-AUTH-07]
+    sc: Wrong or empty authorization scheme
+    t: Non-Bearer schemes and an empty bearer value are rejected
+    src: ["JwtBearer handler"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[GET /api/auth/me] Send 'Authorization: Basic <base64 user:pass>' => [401]"
+      - "[GET /api/auth/me] Send 'Authorization: Token <valid access token>' => [401]"
+      - "[GET /api/auth/me] Send 'Authorization: Bearer' (no value) => [401]"
+      - "[GET /api/auth/me] Send 'Authorization: Bearer ' followed only by spaces => [401]"
+    auto: API
+
+  - id: AUTH-TOKEN-004
+    func: [F-AUTH-07]
+    sc: Scheme casing
+    t: The Bearer scheme keyword is case-insensitive
+    src: ["JwtBearer handler"]
+    type: Positive
+    tags: [Validation]
+    pri: P3
+    sev: Low
+    steps:
+      - "[GET /api/auth/me] Send 'Authorization: bearer <valid token>' => [200]"
+      - "[GET /api/auth/me] Send 'Authorization: BEARER <valid token>' => [200]"
+    auto: API
+
+  - id: AUTH-TOKEN-005
+    func: [F-AUTH-07]
+    sc: Malformed tokens
+    t: Non-JWT strings, wrong segment counts and non-base64 segments are rejected
+    src: ["JwtBearer handler"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[GET /api/auth/me] Bearer 'abc' => [401]"
+      - "[GET /api/auth/me] Bearer 'a.b' (two segments) => [401]"
+      - "[GET /api/auth/me] Bearer 'a.b.c.d' (four segments) => [401]"
+      - "[GET /api/auth/me] Bearer '@@@.@@@.@@@' => [401]"
+      - "[GET /api/auth/me] Bearer with a 64 KB random string => [401] or [431]; never 500"
+    auto: API
+
+  - id: AUTH-TOKEN-006
+    func: [F-AUTH-07]
+    sc: Corrupted signature
+    t: A token whose signature is altered by one character is rejected
+    src: ["TokenValidationParameters.ValidateIssuerSigningKey"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[GET /api/auth/me] Take a valid token, change the last character of the signature segment => [401]"
+      - "[GET /api/auth/me] Remove the signature segment but keep the trailing dot => [401]"
+      - "[GET /api/auth/me] Control: the unmodified token => [200]"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.A_token_signed_with_another_key_is_refused", "xU:JwtTokenServiceTests.Access_token_signed_with_another_key_is_rejected"]
+
+  - id: AUTH-TOKEN-007
+    func: [F-AUTH-07, F-TEN-08]
+    sc: Payload tampering
+    t: Editing the tenant or permission claims in the payload without re-signing is rejected
+    src: ["JwtTokenServiceTests.Tampering_with_the_payload_invalidates_the_token"]
+    type: Security
+    tags: [Tenant-Isolation, Authorization, Negative]
+    pri: P0
+    sev: Critical
+    steps:
+      - "Decode the payload of a valid A_EMP token; replace tid with Tenant B's id; re-encode WITHOUT re-signing => token prepared"
+      - "[GET /api/auth/me] Send the tampered token at the Tenant A host => [401]"
+      - "Repeat replacing only the permission claims (add Employee.Delete) and role claim (TenantAdmin) => token prepared"
+      - "[DELETE /api/employees/{id}] Send the tampered token => [401] (not 403, not 204)"
+    sec: "Signature covers tid and permission claims."
+    auto: API
+    ex: ["xU:JwtTokenServiceTests.Tampering_with_the_payload_invalidates_the_token"]
+
+  - id: AUTH-TOKEN-008
+    func: [F-AUTH-07]
+    sc: Different signing key
+    t: A structurally valid token signed with a different HMAC key is rejected
+    src: ["AuthEndpointsTests.A_token_signed_with_another_key_is_refused"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    steps:
+      - "Craft a token with correct issuer/audience/tid/permissions but signed with a random 32-byte key => token prepared"
+      - "[GET /api/auth/me] Send it => [401]"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.A_token_signed_with_another_key_is_refused"]
+
+  - id: AUTH-TOKEN-009
+    func: [F-AUTH-07]
+    sc: Algorithm pinning
+    t: Tokens using alg none, HS384 or HS512 are rejected
+    src: ["TokenValidationParameters.ValidAlgorithms = HmacSha256"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    steps:
+      - "Craft an unsigned token (alg 'none', empty signature) with valid claims => token prepared"
+      - "[GET /api/auth/me] Send the alg=none token => [401]"
+      - "Craft the same claims signed HS384, then HS512, using the QA key => tokens prepared"
+      - "[GET /api/auth/me] Send each => [401] (algorithm is pinned to HS256)"
+      - "Craft an RS256-labelled token whose 'signature' is HMAC over the public-key-like string (algorithm confusion) => [401]"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.A_token_signed_with_a_different_algorithm_is_refused"]
+
+  - id: AUTH-TOKEN-010
+    func: [F-AUTH-07]
+    sc: Expired token
+    t: A token past its expiry (beyond the configured clock skew) is rejected
+    src: ["TokenValidationParameters.ValidateLifetime, ClockSkew=30s"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "Craft a token with exp = now - 5 minutes, signed with the QA key => token prepared"
+      - "[GET /api/auth/me] Send it => [401] standard challenge envelope"
+      - "Control: craft exp = now + 5 minutes => [200]"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.An_expired_token_is_refused", "xU:JwtTokenServiceTests.An_expired_access_token_fails_validation"]
+
+  - id: AUTH-TOKEN-011
+    func: [F-AUTH-07]
+    sc: Clock-skew boundary
+    t: Expiry is enforced at the 30-second skew boundary
+    src: ["Jwt:ClockSkewSeconds (default 30)"]
+    type: Boundary
+    tags: [Security]
+    pri: P1
+    sev: Medium
+    pre: "Effective Jwt:ClockSkewSeconds known (default 30); QA clock in sync with the API host."
+    steps:
+      - "Craft exp = now - 20 s => token prepared"
+      - "[GET /api/auth/me] Send it => [200] still accepted within skew"
+      - "Craft exp = now - 40 s => token prepared"
+      - "[GET /api/auth/me] Send it => [401] outside skew"
+    auto: API
+    cm: "Timing-sensitive; use generous margins (10 s) and record the effective skew setting."
+
+  - id: AUTH-TOKEN-012
+    func: [F-AUTH-07]
+    sc: Not-before claim
+    t: A token whose nbf is in the future is rejected
+    src: ["TokenValidationParameters.ValidateLifetime (NotBefore)"]
+    type: Negative
+    tags: [Security, Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "Craft a token with nbf = now + 10 minutes and exp = now + 20 minutes => token prepared"
+      - "[GET /api/auth/me] Send it => [401]"
+    auto: API
+
+  - id: AUTH-TOKEN-013
+    func: [F-AUTH-07]
+    sc: Issuer validation
+    t: Wrong or missing issuer is rejected
+    src: ["TokenValidationParameters.ValidIssuer (Jwt:Issuer)"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    steps:
+      - "Craft a token with iss = 'HRMS.Other', otherwise valid => token prepared"
+      - "[GET /api/auth/me] Send it => [401]"
+      - "Craft a token with no iss claim => token prepared"
+      - "[GET /api/auth/me] Send it => [401]"
+    auto: API
+
+  - id: AUTH-TOKEN-014
+    func: [F-AUTH-07]
+    sc: Audience validation
+    t: Wrong or missing audience is rejected
+    src: ["TokenValidationParameters.ValidAudience (Jwt:Audience)"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    steps:
+      - "Craft a token with aud = 'HRMS.Other' => token prepared"
+      - "[GET /api/auth/me] Send it => [401]"
+      - "Craft a token with no aud claim => token prepared"
+      - "[GET /api/auth/me] Send it => [401]"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.A_token_issued_for_another_audience_is_refused"]
+
+  - id: AUTH-TOKEN-015
+    func: [F-AUTH-07, F-TEN-04]
+    sc: Missing tenant claim
+    t: A validly signed token with no tid claim is refused
+    src: ["TenantScoped() RequireClaim(tid)"]
+    type: Security
+    tags: [Tenant-Isolation, Negative]
+    pri: P0
+    sev: Critical
+    steps:
+      - "Craft a token signed with the QA key, valid iss/aud/exp, with NO 'tid' claim => token prepared"
+      - "[GET /api/auth/me] Send it => [401] or [403]; record actual status and message (no data)"
+      - "[GET /api/employees] Send it => same refusal"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.A_token_without_a_tenant_claim_is_refused"]
+
+  - id: AUTH-TOKEN-016
+    func: [F-AUTH-07, F-TEN-04]
+    sc: Unparseable tenant claim
+    t: A tid claim that is not a GUID is refused with the workspace-mismatch 401
+    src: ["TenantMatchesShardHandler (Guid.TryParse)"]
+    type: Security
+    tags: [Tenant-Isolation, Negative]
+    pri: P1
+    steps:
+      - "Craft a token with tid = 'not-a-guid' (valid signature) => token prepared"
+      - "[GET /api/auth/me] Send it at the Tenant A host => [401] message 'Your session is not valid for this workspace. Please sign in again.'"
+      - "Craft tid = empty GUID (00000000-...) => [401] same"
+    auto: API
+
+  - id: AUTH-TOKEN-017
+    func: [F-AUTH-07, F-TEN-04]
+    sc: tcode agreement
+    t: A token whose tcode disagrees with the host's organization is refused; an absent tcode is tolerated
+    src: ["TenantMatchesShardHandler (tcode check)"]
+    type: Security
+    tags: [Tenant-Isolation, Negative]
+    pri: P1
+    steps:
+      - "Craft a token with tid = Tenant A id but tcode = Tenant B code => token prepared"
+      - "[GET /api/auth/me] Send it at Tenant A host => [401] workspace-mismatch message"
+      - "Craft a token with tid = A and NO tcode claim => token prepared"
+      - "[GET /api/auth/me] Send it at Tenant A host => [200] (tcode is a secondary check only)"
+      - "Craft tcode in different letter case (upper) => [200] compared case-insensitively"
+    auto: API
+    cm: "Records that tid alone is authoritative; tcode is a defence-in-depth check."
+
+  - id: AUTH-TOKEN-018
+    func: [F-AUTH-07]
+    sc: Token in the query string
+    t: An access token supplied as a query parameter is not honoured
+    src: ["JwtBearer default token retrieval (Authorization header only)"]
+    type: Security
+    tags: [Negative]
+    pri: P2
+    sev: Medium
+    role: Anonymous
+    steps:
+      - "[GET /api/auth/me?access_token=<valid token>] Call with the token only in the query string => [401]"
+      - "Send the token in a cookie named access_token / in a custom header => [401]"
+    sec: "Tokens in URLs leak via logs and referrers; only the Authorization header must work."
+    auto: API
+
+  - id: AUTH-TOKEN-019
+    func: [F-AUTH-07]
+    sc: Multiple Authorization headers
+    t: Duplicate Authorization headers do not allow a valid token to mask an invalid one
+    src: ["Kestrel/JwtBearer header handling"]
+    type: Security
+    tags: [Negative]
+    pri: P3
+    sev: Low
+    steps:
+      - "[GET /api/auth/me] Send two Authorization headers: first a garbage bearer, second a valid bearer => record status (expected [401] or [400])"
+      - "Swap the order => record status; behaviour must be consistent and never authenticate as a different user than the token owner"
+    auto: API
+    cm: "Characterisation test; framework-defined behaviour."
+
+  - id: AUTH-TOKEN-020
+    func: [F-AUTH-07, F-AUTH-15]
+    sc: Subject claim points to a missing or foreign user
+    t: A validly signed token for a user id that does not exist in the token's tenant yields no data
+    src: ["AuthService.GetCurrentUserAsync (query-filtered read)"]
+    type: Security
+    tags: [Tenant-Isolation, Negative]
+    pri: P1
+    steps:
+      - "Craft a token (QA key) with uid/sub = random GUID, tid = Tenant A => token prepared"
+      - "[GET /api/auth/me] Send it => [404] 'The signed-in account no longer exists.'"
+      - "Craft a token with uid = a Tenant B user's id but tid = Tenant A => token prepared"
+      - "[GET /api/auth/me] Send it => [404] (query filter scopes to Tenant A; B's profile is never returned)"
+    sec: "The tenant query filter, not the claim, decides visibility."
+    auto: API
+    ex: ["xU:AuthServiceLoginTests.Get_current_user_resolves_a_new_link_with_an_old_valid_token"]
+    cm: "Also confirms a token minted with a valid key cannot read another tenant's user."
+
+  - id: AUTH-TOKEN-021
+    func: [F-AUTH-06]
+    sc: Claim content
+    t: The access token carries the expected registered and custom claims and no sensitive data
+    src: ["JwtTokenService.CreateAccessToken", "HrmsClaimTypes"]
+    type: Positive
+    tags: [Contract, Security]
+    pri: P1
+    role: A_HR
+    steps:
+      - "[POST /api/auth/login] Sign in as A_HR => [200]"
+      - "Decode the access token header => alg=HS256, typ=JWT"
+      - "Decode the payload => contains sub, jti, uid, tid, tcode, email, given_name, family_name, iss, aud, iat, nbf, exp; repeated role and permission claims"
+      - "Inspect payload for sensitive material => no password, hash, refresh token, phone or address"
+      - "Login twice and compare jti => jti differs per token"
+    sec: "Token payload is readable by the client; it must hold no secrets."
+    auto: API
+    ex: ["xU:JwtTokenServiceTests.Access_token_carries_identity_tenant_role_and_permission_claims", "xU:JwtTokenServiceTests.Access_token_is_signed_with_hmac_sha256_and_validates_against_the_configured_key"]
+
+  - id: AUTH-TOKEN-022
+    func: [F-AUTH-06]
+    sc: Token lifetime follows configuration
+    t: exp minus iat equals the configured Jwt:AccessTokenMinutes
+    src: ["JwtSettings.AccessTokenMinutes (default 60)"]
+    type: Positive
+    tags: [Configuration]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[POST /api/auth/login] Sign in => [200] decode iat and exp"
+      - "Compare (exp - iat) with the QA stack's Jwt:AccessTokenMinutes => equal (60 minutes by default) and equals expiresInSeconds in the response within 2 s"
+    auto: API
+    ex: ["xU:JwtTokenServiceTests.Access_token_lifetime_follows_configuration"]
+
+  - id: AUTH-TOKEN-023
+    func: [F-AUTH-06]
+    sc: Token size for the broadest role
+    t: The TenantAdmin token (all permission claims) is accepted end to end without header-size errors
+    src: ["Permissions.All (281 permissions) emitted as repeated claims"]
+    type: Boundary
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    role: A_ADMIN
+    steps:
+      - "[POST /api/auth/login] Sign in as A_ADMIN => [200] record accessToken length (characters)"
+      - "[GET /api/auth/me] Send the token => [200] (no 431 Request Header Fields Too Large, no 400)"
+      - "Record token length versus the 32 KB default Kestrel header limit => headroom documented"
+    auto: API
+    cm: "Guards against future permission growth exceeding header limits (new permissions are added each phase)."
+
+  - id: AUTH-TOKEN-024
+    func: [F-AUTH-06, F-AUTH-08]
+    sc: Refresh token used as a bearer token
+    t: An opaque refresh token cannot authenticate API calls
+    src: ["Refresh tokens are opaque, not JWTs"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    steps:
+      - "[POST /api/auth/login] Sign in => [200] keep refreshToken"
+      - "[GET /api/auth/me] Send the refresh token as the bearer => [401]"
+    auto: API
+
+  - id: AUTH-TOKEN-025
+    func: [F-AUTH-16, F-AUTH-14]
+    sc: Access token after logout
+    t: An access token continues to work after logout until its expiry (documented current behaviour)
+    src: ["Stateless JWT; AuthService.LogoutAsync revokes only the refresh token"]
+    type: Security
+    tags: [Configuration]
+    pri: P1
+    role: A_EMP
+    steps:
+      - "[POST /api/auth/login] Sign in => [200] tokens T1"
+      - "[POST /api/auth/logout] Log out with T1 access token and refresh token => [200] 'Signed out.'"
+      - "[GET /api/auth/me] Use T1 access token again => record status (current design: [200] until exp)"
+      - "[POST /api/auth/refresh] Use T1 refresh token => [401] revoked"
+    sec: "Bounded exposure = AccessTokenMinutes (default 60)."
+    auto: API
+    cr: [CR-14]
+    cm: "Exposes CR-14. Classify later as Expected / Accepted risk / Design change; no product change now."
+
+  - id: AUTH-TOKEN-026
+    func: [F-AUTH-16, F-AUTH-05]
+    sc: Deactivated user with a live access token
+    t: After a user is deactivated, existing access tokens keep working for permission-guarded endpoints until expiry
+    src: ["TenantScoped policy uses claims only; AuthService.GetCurrentUserAsync checks IsActive"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    sev: Critical
+    role: A_EMP2 (disposable)
+    pre: "A_EMP2 has an access token T1 obtained before deactivation; admin can deactivate the user (DB-assisted or User.Edit)."
+    steps:
+      - "[POST /api/auth/login] Sign in as A_EMP2 => [200] token T1"
+      - "Deactivate A_EMP2 (Users.IsActive = 0) => user deactivated"
+      - "[GET /api/auth/me] Call with T1 => [403] 'This account has been deactivated.'"
+      - "[GET /api/leave-balances/mine] Call a permission-guarded self-service endpoint with T1 => record status (current design: [200] until token expiry)"
+      - "[POST /api/auth/refresh] Refresh with T1 refresh token => [401] and token revoked"
+      - "[POST /api/auth/login] Sign in again => [403]"
+    db: "Users.IsActive toggled in the QA tenant DB; RefreshTokens.RevokedAtUtc set by the failed refresh."
+    sec: "Measures the window of residual access for a deactivated user."
+    auto: DB-assisted
+    cr: [CR-14]
+    ex: ["xU:AuthServiceRefreshTests.Refresh_revokes_the_token_when_the_account_has_been_deactivated"]
+    cm: "Compare with platform tokens, which re-check IsActive per request (PLATFORM-AUTH-018)."
+
+  - id: AUTH-TOKEN-027
+    func: [F-AUTH-16, F-AZ-03]
+    sc: Role revoked while a token is live
+    t: A permission removed from a role stays effective in existing tokens until refresh
+    src: ["RequireClaim(permission) evaluates token claims"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    sev: High
+    role: A_EMP3 (disposable, role Manager)
+    steps:
+      - "[POST /api/auth/login] Sign in as A_EMP3 (Manager, has Leave.Approve) => [200] token T1"
+      - "[GET /api/leave-approvals] Call with T1 => [200]"
+      - "Admin revokes the Manager role (POST /api/role-assignments/{id}/revoke) => revoked"
+      - "[GET /api/leave-approvals] Call with the SAME T1 => record status (current design: [200] until expiry)"
+      - "[POST /api/auth/refresh] Refresh => [200] new token without Leave.Approve"
+      - "[GET /api/leave-approvals] Call with the new token => [403]"
+    db: "UserRoles assignment revoked/end-dated; permissions in the new token no longer include Leave.Approve."
+    sec: "Stale-authorization window equals remaining access-token lifetime."
+    auto: API
+    cr: [CR-14]
+    ex: ["xU:AuthServiceRefreshTests.Refresh_reflects_a_role_change_made_since_sign_in"]
+
+  - id: AUTH-TOKEN-028
+    func: [F-AUTH-16, F-AZ-03]
+    sc: Role granted while a token is live
+    t: A newly granted permission is not available until the next refresh or login
+    src: ["Token claims are a snapshot"]
+    type: Positive
+    tags: [Authorization]
+    pri: P1
+    sev: Medium
+    role: A_EMP3
+    steps:
+      - "[POST /api/auth/login] Sign in as an Employee => [200] token T1"
+      - "Admin assigns the Manager role => role assigned"
+      - "[GET /api/leave-approvals] Call with T1 => [403] permission not yet in token"
+      - "[GET /api/auth/me] Call with T1 => record whether /me shows the new role (it reads the DB) versus the token claims"
+      - "[POST /api/auth/refresh] Refresh => [200]"
+      - "[GET /api/leave-approvals] Call with the new token => [200]"
+    auto: API
+    cr: [CR-14]
+    cm: "Also shows /me (DB-fresh) and claims (token snapshot) can disagree between refreshes."
+
+  - id: AUTH-TOKEN-029
+    func: [F-AUTH-06, F-AUTH-07]
+    sc: Configuration fail-closed
+    t: The API refuses to start with a missing or too-short JWT secret and out-of-range lifetimes
+    src: ["JwtSettings.Validate", "JwtSettingsValidator (ValidateOnStart)"]
+    type: Negative
+    tags: [Configuration, Security]
+    pri: P1
+    sev: High
+    role: N/A (operator)
+    tenant: None
+    pre: "Disposable local API instance started manually with modified environment variables; never against a shared environment."
+    steps:
+      - "Start the API with Jwt__SecretKey unset => process exits non-zero; log states 'Jwt:SecretKey must be configured'"
+      - "Start with a 31-byte Jwt__SecretKey => exits; log states the minimum of 32 bytes"
+      - "Start with Jwt__AccessTokenMinutes=0 and again with 1441 => exits with the range message"
+      - "Start with Jwt__RefreshTokenDays=366 and Jwt__ClockSkewSeconds=301 => exits with the range messages"
+    sec: "No default or fallback secret exists."
+    auto: Manual only
+    ex: ["xU:JwtTokenServiceTests.Configuration_validation_accepts_a_sound_configuration"]
+    cm: "Existing test covers only the accepting case; negative startup behaviour is an operator/manual check."
+
+  - id: AUTH-TOKEN-030
+    func: [F-AUTH-06, F-AUTH-07]
+    sc: Token and tenant scoping of a permission-guarded endpoint
+    t: The same token yields different data only within its own tenant scope
+    src: ["HrmsDbContext global query filters keyed on the token's tid"]
+    type: Tenant-Isolation
+    pri: P0
+    sev: Critical
+    role: A_HR and B_HR
+    tenant: A/B
+    steps:
+      - "[GET /api/employees] With A_HR's token at the A host => [200] only Tenant A employees (every record's tenant-owned ids belong to A)"
+      - "[GET /api/employees] With B_HR's token at the B host => [200] only Tenant B employees; no overlap of employee ids with A's list"
+    auto: API
+    smoke: true
+    ex: ["xU:AuthEndpointsTests.A_token_naming_another_tenant_cannot_reach_this_tenants_data", "xU:TenantIsolationTests.One_tenant_cannot_read_rows_created_by_another_tenant"]

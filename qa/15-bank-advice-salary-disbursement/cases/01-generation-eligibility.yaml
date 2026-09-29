@@ -1,0 +1,253 @@
+sheet: BankAdv_Generation_Eligibility
+submodule: Bank Advice Generation & Payroll-Run Eligibility
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-GEN-001
+    func: [F-BANKADV-001]
+    sc: Unauthenticated tenant context cannot generate
+    t: GenerateAsync returns Unauthorized when no tenant is resolved on the request context
+    src: "Backend/HRMS.Application/Services/BankAdviceService.cs GenerateAsync"
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: High
+    pre: "Approved payroll run RUN1 exists"
+    role: n/a (no tenant context)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] with a request bearing no resolvable tenant => [401] Unauthorized"
+    auto: API
+
+  - id: BANKADV-GEN-002
+    func: [F-BANKADV-002]
+    sc: Nonexistent payroll run
+    t: Generate for a run id that does not exist in the tenant returns NotFound
+    src: "BankAdviceService.GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId = a fresh random guid"
+    steps:
+      - "[POST /api/payroll/runs/{randomGuid}/bank-advice] => [404] NotFound (\"Payroll run not found.\")"
+    auto: API
+
+  - id: BANKADV-GEN-003
+    func: [F-BANKADV-003]
+    sc: Run status gate - eligible statuses succeed, others are rejected
+    t: Generate succeeds only when PayrollRun.Status is Approved or Finalized; Draft/Prepared/Processing/Calculated/Cancelled are all Conflict
+    src: "BankAdviceService.GenerateAsync"
+    type: Negative
+    tags: [Boundary, Validation]
+    pri: P0
+    sev: High
+    pre: "One payroll run per status value exists, each with at least one Calculated PayrollResult"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: "Runs at Draft/Prepared/Processing/Calculated/Approved/Finalized/Cancelled"
+    steps:
+      - "[POST /api/payroll/runs/{draftRun}/bank-advice] => [409] Conflict (\"can only be generated from an approved or finalized payroll run\")"
+      - "[POST /api/payroll/runs/{calculatedRun}/bank-advice] => [409] Conflict"
+      - "[POST /api/payroll/runs/{cancelledRun}/bank-advice] => [409] Conflict"
+      - "[POST /api/payroll/runs/{approvedRun}/bank-advice] => [200] batch created, Status=Draft"
+      - "[POST /api/payroll/runs/{finalizedRun}/bank-advice] => [200] batch created, Status=Draft"
+    auto: API
+
+  - id: BANKADV-GEN-004
+    func: [F-BANKADV-004]
+    sc: Duplicate active batch is blocked
+    t: A second Generate call on the same run while an active batch already exists is Conflict
+    src: "BankAdviceService.GenerateAsync (AnyAsync guard)"
+    type: Negative
+    tags: [Idempotency]
+    pri: P0
+    sev: High
+    pre: "RUN1 (Approved) already has a Draft batch"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] a second time => [409] Conflict (\"An active bank advice batch already exists for this payroll run.\")"
+    auto: API
+    reg: true
+
+  - id: BANKADV-GEN-005
+    func: [F-BANKADV-005]
+    sc: Only current, calculated results contribute
+    t: A superseded (IsCurrent=false) or Failed PayrollResult row never produces a payment
+    src: "BankAdviceService.GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (Approved) has 3 employees: one Calculated+current, one Calculated but IsCurrent=false (superseded by a recalculation), one Status=Failed"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 3 PayrollResult rows as described
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] batch created with exactly 1 payment, for the current+Calculated employee only"
+    auto: DB-assisted
+    db: "Assert BankAdvicePayments count == 1 and PayrollResultId references only the current/Calculated row"
+
+  - id: BANKADV-GEN-006
+    func: [F-BANKADV-006]
+    sc: Zero eligible results
+    t: Generate on an Approved run with no Calculated payroll results is Conflict
+    src: "BankAdviceService.GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "RUN2 is Approved but has zero PayrollResult rows (e.g. an empty population)"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN2}/bank-advice] => [409] Conflict (\"No calculated payroll results are available for this run.\")"
+    auto: API
+
+  - id: BANKADV-GEN-007
+    func: [F-BANKADV-007]
+    sc: Mixed-currency results block generation
+    t: Generate is Conflict when the run's Calculated results span more than one CurrencyCode
+    src: "BankAdviceService.GenerateAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "RUN3 (Approved) has one employee with CurrencyCode=INR and one with CurrencyCode=USD"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: "2 PayrollResult rows, differing CurrencyCode"
+    steps:
+      - "[POST /api/payroll/runs/{RUN3}/bank-advice] => [409] Conflict (\"A bank advice batch cannot contain mixed currencies.\")"
+    auto: API
+
+  - id: BANKADV-GEN-008
+    func: [F-BANKADV-008]
+    sc: Deterministic batch numbering
+    t: BatchNumber follows BA/{PayDate:yyyyMM}/{RunId:N}/{version}, version = 1 + max existing Version for the run
+    src: "BankAdviceService.GenerateAsync"
+    type: Contract
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (Approved, PayDate 2026-10-05) has one eligible employee, no prior batch"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] BatchNumber == \"BA/202610/{RUN1:N}/1\", Version == 1"
+    auto: API
+
+  - id: BANKADV-GEN-009
+    func: [F-BANKADV-009]
+    sc: New batch starting state
+    t: A newly generated batch starts at Status=Draft with GeneratedAtUtc/GeneratedByUserId stamped and a Generated history event
+    src: "BankAdviceService.GenerateAsync -> History(Generated)"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (Approved) has one eligible employee"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] Status==\"Draft\", GeneratedAtUtc is set"
+      - "[GET /api/payroll/bank-advice/{batchId}] => [200] History contains exactly one Generated-type event"
+    auto: API
+
+  - id: BANKADV-GEN-010
+    func: [F-BANKADV-010, F-BANKADV-011]
+    sc: Sequence and payment reference determinism
+    t: Payments are sequenced 1..N by EmployeeCode ascending, and PaymentReference is {BatchNumber}/{Sequence:0000}
+    src: "BankAdviceService.GenerateAsync"
+    type: Contract
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (Approved) has 3 eligible employees with EmployeeCode EMP-030, EMP-010, EMP-020 (inserted in that unsorted order)"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: 3 PayrollResult rows
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] payments ordered EMP-010(seq 1), EMP-020(seq 2), EMP-030(seq 3)"
+      - "[Manual] each payment's PaymentReference == BatchNumber + \"/\" + Sequence zero-padded to 4 digits => matches for all 3 rows"
+    auto: API
+
+  - id: BANKADV-GEN-011
+    func: [F-BANKADV-012]
+    sc: Regeneration is possible after cancellation
+    t: Once a batch for a run reaches Status=Cancelled, Generate succeeds again for the same run
+    src: "BankAdviceService.GenerateAsync (AnyAsync excludes Cancelled)"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (Approved) has a batch that has been cancelled (see BANKADV-CANCEL-004 for the cancel step)"
+    role: HRAdmin (custom role holding BankAdvice.Generate, Cancel)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] a new batch is created (Status=Draft) despite the run already having a Cancelled batch"
+    auto: API
+    cr: [CR-269]
+
+  - id: BANKADV-GEN-012
+    func: [F-BANKADV-013]
+    sc: Generation never mutates payroll results
+    t: PayrollResult rows are read-only inputs to generation; NetPay/Status/IsCurrent are unchanged before and after
+    src: "BankAdviceService.GenerateAsync (AsNoTracking source query)"
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Low
+    pre: "RUN1 (Approved) has one eligible employee with a known NetPay"
+    role: HRAdmin (custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] snapshot the PayrollResult row's NetPay/Status/IsCurrent before generation => values recorded"
+      - "[POST /api/payroll/runs/{RUN1}/bank-advice] => [200] batch created"
+      - "[Manual] re-read the same PayrollResult row => NetPay/Status/IsCurrent are byte-for-byte unchanged"
+    auto: DB-assisted
+    db: "PayrollResults row unchanged"
+
+  - id: BANKADV-GEN-013
+    func: [F-BANKADV-014]
+    sc: Cross-tenant run id
+    t: Generate for a run id belonging to another tenant returns NotFound, not Forbidden
+    src: "BankAdviceService.GenerateAsync (TenantId filter)"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "RUN_T2 is an Approved payroll run belonging to tenant T2 (DEMO02)"
+    role: HRAdmin (T1, custom role holding BankAdvice.Generate)
+    perm: Payroll.BankAdvice.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN_T2}/bank-advice] as a T1 user => [404] NotFound"
+    auto: API
+    secc: true

@@ -1,0 +1,210 @@
+sheet: EmployeeCode_Frontend
+submodule: EmployeeCodeConfigurationPage, Rule Builder, Employment/Personal-Details Integration
+defaults:
+  role: TENANT_ADMIN
+  perm: EmployeeCodeConfiguration.Manage
+  tenant: A
+  pre: "Tenant A signed in as TenantAdmin, browsing /configuration/employee-code."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: CODE-FE-001
+    func: [F-CODE-46]
+    sc: Assignment-mode choice cards are mutually exclusive and drive which fields are enabled
+    t: Selecting Manual disables Prefix/Next Number/Padding/Separator; selecting Auto re-enables them and reveals Generation Method
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx (choice-card radios, disabled={!autoGenerate})"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[UI] Load the page for a tenant with no configuration yet => 'Manual' is unselected, 'Auto Generate' is the default selection, Simple/RuleBased choice is visible"
+      - "[UI] Click 'Manual Employee Code' => Prefix/Next number/Padding/Separator inputs become disabled; the Generation Method fieldset disappears"
+      - "[UI] Click 'Auto Generate Employee Code' again => the fields re-enable and Generation Method reappears, defaulting to 'Simple Sequence'"
+    auto: UI
+
+  - id: CODE-FE-002
+    func: [F-CODE-46]
+    sc: The Simple-mode 'Example preview' text updates live as prefix/padding/separator/next-number change
+    t: A purely client-side preview computed from current form state, before any save
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx ('Example preview' paragraph)"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] With Auto + Simple selected, set prefix='STAFF', padding=4, separator='/', nextNumber=7 => the example preview text reads 'STAFF/0007'"
+    auto: UI
+
+  - id: CODE-FE-003
+    func: [F-CODE-46]
+    sc: Saving the configuration form surfaces the exact backend validation message on failure
+    t: A rejected save (e.g. invalid separator sent via a manipulated form state) shows the API's error text in the page's error Notice, not a generic failure message
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx (submit -> catch -> setConfigurationError(ApiError.message))"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[UI] Force an invalid save (e.g. via devtools manipulation of the separator select's value) and submit => the error banner shows the backend's exact validation message text"
+    auto: UI
+
+  - id: CODE-FE-004
+    func: [F-CODE-47]
+    sc: The rule builder only appears when Auto + Rule-Based is the currently selected configuration mode
+    t: Switching to Simple or Manual hides the entire 'Advanced Rule-Based Generation' card
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx ('autoGenerate && generationMethod === \"RuleBased\" ? <Card>... : null')"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Select Auto + Rule-Based => the rule builder card is visible with its rule list and 'Rule Builder' form"
+      - "[UI] Switch to Auto + Simple => the rule builder card disappears entirely"
+    auto: UI
+
+  - id: CODE-FE-005
+    func: [F-CODE-47]
+    sc: A condition's master dropdown cascades to its child field, clearing the child's selection when the parent changes
+    t: Changing the Department condition's value clears any already-selected Sub Department condition value (clearDescendants)
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx (fieldParents, clearDescendants)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Add a Department condition set to 'IT', then add a Sub Department condition set to one of IT's sub-departments => both selections are retained"
+      - "[UI] Change the Department condition to 'Finance' => the Sub Department condition's selected value is cleared automatically"
+    auto: UI
+
+  - id: CODE-FE-006
+    func: [F-CODE-47]
+    sc: The Location field is rendered but disabled in both the condition-field dropdown and the segment-type dropdown, with an explanatory hint
+    t: The unavailable Location option cannot be selected at all in the UI, matching the backend's hard rejection
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx (fieldDefinitions 'unavailable' hint, segmentDefinitions disabled option)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[UI] Open the condition field dropdown => 'Location' is present but shown disabled with 'No separate Location master exists in the employment model.'"
+      - "[UI] Open the segment type dropdown => 'Location code (unavailable)' is present but disabled"
+    auto: UI
+
+  - id: CODE-FE-007
+    func: [F-CODE-47]
+    sc: The rule builder blocks adding a second Sequential Number segment client-side, before ever calling the API
+    t: "'Add segment' with segmentType=SequentialNumber is a no-op once one already exists"
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx (addSegment: 'if (segmentType === 1 && segments.some(...)) return')"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[UI] Add a Sequential Number segment, then attempt to add a second one via the segment-type dropdown on an existing segment row => the change is rejected client-side; only one Sequential Number segment remains"
+    auto: UI
+
+  - id: CODE-FE-008
+    func: [F-CODE-47]
+    sc: Segment reordering (Move Up/Move Down) changes rendered order and the SequenceOrder sent on save
+    t: Moving a segment changes the eventual code's segment order
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx (moveSegment)"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Build a rule with segments [DepartmentCode, SequentialNumber]; click 'Move Down' on DepartmentCode => order becomes [SequentialNumber, DepartmentCode]"
+      - "[UI] Save the rule, then reload it via Edit => segments reload in the saved order"
+    auto: UI
+
+  - id: CODE-FE-009
+    func: [F-CODE-47]
+    sc: The unsaved local preview and the backend 'Preview saved rule' call produce independent results, and the local one is clearly labeled as unsaved
+    t: Editing conditions/segments after a save changes the local preview immediately but the backend preview only reflects the last SAVED rule until re-run
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx (rulePreview() vs runSavedPreview())"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Save a rule with a given segment set, then click 'Preview saved rule' => the 'Saved-rule preview' box shows a rendered code"
+      - "[UI] Change a segment's fixed value WITHOUT saving => the 'Unsaved editor preview' box updates immediately, but the 'Saved-rule preview' box (until 'Preview saved rule' is clicked again) still shows the old, already-saved rule's rendering"
+    auto: UI
+
+  - id: CODE-FE-010
+    func: [F-CODE-47]
+    sc: Deleting a rule shows a confirmation dialog stating that existing Employee Codes are unaffected
+    t: The confirm() text matches the backend's actual soft-delete semantics (no retroactive effect on already-issued codes)
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx (deleteRule confirm text)"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Click 'Delete' on a rule row => a confirm dialog reads '...This will remove the rule from this screen and stop it being used for Employee Code generation.\\n\\nExisting Employee Codes will not be affected.'"
+      - "[UI] Confirm => the rule disappears from the list and a success flash 'Employee Code rule deleted.' appears"
+    auto: UI
+
+  - id: CODE-FE-011
+    func: [F-CODE-47]
+    sc: Client-side validation messages match the backend's own wording for the checks the UI duplicates
+    t: "'Rule name is required.', 'Priority is required...', 'Active rules require exactly one sequential-number segment.', 'Fixed text and custom constant segments require a value.', and the Location-unavailable message all match their backend counterparts"
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx (addRule pre-submit checks)"]
+    type: Negative
+    tags: [Validation]
+    pri: P2
+    steps:
+      - "[UI] Submit the rule form with a blank name => inline error 'Rule name is required.' (no API call made)"
+      - "[UI] Submit with priority left non-numeric/negative => 'Priority is required and must be a valid number.'"
+      - "[UI] Submit with zero or two Sequential Number segments => 'Active rules require exactly one sequential-number segment.'"
+    auto: UI
+
+  - id: CODE-FE-012
+    func: [F-CODE-49]
+    sc: PersonalDetailsForm renders the read-only employee-code banner with no input control, for both a pending and an already-coded employee
+    t: There is no way to type/edit an Employee Code from the Personal Details screen under any assignment mode
+    src: ["Frontend PersonalDetailsForm.tsx (employee-code-banner, no <input> anywhere in that block)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Open Personal Details for a brand-new employee (no code yet) => banner shows the new-hire placeholder and hint text, no editable field"
+      - "[UI] Open Personal Details for an already-coded employee => banner shows the actual code, still read-only"
+    auto: UI
+
+  - id: CODE-FE-013
+    func: [F-CODE-48]
+    sc: EmploymentSectionForm's manual-code field is required (HTML5 required attribute) and carries the documented hint text
+    t: The field cannot be submitted blank when it is rendered
+    src: ["Frontend EmploymentSectionForm.tsx (TextField required, hint 'Required for the first employment record when manual assignment is enabled.')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[UI] Under Manual mode, first employment record, leave the Employee code field blank and submit => the browser/form blocks submission (required) or the API 400 message is surfaced if bypassed"
+    auto: UI
+
+  - id: CODE-FE-014
+    func: [F-CODE-01, F-CODE-46]
+    sc: An API failure while loading the configuration page shows an error Notice instead of a blank/broken form
+    t: A 500 or network failure on GET is surfaced, not silently swallowed
+    src: ["Frontend EmployeeCodeConfigurationPage.tsx (error ? <Notice tone=\"error\">Unable to load Employee Code configuration.</Notice> : null)"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[UI] Simulate the GET failing (network throttling/mocked 500) => 'Unable to load Employee Code configuration.' Notice is shown; the form area shows nothing broken"
+    auto: UI
+
+  - id: CODE-FE-015
+    func: [F-CODE-43]
+    sc: A user without EmployeeCodeConfiguration.View never sees the 'Employee Code Configuration' nav entry, and a direct route visit is blocked
+    t: Navigation is permission-driven (navigation.ts), and the page route itself is still protected server-side even if reached directly
+    src: ["Frontend navigation.ts (permission: Permissions.employeeCodeConfiguration.view); backend [HasPermission] as the real enforcement point"]
+    type: Authorization
+    tags: [Negative]
+    pri: P1
+    role: HR_ADMIN
+    steps:
+      - "[UI] Log in as HR_ADMIN => the sidebar has no 'Employee Code Configuration' entry (CR-44)"
+      - "[UI] Navigate directly to /configuration/employee-code by URL => the page attempts its GET, which the backend refuses with 403; the page renders its error Notice rather than exposing configuration data"
+    auto: API + UI
+    cr: [CR-44]
+
+  - id: CODE-FE-016
+    func: [F-CODE-50]
+    sc: No Vitest test file exists for EmployeeCodeConfigurationPage, and EmploymentSectionForm's existing test file never exercises the manual-code branch
+    t: Confirms the coverage gap directly, as a documented fact rather than an assumption
+    src: ["repository search: no Frontend/HRMS.Web/src/pages/EmployeeCodeConfigurationPage.test.* file; EmploymentSectionForm.test.tsx has zero matches for employeeCode/manualCode/assignmentMode"]
+    type: Boundary
+    tags: [Contract]
+    pri: P3
+    sev: Low
+    steps:
+      - "[Code inspection] `find Frontend/HRMS.Web/src -iname 'EmployeeCodeConfigurationPage.test.*'` => no results"
+      - "[Code inspection] grep EmploymentSectionForm.test.tsx for 'employeeCode'/'manualCode'/'assignmentMode' => no results"
+    auto: Manual only
+    cm: "Restates F-CODE-50's own finding (functionality status 'Needs clarification'); no separate clarifications.yaml entry was created for this purely frontend-test-coverage observation."

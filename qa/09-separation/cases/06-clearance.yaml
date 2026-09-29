@@ -1,0 +1,470 @@
+sheet: Separation_Clearance
+submodule: Clearance template configuration, task lifecycle, asset returns, completion gate, and concurrency
+defaults:
+  role: HRADMIN
+  perm: "Separation.Clearance.ManageTask"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: SEP-CLR-001
+    func: [F-SEP-130, F-SEP-131]
+    sc: Clearance and task enum contract
+    t: Clearance status/task status/owner type/category values match the declared enums exactly
+    src: ["Backend/HRMS.Domain/Enums/SeparationClearanceEnums.cs"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/Code] Inspect SeparationClearanceStatus, SeparationClearanceTaskStatus, ClearanceOwnerType, SeparationClearanceTaskCategory declarations => match the documented values exactly"
+    auto: Manual only
+
+  - id: SEP-CLR-002
+    func: [F-SEP-132]
+    sc: Configure a clearance template with items
+    t: A valid template with code/name/items is created; missing fields are rejected
+    src: ["ClearanceService.CreateTemplateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Separation.Clearance.Configure"
+    steps:
+      - "[POST /api/separation/clearance/templates] Code='STD', Name='Standard Clearance', Items=[{Code:'HR1',Name:'HR Clearance',Category:Hr,IsMandatory:true}] => [200/201] created"
+      - "[POST /api/separation/clearance/templates] Code='', Name='' => [400] A template, code, name and at least one item are required."
+    auto: API
+
+  - id: SEP-CLR-003
+    func: [F-SEP-133]
+    sc: Clearance start requires Approved/NoticePeriod status, an effective template, and snapshots items
+    t: Starting clearance on a Draft case fails; starting on Approved with an effective template succeeds and snapshots
+    src: ["ClearanceService.StartAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Separation.Clearance.Start"
+    steps:
+      - "[Setup] Case is still Draft => precondition established"
+      - "[POST /api/separation/clearance/for/{draftCaseId}/start] => [409] Clearance can start only after separation approval."
+      - "[Setup] Case is Approved, an effective template exists => precondition established"
+      - "[POST /api/separation/clearance/for/{approvedCaseId}/start] => [200/201] Status=NotStarted->InProgress, tasks snapshotted from the active template items"
+    auto: API
+
+  - id: SEP-CLR-004
+    func: [F-SEP-133]
+    sc: Later template edits do not retroactively change an in-flight clearance's tasks
+    t: Editing the template after Start leaves the already-started clearance's tasks unchanged
+    src: ["ClearanceService.StartAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.Clearance.Configure"
+    steps:
+      - "[Setup] Clearance already started with 2 tasks snapshotted from the template's current items => precondition established"
+      - "[POST /api/separation/clearance/templates/{templateId}/items] Add a 3rd item to the template (if supported) or create a new version => precondition established"
+      - "[GET /api/separation/clearance/for/{separationId}] => [200] the already-started clearance still shows exactly 2 tasks - the historical snapshot is immune to the edit"
+    auto: DB-assisted
+
+  - id: SEP-CLR-005
+    func: [F-SEP-134]
+    sc: A clearance can only be started once per separation
+    t: A second Start attempt on the same separation Conflicts
+    src: ["ClearanceService.StartAsync"]
+    type: Negative
+    pri: P0
+    perm: "Separation.Clearance.Start"
+    steps:
+      - "[POST /api/separation/clearance/for/{id}/start] first call => [200/201]"
+      - "[POST /api/separation/clearance/for/{id}/start] second call => [409] Clearance has already been started for this separation."
+    auto: API
+
+  - id: SEP-CLR-006
+    func: [F-SEP-135]
+    sc: No effective template for the separation's type/reason blocks Start
+    t: An unconfigured tenant (no effective template) fails Start with Conflict
+    src: ["ClearanceService.StartAsync"]
+    type: Negative
+    pri: P1
+    perm: "Separation.Clearance.Start"
+    steps:
+      - "[Setup] No IsActive, effective-dated clearance template exists for this separation's type/reason => precondition established"
+      - "[POST /api/separation/clearance/for/{id}/start] => [409] No effective clearance template is configured for this separation."
+    auto: DB-assisted
+
+  - id: SEP-CLR-007
+    func: [F-SEP-136]
+    sc: Task DueDate is computed from DueDaysBeforeLwd, falling back to the LWD itself
+    t: A task with DueDaysBeforeLwd=5 gets DueDate=LWD-5; a task with no offset configured gets DueDate=LWD
+    src: ["ClearanceService.StartAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[Setup] Template item DueDaysBeforeLwd=5, ApprovedLastWorkingDate=2026-10-31 => precondition established"
+      - "[POST /api/separation/clearance/for/{id}/start] => [200/201] the corresponding task's DueDate=2026-10-26"
+      - "[Setup] A second item with no DueDaysBeforeLwd configured => precondition established"
+      - "[GET /api/separation/clearance/for/{id}] => [200] that task's DueDate=2026-10-31 (the LWD itself)"
+    auto: API
+
+  - id: SEP-CLR-008
+    func: [F-SEP-137]
+    sc: No endpoint exists to add a task to an already-started clearance
+    t: Once started, task identity/count is fixed - only status/comment/assets can change
+    src: ["ClearanceService.cs (absence)"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual/Code] Full grep of SeparationClearanceController.cs's action list => no 'add task' or 'add item to in-flight clearance' route exists"
+    auto: Manual only
+
+  - id: SEP-CLR-009
+    func: [F-SEP-138]
+    sc: All-clear computation (MandatoryTotal/MandatoryResolved/ReadyForExit) is computed live on every read
+    t: Clearing one of two mandatory tasks updates the live counts on the very next GET, with no caching
+    src: ["ClearanceService.ToDto"]
+    type: Positive
+    pri: P1
+    perm: "Separation.Clearance.ViewAll"
+    steps:
+      - "[Setup] Clearance has 2 mandatory tasks, both Pending => precondition established"
+      - "[GET /api/separation/clearance/{id}] => [200] MandatoryTotal=2, MandatoryResolved=0, ReadyForExit=false"
+      - "[POST /api/separation/clearance/tasks/{task1Id}/clear] Comment='Done' => [200] Cleared"
+      - "[GET /api/separation/clearance/{id}] => [200] MandatoryResolved=1 immediately, no cache staleness"
+    auto: API
+
+  - id: SEP-CLR-010
+    func: [F-SEP-139]
+    sc: Completion is blocked while any mandatory task remains unresolved; non-mandatory tasks never block it
+    t: A pending mandatory task blocks Complete; an unresolved non-mandatory task does not
+    src: ["ClearanceService.CompleteAsync"]
+    type: Negative
+    pri: P0
+    smoke: true
+    perm: "Separation.Clearance.Complete"
+    steps:
+      - "[Setup] 1 mandatory task Pending, 1 non-mandatory task Pending => precondition established"
+      - "[POST /api/separation/clearance/{id}/complete] => [409] Mandatory clearance tasks remain unresolved."
+      - "[POST /api/separation/clearance/tasks/{mandatoryTaskId}/clear] Comment='Done' => [200] Cleared"
+      - "[POST /api/separation/clearance/{id}/complete] => [200] Completed - the still-Pending non-mandatory task does not block it"
+    auto: API
+
+  - id: SEP-CLR-011
+    func: [F-SEP-140]
+    sc: Completing an already-Completed clearance is idempotent success
+    t: A second Complete call returns success with the message 'Clearance is already complete.'
+    src: ["ClearanceService.CompleteAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Separation.Clearance.Complete"
+    steps:
+      - "[POST /api/separation/clearance/{id}/complete] first call, all tasks resolved => [200] Completed"
+      - "[POST /api/separation/clearance/{id}/complete] second call => [200] 'Clearance is already complete.'"
+    auto: API
+
+  - id: SEP-CLR-012
+    func: [F-SEP-141]
+    sc: Completion is blocked once the parent separation is Closed
+    t: A Closed separation's clearance cannot be completed, with the bare 'SeparationAlreadyClosed' code
+    src: ["ClearanceService.CompleteAsync"]
+    type: Negative
+    pri: P1
+    perm: "Separation.Clearance.Complete"
+    steps:
+      - "[Setup] Parent separation is already Closed (exit fully executed) => precondition established"
+      - "[POST /api/separation/clearance/{id}/complete] => [409] SeparationAlreadyClosed"
+    auto: DB-assisted
+    cr: [CR-137]
+
+  - id: SEP-CLR-013
+    func: [F-SEP-142]
+    sc: Successful clearance completion pushes the separation to ReadyForExit
+    t: (cross-reference to SEP-SM-010 for the full happy-path assertion)
+    src: ["ClearanceService.CompleteAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Manual/API] Cross-reference SEP-SM-010's happy-path assertion => confirms clearance completion pushes the separation to ReadyForExit"
+    auto: Manual only
+
+  - id: SEP-CLR-014
+    func: [F-SEP-143, F-SEP-144]
+    sc: No department/role/HR/IT/Accounts/Admin ownership enforcement exists on task actions
+    t: A generic ManageTask holder can clear an IT-category task regardless of assignment
+    src: ["ClearanceService.TaskActionAsync"]
+    type: Security
+    pri: P1
+    steps:
+      - "[Setup] A task with OwnerType=It, Category=It exists, unassigned to the current caller => precondition established"
+      - "[POST /api/separation/clearance/tasks/{itTaskId}/clear] As an HR user holding only the blanket Separation.Clearance.ManageTask permission (no IT-specific role) => [200] Cleared - no ownership check blocks this"
+    auto: API
+    cr: [CR-138]
+
+  - id: SEP-CLR-015
+    func: [F-SEP-145]
+    sc: Block/Waive require a reason; Clear requires a comment when RequiresComment is set
+    t: Missing reason on Block/Waive, and missing comment on a RequiresComment task's Clear, are both Invalid
+    src: ["ClearanceService.TaskActionAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/separation/clearance/tasks/{id}/block] Reason='' => [400] A reason is required."
+      - "[Setup] Task RequiresComment=true => precondition established"
+      - "[POST /api/separation/clearance/tasks/{id}/clear] Comment='' => [400] A comment is required for this task."
+    auto: API
+
+  - id: SEP-CLR-016
+    func: [F-SEP-146]
+    sc: Clear is blocked when a required asset return has not been resolved
+    t: A task with RequiresAssetReturn and no Returned/NotApplicable asset row cannot be cleared
+    src: ["ClearanceService.TaskActionAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] Task RequiresAssetReturn=true, no asset return rows exist yet => precondition established"
+      - "[POST /api/separation/clearance/tasks/{id}/clear] Comment='Done' => [409] All required assets must be returned or marked not applicable before clearance."
+      - "[POST /api/separation/clearance/tasks/{id}/assets] AssetReference='LAPTOP-001', AssetName='Laptop', ReturnStatus=Returned => [200/201]"
+      - "[POST /api/separation/clearance/tasks/{id}/clear] Comment='Done' => [200] Cleared"
+    auto: API
+
+  - id: SEP-CLR-017
+    func: [F-SEP-147]
+    sc: Waive is only permitted on mandatory tasks
+    t: Waiving a non-mandatory task is Invalid
+    src: ["ClearanceService.TaskActionAsync"]
+    type: Negative
+    pri: P1
+    perm: "Separation.Clearance.Waive"
+    steps:
+      - "[Setup] Task IsMandatory=false => precondition established"
+      - "[POST /api/separation/clearance/tasks/{id}/waive] Reason='Not needed' => [400] Only mandatory tasks require an authorized waiver."
+    auto: API
+
+  - id: SEP-CLR-018
+    func: [F-SEP-148]
+    sc: An employee cannot clear their own clearance task; a Manager-owner task requires the resolved effective manager
+    t: Self-clear is Forbidden; a non-manager caller on a Manager-owner task is Forbidden
+    src: ["ClearanceService.TaskActionAsync"]
+    type: Security
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/separation/clearance/tasks/{ownTaskId}/clear] As the separating employee themself, holding ManageTask (test-only grant) => [403] An employee cannot clear their own clearance task."
+      - "[Setup] Task OwnerType=Manager => precondition established"
+      - "[POST /api/separation/clearance/tasks/{managerTaskId}/clear] As a colleague who is NOT the effective manager => [403] Only the effective manager may act on this task. / You are not the effective manager for this task."
+    auto: API
+
+  - id: SEP-CLR-019
+    func: [F-SEP-149, F-SEP-153]
+    sc: Add and update an asset return record; no monetary amount field exists
+    t: A valid asset return is created with required reference/name; RecoveryReference is free text, never a numeric amount
+    src: ["ClearanceService.AddAssetReturnAsync", "UpdateAssetReturnAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.Clearance.AssetManage"
+    steps:
+      - "[POST /api/separation/clearance/tasks/{id}/assets] AssetReference='', AssetName='' => [400] Asset reference and name are required."
+      - "[POST /api/separation/clearance/tasks/{id}/assets] AssetReference='BADGE-42', AssetName='Access Badge', RecoveryRequired=true, RecoveryReference='Lost - deduct INR 500 per policy' => [200/201] created - RecoveryReference stores this as free text; there is no numeric Amount field anywhere on this entity"
+    auto: API
+    cr: [CR-156]
+
+  - id: SEP-CLR-020
+    func: [F-SEP-150]
+    sc: ActualReturnDate and IssuedDate are never populated even on a Returned transition
+    t: Marking an asset Returned does not stamp ActualReturnDate
+    src: ["ClearanceService.UpdateAssetReturnAsync"]
+    type: Negative
+    pri: P2
+    perm: "Separation.Clearance.AssetManage"
+    steps:
+      - "[POST /api/separation/clearance/tasks/{id}/assets/{assetId}] ReturnStatus=Returned => [200] ReturnStatus=Returned"
+      - "[GET /api/separation/clearance/{id}] => [200] the asset's ActualReturnDate and IssuedDate remain null"
+    auto: API
+    cr: [CR-142]
+
+  - id: SEP-CLR-021
+    func: [F-SEP-151]
+    sc: An already-resolved asset return cannot change to a DIFFERENT terminal status
+    t: Changing a Returned asset to Lost is rejected; re-saving the same status is accepted
+    src: ["ClearanceService.UpdateAssetReturnAsync"]
+    type: Negative
+    pri: P1
+    perm: "Separation.Clearance.AssetManage"
+    steps:
+      - "[POST /api/separation/clearance/tasks/{id}/assets/{assetId}] ReturnStatus=Returned => [200] Returned"
+      - "[POST /api/separation/clearance/tasks/{id}/assets/{assetId}] ReturnStatus=Lost => [409] The asset return has already been resolved with a different status."
+      - "[POST /api/separation/clearance/tasks/{id}/assets/{assetId}] ReturnStatus=Returned (same) => [200] accepted"
+    auto: API
+
+  - id: SEP-CLR-022
+    func: [F-SEP-152]
+    sc: Multiple asset rows on one task are allowed but only the first is surfaced in inbox/dashboard summaries
+    t: Adding a second asset to a task with an existing one succeeds, but the summary DTO shows only the first by Id order
+    src: ["ClearanceService.AddAssetReturnAsync", "GetInboxAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/separation/clearance/tasks/{id}/assets] AssetReference='LAPTOP-001' (first) => [200/201]"
+      - "[POST /api/separation/clearance/tasks/{id}/assets] AssetReference='MONITOR-001' (second, same task) => [200/201] both persisted"
+      - "[GET /api/separation/clearance/inbox] => [200] the task's summary row shows only the first asset (LAPTOP-001) by Id ordering - MONITOR-001 is hidden from the list view"
+    auto: API
+
+  - id: SEP-CLR-023
+    func: [F-SEP-154]
+    sc: Reopen a Completed clearance preserves prior event history
+    t: Reopening appends an event without erasing the prior Started/Cleared/Completed events
+    src: ["ClearanceService.ReopenAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.Clearance.Reopen"
+    steps:
+      - "[POST /api/separation/clearance/{id}/reopen] Comments='Missed an item' => [200] Status=Reopened"
+      - "[GET /api/separation/clearance/{id}] => [200] Events collection shows ClearanceStarted, TaskCleared, ClearanceCompleted, AND ClearanceReopened - 4 total, none erased"
+    auto: API
+
+  - id: SEP-CLR-024
+    func: [F-SEP-154]
+    sc: Reopen requires a reason and only applies to Completed clearances
+    t: An empty reason or reopening a non-Completed clearance both fail
+    src: ["ClearanceService.ReopenAsync"]
+    type: Negative
+    pri: P1
+    perm: "Separation.Clearance.Reopen"
+    steps:
+      - "[POST /api/separation/clearance/{id}/reopen] Comments='' => [400] A reason is required to reopen clearance."
+      - "[Setup] Clearance is still InProgress, not Completed => precondition established"
+      - "[POST /api/separation/clearance/{inProgressId}/reopen] Comments='x' => [409] Only completed clearance can be reopened."
+    auto: API
+
+  - id: SEP-CLR-025
+    func: [F-SEP-155]
+    sc: Manager, functional, and HR clearance inboxes/dashboard - server-paged and tenant-scoped
+    t: Each of the three listing endpoints returns only appropriately-scoped, tenant-isolated rows
+    src: ["ClearanceService.GetManagerInboxAsync", "GetFunctionalInboxAsync", "GetHrDashboardAsync"]
+    type: Positive
+    pri: P1
+    perm: "Separation.Clearance.ViewTeam"
+    steps:
+      - "[GET /api/separation/clearance/inbox/manager] As a manager => [200] only tasks for their own direct reports"
+      - "[GET /api/separation/clearance/inbox] As a functional/department user => [200] only tasks assigned to their department/user"
+      - "[GET /api/separation/clearance/hr-dashboard] As HRAdmin holding ViewAll => [200] tenant-wide"
+    auto: API
+
+  - id: SEP-CLR-026
+    func: [F-SEP-156]
+    sc: ClearanceViewSelf gates zero endpoints
+    t: An employee holding only ClearanceViewSelf cannot reach any clearance endpoint through this permission
+    src: ["Permissions.cs", "SeparationClearanceController.cs"]
+    type: Security
+    pri: P1
+    role: EMPLOYEE
+    perm: "Separation.Clearance.ViewSelf"
+    steps:
+      - "[GET /api/separation/clearance/for/{ownCaseId}] As an employee holding ONLY Separation.Clearance.ViewSelf (no ViewAll) => [403] Forbidden - this endpoint is gated on ClearanceViewAll, not ViewSelf"
+    auto: API
+    cr: [CR-140]
+
+  - id: SEP-CLR-027
+    func: [F-SEP-157]
+    sc: Seeded IT/Accounts roles cannot act on any clearance task
+    t: A user with only the seeded IT or Accounts role permission set cannot clear/block a task
+    src: ["SeedData.cs RolePermissionMap"]
+    type: Authorization
+    pri: P1
+    role: IT
+    perm: "n/a"
+    steps:
+      - "[POST /api/separation/clearance/tasks/{itTaskId}/clear] As a seeded IT-role user (User.View/User.Edit/AccountEmployeeLink.View only) => [403] Forbidden - IT holds zero Separation.Clearance.* permissions"
+    auto: API
+    cr: [CR-139]
+
+  - id: SEP-CLR-028
+    func: [F-SEP-158]
+    sc: Tenant isolation across every clearance query and mutation
+    t: A Tenant B caller referencing a Tenant A clearance/task/asset id gets NotFound with no side effect
+    src: ["ClearanceService.cs"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/separation/clearance/{tenantAClearanceId}] As Tenant B => [404]"
+      - "[POST /api/separation/clearance/tasks/{tenantATaskId}/clear] As Tenant B holding ManageTask => [404] - no side effect on Tenant A's task"
+    auto: API
+
+  # ── Clearance concurrency ──
+  - id: SEP-CLRC-001
+    func: [F-SEP-159]
+    sc: Clear vs Block race on the same task
+    t: Exactly one authoritative final task status survives
+    src: ["ClearanceService.TaskActionAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire Clear and Block concurrently against the same Pending task via a synchronized barrier => final status is exactly one of {Cleared, Blocked, Waived}; 0-1 calls succeed, never 2"
+    auto: DB-assisted
+
+  - id: SEP-CLRC-002
+    func: [F-SEP-160]
+    sc: Clear vs Waive race on the same task
+    t: Exactly one authoritative final task status survives
+    src: ["ClearanceService.TaskActionAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire Clear and Waive concurrently against the same Pending mandatory task => final status is exactly one of {Cleared, Waived}"
+    auto: DB-assisted
+
+  - id: SEP-CLRC-003
+    func: [F-SEP-161]
+    sc: Complete vs concurrent task update never observes an invalid Completed state
+    t: The clearance can never be Completed while a mandatory task remains unresolved, under any race interleaving
+    src: ["ClearanceService.CompleteAsync", "TaskActionAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[Manual/DB] Fire Complete and Block (on the last remaining mandatory task) concurrently => it is never observed that clearance.Status==Completed while a mandatory task is unresolved"
+    auto: DB-assisted
+
+  - id: SEP-CLRC-004
+    func: [F-SEP-162]
+    sc: Reopen vs Complete race leaves a valid clearance state
+    t: Final status is always one of {Completed, Reopened}
+    src: ["ClearanceService.ReopenAsync", "CompleteAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Pre-clear the mandatory task and pre-complete the clearance, then fire Reopen and Complete concurrently => final status is one of {Completed, Reopened}; 1-2 calls may succeed depending on interleaving"
+    auto: DB-assisted
+
+  - id: SEP-CLRC-005
+    func: [F-SEP-163]
+    sc: Asset-return vs reported-lost race on the same asset row
+    t: A single final asset status survives, never both
+    src: ["ClearanceService.UpdateAssetReturnAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire ReturnStatus=Returned and ReturnStatus=Lost concurrently against the same asset row => final status is exactly one of {Returned, Lost}"
+    auto: DB-assisted
+
+  - id: SEP-CLRC-006
+    func: [F-SEP-164]
+    sc: LWD revision vs clearance completion race (cross-module) never produces an invalid combined state
+    t: The separation ends in a valid status and clearance is never left Cancelled
+    src: ["SeparationService.ReviseApprovedLwdAsync", "ClearanceService.CompleteAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Fire ReviseApprovedLwdAsync and ClearanceService.CompleteAsync concurrently on the same case => separation ends in {ReadyForExit, Approved, NoticePeriod}; clearance is never Cancelled; 1-2 calls succeed"
+    auto: DB-assisted
+
+  - id: SEP-CLRC-007
+    func: [F-SEP-165]
+    sc: A pre-commit failure at Clear/Complete/AddAssetReturn rolls back cleanly and a retry succeeds exactly once
+    t: Injected failures leave zero partial writes/events; a clean retry succeeds
+    src: ["ClearanceService.cs"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Inject a pre-commit failure during ClearTask => task stays Pending, no TaskCleared event; retry without the injector succeeds"
+      - "[Manual/DB] Inject a pre-commit failure during CompleteAsync => clearance not Completed, no ClearanceCompleted event, separation not ReadyForExit; retry succeeds"
+      - "[Manual/DB] Inject a pre-commit failure during AddAssetReturnAsync => zero asset rows persisted; retry succeeds"
+    auto: DB-assisted

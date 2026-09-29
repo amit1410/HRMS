@@ -1,0 +1,187 @@
+sheet: Leave_EffectiveDates
+submodule: LeavePolicyResolver effective-dating, priority/specificity tie-break, and cross-boundary requests
+defaults:
+  role: TENANT_ADMIN
+  perm: "Leave.PolicyView"
+  tenant: A
+  pre: "Tenant A signed in; policy versions set up per case via POST /api/leave-policies/test or direct data setup."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LEAVE-DATE-001
+    func: [F-LEAVE-041]
+    sc: A single Published, applicable, in-range version resolves cleanly
+    t: POST /api/leave-policies/test resolves the one candidate that is Published, IsActive, date-in-range, and applicability-matched
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/leave-policies/test] {employeeId, leaveTypeId, date: today} => [200] {status:'Resolved', policyVersionId, isWinner:true}"
+    auto: API
+
+  - id: LEAVE-DATE-002
+    func: [F-LEAVE-042, F-LEAVE-043]
+    sc: A date one day before EffectiveFrom does not resolve; the exact EffectiveFrom date does
+    t: The lower bound of a version's effective window is inclusive
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/leave-policies/test] {date: <version.EffectiveFrom - 1 day>} => [200] {status:'NoPolicy'} (no other version covers this date)"
+      - "[POST /api/leave-policies/test] {date: <version.EffectiveFrom>} => [200] {status:'Resolved'}"
+    auto: API
+
+  - id: LEAVE-DATE-003
+    func: [F-LEAVE-044]
+    sc: A date exactly on EffectiveTo resolves; the day after does not
+    t: The upper bound of a version's effective window is inclusive
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/leave-policies/test] {date: <version.EffectiveTo>} => [200] {status:'Resolved'}"
+      - "[POST /api/leave-policies/test] {date: <version.EffectiveTo + 1 day>} => [200] {status:'NoPolicy'}"
+    auto: API
+
+  - id: LEAVE-DATE-004
+    func: [F-LEAVE-045]
+    sc: An open-ended version (EffectiveTo=null) resolves indefinitely into the future
+    t: A version with no EffectiveTo resolves for a date many years after EffectiveFrom
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/leave-policies/test] {date: <EffectiveFrom + 5 years>} => [200] {status:'Resolved'} for the open-ended version"
+    auto: API
+
+  - id: LEAVE-DATE-005
+    func: [F-LEAVE-046, F-LEAVE-047]
+    sc: A future-dated or already-expired version never resolves for today
+    t: A version whose EffectiveFrom is next year, and a separate version whose EffectiveTo has already passed, both fail to resolve for today
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/leave-policies/test] {date: today} against a future-dated-only version => [200] {status:'NoPolicy'}"
+      - "[POST /api/leave-policies/test] {date: today} against an already-expired-only version => [200] {status:'NoPolicy'}"
+    auto: API
+
+  - id: LEAVE-DATE-006
+    func: [F-LEAVE-048]
+    sc: Two sequential, non-overlapping versions of the same policy each resolve in their own window
+    t: v1 (Jan-Jun) and v2 (Jul-Dec) each resolve correctly for a date in their own range
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/leave-policies/test] {date: <March>} => [200] resolves v1"
+      - "[POST /api/leave-policies/test] {date: <September>} => [200] resolves v2"
+    auto: API
+
+  - id: LEAVE-DATE-007
+    func: [F-LEAVE-049]
+    sc: A gap between two versions of the same policy resolves NoPolicy for dates inside the gap
+    t: v1 ends 2027-03-31, v2 starts 2027-05-01 - April dates resolve NoPolicy
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/leave-policies/test] {date: '2027-04-15'} => [200] {status:'NoPolicy'}"
+      - "[POST /api/leave-policies/test] {date: '2027-03-31'} => [200] {status:'Resolved'} (v1's last day)"
+      - "[POST /api/leave-policies/test] {date: '2027-05-01'} => [200] {status:'Resolved'} (v2's first day)"
+    auto: API
+
+  - id: LEAVE-DATE-008
+    func: [F-LEAVE-050]
+    sc: Two overlapping Published versions of the SAME policy resolve as ConfigurationAmbiguity
+    t: A data anomaly (force-created via acknowledgeOverlap or direct data setup) surfaces 409, not a silent pick
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Publish v1 and v2 of the SAME policy with overlapping date ranges (acknowledgeOverlap=true) => test preconditions are established for the steps below"
+      - "[POST /api/leave-policies/test] {date: <the overlapping window>} => [409] 'Multiple Published versions of the same LeavePolicy apply to this date'"
+    auto: API
+
+  - id: LEAVE-DATE-009
+    func: [F-LEAVE-051]
+    sc: Two different policies applicable on the same date resolve deterministically by Priority then Specificity
+    t: A higher-priority policy wins regardless of specificity; among equal priorities, the more-specific applicability set wins
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Policy A (priority=10, tenant-wide) and Policy B (priority=20, Department=Engineering) both cover the same LeaveType/date => test preconditions are established for the steps below"
+      - "[POST /api/leave-policies/test] {employeeId: engineeringEmployeeId, date} => [200] Policy B wins (higher priority); competingPolicies lists both with Policy B isWinner=true"
+      - "[Setup] Raise Policy A to priority=20 (equal to B) => test preconditions are established for the steps below"
+      - "[POST /api/leave-policies/test] {employeeId: engineeringEmployeeId, date} => [200] Policy B still wins - equal priority, but B's Department match gives it higher specificity"
+    auto: API
+
+  - id: LEAVE-DATE-010
+    func: [F-LEAVE-052]
+    sc: A tenant-wide version loses to any matching non-empty applicability set at equal priority
+    t: Specificity=0 (zero applicability sets) never outranks Specificity>=1 at the same priority
+    src: ["LeavePolicyResolver.ResolveAsync (Specificity)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/leave-policies/test] {employeeId: engineeringEmployeeId, date} with both policies at priority=20 => [200] the Department-scoped policy (specificity=1) wins over the tenant-wide one (specificity=0)"
+    auto: API
+
+  - id: LEAVE-DATE-011
+    func: [F-LEAVE-053]
+    sc: A true tie (equal priority AND equal specificity, different policies) resolves as ConfigurationAmbiguity
+    t: Neither policy is preferred - 409 with the full competingPolicies diagnostic list
+    src: ["LeavePolicyResolver.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Policy A and Policy B both priority=20, both scoped to Department=Engineering, both covering the same LeaveType/date => test preconditions are established for the steps below"
+      - "[POST /api/leave-policies/test] {employeeId: engineeringEmployeeId, date} => [409] 'Multiple published policies have the same best priority and specificity'; competingPolicies lists both candidates, neither isWinner"
+    auto: API
+
+  - id: LEAVE-DATE-012
+    func: [F-LEAVE-054]
+    sc: A backdated leave request resolves the policy as of the request's OWN start date, not today
+    t: A policy version that has since expired is still honored for a historical request date within its own window
+    src: ["LeaveRequestValidationService.ResolveContextAsync"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Setup] A version effective only Jan-Jun of last year, now expired; RequestRule.BackdatedRequestMode=Allowed => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {leaveTypeId, startDate: <a date within Jan-Jun last year>, endDate: <same>} => [200] resolves against the EXPIRED version successfully, since it was current on that historical date"
+    auto: API
+
+  - id: LEAVE-DATE-013
+    func: [F-LEAVE-055]
+    sc: A future-dated leave request resolves the policy that WILL be effective on that future date
+    t: A different policy becomes effective next quarter - a request dated then resolves the NEW policy, not today's
+    src: ["LeaveRequestValidationService.ResolveContextAsync"]
+    type: Boundary
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Setup] Policy A covers today; Policy B (different EntitlementQuantity) becomes effective in 90 days => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {leaveTypeId, startDate: <in 90 days>, endDate: <same>} => [200] resolves against Policy B's rule, confirmed via the response's leavePolicyVersionId/leavePolicyRuleId"
+    auto: API
+
+  - id: LEAVE-DATE-014
+    func: [F-LEAVE-056]
+    sc: A multi-day request crossing a policy-version boundary is rejected
+    t: A request spanning a date where the policy version/rule/period/employment context changes mid-range fails 400
+    src: ["LeaveRequestValidationService.ValidateSingleContextAsync"]
+    type: Negative
+    pri: P1
+    role: EMPLOYEE
+    perm: "Leave.RequestCreate"
+    steps:
+      - "[Setup] Version v1 ends 2027-03-31, v2 (a different rule/version) starts 2027-04-01, both Published and applicable => test preconditions are established for the steps below"
+      - "[POST /api/leave-requests/preview] {leaveTypeId, startDate:'2027-03-30', endDate:'2027-04-02'} => [400] 'The request crosses an employment, LeavePeriod, or Policy context boundary'"
+    auto: API

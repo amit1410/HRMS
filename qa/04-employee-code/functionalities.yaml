@@ -1,0 +1,576 @@
+# Functionality registry for Module 4 - Employee Code Generation.
+# Every test case references one or more of these ids; the builder fails if a functionality has zero cases
+# or a case references an unknown id.
+#
+# Discovered implementation (authoritative source: EmployeeCodeConfigurationController/Service,
+# EmployeeEmploymentService.CreateChangeAsync/AssignPendingEmployeeCodeAsync, EmployeeCodeSequenceService,
+# EmployeeCodeRuleMatcher/EmployeeCodeRenderer, the EF configurations/migrations under
+# HRMS.Infrastructure/Persistence, the two per-provider IEmployeeCodeSequenceUpdater implementations,
+# EmployeeCodeConfigurationPage.tsx, EmploymentSectionForm.tsx and PersonalDetailsForm.tsx):
+#
+# There are TWO Employee-Code concepts in the tenant schema, one of them live and one dead:
+#   - EmployeeCodeConfig / EmployeeCodeConfigVersion (+ EmployeeCodeRule/Condition/Segment/Sequence) is the
+#     LIVE, effective-dated, Manual-or-Auto x Simple-or-Rule-Based engine. It is read/written exclusively
+#     through EmployeeCodeConfigurationController and consumed exclusively by
+#     EmployeeEmploymentService.CreateChangeAsync (via AssignPendingEmployeeCodeAsync) - the single place an
+#     Employee Code is ever assigned, and it happens exactly once, at the first employment record
+#     (employee.EmployeeCode is null gate), never on a later change (see F-CODE-20/F-CODE-21, CR-41).
+#   - EmployeeService.cs still carries a legacy Prefix+NextNumber implementation
+#     (ResolveEmployeeCodeAsync/PersistEmployeeCodeCounterAsync) that reads/writes the same EmployeeCodeConfig
+#     row's AutoGenerate/Prefix/Padding/NextNumber fields, but has NO caller anywhere in the codebase - dead
+#     code left over from before Employee Code was moved to the Initial Employment step (F-CODE-26, CR-37).
+#
+# Assignment mode (EmployeeCodeAssignmentMode: Manual=0, Auto=1) and generation method
+# (EmployeeCodeGenerationMethod: Simple=0, RuleBased=1) are independent axes; Manual always implies
+# GenerationMethod=null (server-forced) regardless of what the client sends.
+#
+# Rule-Based generation resolves through EmployeeCodeRuleMatcher (priority ascending, then rule Id, first
+# non-default rule whose conditions ALL match; falls back to the version's single active default rule with
+# zero conditions) and renders through EmployeeCodeRenderer (ordered EmployeeCodeSegment list: FixedText,
+# SequentialNumber [D-padded], 13 master-code segment types, JoiningYear, JoiningMonth, CustomConstant;
+# JoiningFinancialYear and LocationCode are defined in the enum but have NO renderer case and NO rule-save
+# path that can reach them - Location is explicitly rejected at both condition and segment save time because
+# this data model has no separate Location master).
+#
+# Sequence allocation (EmployeeCodeSequenceService.AllocateAsync) is scoped per EmployeeCodeRule
+# (Scope=Tenant, ScopeKey="RULE:{ruleId}", PeriodKey="NONE" - ResetPeriod/other Scope values exist on the
+# entity/enum but Rule-Based generation only ever calls AllocateAsync with these fixed constants), uses an
+# optimistic create-if-absent-then-ExecuteUpdateAsync retry loop (MaxAttempts=8), and is advanced through a
+# provider-specific IEmployeeCodeSequenceUpdater when one is registered (SqlServerEmployeeCodeSequenceUpdater
+# vs MySqlEmployeeCodeSequenceUpdater, which additionally stamps an app-managed RowVersion token). Simple
+# generation does NOT use EmployeeCodeSequenceService at all - it advances
+# EmployeeCodeConfigVersion.NextNumber directly with its own single ExecuteUpdateAsync/retry loop inside
+# AssignPendingEmployeeCodeAsync.
+
+functionalities:
+  - id: F-CODE-01
+    name: Read the tenant's current Employee Code configuration
+    group: Configuration
+    status: Implemented
+    ui: "EmployeeCodeConfigurationPage initial load"
+    api: "GET /api/employee-code-configuration"
+    service: "EmployeeCodeConfigurationService.GetAsync (returns the config row plus its latest-by-EffectiveFrom version; 404 if no config row exists yet)"
+    permission: "EmployeeCodeConfiguration.View"
+    db: "EmployeeCodeConfigs, EmployeeCodeConfigVersions (tenant-filtered)"
+
+  - id: F-CODE-02
+    name: Save (create or update) the Employee Code configuration - config row + version row together
+    group: Configuration
+    status: Implemented
+    ui: "EmployeeCodeConfigurationPage 'Save Configuration' form"
+    api: "PUT /api/employee-code-configuration"
+    service: "EmployeeCodeConfigurationService.SaveAsync (creates the single per-tenant EmployeeCodeConfig row on first save; every save also creates-or-updates one EmployeeCodeConfigVersion keyed by VersionId or by an exact EffectiveFrom match)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeConfigs (insert/update), EmployeeCodeConfigVersions (insert/update)"
+
+  - id: F-CODE-03
+    name: Legacy AutoGenerate=false compatibility - forces AssignmentMode=Manual and GenerationMethod=null server-side
+    group: Configuration
+    status: Implemented
+    ui: "n/a (AssignmentMode/GenerationMethod are what the current UI actually sends; AutoGenerate is kept for older callers)"
+    api: "PUT /api/employee-code-configuration"
+    service: "EmployeeCodeConfigurationService.SaveAsync ('Legacy callers still send AutoGenerate only; derive the explicit mode for compatibility')"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeConfigs.AssignmentMode/GenerationMethod, EmployeeCodeConfigVersions.AssignmentMode/GenerationMethod"
+
+  - id: F-CODE-04
+    name: Configuration request validation (prefix, next number, padding, separator, generation method presence)
+    group: Configuration
+    status: Implemented
+    ui: "EmployeeCodeConfigurationPage form fields (prefix maxLength 10, padding input min 0 max 10, separator <select>)"
+    api: "PUT /api/employee-code-configuration"
+    service: "EmployeeCodeConfigurationRequestValidator (Prefix: required, <=10 chars, [A-Za-z0-9_-]+; NextNumber >=1; Padding 0-10; Separator in {'', '-','/','.','_'}; GenerationMethod required iff Auto, forbidden iff Manual; EffectiveTo >= EffectiveFrom)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "none (rejected before save)"
+
+  - id: F-CODE-05
+    name: New-version overlap detection against every other ACTIVE version of the same configuration
+    group: Effective Dating
+    status: Implemented
+    ui: "EmployeeCodeConfigurationPage save error banner"
+    api: "PUT /api/employee-code-configuration (no versionId, or a versionId whose EffectiveFrom differs from the request)"
+    service: "EmployeeCodeConfigurationService.SaveAsync (interval-overlap test: request.EffectiveFrom <= (v.EffectiveTo ?? MaxValue) && v.EffectiveFrom <= (request.EffectiveTo ?? MaxValue), only against IsActive versions; inactive/superseded versions never block a new one)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeConfigVersions (read, tenant + config scoped)"
+
+  - id: F-CODE-06
+    name: Editing an existing version re-runs the same overlap check against every OTHER active version
+    group: Effective Dating
+    status: Implemented
+    ui: "EmployeeCodeConfigurationPage editing the currently-loaded version (same EffectiveFrom as loaded data)"
+    api: "PUT /api/employee-code-configuration (versionId supplied)"
+    service: "EmployeeCodeConfigurationService.SaveAsync (v.Id != version.Id excludes the version being edited from its own overlap check)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeConfigVersions"
+
+  - id: F-CODE-07
+    name: A versionId that does not resolve to a real version of this tenant's configuration is rejected
+    group: Effective Dating
+    status: Implemented
+    ui: "n/a (only reachable by calling the API directly with a stale/foreign versionId)"
+    api: "PUT /api/employee-code-configuration"
+    service: "EmployeeCodeConfigurationService.SaveAsync (VersionId is not null && version is null -> NotFound)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeConfigVersions (tenant + config scoped lookup)"
+
+  - id: F-CODE-08
+    name: Simple Sequence code composition - Prefix + Separator + zero-padded running number
+    group: Simple Sequence
+    status: Implemented
+    ui: "EmployeeCodeConfigurationPage 'Example preview' text"
+    api: "n/a (server-side composition at employment time)"
+    service: "EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (Simple branch: prefix + separator + number.ToString(padding==0 ? '' : 'D{padding}'))"
+    permission: "n/a"
+    db: "EmployeeCodeConfigVersions.NextNumber (read+advance)"
+
+  - id: F-CODE-09
+    name: Simple Sequence counter advance is per-version, optimistic, and retried on contention
+    group: Simple Sequence
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (ExecuteUpdateAsync WHERE NextNumber == number; on 0 rows affected, reloads the version and retries the loop; loop is unbounded by attempt count, unlike EmployeeCodeSequenceService's MaxAttempts=8, and eventually returns Conflict 'Employee Code sequence is busy; please retry.' only if it never reads a consistent row - practically unreachable without an external fault)"
+    permission: "n/a"
+    db: "EmployeeCodeConfigVersions.NextNumber"
+
+  - id: F-CODE-10
+    name: Padding boundaries differ between Simple config (0-10) and Rule-Based sequence segments (0-12)
+    group: Simple Sequence
+    status: Needs clarification
+    ui: "Configuration page padding input max=10; Rule builder segment padding input max=10 in the UI but the SERVER accepts up to 12"
+    api: "PUT /api/employee-code-configuration (Padding 0-10); PUT/POST /api/employee-code-configuration/rules (segment PaddingLength 0-12)"
+    service: "EmployeeCodeConfigurationRequestValidator.Padding vs EmployeeCodeConfigurationService.SaveRuleAsync ('s.PaddingLength is < 0 or > 12')"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "none"
+
+  - id: F-CODE-11
+    name: Manual assignment requires a client-supplied Employee Code and rejects duplicates
+    group: Manual Assignment
+    status: Implemented
+    ui: "EmploymentSectionForm 'Employee code' text input, shown only when manualCode && !employeeCode"
+    api: "POST /api/employees/{id}/employment-history (or the Initial Employment path that calls CreateChangeAsync)"
+    service: "EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (Manual branch: blank code -> Invalid 'employeeCode'/'Employee code is required for manual assignment.'; case-insensitive Employees.EmployeeCode uniqueness check -> Conflict 'This employee code is already in use.')"
+    permission: "EmploymentHistory.Change"
+    db: "Employees.EmployeeCode (uniqueness probe, tenant + cross-employee)"
+
+  - id: F-CODE-12
+    name: Rule matching selects the lowest-Priority non-default rule whose conditions all match; falls back to the single active default
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "EmployeeCodeConfigurationPage rule list ('Active rules are evaluated from lowest priority number to highest; the default fallback is used when no specific rule matches.')"
+    api: "n/a (evaluated server-side at employment time and at Preview)"
+    service: "EmployeeCodeRuleMatcher.Match(rules, values, referenceIds) (excludes IsDefault rules and zero-condition rules from the specific-match pass; OrderBy Priority, ThenBy Id; fallback is SingleOrDefault(IsDefault) among Active rules - throws if two Active defaults ever coexist, which SaveRuleAsync's own uniqueness guard is meant to prevent)"
+    permission: "n/a"
+    db: "EmployeeCodeRules/Conditions/Segments (read, filtered to this version, not deleted, Active)"
+
+  - id: F-CODE-13
+    name: Rule condition matching - Equals by ReferenceId (exact GUID) or by literal/resolved code (case-insensitive)
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "Rule builder condition row (master dropdown sets ReferenceId; the resolved Code is what is actually stored/compared)"
+    api: "n/a"
+    service: "EmployeeCodeRuleMatcher.Matches (ReferenceId path compares the employment's resolved reference-id dictionary; no-ReferenceId path compares condition.Value against the employment's resolved code with StringComparison.OrdinalIgnoreCase)"
+    permission: "n/a"
+    db: "EmployeeCodeRuleConditions.ReferenceId/Value"
+
+  - id: F-CODE-14
+    name: A stale/edited condition Value does not affect matching once a ReferenceId is present - the live master Code is always re-resolved at match time
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "EmployeeEmploymentService.CreateChangeAsync builds its values/referenceIds dictionaries from the CURRENT employment references every time, independent of whatever Code string is stored on the condition row"
+    permission: "n/a"
+    db: "EmployeeCodeRuleConditions.Value (can be stale without breaking matching, because matching by ReferenceId never reads it)"
+
+  - id: F-CODE-15
+    name: EmployeeCodeConditionOperator exposes exactly one implemented value (Equals) end-to-end
+    group: Rule-Based Generation
+    status: Needs clarification
+    ui: "Rule builder condition 'Operator' <select> - a single 'Equals' option"
+    api: "field 'operator' on every condition DTO/request"
+    service: "EmployeeCodeRuleMatcher.Matches (Operator != Equals -> the condition can never match; no other operator exists on the enum, so this branch is currently unreachable dead logic, not a live behavior)"
+    permission: "n/a"
+    db: "EmployeeCodeRuleConditions.Operator (stored, but only one value is ever meaningful)"
+
+  - id: F-CODE-16
+    name: Rule condition hierarchy validation on save (parent/child master consistency)
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "Rule builder cascading MasterDropdown (child fields disabled until a parent value is chosen)"
+    api: "PUT/POST /api/employee-code-configuration/rules"
+    service: "EmployeeCodeConfigurationService.IsValidHierarchyAsync (Lob<-HoldingCompany, SubDepartment<-Department, Section<-SubDepartment, SubSection<-Section, SubFunction<-Function; each check is skipped - always true - when the parent field has no condition of its own in the same request)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "LinesOfBusiness/SubDepartments/Sections/SubSections/SubFunctions (existence + parent-FK check, tenant + active scoped)"
+
+  - id: F-CODE-17
+    name: Hierarchy validation no-ops when the logical parent condition is simply absent from the request
+    group: Rule-Based Generation
+    status: Needs clarification
+    ui: "n/a (the UI always renders the parent field, but nothing forces the caller to include a condition for it)"
+    api: "PUT/POST /api/employee-code-configuration/rules"
+    service: "EmployeeCodeConfigurationService.IsValidHierarchyAsync (Parent() returns null when no condition for that field exists in the request; '!holdingCompanyId.HasValue || ...' then short-circuits to true)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "none (validation short-circuit)"
+
+  - id: F-CODE-18
+    name: Location is rejected for both conditions and segments because this data model has no separate Location master
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "Rule builder: Location field disabled with an 'unavailable' hint; Location code segment option disabled"
+    api: "PUT/POST /api/employee-code-configuration/rules"
+    service: "EmployeeCodeConfigurationService.SaveRuleAsync (explicit Field==Location and SegmentType==LocationCode rejections, both worded 'because this model has no separate Location master')"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "none"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Location_condition_is_rejected_when_no_separate_location_master_exists"]
+
+  - id: F-CODE-19
+    name: Rule segment composition rules - exactly one SequentialNumber segment, Fixed/Custom need a value, at least one segment when Active
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "Rule builder segment list ('+ Add segment', one Sequential-number option enforced client-side too)"
+    api: "PUT/POST /api/employee-code-configuration/rules"
+    service: "EmployeeCodeConfigurationService.SaveRuleAsync (Active requires >=1 segment; exactly one SequentialNumber segment when Active; FixedText/CustomConstant segments require a non-blank FixedValue)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeSegments (unique index on TenantId+RuleId+SequenceOrder)"
+
+  - id: F-CODE-20
+    name: Active specific (non-default) rules require at least one condition; default rules must have zero conditions
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "Rule builder 'Default fallback rule' checkbox hides the condition list"
+    api: "PUT/POST /api/employee-code-configuration/rules"
+    service: "EmployeeCodeConfigurationService.SaveRuleAsync ('Active specific rules require at least one matching condition.' / 'Default fallback rules cannot contain conditions.')"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeRuleConditions"
+
+  - id: F-CODE-21
+    name: Only one Active default (fallback) rule is allowed per configuration version
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "n/a (surfaced only as a save-time error)"
+    api: "PUT/POST /api/employee-code-configuration/rules"
+    service: "EmployeeCodeConfigurationService.SaveRuleAsync ('Only one active default Employee Code rule is allowed.')"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeRules (IsDefault, Status, EmployeeCodeConfigVersionId)"
+
+  - id: F-CODE-22
+    name: An Active rule cannot be attached to an inactive configuration version
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "n/a"
+    api: "PUT/POST /api/employee-code-configuration/rules"
+    service: "EmployeeCodeConfigurationService.SaveRuleAsync ('An active rule cannot be attached to an inactive Employee Code configuration version.')"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeConfigVersions.IsActive"
+
+  - id: F-CODE-23
+    name: A rule can only be created after the tenant's Employee Code configuration exists
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "n/a (the rule builder is only rendered once a configuration has been saved)"
+    api: "PUT/POST /api/employee-code-configuration/rules"
+    service: "EmployeeCodeConfigurationService.SaveRuleAsync ('Create Employee Code configuration before adding rules.')"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeConfigs"
+
+  - id: F-CODE-24
+    name: Rule soft delete, guarded against removing the only Active default fallback
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "Rule list row 'Delete' (confirm dialog states existing Employee Codes are unaffected)"
+    api: "DELETE /api/employee-code-configuration/rules/{id}"
+    service: "EmployeeCodeConfigurationService.SoftDeleteRuleAsync (IsDeleted=true/DeletedAt stamped, never a hard delete; refuses when this is the only Active default for its version)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeRules.IsDeleted/DeletedAt"
+
+  - id: F-CODE-25
+    name: Saving an existing rule while a DIFFERENT configuration version is targeted creates a version-local copy, never mutates the historical rule
+    group: Rule-Based Generation
+    status: Implemented
+    ui: "n/a (surfaced through the rule builder's 'Save Rule' when editing a rule loaded from an older version)"
+    api: "PUT /api/employee-code-configuration/rules/{id}"
+    service: "EmployeeCodeConfigurationService.SaveRuleAsync (rule.EmployeeCodeConfigVersionId != version.Id branch: clones Conditions/Segments onto a brand-new EmployeeCodeRule with a new Id, leaves the original historical rule and its Id untouched)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeRules/Conditions/Segments (insert of the copy; original row unchanged)"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.New_active_version_on_2026_09_13_can_use_a_versioned_rule_and_generate_code"]
+
+  - id: F-CODE-26
+    name: Employee Code Preview - renders a sample code from supplied master ids without reserving a sequence number
+    group: Preview
+    status: Implemented
+    ui: "EmployeeCodeConfigurationPage 'Preview saved rule' button"
+    api: "POST /api/employee-code-configuration/preview"
+    service: "EmployeeCodeConfigurationService.PreviewAsync (resolves the single active version effective on the requested date, requires Auto+RuleBased, re-resolves every supplied master id to its Code, matches a rule, reads - but does NOT allocate - the rule's current sequence value defaulting to 1)"
+    permission: "EmployeeCodeConfiguration.View"
+    db: "EmployeeCodeSequences (read-only Select, never inserted/advanced by Preview)"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Preview_uses_the_same_rule_and_sequence_state_without_allocating"]
+
+  - id: F-CODE-27
+    name: Preview requires exactly one active version effective on the requested date, and rejects Manual/Simple configurations
+    group: Preview
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employee-code-configuration/preview"
+    service: "EmployeeCodeConfigurationService.PreviewAsync (0 matches -> Invalid 'effectiveFrom'; >1 match -> Conflict; AssignmentMode!=Auto or GenerationMethod!=RuleBased -> Invalid 'generationMethod')"
+    permission: "EmployeeCodeConfiguration.View"
+    db: "EmployeeCodeConfigVersions"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Preview_rejects_missing_master_values_and_dates_outside_the_active_version"]
+
+  - id: F-CODE-28
+    name: Preview validates every supplied master id (active, correct tenant) and every id is tenant-scoped
+    group: Preview
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employee-code-configuration/preview"
+    service: "EmployeeCodeConfigurationService.ResolvePreviewCodeAsync/PreviewAsync (per-field lookup Where Id/TenantId/IsActive, Country excluded from tenant filter; any supplied id that fails resolves to Invalid on that field name)"
+    permission: "EmployeeCodeConfiguration.View"
+    db: "HoldingCompanies/LinesOfBusiness/.../CostCenters (tenant + active filtered lookups)"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Preview_is_tenant_scoped_even_when_using_another_tenants_master_id"]
+
+  - id: F-CODE-29
+    name: Preview requires an authenticated tenant
+    group: Preview
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employee-code-configuration/preview"
+    service: "EmployeeCodeConfigurationService.PreviewAsync (_tenant.TenantId is not Guid -> Unauthorized)"
+    permission: "EmployeeCodeConfiguration.View"
+    db: "none"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Preview_requires_a_tenant_and_effective_active_version"]
+
+  - id: F-CODE-30
+    name: EmployeeCodeSequenceService.AllocateAsync - per-rule optimistic counter with create-if-absent and bounded retry
+    group: Sequence / Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "n/a (internal to Rule-Based employment-time generation and unit-testable directly)"
+    service: "EmployeeCodeSequenceService.AllocateAsync (MaxAttempts=8; first caller for a (rule, scope, scopeKey, periodKey) tuple inserts NextNumber=start+increment and returns start; later callers advance via ExecuteUpdateAsync or the injected IEmployeeCodeSequenceUpdater, retrying while the optimistic WHERE NextNumber==expected affects 0 rows; exhausting attempts returns Conflict 'Employee Code sequence is busy; please retry.')"
+    permission: "n/a"
+    db: "EmployeeCodeSequences (unique index TenantId+RuleId+Scope+ScopeKey+PeriodKey)"
+
+  - id: F-CODE-31
+    name: Provider-specific sequence advance implementations diverge in concurrency-token handling
+    group: Sequence / Concurrency
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "SqlServerEmployeeCodeSequenceUpdater (bare ExecuteUpdateAsync, relies on the optimistic NextNumber==expected predicate only) vs MySqlEmployeeCodeSequenceUpdater (additionally stamps a fresh app-managed RowVersion via MySqlConcurrencyTokenGenerator, per CLAUDE.md's MySQL binary(16) app-managed token vs SQL Server native rowversion divergence)"
+    permission: "n/a"
+    db: "EmployeeCodeSequences.RowVersion (SQL Server: DB-native rowversion column, auto-maintained; MySQL: app-written binary token)"
+
+  - id: F-CODE-32
+    name: No SQL Server/MySQL provider-acceptance or dedicated concurrency test exists for Employee Code sequence allocation
+    group: Sequence / Concurrency
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "grep of Backend/HRMS.Tests for EmployeeCode*ProviderAcceptance.cs / EmployeeCode*ConcurrencyTests.cs returns nothing; every other subsystem with a per-provider updater (Payroll, Attendance, Leave, Separation) has at least one of these two test kinds"
+    permission: "n/a"
+    db: "none"
+
+  - id: F-CODE-33
+    name: Employee Code is assigned exactly once, at the FIRST employment record ever created for an employee
+    group: Employee/Employment Integration
+    status: Implemented
+    ui: "PersonalDetailsForm employee-code banner ('Assigned by the system when this employee is saved.') before Initial Employment"
+    api: "the employment-history-create endpoint that calls EmployeeEmploymentService.CreateChangeAsync"
+    service: "EmployeeEmploymentService.CreateChangeAsync ('if (employee.EmployeeCode is null)' gate around AssignPendingEmployeeCodeAsync, deliberately placed after every other validation has already passed)"
+    permission: "EmploymentHistory.Change"
+    db: "Employees.EmployeeCode (set exactly once)"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Simple_configuration_creates_version_and_assigns_sequential_codes_to_pending_employees"]
+
+  - id: F-CODE-34
+    name: A once-assigned Employee Code is never regenerated on any later employment change
+    group: Employee/Employment Integration
+    status: Needs clarification
+    ui: "EmploymentSectionForm hides the manual-code input once employeeCode is already set (manualCode && !employeeCode)"
+    api: "CreateChangeAsync for any ChangeReason other than the employee's first record"
+    service: "EmployeeEmploymentService.CreateChangeAsync (the `employee.EmployeeCode is null` gate is false for every subsequent call, so AssignPendingEmployeeCodeAsync - and therefore rule re-matching/re-rendering - never runs again, even under Rule-Based generation whose matched rule/segments could differ for the new Department/Grade/etc.)"
+    permission: "EmploymentHistory.Change"
+    db: "Employees.EmployeeCode (unchanged across every subsequent EmployeeEmploymentHistory row)"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Promotion_keeps_the_existing_employee_code"]
+
+  - id: F-CODE-35
+    name: The correct effective-dated configuration version is resolved from the employment's EffectiveFrom, not from today
+    group: Employee/Employment Integration
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (matchingVersions filtered by TenantId/IsActive/EffectiveFrom<=request.EffectiveFrom<=EffectiveTo; 0 matches -> Invalid; >1 -> Conflict)"
+    permission: "n/a"
+    db: "EmployeeCodeConfigVersions"
+
+  - id: F-CODE-36
+    name: Rule-Based generation at employment time - full pipeline (match -> allocate -> render -> duplicate-guard -> assign)
+    group: Employee/Employment Integration
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (no matching rule -> Invalid 'employeeCode'; render error -> Invalid 'employeeCode'; a post-render race against Employees.EmployeeCode -> Conflict 'Generated Employee Code is already in use; please retry.')"
+    permission: "EmploymentHistory.Change"
+    db: "Employees, EmployeeCodeSequences"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Rule_based_generation_uses_explicit_master_code_mappings"]
+
+  - id: F-CODE-37
+    name: A failed code-generation attempt at employment time leaves NO employment history row and NO sequence row behind (fully transactional)
+    group: Employee/Employment Integration
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "EmployeeEmploymentService.CreateChangeAsync (code assignment happens inside the same open transaction as the history insert; a code error returns before SaveChangesAsync/Commit, so the whole unit of work rolls back)"
+    permission: "n/a"
+    db: "EmployeeEmploymentHistory, EmployeeCodeSequences (both assert zero rows after a failed attempt)"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Failed_rule_generation_rolls_back_code_sequence_and_history"]
+
+  - id: F-CODE-38
+    name: A rejected Manual-mode duplicate leaves no employment history row and does not mutate the employee
+    group: Employee/Employment Integration
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (Manual duplicate Conflict is returned before the new EmployeeEmploymentHistory row is constructed/saved)"
+    permission: "n/a"
+    db: "EmployeeEmploymentHistory, Employees.EmployeeCode (both unchanged)"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Manual_assignment_rejects_duplicate_codes_without_creating_history"]
+
+  - id: F-CODE-39
+    name: A tenant with no Employee Code configuration row defaults every new employee to Manual/no-config behavior at the version-resolution step
+    group: Employee/Employment Integration
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (matchingVersions query simply returns 0 rows when EmployeeCodeConfigVersions has never been populated -> Invalid 'employeeCode', 'No active Employee Code configuration is effective for the selected date.'-style failure; this differs from the DEAD legacy EmployeeService.ResolveEmployeeCodeAsync's 'no configuration row defaults to auto-generation' comment, which no longer applies to any reachable code path)"
+    permission: "n/a"
+    db: "EmployeeCodeConfigVersions (absent)"
+
+  - id: F-CODE-40
+    name: Legacy dead-code Employee Code path in EmployeeService.cs (ResolveEmployeeCodeAsync / PersistEmployeeCodeCounterAsync)
+    group: Legacy / Dead Code
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a (no controller action reaches either method)"
+    service: "EmployeeService.cs private methods with zero call sites anywhere in the solution"
+    permission: "n/a"
+    db: "EmployeeCodeConfigs.AutoGenerate/Prefix/Padding/NextNumber (would be mutated if ever reactivated, independently of EmployeeCodeConfigVersion, which is the field the live path actually advances)"
+
+  - id: F-CODE-41
+    name: No unique constraint or transactional guard prevents two concurrent first-time configuration saves from creating duplicate EmployeeCodeConfig rows
+    group: Sequence / Concurrency
+    status: Needs clarification
+    ui: "n/a"
+    api: "PUT /api/employee-code-configuration (first-ever save for a tenant, called twice concurrently)"
+    service: "EmployeeCodeConfigurationService.SaveAsync (config is null check-then-insert with no unique index on EmployeeCodeConfigs.TenantId and no serializable transaction around the check)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "EmployeeCodeConfigs (no unique index on TenantId alone; only the (TenantId, Id) alternate key, which cannot prevent a second distinct row)"
+
+  - id: F-CODE-42
+    name: Employee Code entities are tenant-scoped through the composite (TenantId, Id) alternate-key + composite-FK pattern, not through EF's TenantId query filter alone
+    group: Data Model / Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "n/a"
+    service: "EmployeeCodeConfigConfiguration/EmployeeCodeConfigVersionConfiguration/EmployeeCodeRuleConfiguration/EmployeeCodeRuleConditionConfiguration/EmployeeCodeSegmentConfiguration/EmployeeCodeSequenceConfiguration (every child FK is HasForeignKey(TenantId, ParentId).HasPrincipalKey(TenantId, Id), so a row can never point at a parent belonging to a different tenant even if the TenantId column were tampered with directly)"
+    permission: "n/a"
+    db: "EmployeeCodeConfigs/Versions/Rules/RuleConditions/Segments/Sequences (composite alternate keys and FKs)"
+
+  - id: F-CODE-43
+    name: Every configuration/rule endpoint is gated by EmployeeCodeConfiguration.View or .Manage
+    group: Authorization
+    status: Implemented
+    ui: "navigation.ts 'Employee Code Configuration' entry (Permissions.employeeCodeConfiguration.view)"
+    api: "every route under /api/employee-code-configuration"
+    service: "[HasPermission(Permissions.EmployeeCodeConfiguration.View|Manage)] on EmployeeCodeConfigurationController"
+    permission: "EmployeeCodeConfiguration.View / EmployeeCodeConfiguration.Manage"
+    db: "none"
+
+  - id: F-CODE-44
+    name: HRAdmin - the role that actually performs Initial Employment where codes are generated - holds neither EmployeeCodeConfiguration.View nor .Manage
+    group: Authorization
+    status: Needs clarification
+    ui: "HRAdmin never sees the 'Employee Code Configuration' nav entry"
+    api: "GET/PUT /api/employee-code-configuration and every /rules, /preview route, called as HRAdmin"
+    service: "SeedData.RolePermissionMap[RoleNames.HRAdmin] (has EmploymentHistory.Change, Employee.Create/Edit, Geography.View/Manage - but no EmployeeCodeConfiguration.* entry at all); only SuperAdmin/TenantAdmin (via DomainPermissions.All) can reach these endpoints"
+    permission: "EmployeeCodeConfiguration.View / EmployeeCodeConfiguration.Manage"
+    db: "RolePermissions/UserRoles seed data"
+
+  - id: F-CODE-45
+    name: Configuration, rules, sequences and Preview are all tenant-isolated
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "GET/PUT /api/employee-code-configuration; /rules*; POST /preview - as Tenant B against Tenant A's data"
+    service: "ITenantContext-scoped queries throughout EmployeeCodeConfigurationService/EmployeeCodeSequenceService/EmployeeEmploymentService; EF global TenantId query filter plus the composite-FK pattern in F-CODE-42"
+    permission: "n/a (tenant resolved from the caller's host/token, never from the request)"
+    db: "EmployeeCodeConfigs/Versions/Rules/Sequences (tenant-filtered)"
+    ex: ["xU:EmployeeCodeEmploymentFlowTests.Preview_is_tenant_scoped_even_when_using_another_tenants_master_id"]
+
+  - id: F-CODE-46
+    name: EmployeeCodeConfigurationPage renders assignment-mode/generation-method as mutually exclusive choice cards and disables Simple fields for Manual
+    group: Frontend
+    status: Implemented
+    ui: "/configuration/employee-code (choice-card radios, prefix/next-number/padding/separator inputs disabled when !autoGenerate)"
+    api: "GET/PUT /api/employee-code-configuration"
+    service: "n/a"
+    permission: "EmployeeCodeConfiguration.View/Manage"
+    db: "none"
+
+  - id: F-CODE-47
+    name: Rule builder - conditions with cascading MasterDropdowns, segment ordering (Move Up/Down/Remove), unsaved local preview vs backend Preview
+    group: Frontend
+    status: Implemented
+    ui: "/configuration/employee-code 'Advanced Rule-Based Generation' card"
+    api: "GET/PUT/POST/DELETE /api/employee-code-configuration/rules*; POST /preview"
+    service: "n/a (fieldParents drives clearDescendants; rulePreview() renders a client-only approximation before any save)"
+    permission: "EmployeeCodeConfiguration.Manage (edit) / .View (backend preview)"
+    db: "none"
+
+  - id: F-CODE-48
+    name: EmploymentSectionForm shows a manual Employee Code input only for the FIRST employment record under Manual assignment
+    group: Frontend
+    status: Implemented
+    ui: "EmploymentSectionForm ('manualCode && !employeeCode' guarded TextField, hint 'Required for the first employment record when manual assignment is enabled.')"
+    api: "GET /api/employee-code-configuration (to read assignmentMode); the employment-create call itself"
+    service: "n/a"
+    permission: "EmploymentHistory.Change"
+    db: "none"
+
+  - id: F-CODE-49
+    name: PersonalDetailsForm shows the assigned Employee Code (or a 'new hire' placeholder) as a read-only banner, with no input to set it
+    group: Frontend
+    status: Implemented
+    ui: "PersonalDetailsForm employee-code-banner"
+    api: "n/a (code comes from the loaded Employee record)"
+    service: "n/a"
+    permission: "Employee.View"
+    db: "none"
+
+  - id: F-CODE-50
+    name: No Vitest coverage exists for EmployeeCodeConfigurationPage or for the manual-code branch of EmploymentSectionForm
+    group: Frontend
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "no EmployeeCodeConfigurationPage.test.* file exists anywhere in Frontend/HRMS.Web/src; EmploymentSectionForm.test.tsx exists but contains no reference to employeeCode/manualCode/assignmentMode"
+    permission: "n/a"
+    db: "none"
+
+  - id: F-CODE-51
+    name: Simple-mode generated codes have no application-level duplicate guard against Employees.EmployeeCode, unlike Rule-Based
+    group: Simple Sequence
+    status: Needs clarification
+    ui: "n/a"
+    api: "n/a"
+    service: "EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (Simple branch assigns `employee.EmployeeCode = code` directly after the optimistic NextNumber advance succeeds, with no AnyAsync duplicate probe; the Rule-Based branch has one)"
+    permission: "n/a"
+    db: "Employees (TenantId, EmployeeCode) unique index - a collision throws an unhandled DbUpdateException instead of a handled Conflict"
+
+  - id: F-CODE-52
+    name: Rule request Conditions/Segments lists are not null-checked before use, despite defaulting to empty collections
+    group: Configuration Validation
+    status: Needs clarification
+    ui: "n/a (the rule builder always sends an array, even an empty one, so this is only reachable via a direct/malformed API call)"
+    api: "PUT/POST /api/employee-code-configuration/rules"
+    service: "EmployeeCodeConfigurationService.SaveRuleAsync (request.Segments.Count/.Any, request.Conditions.Count and the foreach over request.Conditions, all unguarded against an explicit JSON null overriding the DTO's empty-list default)"
+    permission: "EmployeeCodeConfiguration.Manage"
+    db: "none"

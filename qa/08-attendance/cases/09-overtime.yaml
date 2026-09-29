@@ -1,0 +1,426 @@
+sheet: Attendance_Overtime
+submodule: Overtime policy, request/approval lifecycle, finalization, Comp-Off exclusivity
+defaults:
+  role: EMPLOYEE
+  perm: "Attendance.Overtime.Request"
+  tenant: A
+  pre: "Tenant A signed in as an active, linked Employee with an OvertimePolicy resolvable for the work date, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: ATT-OT-001
+    func: [F-ATT-169]
+    sc: Create an Overtime policy
+    t: A valid EligibilityMode=All policy is created, effective-dated
+    src: ["OvertimeService.CreatePolicyAsync"]
+    type: Positive
+    pri: P1
+    role: HRADMIN
+    perm: "Attendance.Overtime.Finalize"
+    steps:
+      - "[POST /api/attendance/overtime/policies] EligibilityMode=All, AllowNormalWorkingDay=true, AllowWeekOff=true, AllowHoliday=true, NormalDayMultiplier=1.5, EffectiveFrom=2026-01-01 => [200/201] policy created"
+    auto: API
+
+  - id: ATT-OT-002
+    func: [F-ATT-169]
+    sc: OT.Finalize also gates policy authoring - a Finalize-only role can create/modify policies
+    t: Confirm the double-duty permission reuse explicitly
+    src: ["OvertimeController"]
+    type: Contract
+    pri: P2
+    role: HRADMIN
+    perm: "Attendance.Overtime.Finalize"
+    steps:
+      - "[POST /api/attendance/overtime/policies] As a role holding ONLY Attendance.Overtime.Finalize (no separate policy-authoring permission exists) => [200/201] succeeds - the same permission used for month-end finalization also authors policy"
+    auto: API
+
+  - id: ATT-OT-003
+    func: [F-ATT-170]
+    sc: Create a valid Overtime request for the caller's own attendance
+    t: A clean NormalDay OT request within policy limits succeeds
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] EmployeeAttendanceDay for WorkDate exists, WorkedMinutes exceed ExpectedWorkMinutes by 90 => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] WorkDate=that date, Category=NormalDay, RequestedMinutes=90 => [200/201] Status=Draft or Submitted per the submit flow, ActualEligibleMinutes computed server-side"
+    auto: API
+
+  - id: ATT-OT-004
+    func: [F-ATT-170]
+    sc: An employee cannot create an OT request for a different employee
+    t: Self-service restriction is enforced independently of role-scope
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Security
+    pri: P0
+    steps:
+      - "[POST /api/attendance/overtime/requests] EmployeeId=<a different employee's id> => [403] Forbidden - self-service only, even before any authorization-service scope check runs"
+    auto: API
+
+  - id: ATT-OT-005
+    func: [F-ATT-170]
+    sc: RequestedMinutes<=0 is rejected; no resolvable policy for the work date Conflicts; EligibilityMode=None Forbids
+    t: Three distinct rejection paths at creation
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/overtime/requests] RequestedMinutes=0 => [400] Invalid"
+      - "[Setup] No OvertimePolicy resolves for the work date => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] => [409] 'OvertimePolicyNotFound'"
+      - "[Setup] Policy EligibilityMode=None => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] => [403] 'OvertimeNotEligible'"
+    auto: API
+
+  - id: ATT-OT-006
+    func: [F-ATT-171]
+    sc: OT cannot be requested before attendance is authoritative for the work date
+    t: No EmployeeAttendanceDay row yet Conflicts
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] No EmployeeAttendanceDay row exists yet for WorkDate (day not yet processed) => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] WorkDate=that date => [409] 'AttendanceNotResolved'"
+    auto: API
+
+  - id: ATT-OT-007
+    func: [F-ATT-172]
+    sc: ActualEligibleMinutes is computed from category-specific worked-minutes math, then threshold/rounding/cap are applied in order
+    t: Worked examples for NormalDay vs WeekOff/Holiday category formulas
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] NormalDay: WorkedMinutes=600, ExpectedWorkMinutes=480 (ActualMinutes=120); policy MinimumExtraMinutes=30, RoundingMode=Floor to nearest 15, MaximumMinutesPerDay=90 => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] Category=NormalDay, RequestedMinutes=120 => [200/201] ActualEligibleMinutes reflects the threshold-then-rounding-then-cap pipeline (e.g. floored/capped at 90)"
+      - "[Setup] WeekOff: WorkedMinutes=240 (no ExpectedWorkMinutes subtraction for WeekOff/Holiday categories) => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] Category=WeekOff, RequestedMinutes=240 => [200/201] ActualEligibleMinutes derived from the full 240 WorkedMinutes, not WorkedMinutes-Expected"
+    auto: API
+
+  - id: ATT-OT-008
+    func: [F-ATT-173]
+    sc: A duplicate active OT request for the same employee+work date is rejected; a prior Rejected one does not block a new request
+    t: Submitted/Approved block; Rejected does not
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] An existing OT request for the same employee+WorkDate has Status=Submitted => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] same employee+WorkDate => [409] 'An active OT request already exists...'"
+      - "[Setup] Instead, the existing request has Status=Rejected => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] same employee+WorkDate => [200/201] a new request is accepted - Rejected does not block"
+    auto: API
+
+  - id: ATT-OT-009
+    func: [F-ATT-174]
+    sc: There is no 'view my OT requests' or 'view team OT requests' endpoint anywhere
+    t: Confirm the absence of a GET list route despite ViewSelf/ViewTeam permissions being seeded
+    src: ["OvertimeController"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[GET /api/attendance/overtime/requests] or [GET /api/attendance/overtime/requests/mine] (guessed REST conventions) => [404] no such route is registered anywhere - only create/submit/approve/reject/correct/finalize/reopen/snapshot exist"
+    auto: API
+    cr: [CR-105]
+
+  - id: ATT-OT-010
+    func: [F-ATT-175]
+    sc: There is no OT request cancellation endpoint
+    t: An employee who submitted an OT request in error has no way to withdraw it
+    src: ["OvertimeService"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[POST /api/attendance/overtime/requests/{id}/cancel] (guessed) => [404] no such route exists - OvertimeRequestStatus.Cancelled is a defined enum member that no code path ever sets"
+    auto: API
+    cr: [CR-107]
+
+  - id: ATT-OT-011
+    func: [F-ATT-176]
+    sc: Approve requires Submitted status and clamps ApprovedMinutes to the frozen ActualEligibleMinutes
+    t: The happy-path approval
+    src: ["OvertimeService.ApproveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: MANAGER
+    perm: "Attendance.Overtime.Approve"
+    steps:
+      - "[POST /api/attendance/overtime/requests/{id}/approve] a Submitted request with RequestedMinutes=120, ActualEligibleMinutes=90 => [200] Status=Approved, ApprovedMinutes=90 (min of the two)"
+    auto: API
+
+  - id: ATT-OT-012
+    func: [F-ATT-176]
+    sc: Requester cannot approve their own OT request
+    t: Self-approval is blocked
+    src: ["OvertimeService.ApproveAsync"]
+    type: Boundary
+    pri: P0
+    role: EMPLOYEE
+    perm: "Attendance.Overtime.Approve"
+    steps:
+      - "[POST /api/attendance/overtime/requests/{ownRequestId}/approve] As the request's own employee, holding Overtime.Approve via another role => [403] Forbidden"
+    auto: API
+
+  - id: ATT-OT-013
+    func: [F-ATT-176]
+    sc: ActualEligibleMinutes is NOT recomputed at approval time even if attendance changes in between
+    t: Regularizing the underlying day downward after OT creation does not adjust the OT request's frozen eligible minutes before approval
+    src: ["OvertimeService.ApproveAsync"]
+    type: Boundary
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Overtime.Approve"
+    steps:
+      - "[Setup] OT request created with ActualEligibleMinutes=90 (based on WorkedMinutes at creation time) => precondition established for the steps below"
+      - "[Setup] An admin correction subsequently reduces the same day's effective WorkedMinutes substantially (e.g. correcting the out-time earlier) => precondition established"
+      - "[POST /api/attendance/overtime/requests/{id}/approve] => [200] ApprovedMinutes is still clamped against the ORIGINAL ActualEligibleMinutes=90, not a recomputed lower value reflecting the correction"
+    auto: DB-assisted
+    cr: [CR-108]
+
+  - id: ATT-OT-014
+    func: [F-ATT-177]
+    sc: Reject transitions Submitted->Rejected with a stored reason
+    t: The happy-path reject
+    src: ["OvertimeService.RejectAsync"]
+    type: Positive
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Overtime.Approve"
+    steps:
+      - "[POST /api/attendance/overtime/requests/{id}/reject] RejectionReason='Exceeds team OT budget' => [200] Status=Rejected"
+    auto: API
+
+  - id: ATT-OT-015
+    func: [F-ATT-177]
+    sc: Correct requires an explicit Reopen first when the period already has a current OT snapshot
+    t: Correcting an already-finalized-for-this-employee OT request fails until reopened
+    src: ["OvertimeService.CorrectAsync"]
+    type: Negative
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.Overtime.Approve"
+    steps:
+      - "[Setup] The period has already been finalized (POST .../periods/{id}/finalize succeeded) with a current OT snapshot for this employee => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests/{id}/correct] ApprovedMinutes=<new value> => [409] 'Overtime must be reopened before correction'"
+      - "[POST /api/attendance/overtime/periods/{id}/reopen] Reason='Correction needed' => [200]"
+      - "[POST /api/attendance/overtime/requests/{id}/correct] => [200] succeeds now, clamped to ActualEligibleMinutes"
+    auto: API
+
+  - id: ATT-OT-016
+    func: [F-ATT-178]
+    sc: Finalize requires the Attendance period be Closed
+    t: Finalizing against a not-yet-closed period Conflicts
+    src: ["OvertimeService.FinalizeAsync"]
+    type: Negative
+    pri: P1
+    role: HRADMIN
+    perm: "Attendance.Overtime.Finalize"
+    steps:
+      - "[Setup] AttendancePeriod is Open/ReadyToClose, not Closed => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/periods/{id}/finalize] => [409] 'OvertimeNotFinalized'"
+    auto: API
+
+  - id: ATT-OT-017
+    func: [F-ATT-178]
+    sc: A valid finalize creates versioned, IsCurrent-unique snapshots per employee, with the monthly cap applied Normal->WeekOff->Holiday
+    t: The happy-path finalization
+    src: ["OvertimeService.FinalizeAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: HRADMIN
+    perm: "Attendance.Overtime.Finalize"
+    steps:
+      - "[Setup] Attendance period is Closed; several employees have Approved OT requests across Normal/WeekOff/Holiday categories exceeding the policy's MaximumMinutesPerMonth in aggregate => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/periods/{id}/finalize] => [200] one current PayrollOvertimeSnapshot/EmployeeMonthlyOvertime row per employee, monthly cap applied with Normal-category minutes trimmed first, then WeekOff, then Holiday"
+    auto: API
+
+  - id: ATT-OT-018
+    func: [F-ATT-179]
+    sc: The OT snapshot stores minutes/multipliers only, never a monetary amount
+    t: The snapshot's schema has no Amount-named field
+    src: ["OvertimeService.FinalizeAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual/DB] Inspect PayrollOvertimeSnapshots columns => confirms no 'Amount'/'Pay'-named column; only minutes and multiplier fields - payroll computes the money"
+    auto: DB-assisted
+
+  - id: ATT-OT-019
+    func: [F-ATT-179]
+    sc: Payroll resolution rejects an OT snapshot derived from a stale Attendance version
+    t: A superseded Attendance snapshot version invalidates the OT snapshot for payroll consumption
+    src: ["OvertimeService.ResolveAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] OT snapshot references AttendanceSnapshotVersion=1; the Attendance period is subsequently reopened/corrected/reclosed, producing a current AttendanceSnapshotVersion=2, but OT is not yet re-finalized => precondition established for the steps below"
+      - "[Manual/DB] Payroll calls OvertimeService.ResolveAsync for this employee/period => [409] 'OvertimeVersionConflict' - payroll cannot consume the stale OT snapshot"
+    auto: DB-assisted
+
+  - id: ATT-OT-020
+    func: [F-ATT-180]
+    sc: Reopen requires a non-blank reason and preserves history without deleting it
+    t: Reopen marks the current snapshot non-current but keeps it queryable
+    src: ["OvertimeService.ReopenAsync"]
+    type: Positive
+    pri: P1
+    role: HRADMIN
+    perm: "Attendance.Overtime.Reopen"
+    steps:
+      - "[POST /api/attendance/overtime/periods/{id}/reopen] Reason='' => [400] Reason required"
+      - "[POST /api/attendance/overtime/periods/{id}/reopen] Reason='Correction' => [200] prior snapshot IsCurrent=false, but the row itself remains queryable/unchanged otherwise"
+    auto: API
+
+  - id: ATT-OT-021
+    func: [F-ATT-181]
+    sc: OT never double-counts across an overnight shift's midnight boundary
+    t: A crossing-midnight shift's OT eligible minutes are computed once against the correct business date
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Overnight shift 22:00-06:00, punches span midnight, both correctly land on the shift's start business date per AttendanceBusinessDateResolver => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] WorkDate=the shift's start date => [200/201] ActualEligibleMinutes reflects the single business date's WorkedMinutes exactly once, no double-counting from the crossing"
+    auto: API
+
+  - id: ATT-OT-022
+    func: [F-ATT-181]
+    sc: A partial working day does not inflate eligible overtime beyond actually-resolved worked minutes
+    t: Short-hours attendance never produces more eligible OT minutes than were actually worked
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] WorkedMinutes=300 (a short day, less than ExpectedWorkMinutes), NormalDay category => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] Category=NormalDay, RequestedMinutes=60 => [200/201] ActualEligibleMinutes=0 (max(0, 300-Expected) floors at zero, since Worked<Expected) - not a fabricated positive value"
+    auto: API
+
+  - id: ATT-OT-023
+    func: [F-ATT-182]
+    sc: OnLeave and OnDuty days both yield zero eligible OT minutes
+    t: Neither leave nor on-duty status automatically generates overtime
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] date D has Status=OnLeave (WorkedMinutes=null) => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] WorkDate=D => [200/201 with ActualEligibleMinutes=0, or 409 AttendanceNotResolved-equivalent] - confirm zero eligible minutes, no payable OT from a leave day"
+      - "[Setup] date D2 has Status=OnDuty => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] WorkDate=D2 => [200/201] ActualEligibleMinutes=0 - On Duty does not automatically become Overtime"
+    auto: API
+
+  - id: ATT-OT-024
+    func: [F-ATT-183]
+    sc: Category is not cross-checked against the resolved day type - a mismatched category can pass if the policy allows it
+    t: Requesting Category=Holiday on a date that is not actually a configured Holiday is accepted if AllowHoliday is enabled
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] date D is a genuinely normal working day (RosterDayType=Shift, not Holiday); policy AllowHoliday=true => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] WorkDate=D, Category=Holiday, RequestedMinutes=60 => [200/201] accepted - the service validates Category only against the policy's Allow flags, never against D's actual resolved RosterDayType"
+    auto: API
+    cr: [CR-109]
+
+  - id: ATT-OT-025
+    func: [F-ATT-184]
+    sc: An OT request for a day already sourcing a Comp-Off earning is blocked
+    t: DoubleBenefitDenied fires when the same attendance day already has a non-rejected Comp-Off earning
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] A CompOffEarning already exists with SourceAttendanceDayId=<this day's id>, Status not Rejected/Superseded => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] WorkDate=that same day => [409] 'DoubleBenefitDenied' - zero OvertimeRequests rows created; the existing Comp-Off earning/ledger is verified unchanged"
+    auto: API
+
+  - id: ATT-OT-026
+    func: [F-ATT-184]
+    sc: The reverse direction is also blocked - a Comp-Off earn attempt for a day already sourcing Overtime fails
+    t: An OT-sourced day blocks a subsequent Comp-Off earn for the identical attendance day
+    src: ["OvertimeService / CompOffService"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Setup] A non-rejected OvertimeRequest exists for a given attendance day => precondition established for the steps below"
+      - "[POST /api/attendance/comp-off/earn] SourceAttendanceDayId=<the same day> => [409] 'DoubleBenefitDenied'"
+    auto: API
+
+  - id: ATT-OT-027
+    func: [F-ATT-184]
+    sc: The exclusivity guard is scoped per attendance day, not employee-wide
+    t: A Comp-Off on one day and an OT request on a different day for the same employee both succeed independently
+    src: ["OvertimeService.CreateRequestAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] Employee E1 has a Comp-Off earning sourced from date D1; E1 also worked overtime-eligible hours on a DIFFERENT date D2 => precondition established for the steps below"
+      - "[POST /api/attendance/overtime/requests] WorkDate=D2 => [200/201] succeeds - the guard does not block based on the employee having ANY comp-off elsewhere"
+    auto: API
+
+  - id: ATT-OT-028
+    func: [F-ATT-185]
+    sc: A rejected cross-benefit attempt leaves the other, already-finalized benefit completely untouched
+    t: Attempting (and failing) to double-claim does not mutate the surviving benefit's fields
+    src: ["OvertimeService / CompOffService"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] A finalized PayrollOvertimeSnapshot exists for employee/day D (Id, Version, TotalApprovedMinutes, multipliers, AttendanceSnapshotId/Version all noted) => precondition established for the steps below"
+      - "[POST /api/attendance/comp-off/earn] SourceAttendanceDayId=D (attempting a cross-benefit claim) => [409] DoubleBenefitDenied"
+      - "[Manual/DB] Re-inspect the OT snapshot fields noted above => byte-for-byte unchanged"
+    auto: DB-assisted
+
+  - id: ATT-OT-029
+    func: [F-ATT-186]
+    sc: OT approval authority composes the same manager-resolver/role-scope/permission primitives used elsewhere, degrading to the pure manager-resolver fallback when IAttendanceAuthorizationService is not DI-wired
+    t: An HRBP with role-scope-only access (no direct-manager relationship) can approve OT only via the composed path, not the fallback path
+    src: ["AttendanceAuthorizationService / EmployeeManagerResolver"]
+    type: Boundary
+    pri: P1
+    role: HRBP
+    perm: "Attendance.Overtime.Approve"
+    steps:
+      - "[POST /api/attendance/overtime/requests/{id}/approve] As an HRBP with role-scope access to this employee's department but NO direct manager relationship, under the composed AttendanceAuthorizationService path => [200] Approved - role-scope alone is sufficient"
+      - "[POST /api/attendance/overtime/requests/{id}/approve] Same HRBP, under a null-DI fallback configuration that only checks EmployeeManagerResolver directly => [403] Forbidden - the fallback has no role-scope awareness at all; confirm which path is actually active in the running environment before asserting a status code"
+    auto: DB-assisted
+
+  - id: ATT-OT-030
+    func: [F-ATT-187]
+    sc: Every Overtime endpoint declares its own distinct permission with no missing controller attribute
+    t: A reflection-style check confirms each route's exact HasPermission value
+    src: ["OvertimeController"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Manual] Inspect OvertimeController route attributes => policies=Overtime.Finalize, requests(create/submit)=Overtime.Request, approve/reject/correct=Overtime.Approve, periods/finalize=Overtime.Finalize, periods/reopen=Overtime.Reopen, snapshot=Overtime.ViewAll - every route carries an explicit [HasPermission], none rely on [Authorize] alone"
+    auto: DB-assisted
+
+  - id: ATT-OT-031
+    func: [F-ATT-188]
+    sc: A cross-tenant Overtime access attempt is rejected at the host/tenant layer with 401, not 403/404
+    t: A mismatched tenant host for the token returns Unauthorized before reaching controller authorization
+    src: ["TenantShardResolutionMiddleware"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[POST /api/attendance/overtime/requests] Using a Tenant A token against Tenant B's host => [401] Unauthorized - distinct from the 403/404 in-tenant patterns used for out-of-scope access elsewhere in Attendance"
+    auto: API
+
+  - id: ATT-OT-032
+    func: [F-ATT-189]
+    sc: The request DTO has no client-settable ApprovedMinutes/ActualEligibleMinutes property
+    t: A client attempting to submit these fields directly has no effect - they are not bindable
+    src: ["OvertimeController"]
+    type: Security
+    pri: P1
+    steps:
+      - "[POST /api/attendance/overtime/requests] Include extra JSON fields approvedMinutes=9999, actualEligibleMinutes=9999 alongside a valid payload => [200/201] created, but these extraneous fields are silently ignored/unbound - the server-computed ActualEligibleMinutes is unaffected by the client-supplied values"
+    auto: API

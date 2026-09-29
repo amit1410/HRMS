@@ -1,0 +1,201 @@
+sheet: TaxDcl_Frontend
+submodule: Frontend
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-FE-001
+    func: [F-TAXDCL-147]
+    sc: "CONFIRMED HEADLINE DEFECT - MyTaxDeclarationsPage's read call 404s against the real backend"
+    t: getMyTaxDeclaration() calls GET /api/me/tax-declarations/current, a route that does not exist
+    src: "Frontend/HRMS.Web/src/api/taxDeclarations.ts (getMyTaxDeclaration); Backend/HRMS.API/Controllers/TaxDeclarationsController.cs (MyTaxDeclarationsController.Get route)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    pre: "Real backend running, EMP1 has an existing declaration reachable at GET /api/me/tax-declarations"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ViewOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] navigate to /payroll/my-tax-declarations as EMP1 against a real (non-mocked) backend => the page's own network call goes to GET /api/me/tax-declarations/current"
+      - "[GET /api/me/tax-declarations/current] as EMP1 => [404] NotFound - no such route exists on MyTaxDeclarationsController"
+      - "[Manual] compare against the real route: GET /api/me/tax-declarations (no suffix) => [200] returns the declaration correctly when called directly"
+    secc: true
+    auto: UI
+    cr: [CR-241]
+
+  - id: TAXDCL-FE-002
+    func: [F-TAXDCL-148]
+    sc: "CONFIRMED DEFECT - no UI path to create a declaration, add a line, or add a proof"
+    t: MyTaxDeclarationsPage cannot start a declaration from zero; api/taxDeclarations.ts has no create/addLine/addProof functions
+    src: "Frontend/HRMS.Web/src/api/taxDeclarations.ts (full file); MyTaxDeclarationsPage.tsx (full component)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    pre: "EMP2 has no declaration yet (the empty-state scenario)"
+    role: Employee (EMP2)
+    perm: Payroll.TaxDeclaration.ViewOwn, ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] navigate to /payroll/my-tax-declarations as EMP2 (no declaration) => page renders only 'No active declaration was found.' with no button/form to create one"
+      - "[Manual] full read of src/api/taxDeclarations.ts => no createMyTaxDeclaration/addMyTaxDeclarationLine/addMyTaxDeclarationProof function exists at all"
+    auto: UI
+    cr: [CR-242]
+
+  - id: TAXDCL-FE-003
+    func: [F-TAXDCL-149]
+    sc: "CONFIRMED GAP - zero reviewer/admin UI exists anywhere for tax declarations"
+    t: A full frontend grep confirms no page for cycles/categories/items/review/approve/lock/reopen/audit
+    src: "Frontend/HRMS.Web/src (full grep for tax-declarations review/approve/cycle/category/item routes)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    pre: none
+    role: HRAdmin (holds Review/Approve/Configure)
+    perm: Payroll.TaxDeclaration.Review, Approve, Configure, Reopen, ViewAudit
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of Frontend/HRMS.Web/src/pages for 'tax-declarations/cycles', 'tax-declarations/review', 'ReviewLine', 'ReviewProof' => zero matches anywhere outside src/api/taxDeclarations.ts's own self-service functions"
+      - "[Manual] full grep of Frontend/HRMS.Web/src/App.tsx for a second, admin-facing tax-declarations route => only /payroll/my-tax-declarations is registered"
+    auto: Manual only
+    cr: [CR-253]
+
+  - id: TAXDCL-FE-004
+    func: [F-TAXDCL-150]
+    sc: "CONFIRMED DEFECT - YearEndTaxPage's Previous Employer Inputs tab is a non-functional stub"
+    t: The 'previous' tab renders static text only; addPreviousEmployerInput exists but is never called
+    src: "Frontend/HRMS.Web/src/pages/payroll/YearEndTaxPage.tsx ('previous' tab); src/api/yearEndTax.ts (addPreviousEmployerInput, unused)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: Critical
+    pre: none
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] navigate to /payroll/year-end-tax, select the 'Previous Employer Inputs' tab as HRAdmin => two static paragraphs render, no input field, no 'Add' button of any kind"
+      - "[Manual] full grep of YearEndTaxPage.tsx for 'addPreviousEmployerInput' => zero call sites, despite the function existing and working in src/api/yearEndTax.ts"
+    auto: UI
+    cr: [CR-254]
+
+  - id: TAXDCL-FE-005
+    func: [F-TAXDCL-151]
+    sc: yearEndTax.ts is missing 6 of 14 backend routes' client functions
+    t: No client function exists for Cancel, Handoff, History, Export, single-Employee GET, or UpdatePreviousEmployerInput
+    src: "Frontend/HRMS.Web/src/api/yearEndTax.ts (full file - 8 of 14 routes)"
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    sev: High
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full read of src/api/yearEndTax.ts => confirms exactly 8 exported functions (list/create/calculate/submit/approve/close/getEmployees/addPreviousEmployerInput); no cancelYearEndTaxRun, handoffYearEndTaxAdjustment, getYearEndTaxHistory, exportYearEndTax, getYearEndTaxEmployee (single), or updatePreviousEmployerInput function exists"
+    auto: Manual only
+    cr: [CR-255]
+
+  - id: TAXDCL-FE-006
+    func: [F-TAXDCL-152]
+    sc: "CONFIRMED GAP - neither page has a navigation.ts entry"
+    t: Both /payroll/my-tax-declarations and /payroll/year-end-tax are reachable only by typing the exact URL
+    src: "Frontend/HRMS.Web/src/layout/navigation.ts (full grep for 'tax'); App.tsx (both route registrations)"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: High
+    pre: none
+    role: HRAdmin (holds all relevant permissions)
+    perm: Payroll.TaxDeclaration.ViewOwn; Payroll.YearEndTax.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of Frontend/HRMS.Web/src/layout/navigation.ts for 'tax' (case-insensitive) => zero matches"
+      - "[Manual] check App.tsx route registrations for both pages => both ARE registered with permission guards, so the pages themselves work once the URL is known; the gap is discoverability, not functionality"
+    auto: Manual only
+    cr: [CR-256]
+
+  - id: TAXDCL-FE-007
+    func: [F-TAXDCL-153]
+    sc: YearEndTaxPage genuinely permission-gates its mutating buttons
+    t: The Calculate/Submit/Approve/Close/Create buttons are each conditioned on can(Permissions.payroll.yearEndTax*)
+    src: "Frontend/HRMS.Web/src/pages/payroll/YearEndTaxPage.tsx (can() calls on every mutating button)"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "User holds Payroll.YearEndTax.View but NOT Calculate/Submit/Approve/Close/Manage"
+    role: Custom role (View-only)
+    perm: Payroll.YearEndTax.View
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] navigate to /payroll/year-end-tax as a View-only user => 'Create draft' button is disabled; per-run Calculate/Submit/Approve/Close buttons never render at all for any row, matching the user's held permission set"
+    auto: UI
+
+  - id: TAXDCL-FE-008
+    func: [F-TAXDCL-154]
+    sc: "CONFIRMED GAP (low severity) - MyTaxDeclarationsPage has no permission gating on any button"
+    t: Resubmit/Edit/Save/Delete/Replace-proof all render unconditionally for any user who can reach the page
+    src: "Frontend/HRMS.Web/src/pages/payroll/MyTaxDeclarationsPage.tsx (full component - no useAuth import)"
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: "User holds only Payroll.TaxDeclaration.ViewOwn, NOT ManageOwn"
+    role: Employee (view-only, hypothetical custom grant)
+    perm: Payroll.TaxDeclaration.ViewOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full read of MyTaxDeclarationsPage.tsx => no useAuth import, no can() call anywhere"
+      - "[Manual] navigate to the page as a hypothetical ViewOwn-only user => Edit/Delete/Resubmit buttons render and are clickable; the real gate is the backend [HasPermission] attribute, which would return 403 only after the click"
+    auto: UI
+    cr: [CR-257]
+
+  - id: TAXDCL-FE-009
+    func: [F-TAXDCL-155]
+    sc: MyTaxDeclarationsPage.test.tsx's 4 scenarios all mock the API module
+    t: The existing frontend suite exercises partially-approved read-only, empty state, draft edit/delete, and resubmission-required flows, entirely against mocked data
+    src: "Frontend/HRMS.Web/src/pages/payroll/MyTaxDeclarationsPage.test.tsx (full file)"
+    type: Contract
+    tags: [Negative]
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] read MyTaxDeclarationsPage.test.tsx => vi.mock('../../api/taxDeclarations.ts', ...) mocks getMyTaxDeclaration/updateMyTaxDeclarationLine/deleteMyTaxDeclarationLine/replaceMyTaxDeclarationProof/resubmitMyTaxDeclaration for all 4 test scenarios; the real /current URL mismatch (CR-241) is never exercised by this suite"
+    auto: Manual only
+
+  - id: TAXDCL-FE-010
+    func: [F-TAXDCL-156]
+    sc: YearEndTaxPage has no dedicated test file
+    t: A glob of the payroll pages directory finds no YearEndTaxPage.test.tsx
+    src: "Frontend/HRMS.Web/src/pages/payroll (directory glob)"
+    type: Contract
+    tags: []
+    pri: P3
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full glob of Frontend/HRMS.Web/src/pages/payroll for 'YearEndTaxPage.test.tsx' => no match; only MyTaxDeclarationsPage.tsx has a sibling .test.tsx in this module"
+    auto: Manual only

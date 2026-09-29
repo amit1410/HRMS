@@ -1,0 +1,76 @@
+sheet: Loans_Audit_History
+submodule: Audit and History - append-only LoanHistory proof across the full lifecycle, actor attribution
+defaults:
+  role: HRADMIN
+  perm: "Payroll.Loans.Request"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LOAN-AUD-001
+    func: [F-LOAN-095]
+    sc: The full lifecycle produces a complete, ordered LoanHistory trail
+    t: Create through Disbursement produces Created/Submitted/Approved/Disbursed/Activated rows in order
+    src: ["PayrollLoanService.AddHistory"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/loans] => [200/201] loan created"
+      - "[POST /api/payroll/loans/{id}/submit] => [200] Status=Submitted"
+      - "[POST /api/payroll/loans/{id}/approve] => [200] Status=Approved"
+      - "[POST /api/payroll/loans/{id}/record-disbursement] => [200] Status=Active"
+      - "[Manual/DB] Query LoanHistories for the loan ordered by OccurredAtUtc => Created, Submitted, Approved, Disbursed, Activated all present in that order"
+    auto: DB-assisted
+
+  - id: LOAN-AUD-002
+    func: [F-LOAN-095]
+    sc: No update or delete path exists for a LoanHistory row
+    t: A full grep confirms LoanHistories are only ever Added, never Updated or Removed
+    src: ["PayrollLoanService.cs, PayrollCalculationEngine.cs, PayrollRetroSettlementService.cs (full grep for LoanHistories.Update/Remove)"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Manual/Code] Grep the full backend for 'LoanHistories.Update' or 'LoanHistories.Remove' => zero matches; every reference is 'LoanHistories.Add'"
+    auto: Manual only
+
+  - id: LOAN-AUD-003
+    func: [F-LOAN-096]
+    sc: Every history row is actor-attributed
+    t: A manually-actioned event stamps the acting user's id; a system-triggered payroll-recovery event stamps the calculation-triggering user's id
+    src: ["PayrollLoanService.AddHistory"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/loans/{id}/approve] as UserX => [200] Status=Approved"
+      - "[Manual/DB] Query LoanHistories for the Approved row => ActorUserId=UserX's id, OccurredAtUtc close to the current clock time"
+    auto: DB-assisted
+
+  - id: LOAN-AUD-004
+    func: [F-LOAN-097]
+    sc: No API route exposes LoanHistories despite the table being fully populated
+    t: A full route grep confirms there is no GET .../history endpoint anywhere in PayrollLoansController
+    src: ["Backend/HRMS.API/Controllers/PayrollLoansController.cs (full route grep for 'history')"]
+    type: Contract
+    pri: P1
+    cr: [CR-185]
+    steps:
+      - "[Manual/Code] Grep PayrollLoansController.cs for 'history' (case-insensitive) => zero route matches; the only way to read LoanHistories is a direct database query"
+    auto: Manual only
+
+  - id: LOAN-AUD-005
+    func: [F-LOAN-098]
+    sc: System-triggered history rows carry SourceType/SourceId back to their trigger
+    t: PayrollRecovery and FinalSettlementRecovery events reference the originating PayrollResult/FinalSettlementCase id
+    src: ["PayrollCalculationEngine.PersistLoanRecoveriesAsync, PayrollRetroSettlementService.AddLoanHistory"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/runs/{id}/calculate] (loan has a due installment) => [200] recovery succeeds"
+      - "[Manual/DB] Query LoanHistories => PayrollRecovery row has SourceType=PayrollResult, SourceId={the resulting PayrollResult id}"
+      - "[POST /api/payroll/final-settlements/{id}/finalize] (loan has an outstanding recovery line) => [200] finalized"
+      - "[Manual/DB] Query LoanHistories => FinalSettlementRecovery row has SourceType=FinalSettlement, SourceId={the settlement id}"
+    auto: DB-assisted

@@ -1,0 +1,158 @@
+sheet: GLAcc_Analytics_Reconciliation
+submodule: Payroll-Analytics Reconciliation Integration
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-REC-001
+    func: [F-GLACC-099]
+    sc: MissingPayrollJournal finding
+    t: A run with persisted results but zero active journals raises a Warning MissingPayrollJournal finding
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "RUN10 has persisted Calculated PayrollResults but no journal has ever been generated for it"
+    role: HRAdmin (custom role holding Payroll.AnalyticsReconcile)
+    perm: Payroll.AnalyticsReconcile
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] trigger a reconciliation run for RUN10 => a Warning finding with code \"MissingPayrollJournal\" is raised"
+    auto: DB-assisted
+    db: "Assert PayrollReconciliationFindings row with code MissingPayrollJournal, Severity=Warning"
+
+  - id: GLACC-REC-002
+    func: [F-GLACC-100]
+    sc: AccountingUnbalanced finding on data drift
+    t: An active journal whose TotalDebit differs from TotalCredit (simulated drift) raises a Critical AccountingUnbalanced finding
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "RUN11 has an active journal directly corrupted in the DB so TotalDebit != TotalCredit"
+    role: HRAdmin (custom role holding Payroll.AnalyticsReconcile)
+    perm: Payroll.AnalyticsReconcile
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] trigger a reconciliation run for RUN11 => a Critical finding with code \"AccountingUnbalanced\" is raised"
+    auto: DB-assisted
+    db: "Assert PayrollReconciliationFindings row with code AccountingUnbalanced, Severity=Critical"
+
+  - id: GLACC-REC-003
+    func: [F-GLACC-101]
+    sc: DuplicatePayrollJournal finding
+    t: More than one active journal for the same run (simulated by directly inserting a second row, bypassing the app-level guard) raises a Critical DuplicatePayrollJournal finding
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "RUN12 has 2 active journal rows for the same PayrollRunId, inserted directly to simulate the CR-282 race outcome"
+    role: HRAdmin (custom role holding Payroll.AnalyticsReconcile)
+    perm: Payroll.AnalyticsReconcile
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] trigger a reconciliation run for RUN12 => a Critical finding with code \"DuplicatePayrollJournal\" is raised"
+    auto: DB-assisted
+    db: "Assert PayrollReconciliationFindings row with code DuplicatePayrollJournal, Severity=Critical"
+    cr: [CR-282]
+
+  - id: GLACC-REC-004
+    func: [F-GLACC-102]
+    sc: AccountingPayrollTotalMismatch finding
+    t: A balanced journal whose TotalCredit differs from the run's own persisted net-pay total raises a Critical AccountingPayrollTotalMismatch finding
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "RUN13's active journal is internally balanced (TotalDebit==TotalCredit) but its TotalCredit was recorded before a later payroll recalculation changed the run's own NetPay totals"
+    role: HRAdmin (custom role holding Payroll.AnalyticsReconcile)
+    perm: Payroll.AnalyticsReconcile
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] trigger a reconciliation run for RUN13 => a Critical finding with code \"AccountingPayrollTotalMismatch\" is raised"
+    auto: DB-assisted
+    db: "Assert PayrollReconciliationFindings row with code AccountingPayrollTotalMismatch, Severity=Critical"
+    cm: "Demonstrates the payroll-recalculation-impact scope area: recalculating a payroll run after its journal has already been generated does NOT automatically regenerate or flag the journal - only the reconciliation engine's periodic check would surface the drift."
+
+  - id: GLACC-REC-005
+    func: [F-GLACC-103]
+    sc: Both linkage findings are permanently unreachable
+    t: BrokenAccountingReversalLinkage and BrokenAccountingAdjustmentLinkage can never fire against journals this service is capable of generating
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] grep PayrollAccountingService.AddLine for every SourceType literal it can emit => only \"EmployeeLoan\"/\"FinalSettlement\", confirming SourceType.Contains(\"Reversal\")/.Contains(\"Adjustment\") can never match"
+    auto: Manual only
+    cr: [CR-277]
+
+  - id: GLACC-REC-006
+    func: [F-GLACC-104]
+    sc: Analytics overview surfaces accounting totals separately from the journal DTO
+    t: PayrollAnalyticsOverviewDto and PayrollRunSummaryDto both expose AccountingDebitTotal/AccountingCreditTotal derived from active journals
+    src: "PayrollAnalyticsService.GetOverviewAsync, GetRunSummaryAsync"
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    sev: Low
+    pre: "RUN14 has one active journal with TotalDebit=TotalCredit=90000"
+    role: HRAdmin (custom role holding Payroll.AnalyticsReconcile)
+    perm: Payroll.AnalyticsReconcile
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] GET the analytics overview for RUN14 => AccountingDebitTotal==90000, AccountingCreditTotal==90000"
+    auto: DB-assisted
+    db: "n/a"
+
+  - id: GLACC-REC-007
+    func: [F-GLACC-105]
+    sc: General reconciliation engine is out of scope
+    t: This module does not claim coverage of PayrollReconciliation/PayrollVarianceControls/PayrollAnomalyFlags beyond the 6 GL-specific findings
+    src: "Backend/HRMS.Application/Services/PayrollAnalyticsService.cs"
+    type: Contract
+    tags: []
+    pri: P3
+    sev: Low
+    pre: none
+    role: n/a (scope note)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] confirm this module's cases reference only the 6 GL-specific finding codes and the 2 GL-specific overview fields => none of the general reconciliation/variance-control/anomaly surface is claimed as covered"
+    auto: Manual only
+
+  - id: GLACC-REC-008
+    func: [F-GLACC-106]
+    sc: SeparationService has zero accounting/journal/GL integration
+    t: A full grep of SeparationService.cs confirms final-settlement accounting is driven entirely from PayrollAccountingService's own read of already-finalized rows
+    src: "Backend/HRMS.Application/Services/SeparationService.cs"
+    type: Contract
+    tags: []
+    pri: P3
+    sev: Low
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] grep SeparationService.cs for \"Accounting\"/\"Journal\"/\"GL\" => zero matches"
+    auto: Manual only

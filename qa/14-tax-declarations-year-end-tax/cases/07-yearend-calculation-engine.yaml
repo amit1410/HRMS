@@ -1,0 +1,303 @@
+sheet: TaxDcl_YearEnd_Calc
+submodule: Year-End Calculation Engine
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-YECALC-001
+    func: [F-TAXDCL-077]
+    sc: Payroll-YTD source scoping excludes non-Finalized/non-current/non-overlapping results
+    t: A draft payroll run, a stale (IsCurrent=false) attempt, and a period outside the tax-year window are all excluded from YTD aggregation
+    src: "YearEndTaxService.cs CalculateAsync (PayrollResults query)"
+    type: Boundary
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Employee has: a Finalized/current result inside the window (included); a Draft-run result (excluded); a stale IsCurrent=false result from a prior recalculation (excluded); a Finalized result whose period is entirely before the run's StartDate (excluded)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: 4 PayrollResult rows as described
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] YtdGross/YtdTaxableIncome reflect ONLY the one in-scope Finalized+IsCurrent+overlapping-period result; the other 3 contribute nothing"
+    auto: DB-assisted
+
+  - id: TAXDCL-YECALC-002
+    func: [F-TAXDCL-078]
+    sc: YtdTaxableIncome nets taxable earnings against taxable deductions
+    t: Taxable-earning and taxable-deduction components are correctly summed and netted
+    src: "YearEndTaxService.cs CalculateAsync (ytdTaxable computation)"
+    type: Positive
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "PayrollResultComponents: Basic (IsTaxable=true, IsEarning=true, 50000); HRA (IsTaxable=false, IsEarning=true, 20000); ProfessionalTax-equivalent taxable deduction (IsTaxable=true, IsDeduction=true, 2000)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: 3 components as described
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] YtdTaxableIncome = 50000 - 2000 = 48000 (HRA's non-taxable 20000 excluded entirely)"
+    auto: DB-assisted
+
+  - id: TAXDCL-YECALC-003
+    func: [F-TAXDCL-079, F-TAXDCL-101]
+    sc: YtdTaxDeducted sources from the monthly StatutoryType.IncomeTax engine, read-only
+    t: PayrollStatutoryResults of StatutoryType.IncomeTax are summed as YtdTaxDeducted; this module never calls into or triggers that engine
+    src: "YearEndTaxService.cs CalculateAsync (statutory query); full cross-grep of StatutoryPayrollService.cs/YearEndTaxService.cs"
+    type: Integration-Concurrency
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Employee has 2 monthly PayrollStatutoryResults of StatutoryType.IncomeTax, EmployeeAmount 1000 and 1200; a separate ProvidentFund statutory result (EmployeeAmount 3000, excluded)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: 3 PayrollStatutoryResult rows
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] YtdTaxDeducted = 1000+1200 = 2200 (the 3000 ProvidentFund row is excluded)"
+      - "[Manual] full grep of StatutoryPayrollService.cs and PayrollCalculationEngine.cs for YearEndTaxService/TaxDeclaration references => zero matches either direction, confirming F-STAT-050's independence claim from this module's own side"
+    auto: DB-assisted
+
+  - id: TAXDCL-YECALC-004
+    func: [F-TAXDCL-080]
+    sc: DeclaredAmount/ProofAmount source from Approved/PartiallyApproved/Locked declarations matching the run's TaxYear
+    t: A declaration for a different financial year, or one still Submitted/UnderReview, is excluded
+    src: "YearEndTaxService.cs CalculateAsync (declarations query)"
+    type: Boundary
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Declaration A: Cycle.FinancialYear=2026, Status=Approved, matches run.TaxYear=2026 (included). Declaration B: Cycle.FinancialYear=2025 (excluded). Declaration C: Cycle.FinancialYear=2026, Status=UnderReview (excluded)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: 3 declarations
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] run.TaxYear=2026 => [200] ApprovedDeclarationAmount reflects ONLY Declaration A's approved lines"
+    auto: DB-assisted
+
+  - id: TAXDCL-YECALC-005
+    func: [F-TAXDCL-081]
+    sc: ApprovedProofAmount further restricts to proof-accepted (or proof-not-required) lines
+    t: A line requiring proof but lacking an Accepted proof contributes to DeclaredAmount but not ProofAmount
+    src: "YearEndTaxService.cs CalculateAsync (proof filter)"
+    type: Boundary
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "Line 1: Approved, ApprovedAmount=50000, RequiresProof=true, proof Status=Accepted. Line 2: Approved, ApprovedAmount=30000, RequiresProof=true, proof Status=Submitted (never accepted)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: 2 declaration lines
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] ApprovedDeclarationAmount=80000 (both lines), ApprovedProofAmount=50000 (only Line 1, proof-accepted)"
+    auto: DB-assisted
+
+  - id: TAXDCL-YECALC-006
+    func: [F-TAXDCL-082]
+    sc: FinalTaxableIncome formula uses only proof-backed declaration amounts
+    t: An Approved-but-unproven declaration amount does NOT reduce taxable income; only the ProofAmount component does
+    src: "YearEndTaxService.cs CalculateAsync (taxable computation)"
+    type: Positive
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "YtdTaxableIncome=500000, PreviousEmployerTaxableIncome=0, ApprovedProofAmount=50000, PreviousEmployerEligibleDeductionAmount=0"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: as described
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] FinalTaxableIncome = max(0, 500000+0-50000-0) = 450000"
+    auto: DB-assisted
+
+  - id: TAXDCL-YECALC-007
+    func: [F-TAXDCL-082]
+    sc: FinalTaxableIncome floors at zero
+    t: A negative computed taxable income clamps to 0, never goes negative
+    src: "YearEndTaxService.cs CalculateAsync (Math.Max(0, ...))"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "YtdTaxableIncome=10000, ApprovedProofAmount=50000 (exceeds taxable income)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: as described
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] FinalTaxableIncome=0 (not negative)"
+    auto: DB-assisted
+
+  - id: TAXDCL-YECALC-008
+    func: [F-TAXDCL-083]
+    sc: "CONFIRMED - Projected and Final fields are always numerically identical within one calculation pass"
+    t: ProjectedAnnualTaxableIncome==FinalTaxableIncome and ProjectedAnnualTax==FinalTaxLiability for every produced row
+    src: "YearEndTaxService.cs CalculateAsync (row initializer)"
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Any successfully calculated run"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200]"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/employees] => for every row, projectedAnnualTax == finalTaxLiability exactly (no distinct projection ever computed in a single pass)"
+    auto: API
+    cr: [CR-249]
+
+  - id: TAXDCL-YECALC-009
+    func: [F-TAXDCL-084]
+    sc: "CONFIRMED DEFECT - ProjectedRemainingTaxableIncome is always 0"
+    t: The field is never assigned by CalculateAsync regardless of input data
+    src: "YearEndTaxService.cs CalculateAsync (row initializer - no ProjectedRemainingTaxableIncome assignment)"
+    type: Contract
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Any calculated run with nonzero YTD figures"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200]"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/employees/{employeeId}] => projectedRemainingTaxableIncome=0 for every employee, regardless of any input data - EXPECTED a real computed value; ACTUAL always 0"
+    auto: API
+    cr: [CR-248]
+
+  - id: TAXDCL-YECALC-010
+    func: [F-TAXDCL-085]
+    sc: ResolveTax requires an active, IncomeTaxApplicable profile
+    t: A missing profile, or one with IncomeTaxApplicable=false, is IssueCode=TAX_PROFILE_MISSING
+    src: "YearEndTaxService.cs ResolveTax"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Employee has no EmployeeStatutoryProfile at all (scenario A); a second employee's profile has IncomeTaxApplicable=false (scenario B)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] employee A row: BlockingIssueCode=TAX_PROFILE_MISSING, Status=BlockingIssue"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/employees/{employee B}] => BlockingIssueCode=TAX_PROFILE_MISSING (IncomeTaxApplicable=false is treated identically to no profile at all)"
+    auto: API
+
+  - id: TAXDCL-YECALC-011
+    func: [F-TAXDCL-086]
+    sc: Configuration matching by JurisdictionCode and nullable StateCode
+    t: A configuration with StateCode=null matches every state within the jurisdiction; a mismatched jurisdiction excludes the configuration
+    src: "YearEndTaxService.cs ResolveTax"
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "Profile: JurisdictionCode=IN, StateCode=KA. Configuration A: JurisdictionCode=IN, StateCode=null (matches). Configuration B: JurisdictionCode=US (excluded)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: as described
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] employee's tax resolved using Configuration A only"
+    auto: DB-assisted
+
+  - id: TAXDCL-YECALC-012
+    func: [F-TAXDCL-087]
+    sc: A Priority tie is a per-employee blocking issue, not a whole-run failure
+    t: TAX_CONFIGURATION_AMBIGUOUS blocks only the affected employee's row; other employees still calculate normally
+    src: "YearEndTaxService.cs ResolveTax"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Employee A: two eligible configuration versions, both Priority=1 (tie). Employee B: exactly one eligible version"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: as described
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] whole run still Calculated; Employee A's row: BlockingIssueCode=TAX_CONFIGURATION_AMBIGUOUS; Employee B's row: Status=Reconciled/AdjustmentRecommended (unaffected)"
+    auto: API
+
+  - id: TAXDCL-YECALC-013
+    func: [F-TAXDCL-088]
+    sc: Missing configuration and missing slab are per-employee blocking issues, not silent skips
+    t: TAX_CONFIGURATION_MISSING and TAX_SLAB_MISSING each increment run.BlockingIssueCount, unlike the monthly engine's silent-continue behavior
+    src: "YearEndTaxService.cs ResolveTax"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Employee A: no eligible configuration exists at all. Employee B: a configuration exists but no slab covers the resolved taxable income"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: as described
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] Employee A: BlockingIssueCode=TAX_CONFIGURATION_MISSING; Employee B: BlockingIssueCode=TAX_SLAB_MISSING; run.BlockingIssueCount=2 (not silently skipped, unlike qa/13-statutory-compliance's F-STAT-037/044)"
+    auto: API
+
+  - id: TAXDCL-YECALC-014
+    func: [F-TAXDCL-088]
+    sc: An OptionalMonth-restricted slab is never matched by the annual engine
+    t: A slab with a non-null OptionalMonth is excluded from ResolveTax's own slab query regardless of the run's own end-date month
+    src: "YearEndTaxService.cs ResolveTax (x.OptionalMonth == null filter)"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Only slab available for the resolved taxable income has OptionalMonth=2 (February-only)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: as described
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] run.EndDate is in a February => [200] employee's row is still BlockingIssueCode=TAX_SLAB_MISSING (the OptionalMonth slab is never eligible for this engine)"
+    auto: DB-assisted
+
+  - id: TAXDCL-YECALC-015
+    func: [F-TAXDCL-089]
+    sc: Matched-slab tax formula and rounding
+    t: Tax = round(FixedAmount + taxable*Rate/100) using PayrollRoundingPolicy.RoundMoney
+    src: "YearEndTaxService.cs ResolveTax (final tuple expression)"
+    type: Positive
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "Slab: FromAmount=250000, ToAmount=500000, FixedAmount=0, Rate=5; FinalTaxableIncome=450000"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: as described
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200] ProjectedAnnualTax/FinalTaxLiability = round(0 + 450000*5/100) = 22500.00"
+    auto: DB-assisted
+
+  - id: TAXDCL-YECALC-016
+    func: [F-TAXDCL-090, F-TAXDCL-091, F-TAXDCL-092]
+    sc: EstimatedTaxDue/ExcessTax are mutually exclusive; Status classification; auto-recommended adjustment only on due-and-unblocked
+    t: A due employee gets AdjustmentRecommended + an auto Adjustment; an excess-only employee is Reconciled with no adjustment; a blocked employee never gets EstimatedExcessTax-driven auto-adjustment
+    src: "YearEndTaxService.cs CalculateAsync (status ternary, adjustment creation)"
+    type: Boundary
+    tags: [Positive, Negative]
+    pri: P0
+    sev: High
+    pre: "Employee A: annualTax=22500, YtdTaxDeducted=15000 (due=7500). Employee B: annualTax=10000, YtdTaxDeducted=15000 (excess=5000, due=0). Employee C: BlockingIssueCode set, would otherwise have due>0"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: 3 employees as described
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] => [200]"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/employees/{Employee A}] => EstimatedTaxDue=7500, EstimatedExcessTax=0, Status=AdjustmentRecommended, a YearEndTaxAdjustment(Amount=7500, Status=Recommended) exists"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/employees/{Employee B}] => EstimatedTaxDue=0, EstimatedExcessTax=5000, Status=Reconciled, NO adjustment row created"
+      - "[GET /api/payroll/year-end-tax/runs/{id}/employees/{Employee C}] => Status=BlockingIssue, NO adjustment row created even though a due amount would otherwise apply"
+    auto: API

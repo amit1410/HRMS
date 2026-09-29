@@ -1,0 +1,214 @@
+sheet: EmployeeCode_Config
+submodule: Configuration and Rule Request Validation Matrix
+defaults:
+  role: TENANT_ADMIN
+  perm: EmployeeCodeConfiguration.Manage
+  tenant: A
+  pre: "Tenant A signed in as TenantAdmin (EmployeeCodeConfiguration.Manage)."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: CODE-VALID-001
+    func: [F-CODE-04]
+    sc: An EffectiveFrom omitted from the JSON body binds to DateOnly.MinValue, not to 'today'
+    t: The C# property initializer's default (today's date) only applies to a request object constructed in code; JSON model binding with the field absent still yields the C# default in ASP.NET Core for a value type property with an initializer, but an EXPLICIT null/0001-01-01 sent by a client is accepted at the validator (no NotEmpty rule exists for EffectiveFrom) - confirm the actual bound value against current source rather than assuming
+    src: ["EmployeeCodeConfigurationRequest.EffectiveFrom (no [Required], defaults via property initializer); EmployeeCodeConfigurationRequestValidator (no RuleFor(x => x.EffectiveFrom) at all)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] Body explicitly sets effectiveFrom:'0001-01-01' => [200 or 400] record whether this is accepted (no validator rule exists for EffectiveFrom itself, only for EffectiveTo-vs-EffectiveFrom) and, if accepted, whether it creates a version effective from year 1"
+    auto: API
+
+  - id: CODE-VALID-002
+    func: [F-CODE-04]
+    sc: A malformed EffectiveFrom/EffectiveTo date string fails model binding before the validator ever runs
+    t: An unparseable date value produces a framework-level 400, not a FluentValidation message
+    src: ["ASP.NET Core model binding for DateOnly"]
+    type: Negative
+    tags: [Validation]
+    pri: P2
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'not-a-date', ...} => [400] model-binding error (distinct from a validator-produced field error)"
+    auto: API
+
+  - id: CODE-VALID-003
+    func: [F-CODE-04]
+    sc: Prefix at exactly the 10-character boundary is accepted; 11 characters is rejected
+    t: MaximumLength(10) is inclusive
+    src: ["EmployeeCodeConfigurationRequestValidator.Prefix MaximumLength(10)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] prefix = 10-character string (e.g. 'ABCDEFGHIJ') => [200] accepted"
+      - "[PUT /api/employee-code-configuration] prefix = 11-character string => [400] length validation error"
+    auto: API
+
+  - id: CODE-VALID-004
+    func: [F-CODE-04]
+    sc: Prefix rejects characters outside [A-Za-z0-9_-]
+    t: A prefix containing a space, slash, or other punctuation fails the regex
+    src: ["EmployeeCodeConfigurationRequestValidator.Prefix Matches('^[A-Za-z0-9_-]+$')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] prefix='EM P' (space) => [400]"
+      - "[PUT /api/employee-code-configuration] prefix='EMP/1' (slash) => [400]"
+    auto: API
+
+  - id: CODE-VALID-005
+    func: [F-CODE-04]
+    sc: Separator only accepts one of the five literal values; any other string (including a valid single character not in the set, or a multi-character string) is rejected
+    t: "'*' and '--' are both rejected even though the EF column allows up to 1 character for the accepted set and the DTO is a free-form string"
+    src: ["EmployeeCodeConfigurationRequestValidator.Separator ('value is \"\" or \"-\" or \"/\" or \".\" or \"_\"')"]
+    type: Negative
+    tags: [Validation, Boundary]
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] separator='*' => [400] 'Separator must be blank, -, /, ., or _.'"
+      - "[PUT /api/employee-code-configuration] separator='--' => [400] same message (not merely a length check - it must be exactly one of the five literals)"
+    auto: API
+
+  - id: CODE-VALID-006
+    func: [F-CODE-04]
+    sc: NextNumber of exactly 0 and of a negative value are both rejected; 1 is the accepted minimum
+    t: GreaterThanOrEqualTo(1) boundary
+    src: ["EmployeeCodeConfigurationRequestValidator.NextNumber GreaterThanOrEqualTo(1)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] nextNumber=0 => [400]"
+      - "[PUT /api/employee-code-configuration] nextNumber=-5 => [400]"
+      - "[PUT /api/employee-code-configuration] nextNumber=1 => [200] accepted (lower boundary)"
+    auto: API
+
+  - id: CODE-VALID-007
+    func: [F-CODE-04, F-CODE-10]
+    sc: Padding outside 0-10 is rejected for Simple/config-level padding; 0 and 10 are the accepted boundaries
+    t: -1 and 11 are rejected
+    src: ["EmployeeCodeConfigurationRequestValidator.Padding InclusiveBetween(0, 10)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] padding=-1 => [400]"
+      - "[PUT /api/employee-code-configuration] padding=11 => [400]"
+      - "[PUT /api/employee-code-configuration] padding=0 => [200]"
+      - "[PUT /api/employee-code-configuration] padding=10 => [200]"
+    auto: API
+
+  - id: CODE-VALID-008
+    func: [F-CODE-04]
+    sc: GenerationMethod is required when AssignmentMode=Auto
+    t: Omitting/nulling GenerationMethod while Auto is selected is rejected
+    src: ["EmployeeCodeConfigurationRequestValidator (GenerationMethod NotNull When Auto, 'Generation method is required for Auto assignment.')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {assignmentMode:'Auto', generationMethod:null, ...} => [400] 'Generation method is required for Auto assignment.'"
+    auto: API
+
+  - id: CODE-VALID-009
+    func: [F-CODE-04]
+    sc: GenerationMethod must be null when AssignmentMode=Manual
+    t: Supplying any GenerationMethod value while Manual is selected is rejected
+    src: ["EmployeeCodeConfigurationRequestValidator (GenerationMethod Null When Manual, 'Generation method must be empty for Manual assignment.')"]
+    type: Negative
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {assignmentMode:'Manual', autoGenerate:true, generationMethod:'Simple', ...} => [400] 'Generation method must be empty for Manual assignment.'"
+    auto: API
+
+  - id: CODE-VALID-010
+    func: [F-CODE-52]
+    sc: An explicit JSON null for the rule request's Conditions or Segments array is not handled by a validation message
+    t: "Sending {\"conditions\": null} or {\"segments\": null} on a rule save reaches an unguarded collection access"
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync (no null-check before request.Segments.Count(...)/request.Conditions.Count)"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    sev: High
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {name:'X', priority:1, status:'Draft', conditions: null, segments: null} => [200/400/500] record the ACTUAL observed status verbatim - do not assume 500 without running it, since it depends on exact JSON serializer null-handling for this DTO shape"
+    auto: API
+    cr: [CR-46]
+
+  - id: CODE-VALID-011
+    func: [F-CODE-19]
+    sc: Two rules with the identical Name AND identical Priority on the same version are both accepted - there is no name/priority uniqueness constraint
+    t: Confirms actual (permissive) behavior for the 'duplicate rule' test area rather than assuming a conflict is raised
+    src: ["EmployeeCodeConfigurationService.SaveRuleAsync (no Name or Priority uniqueness check anywhere in the method)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Body {name:'IT Rule', priority:5, isDefault:false, status:'Active', conditions:[{field:'Department', referenceId:<DEPT-A>}], segments:[{segmentType:'SequentialNumber', paddingLength:5}]} => [200] saved, id1"
+      - "[POST /api/employee-code-configuration/rules] Body {name:'IT Rule', priority:5, isDefault:false, status:'Active', conditions:[{field:'Department', referenceId:<DEPT-B>}], segments:[{segmentType:'SequentialNumber', paddingLength:5}]} => [200] saved, id2 - both rules coexist with the same Name and Priority, disambiguated only by insertion order (ThenBy Id) if they ever tie on a match"
+    auto: API
+
+  - id: CODE-VALID-012
+    func: [F-CODE-13]
+    sc: A condition Field value outside the defined enum range, supplied WITHOUT a ReferenceId, saves successfully but can never match anything at employment time
+    t: An out-of-range Field with only a literal Value bypasses ResolveConditionCodeAsync's switch entirely (only entered when ReferenceId is present) and is stored verbatim; at match time, values.TryGetValue for that Field always misses (the values dictionary only ever populates the 15 known fields), so the condition is permanently unsatisfiable
+    src: ["EmployeeCodeConfigurationService.ResolveConditionCodeAsync ('if (condition.ReferenceId is not Guid referenceId) return condition.Value?.Trim();'); EmployeeCodeRuleMatcher.Matches (values.TryGetValue miss => actualCode null => never matches)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Condition {field: 999, operator:'Equals', value:'X', referenceId:null} => [200] saved without error (no ReferenceId means the field-specific resolution switch is never reached)"
+      - "[POST /api/employees/{id}/employment-history] Hire an employee that would otherwise match every other condition on this rule => [200 or 400] the rule with the unknown-field condition never matches (the condition can never be satisfied), so a different rule or the default applies, or a 'no rule matches' error if nothing else does"
+    auto: API
+
+  - id: CODE-VALID-013
+    func: [F-CODE-16]
+    sc: A condition Field value outside the defined enum range, supplied WITH a ReferenceId, IS rejected at save time
+    t: With a ReferenceId present, ResolveConditionCodeAsync's switch is reached and its default arm returns null, which the 'ReferenceId.HasValue && code is null' check then rejects as invalid
+    src: ["EmployeeCodeConfigurationService.ResolveConditionCodeAsync (switch default => null); SaveRuleAsync ('The selected master value is invalid or belongs to another tenant.')"]
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Condition {field: 999, referenceId: <any real GUID>} => [400] 'condition' / 'The selected master value is invalid or belongs to another tenant.'"
+    auto: API
+
+  - id: CODE-VALID-014
+    func: [F-CODE-16]
+    sc: A nonexistent (well-formed but unassigned) GUID as a condition ReferenceId is rejected the same as an invalid/cross-tenant one
+    t: The 'invalid master id' case from a random GUID that matches no row at all
+    src: ["EmployeeCodeConfigurationService.ResolveConditionCodeAsync (SingleOrDefaultAsync returns null)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/employee-code-configuration/rules] Condition {field:'Grade', referenceId: <random GUID matching no Grade row>} => [400] 'condition' / 'The selected master value is invalid or belongs to another tenant.'"
+    auto: API
+
+  - id: CODE-VALID-015
+    func: [F-CODE-02]
+    sc: Saving twice with the exact same EffectiveFrom and no versionId UPDATES the existing version rather than creating a duplicate or reporting a conflict
+    t: The 'exact EffectiveFrom match, no versionId' lookup branch means a second save with identical dates is treated as an edit of the same version, not a second version
+    src: ["EmployeeCodeConfigurationService.SaveAsync ('await _db.EmployeeCodeConfigVersions.FirstOrDefaultAsync(v => v.EmployeeCodeConfigId == config.Id && v.EffectiveFrom == request.EffectiveFrom)')"]
+    type: Boundary
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'2026-10-01', prefix:'AAA', ...} no versionId => [200] versionId=V1"
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'2026-10-01', prefix:'BBB', ...} again, no versionId => [200] SAME versionId=V1 returned, prefix now 'BBB' (updated in place, not a second version and not a 409)"
+    auto: API
+
+  - id: CODE-VALID-016
+    func: [F-CODE-05]
+    sc: A genuinely duplicate configuration version (same EffectiveFrom as an existing ACTIVE version, but reached via a DIFFERENT EffectiveTo so it is not treated as the same version) IS rejected as an overlap conflict
+    t: Distinguishes CODE-VALID-015's same-version update from a real duplicate-version conflict
+    src: ["EmployeeCodeConfigurationService.SaveAsync (overlap check, not the exact-match update path, since a versionId is not supplied and... clarify against source: the exact-EffectiveFrom match branch would actually still find the SAME row regardless of EffectiveTo, since the lookup key is only EmployeeCodeConfigId+EffectiveFrom)"]
+    type: Boundary
+    tags: [Contract]
+    pri: P2
+    cm: "This case tests whether an EffectiveFrom-only match (ignoring EffectiveTo) is sufcient to route into the update branch even when the caller's intent was clearly a new, differently-scoped version - confirm against source behavior rather than assuming a conflict is raised."
+    steps:
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'2026-11-01', effectiveTo:'2026-11-30', ...} => [200] versionId=V2"
+      - "[PUT /api/employee-code-configuration] Body {effectiveFrom:'2026-11-01', effectiveTo:'2026-12-31', ...} (same start date, different end date, no versionId) => [200 or 409] record whether this UPDATES V2's own EffectiveTo (most likely, per the EffectiveFrom-only lookup key) or is treated as a new version and conflicts"
+    auto: API

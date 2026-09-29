@@ -1,0 +1,435 @@
+sheet: Tenant_Isolation
+submodule: Host/Tenant Resolution and Cross-Tenant Security
+defaults:
+  role: "A_HR / B_HR (see steps)"
+  perm: "Varies per case (see steps)"
+  tenant: A/B
+  pre: "QA stack running; Tenant A and Tenant B both provisioned and Active on disposable QA databases, each with its own admin/HR/employee users."
+  data: "Tenant A and Tenant B hosts and seeded QA users per test-data-spec.md; captured record ids from setup steps."
+  sev: Critical
+  reg: true
+
+cases:
+  - id: TENANT-HOST-001
+    func: [F-TEN-01]
+    sc: Valid tenant host resolves
+    t: A registered, active organization's host resolves and serves its own data
+    src: ["TenantShardResolver.ResolveByHostAsync"]
+    type: Positive
+    pri: P0
+    tenant: A
+    smoke: true
+    steps:
+      - "[GET /api/tenants/current/branding] Call at the Tenant A host => [200] branding belonging to Tenant A"
+      - "[POST /api/auth/login] Sign in with an A user at the A host => [200]"
+    auto: API
+    ex: ["xU:TenantShardResolverTests.Resolves_a_seeded_host_to_its_organization"]
+
+  - id: TENANT-HOST-002
+    func: [F-TEN-01, F-TEN-05]
+    sc: Unknown host
+    t: A host belonging to no organization is served (not rejected), but authenticated/tenant routes cannot proceed
+    src: ["TenantShardResolutionMiddleware (shard is null => continues)"]
+    type: Boundary
+    tags: [Negative]
+    pri: P0
+    tenant: None
+    steps:
+      - "[GET /health] Call at an unregistered host => [200] (anonymous, unaffected)"
+      - "[GET /api/employees] Call at an unregistered host with no token => [401] (missing auth, not a tenant error)"
+      - "[POST /api/auth/login] Call at an unregistered host with valid Tenant A credentials => [401] unknown-workspace message"
+    auto: API
+    ex: ["xU:TenantHostRoutingTests.A_host_belonging_to_no_organization_is_still_served", "xU:TenantHostRoutingTests.An_unresolved_host_does_not_open_an_authenticated_route"]
+
+  - id: TENANT-HOST-003
+    func: [F-TEN-01]
+    sc: Malformed / unsupported host
+    t: Hosts with a trailing dot, excess length, or unusual characters do not crash resolution
+    src: ["TenantShardResolver.Normalize"]
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    tenant: A
+    steps:
+      - "[GET /api/tenants/current/branding] Call with Host header 'DEMO-A.LOCALHOST.' (trailing dot, upper case) matching Tenant A's host => [200] resolves the same as the canonical host"
+      - "[GET /api/tenants/current/branding] Call with a Host header longer than the column's max length (very long random string) => [404]/[200-empty] without a 500 (answered without querying the catalog)"
+      - "[GET /api/tenants/current/branding] Call with a Host header containing control characters or spaces (crafted at the HTTP client level) => request rejected by the HTTP layer or resolves to no organization; never 500"
+    auto: API
+    ex: ["xU:TenantShardResolverTests.A_host_longer_than_the_column_is_refused_without_querying_the_catalog"]
+
+  - id: TENANT-HOST-004
+    func: [F-TEN-02]
+    sc: Host resolution caching window
+    t: A host's resolution is cached for CacheSeconds and a status change is honoured after it expires
+    src: ["TenantShardResolver (IMemoryCache, CacheSeconds/UnknownHostCacheSeconds)"]
+    type: Boundary
+    tags: [Positive]
+    pri: P2
+    sev: Medium
+    tenant: S (disposable)
+    steps:
+      - "[GET /api/tenants/current/branding] Call at tenant S's host => [200] cached as Active"
+      - "Suspend tenant S in the catalog => Status=Suspended"
+      - "[GET /api/tenants/current/branding] Call again immediately (within CacheSeconds) => may still return the cached Active resolution (record actual)"
+      - "Wait past CacheSeconds and call again => [404] workspace unavailable, reflecting the new status"
+    auto: API
+    ex: ["xU:TenantShardResolverTests.Remembers_a_resolved_host_rather_than_asking_the_catalog_again", "xU:TenantShardResolverTests.Remembers_that_a_host_resolved_to_nothing"]
+    cm: "Documents a bounded propagation delay for suspension; not a defect unless the delay exceeds the configured window."
+
+  - id: TENANT-HOST-005
+    func: [F-TEN-03]
+    sc: Suspended organization host
+    t: A suspended organization's host refuses every request at the edge with a neutral 404
+    src: ["TenantShardResolutionMiddleware.WriteWorkspaceUnavailableAsync"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: S
+    steps:
+      - "[GET /api/tenants/current/branding] Call at a suspended tenant's host => [404] 'This workspace is not available.'"
+      - "[POST /api/auth/login] Same host, valid credentials => [404] identical body"
+      - "[GET /health] Same host => [200] (anonymous infra probes still answer)"
+    sec: "No organization name or reason leaks."
+    auto: API
+    ex: ["xU:TenantHostRoutingTests.A_suspended_organizations_host_is_refused_before_authentication_runs", "xU:TenantHostRoutingTests.The_refusal_names_no_organization_and_gives_no_reason", "xU:TenantHostRoutingTests.An_active_organizations_host_leaves_the_pipeline_alone"]
+
+  - id: TENANT-HOST-006
+    func: [F-TEN-04]
+    sc: Tenant A token on Tenant B host
+    t: A Tenant A user's token is refused with 401 at the Tenant B host
+    src: ["TenantMatchesShardHandler"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    smoke: true
+    steps:
+      - "[POST /api/auth/login] Sign in as an A user at the A host => [200] token TA"
+      - "[GET /api/auth/me] Present TA at the Tenant B host => [401] 'Your session is not valid for this workspace. Please sign in again.'"
+      - "[GET /api/employees] Present TA at the Tenant B host => [401] same"
+    auto: API
+    ex: ["xU:TokenHostAgreementTests.A_token_is_refused_at_another_organizations_host"]
+
+  - id: TENANT-HOST-007
+    func: [F-TEN-04]
+    sc: Tenant B token on Tenant A host
+    t: The reverse direction is refused identically
+    src: ["TenantMatchesShardHandler"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[POST /api/auth/login] Sign in as a B user at the B host => [200] token TB"
+      - "[GET /api/auth/me] Present TB at the Tenant A host => [401]"
+    auto: API
+    ex: ["xU:TokenHostAgreementTests.A_token_works_at_its_own_organizations_host"]
+
+  - id: TENANT-HOST-008
+    func: [F-TEN-04]
+    sc: A token works only at its own host
+    t: Positive control confirming TENANT-HOST-006/007 are about mismatch, not a general break
+    src: ["TokenHostAgreementTests.A_token_works_at_its_own_organizations_host"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/auth/me] Present TA at the Tenant A host => [200]"
+      - "[GET /api/auth/me] Present TB at the Tenant B host => [200]"
+    auto: API
+    ex: ["xU:TokenHostAgreementTests.A_token_works_at_its_own_organizations_host"]
+
+  - id: TENANT-HOST-009
+    func: [F-TEN-04, F-TEN-05]
+    sc: Token presented at a host resolving to no organization
+    t: A valid tenant token is refused at a host that maps to nothing
+    src: ["TenantMatchesShardHandler (shard is null, authenticated caller)"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    tenant: None
+    steps:
+      - "[GET /api/auth/me] Present a valid Tenant A token at an unregistered host => [401]"
+    auto: API
+    ex: ["xU:TokenHostAgreementTests.A_token_is_refused_at_a_host_that_resolves_to_no_workspace"]
+
+  - id: TENANT-HOST-010
+    func: [F-TEN-08]
+    sc: Client-supplied tenant identifiers are ignored
+    t: Body, query string and header attempts to name a different tenant have no effect
+    src: ["HttpTenantContext (claims only)", "HrmsDbContext.ApplyAuditAndTenantStamps"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: A_HR
+    steps:
+      - "[POST /api/employees] As A_HR at the Tenant A host, include an extra 'tenantId': '<Tenant B id>' field in the JSON body => [201]/[200] the created employee's TenantId is A's, the extra field is ignored"
+      - "[GET /api/employees?tenantId=<Tenant B id>] Add a bogus tenantId query parameter => [200] results are still scoped to Tenant A only"
+      - "[GET /api/employees] Add a custom header 'X-Tenant-Id: <Tenant B id>' => [200] results still scoped to Tenant A only"
+    db: "Created row's TenantId equals the token's tid, never the supplied value."
+    auto: API
+    ex: ["xU:TenantIsolationTests.SaveChanges_forces_new_rows_to_the_resolved_tenant_ignoring_client_value"]
+
+  - id: TENANT-HOST-011
+    func: [F-TEN-09]
+    sc: Cross-tenant read by guessed identifier
+    t: Tenant B's admin cannot read a Tenant A employee by GUID even with a direct API call
+    src: ["EF global query filters"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: B_HR
+    smoke: true
+    steps:
+      - "[POST /api/employees] As A_HR, create an employee in Tenant A; capture its id EID_A => [201]"
+      - "[GET /api/employees/{EID_A}] As B_HR at the Tenant B host => [404] (query filter excludes it; never a 200 with A's data, never a 403 that confirms existence)"
+    db: "Employees row for EID_A carries TenantId = A only; query filtered by B's context returns nothing."
+    auto: API
+    ex: ["xU:TenantIsolationTests.One_tenant_cannot_read_rows_created_by_another_tenant"]
+
+  - id: TENANT-HOST-012
+    func: [F-TEN-09]
+    sc: Cross-tenant update by guessed identifier
+    t: Tenant B cannot update a Tenant A employee by GUID
+    src: ["EF global query filters", "TenantIsolationTests.Update_cannot_relocate_a_row_to_another_tenant"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: B_HR
+    steps:
+      - "[PUT /api/employees/{EID_A}] As B_HR at the Tenant B host, send a valid update body => [404]"
+      - "[GET /api/employees/{EID_A}] As A_HR at Tenant A afterwards => [200] the employee is unchanged"
+    auto: API
+    ex: ["xU:TenantIsolationTests.Update_cannot_relocate_a_row_to_another_tenant"]
+
+  - id: TENANT-HOST-013
+    func: [F-TEN-09]
+    sc: Cross-tenant delete by guessed identifier
+    t: Tenant B cannot delete a Tenant A employee by GUID
+    src: ["EF global query filters"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: B_HR
+    steps:
+      - "[DELETE /api/employees/{EID_A}] As B_HR at the Tenant B host => [404]"
+      - "[GET /api/employees/{EID_A}] As A_HR afterwards => [200] the employee still exists"
+    auto: API
+
+  - id: TENANT-HOST-014
+    func: [F-TEN-09]
+    sc: Cross-tenant approval action
+    t: A Tenant B manager cannot approve a Tenant A leave request by guessed identifier
+    src: ["LeaveRequestsController.Approve", "EF global query filters"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: B_MGR
+    steps:
+      - "As A_EMP, submit a leave request in Tenant A; capture LR_A id => [201]"
+      - "[POST /api/leave-requests/{LR_A}/approve] As B_MGR (holds Leave.Approve in Tenant B) at the Tenant B host => [404]"
+      - "[GET /api/leave-requests/{LR_A}] As A_MGR at Tenant A => [200] status is still PendingApproval"
+    auto: API
+    reg: true
+
+  - id: TENANT-HOST-015
+    func: [F-TEN-09]
+    sc: Cross-tenant export/report access
+    t: A Tenant B HR user cannot export or report on Tenant A's employee data
+    src: ["EmployeesController.Export", "EF global query filters"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P1
+    role: B_HR
+    steps:
+      - "[GET /api/employees/export] As B_HR at the Tenant B host => [200] CSV containing only Tenant B employees; verify EID_A does not appear anywhere in the file"
+      - "[GET /api/leave-reports/employees/{EID_A}/history] As B_HR => [404]/[403]; record actual"
+    auto: API
+
+  - id: TENANT-HOST-016
+    func: [F-TEN-09]
+    sc: Cross-tenant account-employee linking
+    t: Tenant B cannot link, unlink or view link history for a Tenant A employee or user
+    src: ["AccountEmployeeLinksController", "EF global query filters"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P1
+    role: B_ADMIN (AccountLinkAdministrator in B)
+    steps:
+      - "[GET /api/account-employee-links/employees/{EID_A}] As B_ADMIN at Tenant B host => [404]"
+      - "[POST /api/account-employee-links/users/{some Tenant A user id}/link] As B_ADMIN with a Tenant A employee id in the body => [404]/[400]; no link created"
+    auto: API
+
+  - id: TENANT-HOST-017
+    func: [F-TEN-09]
+    sc: Cross-tenant salary assignment
+    t: Tenant B cannot view or assign salary for a Tenant A employee
+    src: ["EmployeeSalaryAssignmentsController", "EF global query filters"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: B_HR (with payroll permission in B)
+    steps:
+      - "[GET /api/payroll/employee-salary-assignments/by-employee/{EID_A}] As B_HR => [404]/[200-empty]; record actual, never another tenant's salary data"
+      - "[POST /api/payroll/employee-salary-assignments] As B_HR with employeeId=EID_A => [400]/[404]; no assignment created against a foreign employee"
+    auto: API
+
+  - id: TENANT-HOST-018
+    func: [F-TEN-09]
+    sc: Cross-tenant attendance access
+    t: Tenant B cannot view Tenant A's attendance calendar or exceptions for a guessed employee id
+    src: ["AttendanceReadController", "EF global query filters"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P1
+    role: B_MGR
+    steps:
+      - "[GET /api/attendance/manager/team/{EID_A}/{date}] As B_MGR => [404]/[403]; record actual"
+    auto: API
+
+  - id: TENANT-HOST-019
+    func: [F-TEN-09]
+    sc: Cross-tenant payroll run visibility
+    t: Tenant B cannot view or act on a Tenant A payroll run by guessed identifier
+    src: ["PayrollRunsController", "EF global query filters"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: B_ADMIN
+    steps:
+      - "As A_ADMIN, create a payroll run in Tenant A; capture RUN_A id => [201]"
+      - "[GET /api/payroll/runs/{RUN_A}] As B_ADMIN at Tenant B host => [404]"
+      - "[POST /api/payroll/runs/{RUN_A}/calculate] As B_ADMIN => [404]; no calculation performed against Tenant A data"
+    auto: API
+
+  - id: TENANT-HOST-020
+    func: [F-TEN-10]
+    sc: Refresh-token isolation between tenants
+    t: See AUTH-REFRESH-011/012 - a Tenant A refresh token has no effect anywhere in Tenant B
+    src: ["AuthService.RefreshAsync tenant checks"]
+    type: Tenant-Isolation
+    pri: P0
+    sev: Critical
+    steps:
+      - "Cross-reference AUTH-REFRESH-011 and AUTH-REFRESH-012 as this module's session-isolation evidence => both pass"
+    auto: API
+    cm: "Placeholder cross-reference row so the traceability matrix shows session isolation under both the Refresh and the Tenant-Isolation groupings."
+
+  - id: TENANT-HOST-021
+    func: [F-TEN-09, F-AZ-01]
+    sc: Cross-tenant role assignment
+    t: Tenant B cannot assign or revoke a role for a Tenant A user by guessed identifier
+    src: ["RoleAssignmentsController", "EF global query filters"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: B_ADMIN
+    steps:
+      - "[GET /api/role-assignments/users/{some Tenant A user id}] As B_ADMIN => [404]"
+      - "[POST /api/role-assignments/users/{that id}] As B_ADMIN with a role payload => [404]/[400]; no UserRoles row created"
+    auto: API
+
+  - id: TENANT-HOST-022
+    func: [F-TEN-09]
+    sc: Cross-tenant separation record
+    t: Tenant B cannot view or approve a Tenant A employee's separation by guessed identifier
+    src: ["SeparationController", "EF global query filters"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P1
+    role: B_HR (Separation.HrReview in B)
+    steps:
+      - "As A_EMP, submit a separation request in Tenant A; capture SEP_A id => [201]"
+      - "[GET /api/separation/{SEP_A}] As B_HR at Tenant B host => [404]"
+      - "[POST /api/separation/{SEP_A}/hr-approve] As B_HR => [404]"
+    auto: API
+
+  - id: TENANT-HOST-023
+    func: [F-TEN-11]
+    sc: Neutral wording of the mismatch response
+    t: The 401 mismatch message names no organization and gives no diagnostic reason
+    src: ["ShardMismatchAuthorizationResultHandler"]
+    type: Security
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[GET /api/auth/me] Trigger a host/token mismatch (as in TENANT-HOST-006) => [401] message is exactly 'Your session is not valid for this workspace. Please sign in again.'; contains no tenant code, name or internal reason"
+    auto: API
+    ex: ["xU:TokenHostAgreementTests.The_refusal_tells_the_client_to_sign_in_again_and_names_no_organization"]
+
+  - id: TENANT-HOST-024
+    func: [F-TEN-07]
+    sc: Untrusted proxy cannot spoof organization or client address
+    t: A caller who is not a configured trusted proxy cannot choose the organization or rate-limit identity via forwarded headers
+    src: ["AddHrmsForwardedHeaders (KnownProxies/KnownNetworks)"]
+    type: Security
+    tags: [Tenant-Isolation]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[GET /api/tenants/current/branding] Call the API directly (not through a trusted proxy) with X-Forwarded-Host: <Tenant B host> while the real connection is to Tenant A's address => resolves using the REAL connection host (A), not the spoofed header"
+      - "[POST /api/auth/login] Send X-Forwarded-For: <arbitrary IP> from an untrusted caller, exhaust the rate limit => the untrusted caller's OWN real IP is throttled, not the spoofed one; a different real caller is unaffected"
+    sec: "Forwarded headers are honoured only from configured trusted proxies."
+    auto: API
+    ex: ["xU:ForwardedHeadersTests.An_untrusted_caller_cannot_choose_an_organization_with_a_header", "xU:ForwardedHeadersTests.An_untrusted_caller_cannot_spend_someone_elses_rate_limit_budget"]
+
+  - id: TENANT-HOST-025
+    func: [F-TEN-07]
+    sc: Trusted proxy forwarding
+    t: A configured trusted proxy's forwarded headers are honoured
+    src: ["ForwardedHeadersServiceCollectionExtensions"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    pre: "Requires a QA deployment with a configured trusted proxy (KnownProxies/KnownNetworks); otherwise NOT EXECUTED - environment unavailable."
+    steps:
+      - "Through the configured trusted proxy, forward X-Forwarded-Host: <Tenant A host>, X-Forwarded-For: <client IP> => request resolves to Tenant A and rate-limits on the forwarded client IP"
+      - "Through the trusted proxy, forward no X-Forwarded-Host at all => resolves to no organization (falls through as an unknown host), not to the proxy's own host"
+    auto: API
+    ex: ["xU:ForwardedHeadersTests.A_trusted_proxy_can_say_which_address_the_browser_asked_for", "xU:ForwardedHeadersTests.A_trusted_proxy_that_forwards_no_host_resolves_nothing"]
+
+  - id: TENANT-HOST-026
+    func: [F-TEN-09]
+    sc: Full-module cross-tenant sweep (representative sample)
+    t: A representative GET/POST/PUT/DELETE across each major module returns 404 or empty results across the tenant boundary
+    src: ["EF global query filters applied module-wide"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: B_ADMIN (TenantAdmin of B - broadest permission set)
+    data: "One captured Tenant A id per module: employee, department, leave policy, leave request, attendance shift, salary component, payroll period, separation request, comp-off earning, reimbursement."
+    steps:
+      - "[GET /api/departments/{Tenant A department id}] As B_ADMIN => [404]"
+      - "[GET /api/leave-policies/{Tenant A policy id}] As B_ADMIN => [404]"
+      - "[GET /api/attendance/shift-applicability/{Tenant A id}] As B_ADMIN => [404]"
+      - "[GET /api/payroll/salary-components/{Tenant A id}] As B_ADMIN => [404]"
+      - "[GET /api/payroll/periods/{Tenant A id}] As B_ADMIN => [404]"
+      - "[GET /api/attendance/comp-off/ledger] (self-scoped; confirm B_ADMIN's own ledger contains no Tenant A earning ids) As B_ADMIN => [200] no Tenant A ids present"
+      - "[GET /api/payroll/reimbursements/{Tenant A id}] As B_ADMIN => [404]"
+    auto: API
+    cm: "This is a smoke-level sweep across modules, run once per release; each module's own test suite carries the exhaustive per-endpoint version (see that module's Cross_Tenant sheet, created when that module's cases are authored)."
+
+  - id: TENANT-HOST-027
+    func: [F-TEN-09, F-TEN-10]
+    sc: Concurrent activity in two tenants does not cross-contaminate
+    t: Simultaneous write activity in Tenant A and Tenant B never mixes rows or sessions
+    src: ["AuthEndpointsTests.Both_tenants_can_sign_in_concurrently_and_each_sees_only_itself"]
+    type: Tenant-Isolation
+    tags: [Integration-Concurrency]
+    pri: P1
+    steps:
+      - "Concurrently: sign in as A_HR and create an employee in Tenant A; sign in as B_HR and create an employee in Tenant B => both succeed"
+      - "[GET /api/employees] As A_HR => list contains the A-created employee, not the B-created one"
+      - "[GET /api/employees] As B_HR => list contains the B-created employee, not the A-created one"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Both_tenants_can_sign_in_concurrently_and_each_sees_only_itself"]

@@ -1,0 +1,1867 @@
+# Functionality registry for Module 5 - Employee Management.
+# Every test case references one or more of these ids; the builder fails if a functionality has zero cases
+# or a case references an unknown id.
+#
+# Discovered implementation (authoritative source: EmployeesController, EmployeeSubResourcesController,
+# EmployeeService, EmployeeEmploymentService, EmployeeSupervisorService, EmployeeAddressService,
+# EmployeeContactService, EmployeeBankDetailService, EmployeeAccessScopeService, EmployeeManagerResolver,
+# every EmployeeXxxRequestValidator, the Employee/EmployeeEmployment/EmployeeEmploymentHistory/
+# EmployeeSupervisor/EmployeeAddress/EmployeeContact/EmployeeBankDetail/EmployeeFamily/EmployeeEducation/
+# EmployeePreviousEmployment/EmployeeAdditionalInfo/EmployeeDocument entities and EF configurations,
+# Domain/Authorization/Permissions.cs, SeedData.RolePermissionMap, and the frontend EmployeesPage.tsx/
+# EmployeeFormPage.tsx/EmployeeDetailPage.tsx/EmployeeProfileSidebar.tsx/PersonalDetailsForm.tsx/
+# ContactDetailsForm.tsx/AddressDetailsForm.tsx/BankDetailsForm.tsx/EmploymentSectionForm.tsx/
+# SupervisorSectionForm.tsx):
+#
+# ELEVEN sub-resources exist under /api/employees/{id}: Contact, Addresses (Current/Permanent),
+# Family, Education, Previous Employment, Bank Details, Supervisor (L1-L5/Time/ERO/CHRO), Additional
+# Info, Employment (joining/contractual, 1:1) + Employment History (effective-dated, append-only),
+# Documents, and an Audit Log. EIGHT have a frontend tab (Personal, Contact, Address, Family, Bank,
+# Previous Employment, Employment, Supervisor - confirmed present in both EmployeeFormPage.tsx's and
+# EmployeeDetailPage.tsx's TABS list); Education, Additional Info, Documents and the Audit Log have NO
+# frontend surface at all - their api/employeeSubsections.ts functions (getEducationRecords/
+# getDocuments/getAdditionalInfo/getAuditLog) are called nowhere outside that api module (F-EMP-162,
+# F-EMP-164, F-EMP-165, F-EMP-166, F-EMP-170, CR-52).
+#
+# Employee creation has TWO write paths: the legacy full EmployeeRequest (POST/PUT /api/employees,
+# department/designation/manager all optional, client-supplied EmployeeCode required) and the modern
+# Personal-Details-only path (POST/PUT /api/employees/personal-details, no department/designation/email/
+# code - those come from Contact and Initial Employment). Only the modern path defers Employee Code
+# assignment to Initial Employment (F-EMP-013..016); the legacy path requires and validates a client
+# code immediately and never touches Employment History.
+#
+# Employment History is the single append-only, effective-dated source of truth for department,
+# designation, grade, manager and 9 other organizational FKs (F-EMP-067..088). Employee's own
+# DepartmentId/DesignationId/Status/ReportingManagerId/EmployeeTypeId/CostCenterId columns are a
+# denormalized snapshot, synced ONLY when a new history record's effective date is today or earlier
+# (CreateChangeAsync's `isEffectiveToday` gate) - never for a future-dated record, and never by the
+# legacy full-edit endpoint's own direct writes to those same columns (CR-47). EFFECTIVE DATES MAY
+# NEVER BE IN THE PAST: CreateChangeAsync rejects any EffectiveFrom earlier than today's business date
+# for every ChangeReason, including Correction - so a "backdated correction" is not possible through
+# this endpoint; only same-day (Correction, superseding a same-day record) or future-dated changes are
+# accepted (F-EMP-078, CR-51).
+#
+# The direct (L1) manager is resolved from CURRENT Employment History only (EmployeeManagerResolver);
+# EmployeeSupervisor.L1ManagerId is a read-only compatibility mirror the Employment engine keeps in sync
+# and SupervisorSectionForm/the API both refuse to let a caller set L1 directly once Employment has an
+# opinion (F-EMP-089..092). L2-L5/Time/ERO/CHRO are freely-assigned peer fields with only a
+# not-self/must-be-active-in-tenant check - no cross-level consistency and no circular-hierarchy check
+# among themselves (only the direct L1/ReportingManagerId graph is cycle-checked, in both the legacy
+# EmployeeService.WouldCreateReportingCycleAsync and EmployeeEmploymentService.WouldCreateManagerCycleAsync).
+#
+# Employee Export (GET /api/employees/export) and Import (the generic ImportBatchController, gated by
+# the SAME Employee.Import permission) are separate risk surfaces: Export filters/sorts by the Employee
+# entity's own snapshot columns (ApplyFilters/ApplySort) rather than the effective-history-aware logic
+# List uses (ApplyEffectiveFilters/ApplyEffectiveSort) - the two agree only while no legacy full-edit has
+# ever diverged the snapshot from history (CR-47) - and Export/​GetSensitiveDetailsAsync do not apply the
+# EmployeeAccessScopeService scope predicate that GetAsync/GetByIdAsync do (CR-48/CR-49). Import is
+# scaffolding only: ImportBatchService.ImportAsync creates a batch row and never parses or processes a
+# file (CR-50).
+
+functionalities:
+  # ── A. Employee List / Search / Filter ────────────────────────────────────
+  - id: F-EMP-001
+    name: List employees, paged, with default sort by employee code
+    group: List
+    status: Implemented
+    ui: "EmployeesPage initial load"
+    api: "GET /api/employees"
+    service: "EmployeeService.GetAsync (ApplyEffectiveSort defaults to employeeCode ascending, ThenBy Id)"
+    permission: "Employee.View"
+    db: "Employees, EmployeeEmploymentHistory (tenant-filtered)"
+
+  - id: F-EMP-002
+    name: Paging bounds - page >= 1, pageSize 1-100, default pageSize 20
+    group: List
+    status: Implemented
+    ui: "Pagination control (page size selector)"
+    api: "GET /api/employees?page=&pageSize="
+    service: "PagedQueryValidator (Page >= 1, PageSize InclusiveBetween(1,100)); PagedQuery.DefaultPageSize=20, MaxPageSize=100"
+    permission: "Employee.View"
+    db: "n/a (validated before query)"
+
+  - id: F-EMP-003
+    name: A page number beyond the last page returns an empty item list, not an error
+    group: List
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees?page=999"
+    service: "EmployeeService.GetAsync (ToPagedResultAsync Skip/Take)"
+    permission: "Employee.View"
+    db: "Employees"
+
+  - id: F-EMP-004
+    name: Search matches employee code, first name, last name and email (official email when Contact exists)
+    group: List
+    status: Implemented
+    ui: "EmployeesPage search box ('Search name, code or email')"
+    api: "GET /api/employees?search="
+    service: "EmployeeService.ApplyEffectiveFilters (case-insensitive Contains on EmployeeCode/FirstName/LastName/Contact.OfficialEmail-or-Email)"
+    permission: "Employee.View"
+    db: "Employees, EmployeeContacts"
+    ex: ["xU:EmployeeServiceTests.Search_matches_code_name_and_email"]
+
+  - id: F-EMP-005
+    name: Search text is capped at 100 characters
+    group: List
+    status: Implemented
+    ui: "n/a (input has no maxlength; server enforces)"
+    api: "GET /api/employees?search="
+    service: "PagedQueryValidator.Search MaximumLength(100)"
+    permission: "Employee.View"
+    db: "none"
+
+  - id: F-EMP-006
+    name: Filter by department, designation, status and reporting manager, individually and combined
+    group: List
+    status: Implemented
+    ui: "EmployeesPage department/designation/status <select> (reporting-manager filter is API-only - no UI control renders it, CR-53)"
+    api: "GET /api/employees?departmentId=&designationId=&status=&reportingManagerId="
+    service: "EmployeeService.ApplyEffectiveFilters (each filter ORs a current-history match with a no-history-yet fallback to the Employee row's own snapshot field)"
+    permission: "Employee.View"
+    db: "Employees, EmployeeEmploymentHistory"
+    ex: ["xU:EmployeeServiceTests.Get_filters_by_department_designation_status_and_manager"]
+
+  - id: F-EMP-007
+    name: An invalid Status filter value is rejected with 400, not silently ignored
+    group: List
+    status: Implemented
+    ui: "n/a (EmployeesPage's asStatus() drops an unrecognized value from a hand-edited URL before it reaches the API)"
+    api: "GET /api/employees?status=NotARealStatus"
+    service: "EmployeeQueryValidator (Status.IsInEnum())"
+    permission: "Employee.View"
+    db: "none"
+
+  - id: F-EMP-008
+    name: Sort by any of the 9 whitelisted fields, ascending or descending; an unlisted field is rejected
+    group: List
+    status: Implemented
+    ui: "EmployeesPage column headers (Code/Name/Department/Designation/Joined/Status)"
+    api: "GET /api/employees?sortBy=&sortDescending="
+    service: "EmployeeQuery.SortFields (employeeCode, firstName, lastName, email, department, designation, status, dateOfJoining, createdDate); PagedQueryValidator.SortBy whitelist check"
+    permission: "Employee.View"
+    db: "Employees"
+
+  - id: F-EMP-009
+    name: Sorting by department/designation/status orders by the CURRENT employment-history record, falling back to the Employee row only when no history exists yet
+    group: List
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees?sortBy=department"
+    service: "EmployeeService.ApplyEffectiveSort (history-aware branches for department/designation/status; every other field falls through to the plain ApplySort)"
+    permission: "Employee.View"
+    db: "Employees, EmployeeEmploymentHistory"
+
+  - id: F-EMP-010
+    name: List item projection carries the joined department/designation names and an isCurrentlyEmployed flag
+    group: List
+    status: Implemented
+    ui: "EmployeesPage table columns"
+    api: "GET /api/employees"
+    service: "EmployeeService.GetAsync (EmployeeListItemDto: id, employeeCode, fullName, email, departmentName, designationName, status, dateOfJoining, isCurrentlyEmployed)"
+    permission: "Employee.View"
+    db: "Employees, EmployeeEmploymentHistory, Department, Designation"
+    ex: ["xU:EmployeeServiceTests.List_items_carry_the_joined_department_and_designation_names"]
+
+  - id: F-EMP-011
+    name: Empty result is distinguished from an empty filter by the UI (list is genuinely empty vs filters exclude everyone)
+    group: List
+    status: Implemented
+    ui: "EmployeesPage empty state ('No employees yet' vs 'Nobody matches those filters')"
+    api: "GET /api/employees"
+    service: "n/a (frontend decides from list.isFiltered)"
+    permission: "Employee.View"
+    db: "none"
+
+  - id: F-EMP-012
+    name: The list is scoped to the caller's own tenant and, where an employment-scope role assignment exists, further restricted to that scope
+    group: List
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees (as Tenant B, or as a scoped Manager/HR role)"
+    service: "EmployeeService.GetAsync (_accessScope.BuildPredicateAsync applied before paging, in addition to the EF TenantId global filter)"
+    permission: "Employee.View"
+    db: "Employees, UserRoles, RoleScopes"
+    ex: ["xU:EmployeeServiceTests.Get_returns_only_the_callers_own_employees"]
+
+  # ── B. Create Employee (two paths) ────────────────────────────────────────
+  - id: F-EMP-013
+    name: Legacy full create (POST /api/employees) requires a client-supplied Employee Code and accepts department/designation/manager immediately
+    group: Create
+    status: Implemented
+    ui: "n/a (no frontend calls this endpoint directly; PersonalDetailsForm always uses the personal-details path)"
+    api: "POST /api/employees"
+    service: "EmployeeService.CreateAsync"
+    permission: "Employee.Create + EmployeeSensitive.Edit"
+    db: "Employees, EmployeeContacts (a placeholder-linked Contact row is created alongside)"
+    ex: ["xU:EmployeeServiceTests.Create_stamps_the_authenticated_tenant_and_returns_the_joined_record"]
+
+  - id: F-EMP-014
+    name: Modern create (POST /api/employees/personal-details) is Personal-Details-only - no department, designation, manager, email or Employee Code
+    group: Create
+    status: Implemented
+    ui: "PersonalDetailsForm 'Save' on a new employee (only the personal tab is shown, per F-EMP-147)"
+    api: "POST /api/employees/personal-details"
+    service: "EmployeeService.CreatePersonalDetailsCoreAsync (EmployeeCode=null, a uniqueness-safe placeholder email, DepartmentId/DesignationId/ReportingManagerId left null)"
+    permission: "Employee.Create"
+    db: "Employees"
+    ex: ["xU:EmployeePersonalDetailsTests.Create_creates_with_no_department_or_designation", "xU:EmployeePersonalDetailsTests.Create_leaves_auto_employee_code_pending_until_initial_employment"]
+
+  - id: F-EMP-015
+    name: Personal-Details create does not require EmployeeSensitive.Edit; without it, sensitive fields (PF/UAN/Aadhaar/PAN/ESIC/Mediclaim) sent in the request are silently dropped rather than rejected
+    group: Create
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/personal-details (caller holds Employee.Create only)"
+    service: "EmployeeService.CreatePersonalDetailsAsync (canEditSensitive computed from the caller's own EmployeeSensitive.Edit claim); ApplyPersonalDetails (canEditSensitive guards every sensitive field write)"
+    permission: "Employee.Create"
+    db: "Employees (sensitive columns stay null)"
+    ex: ["xU:EmployeePersonalDetailsTests.Create_personal_details_does_not_require_sensitive_edit_permission", "xU:EmployeePersonalDetailsTests.Create_without_sensitive_permission_does_not_persist_sensitive_values_but_authorized_create_does"]
+
+  - id: F-EMP-016
+    name: The Personal-Details create does not touch the Employee Code sequence/version counter at all
+    group: Create
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/personal-details"
+    service: "EmployeeService.CreatePersonalDetailsCoreAsync (no EmployeeCodeConfigVersion read/write); code assignment is deferred entirely to EmployeeEmploymentService.CreateChangeAsync at Initial Employment"
+    permission: "Employee.Create"
+    db: "EmployeeCodeConfigVersions (unchanged)"
+    ex: ["xU:EmployeePersonalDetailsTests.Create_does_not_consume_employee_code_sequence"]
+
+  - id: F-EMP-017
+    name: Legacy create rejects a department/designation/manager id that does not exist or belongs to another tenant
+    group: Create
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees"
+    service: "EmployeeService.ValidateReferencesAsync (tenant-filtered lookup; a foreign id is indistinguishable from a nonexistent one)"
+    permission: "Employee.Create"
+    db: "Departments, Designations, Employees"
+    ex: ["xU:EmployeeServiceTests.Create_rejects_a_department_belonging_to_another_tenant", "xU:EmployeeServiceTests.Create_rejects_a_designation_belonging_to_another_tenant", "xU:EmployeeServiceTests.Create_rejects_a_manager_belonging_to_another_tenant", "xU:EmployeeServiceTests.Create_rejects_a_nonexistent_department"]
+
+  - id: F-EMP-018
+    name: Legacy create rejects an inactive department/designation and a manager who has left the organization
+    group: Create
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees"
+    service: "EmployeeService.ValidateReferencesAsync (IsActive/Status checks apply only on CREATE and on a CHANGED reference - an unchanged reference to an already-retired master is left alone on update, F-EMP-107)"
+    permission: "Employee.Create"
+    db: "Departments, Designations, Employees"
+    ex: ["xU:EmployeeServiceTests.Create_rejects_a_retired_department", "xU:EmployeeServiceTests.Create_rejects_a_manager_who_has_left_the_organization"]
+
+  - id: F-EMP-019
+    name: Legacy create rejects a duplicate Employee Code or email, case-insensitively, within the tenant; another tenant may reuse the same values
+    group: Create
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees"
+    service: "EmployeeService.FindConflictAsync (ToLowerInvariant comparison; a race lost on SaveChangesAsync's unique index is caught and reported as the same Conflict, not a 500)"
+    permission: "Employee.Create"
+    db: "Employees (TenantId, EmployeeCode) and (TenantId, Email) unique indexes"
+    ex: ["xU:EmployeeServiceTests.Create_rejects_a_duplicate_employee_code_regardless_of_case", "xU:EmployeeServiceTests.Create_rejects_a_duplicate_email_regardless_of_case", "xU:EmployeeServiceTests.Another_tenant_may_reuse_an_employee_code_and_email"]
+
+  - id: F-EMP-020
+    name: Birth country/state/city must cascade correctly (state requires country, city requires state, each must belong to its stated parent)
+    group: Create
+    status: Implemented
+    ui: "PersonalDetailsForm birth-location cascading MasterDropdowns"
+    api: "POST /api/employees, POST /api/employees/personal-details"
+    service: "EmployeeService.ValidateReferencesAsync / ValidateBirthLocationAsync (shared logic; the FluentValidation layer only checks shape - that a state/city id without its parent id is rejected - the service checks the parent-child DB relationship)"
+    permission: "Employee.Create"
+    db: "Countries, States, Cities"
+
+  - id: F-EMP-021
+    name: Legacy create request-shape validation (code format/length, name/email/phone format, date-of-birth vs date-of-joining age floor, ESIC-number-required-when-applicable)
+    group: Create
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees"
+    service: "EmployeeRequestValidator"
+    permission: "Employee.Create"
+    db: "none"
+
+  - id: F-EMP-022
+    name: A DateOfLeaving is forbidden for an Active employee and required for any non-Active status, and must not precede DateOfJoining
+    group: Create
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees, PUT /api/employees/{id}"
+    service: "EmployeeRequestValidator (DateOfLeaving Null()/NotNull() cross-checks against Status)"
+    permission: "Employee.Create"
+    db: "none"
+
+  - id: F-EMP-023
+    name: Employee Status defaults to Active server-side when the request omits it (sends the enum default)
+    group: Create
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees"
+    service: "EmployeeService.CreateAsync ('request.Status == default ? EmployeeStatus.Active : request.Status')"
+    permission: "Employee.Create"
+    db: "Employees.Status"
+
+  - id: F-EMP-024
+    name: Employee create runs inside a single SaveChangesAsync; a uniqueness race is caught and turned into a Conflict rather than surfacing a raw database exception
+    group: Create
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees, POST /api/employees/personal-details"
+    service: "EmployeeService.CreateAsync (DbUpdateException catch re-probes FindConflictAsync before rethrowing)"
+    permission: "Employee.Create"
+    db: "Employees"
+
+  # ── C. Personal Details fields ────────────────────────────────────────────
+  - id: F-EMP-025
+    name: First name and last name are required, max 100 characters each
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm First/Last name inputs"
+    api: "POST/PUT .../personal-details"
+    service: "EmployeePersonalDetailsRequestValidator"
+    permission: "Employee.Create / Employee.Edit"
+    db: "Employees.FirstName/LastName"
+
+  - id: F-EMP-026
+    name: Middle name, salutation, religion, caste, citizenship, language known are optional free text with no length limit enforced beyond the underlying column
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm optional fields"
+    api: "POST/PUT .../personal-details"
+    service: "EmployeeService.ApplyPersonalDetails (Normalize: trims, blank becomes null)"
+    permission: "Employee.Create / Employee.Edit"
+    db: "Employees"
+
+  - id: F-EMP-027
+    name: Gender, blood group, marital status are validated as recognized enum members
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm <select> controls"
+    api: "POST/PUT .../personal-details"
+    service: "EmployeePersonalDetailsRequestValidator (Gender.IsInEnum()); BloodGroup/MaritalStatus accepted as any defined value including Unspecified"
+    permission: "Employee.Create / Employee.Edit"
+    db: "Employees.Gender/BloodGroup/MaritalStatus"
+
+  - id: F-EMP-028
+    name: Date of joining is required, must be within 1 year in the future and no more than 100 years in the past
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm 'Date of joining'"
+    api: "POST/PUT .../personal-details"
+    service: "EmployeePersonalDetailsRequestValidator (Cascade(Stop): default check, then the two Must() date-window checks)"
+    permission: "Employee.Create / Employee.Edit"
+    db: "Employees.DateOfJoining"
+
+  - id: F-EMP-029
+    name: Date of birth, when supplied, must be in the past and no more than 120 years ago, and the employee must be at least 14 on the date of joining
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm 'Date of birth'"
+    api: "POST/PUT .../personal-details"
+    service: "EmployeePersonalDetailsRequestValidator (age check is against DateOfJoining, not today, so an old record never becomes invalid merely because time passed)"
+    permission: "Employee.Create / Employee.Edit"
+    db: "Employees.DateOfBirth"
+
+  - id: F-EMP-030
+    name: Aadhaar (12 digits), PAN (5 letters+4 digits+1 letter), UAN (12 digits) are format-validated only when supplied - all three are optional
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm sensitive-identifier inputs (rendered only with EmployeeSensitive.Edit)"
+    api: "POST/PUT .../personal-details"
+    service: "EmployeePersonalDetailsRequestValidator (Matches regex, When !string.IsNullOrWhiteSpace)"
+    permission: "Employee.Create / Employee.Edit + EmployeeSensitive.Edit (to actually persist them, F-EMP-015)"
+    db: "Employees.AadhaarNumber/PanNumber/UanNumber"
+
+  - id: F-EMP-031
+    name: ESIC Number is required when ESIC Applicable is true, optional otherwise, max 50 characters
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm 'ESIC applicable' toggle + 'ESIC number'"
+    api: "POST/PUT .../personal-details"
+    service: "EmployeePersonalDetailsRequestValidator (NotEmpty().When(EsicApplicable))"
+    permission: "Employee.Create / Employee.Edit"
+    db: "Employees.EsicNumber/EsicApplicable"
+    ex: ["xU:EmployeePersonalDetailsTests.Create_requires_esic_number_when_esic_is_applicable"]
+
+  - id: F-EMP-032
+    name: Sensitive identifiers (PF/UAN/Aadhaar/PAN) are returned masked on every read; a blank/omitted value on edit means keep-the-stored-value, not clear-it
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm (edit mode never shows the raw value it would overwrite)"
+    api: "GET /api/employees/{id}, PUT .../personal-details"
+    service: "EmployeeDto.MaskAadhaar/MaskPan/MaskNumericId; EmployeeService.OverwriteOrKeep (preserveSensitive=true on UpdatePersonalDetailsAsync)"
+    permission: "Employee.View / Employee.Edit"
+    db: "Employees (masking is projection-only, not stored)"
+    ex: ["xU:EmployeePersonalDetailsEndToEndTests.Edit_with_blank_sensitive_ids_keeps_the_stored_values"]
+
+  - id: F-EMP-033
+    name: Raw (unmasked) sensitive identifiers are exposed only through GET /api/employees/{id}/sensitive-details, gated by an additional EmployeeSensitive.View permission
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm edit screen (fetches sensitive-details only when authorized)"
+    api: "GET /api/employees/{id}/sensitive-details"
+    service: "EmployeeService.GetSensitiveDetailsAsync"
+    permission: "Employee.View + EmployeeSensitive.View"
+    db: "Employees.AadhaarNumber/PanNumber/UanNumber/PfNumber/EsicNumber/MediclaimNumber (raw)"
+    ex: ["xU:EmployeeSensitiveDataEndpointsTests.General_reads_are_masked_and_raw_statutory_values_require_narrow_permissions"]
+
+  - id: F-EMP-034
+    name: GetSensitiveDetailsAsync does not apply the employment-scope access predicate GetAsync/GetByIdAsync use
+    group: Personal Details
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/employees/{id}/sensitive-details (as a scope-restricted role holding EmployeeSensitive.View, targeting an employee id outside that scope)"
+    service: "EmployeeService.GetSensitiveDetailsAsync (only checks _tenantContext.TenantId - no _accessScope.CanAccessEmployeeAsync call, unlike GetByIdAsync)"
+    permission: "Employee.View + EmployeeSensitive.View"
+    db: "Employees (tenant-filtered only, not scope-filtered)"
+
+  - id: F-EMP-035
+    name: Personal Details update preserves every field it does not itself own (department, designation, manager, contact, address, bank, employment)
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm save (only personal-details endpoint is called)"
+    api: "PUT /api/employees/{id}/personal-details"
+    service: "EmployeeService.ApplyPersonalDetails (touches only the Personal Details field subset)"
+    permission: "Employee.Edit"
+    db: "Employees (partial column update)"
+    ex: ["xU:EmployeePersonalDetailsTests.Update_updates_only_personal_fields_on_an_existing_employee"]
+
+  - id: F-EMP-036
+    name: Unicode names (non-Latin scripts, diacritics) round-trip unchanged through create/update/read
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm text inputs (no charset restriction)"
+    api: "POST/PUT .../personal-details"
+    service: "EmployeeService.ApplyPersonalDetails (Trim only; no charset filtering anywhere in the validator or service)"
+    permission: "Employee.Create / Employee.Edit"
+    db: "Employees.FirstName/LastName/MiddleName (nvarchar/utf8mb4 per provider)"
+
+  - id: F-EMP-037
+    name: Whitespace-only first/last name is rejected by NotEmpty (FluentValidation trims before the check)
+    group: Personal Details
+    status: Implemented
+    ui: "n/a"
+    api: "POST/PUT .../personal-details"
+    service: "EmployeePersonalDetailsRequestValidator.FirstName/LastName NotEmpty()"
+    permission: "Employee.Create"
+    db: "none"
+
+  - id: F-EMP-038
+    name: Personal Details GET/PUT on a nonexistent or cross-tenant employee id returns 404
+    group: Personal Details
+    status: Implemented
+    ui: "n/a"
+    api: "GET/PUT /api/employees/{id}/personal-details"
+    service: "EmployeeService.UpdatePersonalDetailsAsync (plain FirstOrDefaultAsync against the tenant-filtered DbSet - a foreign id is indistinguishable from a nonexistent one)"
+    permission: "Employee.Edit"
+    db: "Employees"
+    ex: ["xU:EmployeePersonalDetailsTests.Update_of_another_tenants_employee_is_not_found"]
+
+  - id: F-EMP-039
+    name: Group Date of Joining, Date of Leaving and JobStatus round-trip on Personal Details create/update
+    group: Personal Details
+    status: Implemented
+    ui: "n/a (JobStatus/GroupDateOfJoining are set via the Employment section, not the Personal Details form, per the DTO's field ownership)"
+    api: "POST/PUT .../personal-details"
+    service: "EmployeeService.ApplyPersonalDetails"
+    permission: "Employee.Create / Employee.Edit"
+    db: "Employees.JobStatus/GroupDateOfJoining"
+    ex: ["xU:EmployeePersonalDetailsEndToEndTests.Every_personal_detail_field_creates_persists_reloads_and_updates"]
+
+  - id: F-EMP-040
+    name: Gratuity and Pension are plain booleans with no cross-field rule
+    group: Personal Details
+    status: Implemented
+    ui: "PersonalDetailsForm 'Gratuity'/'Pension' checkboxes"
+    api: "POST/PUT .../personal-details"
+    service: "EmployeeService.ApplyPersonalDetails"
+    permission: "Employee.Create / Employee.Edit"
+    db: "Employees.Gratuity/Pension"
+
+  # ── D. Contact Details ─────────────────────────────────────────────────────
+  - id: F-EMP-041
+    name: Read/upsert (one row per employee) the Contact record - official/personal/alternate email, official/personal phone, emergency number, same-as-current-address flag
+    group: Contact
+    status: Implemented
+    ui: "ContactDetailsForm"
+    api: "GET/PUT /api/employees/{id}/contact"
+    service: "EmployeeContactService.GetAsync/UpsertAsync"
+    permission: "Employee.View / Employee.Edit"
+    db: "EmployeeContacts (upsert keyed by EmployeeId)"
+
+  - id: F-EMP-042
+    name: Official/personal/alternate email are each validated as a well-formed address only when supplied - all optional
+    group: Contact
+    status: Implemented
+    ui: "ContactDetailsForm email inputs"
+    api: "PUT /api/employees/{id}/contact"
+    service: "EmployeeContactRequestValidator (EmailAddress().When(!blank), all three fields)"
+    permission: "Employee.Edit"
+    db: "none"
+
+  - id: F-EMP-043
+    name: Official email must be unique within the tenant across employees, case-insensitively; also mirrored onto Employee.Email
+    group: Contact
+    status: Implemented
+    ui: "ContactDetailsForm 'Official email'"
+    api: "PUT /api/employees/{id}/contact"
+    service: "EmployeeContactService.OfficialEmailIsInUseAsync / OfficialEmailConflict; a save race is caught the same way EmployeeService.CreateAsync/UpdateAsync catch theirs"
+    permission: "Employee.Edit"
+    db: "Employees.Email (kept in sync), EmployeeContacts.OfficialEmail"
+    ex: ["xU:EmployeeContactSynchronizationTests.Contact_rejects_an_official_email_used_by_another_employee"]
+
+  - id: F-EMP-044
+    name: Before a Contact row exists, GET falls back to the legacy Employee.Email/Phone; the placeholder email created by Personal-Details create is reported as null, never leaked to the client
+    group: Contact
+    status: Implemented
+    ui: "ContactDetailsForm initial load on a brand-new employee"
+    api: "GET /api/employees/{id}/contact"
+    service: "EmployeeContactService.ToDto / GetRealEmployeeEmail (strips the '@placeholder.local' suffix)"
+    permission: "Employee.View"
+    db: "Employees.Email"
+    ex: ["xU:EmployeeContactSynchronizationTests.Get_uses_legacy_employee_values_when_the_contact_row_does_not_exist"]
+
+  - id: F-EMP-045
+    name: Phone fields (official/personal/emergency) are free text up to 30 characters, no format check
+    group: Contact
+    status: Implemented
+    ui: "ContactDetailsForm phone inputs"
+    api: "PUT /api/employees/{id}/contact"
+    service: "EmployeeContactRequestValidator (MaximumLength(30) only)"
+    permission: "Employee.Edit"
+    db: "EmployeeContacts.OfficialPhone/PersonalPhone/EmergencyNumber"
+
+  - id: F-EMP-046
+    name: A legacy employee's phone (set via the full-edit path) is preserved as the initial official phone the first time a Contact row is created
+    group: Contact
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/employees/{id}/contact (first call for this employee, OfficialPhone omitted)"
+    service: "EmployeeContactService.UpsertAsync ('officialPhone ??= Normalize(employee.Phone)', existing is null branch only)"
+    permission: "Employee.Edit"
+    db: "EmployeeContacts.OfficialPhone"
+    ex: ["xU:EmployeeContactSynchronizationTests.Legacy_employee_create_and_edit_keep_the_contact_record_synchronized"]
+
+  - id: F-EMP-047
+    name: Contact GET/PUT on a cross-tenant employee id returns 404
+    group: Contact
+    status: Implemented
+    ui: "n/a"
+    api: "GET/PUT /api/employees/{id}/contact"
+    service: "EmployeeContactService (tenant-filtered lookup)"
+    permission: "Employee.View / Employee.Edit"
+    db: "Employees"
+    ex: ["xU:EmployeeContactSynchronizationTests.Contact_cannot_read_or_update_another_tenants_employee"]
+
+  # ── D. Address ─────────────────────────────────────────────────────────────
+  - id: F-EMP-048
+    name: At most two addresses per employee - Current and Permanent - each upserted independently, keyed by AddressType
+    group: Address
+    status: Implemented
+    ui: "AddressDetailsForm (Current / Permanent sub-forms)"
+    api: "GET/POST /api/employees/{id}/addresses"
+    service: "EmployeeAddressService.UpsertAsync (FirstOrDefaultAsync by EmployeeId+AddressType)"
+    permission: "Employee.View / Employee.Edit"
+    db: "EmployeeAddresses (no unique index beyond the natural EmployeeId+AddressType lookup key - a race could in theory insert two rows of the same type, see coverage gaps)"
+
+  - id: F-EMP-049
+    name: Every address field (country/state/district/city/zip/lines/house number) is free text with only a length cap, no master-list or cascading validation
+    group: Address
+    status: Implemented
+    ui: "AddressDetailsForm free-text inputs (no country/state/city MasterDropdown - these are NOT the same fields as Personal Details' birth-location, which ARE FK-backed)"
+    api: "POST /api/employees/{id}/addresses"
+    service: "EmployeeAddressRequestValidator (MaximumLength only: 100 for country/state/district/city, 20 for zip, 500 for each address line)"
+    permission: "Employee.Edit"
+    db: "EmployeeAddresses"
+
+  - id: F-EMP-050
+    name: Address delete removes the row outright (hard delete), and re-adding the same type afterward creates a fresh row
+    group: Address
+    status: Implemented
+    ui: "AddressDetailsForm 'Remove' (if rendered - see coverage gaps, no explicit UI control confirmed)"
+    api: "DELETE /api/employees/{id}/addresses/{addressId}"
+    service: "EmployeeAddressService.DeleteAsync (_db.EmployeeAddresses.Remove)"
+    permission: "Employee.Edit"
+    db: "EmployeeAddresses"
+
+  - id: F-EMP-051
+    name: "'Same as Current' is a plain boolean on the Contact record (SameAsCurrentAddress), not enforced anywhere server-side - copying/toggling behavior is entirely a frontend concern"
+    group: Address
+    status: Needs clarification
+    ui: "ContactDetailsForm / AddressDetailsForm 'Same as current address' toggle"
+    api: "PUT /api/employees/{id}/contact (SameAsCurrentAddress flag only)"
+    service: "EmployeeContactService.UpsertAsync (stores the flag verbatim; never reads or writes EmployeeAddresses itself)"
+    permission: "Employee.Edit"
+    db: "EmployeeContacts.SameAsCurrentAddress"
+
+  - id: F-EMP-052
+    name: Address GET/POST/DELETE on a cross-tenant employee id returns 404
+    group: Address
+    status: Implemented
+    ui: "n/a"
+    api: "GET/POST/DELETE /api/employees/{id}/addresses[/{addressId}]"
+    service: "EmployeeAddressService (EmployeeExistsAsync tenant-filtered gate)"
+    permission: "Employee.View / Employee.Edit"
+    db: "Employees, EmployeeAddresses"
+
+  - id: F-EMP-053
+    name: Deleting a nonexistent address id (or one belonging to a different employee) is a 404, not a silent success
+    group: Address
+    status: Implemented
+    ui: "n/a"
+    api: "DELETE /api/employees/{id}/addresses/{addressId}"
+    service: "EmployeeAddressService.DeleteAsync (FirstOrDefaultAsync a.Id==addressId && a.EmployeeId==employeeId)"
+    permission: "Employee.Edit"
+    db: "EmployeeAddresses"
+
+  - id: F-EMP-054
+    name: An address delete that races a still-referencing write is reported as a handled Conflict, not a raw DbUpdateException
+    group: Address
+    status: Implemented
+    ui: "n/a"
+    api: "DELETE /api/employees/{id}/addresses/{addressId}"
+    service: "EmployeeAddressService.DeleteAsync (catch DbUpdateException -> Result.Conflict)"
+    permission: "Employee.Edit"
+    db: "EmployeeAddresses"
+
+  # ── E. Bank Details ────────────────────────────────────────────────────────
+  - id: F-EMP-055
+    name: A Bank Detail is chosen from the tenant-scoped Bank master by id - never free text - and must be Active
+    group: Bank Details
+    status: Implemented
+    ui: "BankDetailsForm bank <select> (MasterDropdown)"
+    api: "POST /api/employees/{id}/bank-details"
+    service: "EmployeeBankDetailService.BankExistsAndActiveAsync"
+    permission: "Employee.Edit + EmployeeSensitive.Edit"
+    db: "Banks, EmployeeBankDetails.BankId"
+    ex: ["xU:EmployeeBankDetailsEndpointsTests.Adding_with_an_inactive_bank_is_rejected"]
+
+  - id: F-EMP-056
+    name: Account holder name and account number are required (max 200 / 30 chars); IFSC (alphanumeric, max 20) and branch name (max 200) are optional
+    group: Bank Details
+    status: Implemented
+    ui: "BankDetailsForm inputs"
+    api: "POST/PUT /api/employees/{id}/bank-details[/{id}]"
+    service: "EmployeeBankDetailRequestValidator"
+    permission: "Employee.Edit + EmployeeSensitive.Edit"
+    db: "EmployeeBankDetails"
+
+  - id: F-EMP-057
+    name: Exactly one ACTIVE bank detail is allowed per (employee, AccountPurpose) combination; adding or reactivating a second is a 409 Conflict
+    group: Bank Details
+    status: Implemented
+    ui: "BankDetailsForm (new-record form for a purpose that already has an active account)"
+    api: "POST/PUT /api/employees/{id}/bank-details[/{id}]"
+    service: "EmployeeBankDetailService.ActiveForPurposeExistsAsync"
+    permission: "Employee.Edit + EmployeeSensitive.Edit"
+    db: "EmployeeBankDetails (no DB-level unique index enforces this - it is an application-level check only)"
+    ex: ["xU:EmployeeBankDetailsEndToEndTests.One_active_record_per_purpose_is_enforced", "xU:EmployeeBankDetailsEndpointsTests.Adding_a_second_active_record_for_the_same_purpose_conflicts"]
+
+  - id: F-EMP-058
+    name: Multiple bank detail records (different AccountPurpose) coexist per employee - e.g. Salary and Gratuity accounts side by side
+    group: Bank Details
+    status: Implemented
+    ui: "BankDetailsForm (add-another for a different purpose)"
+    api: "POST /api/employees/{id}/bank-details"
+    service: "EmployeeBankDetailService.CreateAsync"
+    permission: "Employee.Edit + EmployeeSensitive.Edit"
+    db: "EmployeeBankDetails"
+
+  - id: F-EMP-059
+    name: A new bank detail must be created with Status=Active; Frozen/Closed are only reachable by editing an existing current record
+    group: Bank Details
+    status: Implemented
+    ui: "BankDetailsForm (Status is not offered on create)"
+    api: "POST /api/employees/{id}/bank-details"
+    service: "EmployeeBankDetailService.CreateAsync (explicit Invalid when request.Status != Active)"
+    permission: "Employee.Edit + EmployeeSensitive.Edit"
+    db: "EmployeeBankDetails.Status"
+    ex: ["xU:EmployeeBankDetailsEndToEndTests.New_bank_detail_must_start_active", "xU:EmployeeBankDetailsEndpointsTests.Adding_a_historical_status_is_rejected"]
+
+  - id: F-EMP-060
+    name: Moving a current record to Frozen or Closed makes it immutable history; it can never be edited or reactivated again, and a replacement is always a new record
+    group: Bank Details
+    status: Implemented
+    ui: "BankDetailsForm (a historical row's edit controls are absent)"
+    api: "PUT /api/employees/{id}/bank-details/{bankDetailId} (on an already-historical record)"
+    service: "EmployeeBankDetailService.UpdateAsync (IsCurrent(record) gate -> Conflict 'HistoricalRecordMessage')"
+    permission: "Employee.Edit + EmployeeSensitive.Edit"
+    db: "EmployeeBankDetails.IsActive/Status"
+    ex: ["xU:EmployeeBankDetailsEndToEndTests.Non_active_status_moves_the_record_to_immutable_history_and_requires_a_new_replacement"]
+
+  - id: F-EMP-061
+    name: Delete on a current bank detail soft-deactivates it (IsActive=false, Status=Closed); delete on an already-historical record is a harmless no-op success
+    group: Bank Details
+    status: Implemented
+    ui: "BankDetailsForm 'Remove'"
+    api: "DELETE /api/employees/{id}/bank-details/{bankDetailId}"
+    service: "EmployeeBankDetailService.DeleteAsync"
+    permission: "Employee.Edit"
+    db: "EmployeeBankDetails.IsActive/Status"
+    ex: ["xU:EmployeeBankDetailsEndToEndTests.Deleted_purpose_can_be_reused_and_bank_master_is_never_deleted"]
+
+  - id: F-EMP-062
+    name: Account number and IFSC are masked on the list read; full values are exposed only through the dedicated sensitive-details-for-edit endpoint
+    group: Bank Details
+    status: Implemented
+    ui: "BankDetailsForm (list view shows masked; edit form fetches the unmasked endpoint)"
+    api: "GET /api/employees/{id}/bank-details, GET /api/employees/{id}/bank-details/{bankDetailId}/sensitive-details"
+    service: "EmployeeBankDetailService.MapToDto (SensitiveDataMasker.AccountNumber/Ifsc) vs GetForEditAsync (raw)"
+    permission: "Employee.View (list) vs Employee.View + EmployeeSensitive.View (edit)"
+    db: "EmployeeBankDetails.AccountNumber/IfscCode"
+
+  - id: F-EMP-063
+    name: The sensitive-details-for-edit endpoint refuses to serve a historical (non-current) record's raw values
+    group: Bank Details
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees/{id}/bank-details/{bankDetailId}/sensitive-details (on a Frozen/Closed record)"
+    service: "EmployeeBankDetailService.GetForEditAsync (lifecycle check before the sensitive Select even runs)"
+    permission: "Employee.View + EmployeeSensitive.View"
+    db: "EmployeeBankDetails"
+
+  - id: F-EMP-064
+    name: Reassigning a current record's BankId to an inactive bank is rejected unless it is the record's own already-assigned (now-inactive) bank
+    group: Bank Details
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/employees/{id}/bank-details/{bankDetailId}"
+    service: "EmployeeBankDetailService.BankCanBeAssignedAsync"
+    permission: "Employee.Edit + EmployeeSensitive.Edit"
+    db: "Banks"
+
+  - id: F-EMP-065
+    name: Bank writes require EmployeeSensitive.Edit in addition to Employee.Edit; reads of the masked list require only Employee.View
+    group: Bank Details
+    status: Implemented
+    ui: "n/a"
+    api: "POST/PUT/DELETE /api/employees/{id}/bank-details*"
+    service: "[HasPermission(Employee.Edit)] + [HasPermission(EmployeeSensitive.Edit)] on the controller actions"
+    permission: "Employee.Edit + EmployeeSensitive.Edit"
+    db: "none"
+    ex: ["xU:EmployeeBankDetailsEndpointsTests.Bank_writes_require_sensitive_edit_permission"]
+
+  - id: F-EMP-066
+    name: Bank Details endpoints reject an unauthenticated caller and a cross-tenant employee id
+    group: Bank Details
+    status: Implemented
+    ui: "n/a"
+    api: "GET/POST/PUT/DELETE /api/employees/{id}/bank-details*"
+    service: "n/a (JWT auth + EmployeeScopeAuthorizationFilter + tenant-filtered EmployeeExistsAsync)"
+    permission: "n/a"
+    db: "Employees"
+    ex: ["xU:EmployeeBankDetailsEndpointsTests.Bank_details_are_unauthorized_without_a_token"]
+
+  # ── F. Employment (joining info) & Employment History (position) ─────────
+  - id: F-EMP-067
+    name: Read/upsert the 1:1 Employment (joining/contractual) record - first-hired date, date of joining, group date of joining, confirmation date, job status, probation, referrer, notice period/status
+    group: Employment
+    status: Implemented
+    ui: "EmploymentSectionForm 'Joining & contractual details' panel"
+    api: "GET/PUT /api/employees/{id}/employment"
+    service: "EmployeeEmploymentService.GetEmploymentAsync/UpsertEmploymentAsync"
+    permission: "EmploymentHistory.View / EmploymentHistory.Change"
+    db: "EmployeeEmployments (1:1 with Employees)"
+    ex: ["V:pages/employees/EmploymentSectionForm.test.tsx::loads and independently saves joining and contractual employment details"]
+
+  - id: F-EMP-068
+    name: Date of joining cannot precede First Hired Date; Group Date of Joining cannot be after Date of Joining; Confirmation Date cannot be before Date of Joining
+    group: Employment
+    status: Implemented
+    ui: "EmploymentSectionForm date inputs"
+    api: "PUT /api/employees/{id}/employment"
+    service: "EmployeeEmploymentRequestValidator + EmployeeEmploymentService.ValidateEmploymentDetailsRequest (both enforce the same three cross-field date rules)"
+    permission: "EmploymentHistory.Change"
+    db: "none"
+
+  - id: F-EMP-069
+    name: Probation period/unit and Notice period/unit must be supplied together (a bare number with no unit, or a unit with no number, is rejected); units are restricted to Days/Months/Years (probation) or Days/Months (notice)
+    group: Employment
+    status: Implemented
+    ui: "EmploymentSectionForm probation/notice number+unit pairs"
+    api: "PUT /api/employees/{id}/employment"
+    service: "EmployeeEmploymentRequestValidator + EmployeeEmploymentService.ValidateEmploymentDetailsRequest"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmployments.ProbationPeriod/ProbationPeriodUnit/NoticePeriod/NoticePeriodUnit"
+
+  - id: F-EMP-070
+    name: Notice Start Date is required while NoticeStatus=Active; Notice End Date cannot precede Notice Start Date
+    group: Employment
+    status: Implemented
+    ui: "EmploymentSectionForm notice-period fields"
+    api: "PUT /api/employees/{id}/employment"
+    service: "EmployeeEmploymentRequestValidator + EmployeeEmploymentService.ValidateEmploymentDetailsRequest"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmployments.NoticeStartDate/NoticeEndDate/NoticeStatus"
+
+  - id: F-EMP-071
+    name: A referring employee must exist, be Active, belong to the same tenant, and cannot be the employee themselves
+    group: Employment
+    status: Implemented
+    ui: "EmploymentSectionForm 'Referred by' selector"
+    api: "PUT /api/employees/{id}/employment"
+    service: "EmployeeEmploymentService.UpsertEmploymentAsync"
+    permission: "EmploymentHistory.Change"
+    db: "Employees"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Joining_details_validate_dates_units_and_referrer_tenant_state"]
+
+  - id: F-EMP-072
+    name: Upserting Employment also syncs Employee.DateOfJoining/JobStatus/GroupDateOfJoining
+    group: Employment
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/employees/{id}/employment"
+    service: "EmployeeEmploymentService.UpsertEmploymentAsync"
+    permission: "EmploymentHistory.Change"
+    db: "Employees.DateOfJoining/JobStatus/GroupDateOfJoining"
+
+  - id: F-EMP-073
+    name: Every position change (Initial Employment onward) creates a NEW effective-dated EmployeeEmploymentHistory row rather than overwriting the previous one; the prior open record's EffectiveTo is closed the day before
+    group: Employment History
+    status: Implemented
+    ui: "EmploymentSectionForm 'Add employment change' (append-only history table, no Edit/Delete on a row)"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.CreateChangeAsync"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmploymentHistory (append-only insert + one prior-row EffectiveTo update)"
+    ex: ["xU:EmployeeEmploymentEndToEndTests.A_promotion_closes_the_previous_record_and_opens_a_new_one_atomically", "V:pages/employees/EmploymentSectionForm.test.tsx::lists the history and offers no Edit or Delete (append-only)"]
+
+  - id: F-EMP-074
+    name: The FIRST employment record for an employee must use ChangeReason=NewJoining; any other reason on the first record is rejected
+    group: Employment History
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.CreateChangeAsync ('existingRecords.Count==0 && ChangeReason != NewJoining')"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmploymentHistory"
+    ex: ["xU:EmployeeEmploymentEndToEndTests.New_hire_creates_the_first_open_record_and_syncs_the_employee_row"]
+
+  - id: F-EMP-075
+    name: Department and Designation are required on every employment change; every other organizational FK (HoldingCompany/Lob/Organisation/SubDepartment/Section/SubSection/Function/SubFunction/Grade/EmployeeType/WorkLocation/CostCenter) is optional but, when supplied, must exist, be Active and belong to the tenant
+    group: Employment History
+    status: Implemented
+    ui: "EmploymentSectionForm cascading MasterDropdowns"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmploymentChangeRequestValidator + EmployeeEmploymentService.ValidateEmploymentReferencesAsync"
+    permission: "EmploymentHistory.Change"
+    db: "Departments, Designations, HoldingCompanies, LinesOfBusiness, Organisations, SubDepartments, Sections, SubSections, Functions, SubFunctions, Grades, EmployeeTypes, WorkLocations, CostCenters, Countries"
+    ex: ["xU:EmployeeEmploymentEndToEndTests.A_master_reference_that_does_not_exist_is_rejected", "xU:EmployeeEmploymentHardeningTests.Inactive_master_values_and_invalid_country_are_rejected"]
+
+  - id: F-EMP-076
+    name: Hierarchy consistency is enforced pairwise - Lob<-HoldingCompany, SubDepartment<-Department, Section<-SubDepartment, SubSection<-Section - a mismatched child/parent pair is rejected
+    group: Employment History
+    status: Implemented
+    ui: "EmploymentSectionForm (child dropdowns disable until the parent is chosen)"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.ValidateEmploymentReferencesAsync"
+    permission: "EmploymentHistory.Change"
+    db: "SubDepartments.DepartmentId, Sections.SubDepartmentId, SubSections.SectionId, LinesOfBusiness.HoldingCompanyId"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Invalid_hierarchy_combination_is_rejected", "xU:EmployeeEmploymentHardeningTests.Invalid_holding_and_lob_combination_is_rejected"]
+
+  - id: F-EMP-077
+    name: A Work Location requires a Country to also be supplied on the same change
+    group: Employment History
+    status: Implemented
+    ui: "EmploymentSectionForm Work Location + Country fields"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.ValidateEmploymentChangeCommand ('WorkLocationId.HasValue && !CountryLocationId.HasValue')"
+    permission: "EmploymentHistory.Change"
+    db: "none"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Work_location_requires_a_country"]
+
+  - id: F-EMP-078
+    name: EffectiveFrom may never be earlier than today's business date, for ANY ChangeReason including Correction - a genuinely backdated change is always rejected
+    group: Employment History
+    status: Needs clarification
+    ui: "EmploymentSectionForm 'Effective from' date input"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.CreateChangeAsync ('request.EffectiveFrom < validationDate' unconditional check, evaluated before the Correction same-day-overwrite branch even runs)"
+    permission: "EmploymentHistory.Change"
+    db: "none"
+    ex: ["xU:EmployeeEmploymentEndToEndTests.A_past_effective_date_is_rejected", "xU:EmployeeEmploymentHardeningTests.Backdated_employment_change_is_rejected"]
+    cr: [CR-51]
+
+  - id: F-EMP-079
+    name: A future-dated employment change is accepted, recorded, and does NOT become current (does not sync to Employee's snapshot fields or affect list/filter results) until its effective date arrives
+    group: Employment History
+    status: Implemented
+    ui: "EmploymentSectionForm (a future row appears in history but Employee.status/department shown elsewhere stays on the current record)"
+    api: "POST /api/employees/{id}/employment-history (EffectiveFrom > today)"
+    service: "EmployeeEmploymentService.CreateChangeAsync ('isEffectiveToday' gate around the Employee-row sync)"
+    permission: "EmploymentHistory.Change"
+    db: "Employees (unchanged until the date arrives), EmployeeEmploymentHistory"
+    ex: ["xU:EmployeeEmploymentEndToEndTests.A_future_transfer_is_not_current_or_copied_to_employee_until_its_date", "xU:EmployeeEmploymentEndToEndTests.A_future_initial_joining_has_no_current_employment_before_its_date"]
+
+  - id: F-EMP-080
+    name: A record cannot be created on an EffectiveFrom date another record already occupies UNLESS the ChangeReason is Correction, in which case the same-day record(s) are marked superseded and a new RevisionNumber is created
+    group: Employment History
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.CreateChangeAsync (sameDayRecords branch: IsSuperseded=true, RevisionNumber = max+1)"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmploymentHistory.RevisionNumber/IsSuperseded/SupersededAtUtc"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Same_day_corrections_create_revisions_and_latest_revision_resolves"]
+
+  - id: F-EMP-081
+    name: Inserting a new employment change between two existing dated records reconciles BOTH boundaries (closes the record before it, opens the following record's EffectiveFrom the day after)
+    group: Employment History
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history (EffectiveFrom strictly between two existing records)"
+    service: "EmployeeEmploymentService.CreateChangeAsync (previousRecord/nextRecord resolution)"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmploymentHistory"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Inserting_between_two_records_reconciles_both_boundaries", "xU:EmployeeEmploymentEndToEndTests.Multiple_changes_chain_the_effective_periods_without_overlaps_or_gaps"]
+
+  - id: F-EMP-082
+    name: A Retirement/Resignation/Termination change (EmploymentStatus != Active) closes the current record and, once effective, marks the Employee row inactive and stamps DateOfLeaving
+    group: Employment History
+    status: Implemented
+    ui: "EmploymentSectionForm (EmploymentStatus <select>)"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.CreateChangeAsync (isEffectiveToday sync block)"
+    permission: "EmploymentHistory.Change"
+    db: "Employees.Status/DateOfLeaving"
+    ex: ["xU:EmployeeEmploymentEndToEndTests.Retirement_closes_the_current_record_and_marks_the_employee_inactive"]
+
+  - id: F-EMP-083
+    name: Snapshot fields (DepartmentName, DesignationName, ManagerCode, ManagerName, GradeLevel) are frozen at the moment a history row is created and never retroactively updated when the underlying master is later renamed
+    group: Employment History
+    status: Implemented
+    ui: "EmploymentSectionForm history table (older rows keep showing the name that was true then)"
+    api: "GET /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.CreateChangeAsync (BusinessRole/GradeLevel/DepartmentName/DesignationName/ManagerCode/ManagerName snapshot assignment); MapToDto prefers the snapshot over the live navigation name"
+    permission: "EmploymentHistory.View"
+    db: "EmployeeEmploymentHistory.DepartmentName/DesignationName/ManagerCode/ManagerName/GradeLevel"
+    ex: ["xU:EmployeeEmploymentHardeningTests.History_names_are_snapshot_values_after_master_renames"]
+
+  - id: F-EMP-084
+    name: GET .../employment-history/current (or ?asOfDate=) resolves the single record effective on the given date; more than one match is a Conflict (data-integrity signal, not a silent pick)
+    group: Employment History
+    status: Implemented
+    ui: "EmploymentSectionForm 'current position' summary"
+    api: "GET /api/employees/{id}/employment-history/current[?asOfDate=]"
+    service: "EmployeeEmploymentService.GetCurrentAsync/GetAsOfAsync"
+    permission: "EmploymentHistory.View"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-EMP-085
+    name: Full history is returned most-recent-first (EffectiveFrom desc, RevisionNumber desc, CreatedDate desc) - no pagination on this endpoint
+    group: Employment History
+    status: Implemented
+    ui: "EmploymentSectionForm history table"
+    api: "GET /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.GetHistoryAsync"
+    permission: "EmploymentHistory.View"
+    db: "EmployeeEmploymentHistory"
+
+  - id: F-EMP-086
+    name: Employment History rows and their master references are isolated per tenant
+    group: Employment History
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees/{id}/employment-history (cross-tenant id)"
+    service: "EmployeeEmploymentService (tenant-filtered EmployeeExistsAsync gate)"
+    permission: "EmploymentHistory.View"
+    db: "EmployeeEmploymentHistory"
+    ex: ["xU:EmployeeEmploymentEndToEndTests.History_is_isolated_across_tenants"]
+
+  - id: F-EMP-087
+    name: Adding an employment record when ManagerId is omitted carries forward the manager from the prior effective record (except for ChangeReason=ManagerChange, where an explicit null clears the manager)
+    group: Employment History
+    status: Implemented
+    ui: "EmploymentSectionForm (manager control untouched on an unrelated change)"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.CreateChangeAsync (carry-forward before ValidateEmploymentChangeCommand runs)"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmploymentHistory.ManagerId"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Manager_only_employment_change_preserves_position_fields_and_employee_code"]
+
+  - id: F-EMP-088
+    name: Employment endpoints reject an unauthenticated caller and enforce EmploymentHistory.View/.Change separately from Employee.View/.Edit
+    group: Employment History
+    status: Implemented
+    ui: "n/a"
+    api: "GET/POST /api/employees/{id}/employment*"
+    service: "[HasPermission(EmploymentHistory.View|Change)]"
+    permission: "EmploymentHistory.View / EmploymentHistory.Change"
+    db: "none"
+    ex: ["xU:EmployeeEmploymentEndpointsTests.Employment_endpoints_require_a_token", "xU:EmployeeEmploymentEndpointsTests.Adding_employment_requires_the_change_permission"]
+
+  # ── G. Reporting Manager / Supervisor hierarchy ────────────────────────────
+  - id: F-EMP-089
+    name: The direct (L1) manager is resolved exclusively from CURRENT Employment History, never stored as an independently-editable field once Employment has an opinion
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "SupervisorSectionForm L1 field is read-only once Employment has recorded a manager"
+    api: "GET /api/employees/{id}/supervisor"
+    service: "EmployeeManagerResolver.ResolveAsync; EmployeeSupervisorService.GetAsync overlays the resolver's result onto the stored compatibility row"
+    permission: "Employee.View"
+    db: "EmployeeEmploymentHistory.ManagerId (authoritative), EmployeeSupervisors.L1ManagerId (compatibility mirror)"
+    ex: ["V:pages/employees/SupervisorSectionForm.test.tsx::shows resolved and scheduled L1 states and keeps L1 read-only"]
+
+  - id: F-EMP-090
+    name: Attempting to set L1ManagerId through the Supervisor endpoint to anything other than what Employment currently resolves is rejected; if Employment has never recorded a manager at all, L1ManagerId must be left null on this endpoint
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "n/a (SupervisorSectionForm disables the L1 input entirely)"
+    api: "PUT /api/employees/{id}/supervisor"
+    service: "EmployeeSupervisorService.ValidateDirectManagerAsync"
+    permission: "Employee.Edit"
+    db: "none"
+
+  - id: F-EMP-091
+    name: A 'LegacyConflict' resolution status (the deprecated Employee.ReportingManagerId disagrees with current Employment History's ManagerId) blocks the whole Supervisor upsert until reconciled
+    group: Manager / Supervisor
+    status: Needs clarification
+    ui: "n/a"
+    api: "PUT /api/employees/{id}/supervisor"
+    service: "EmployeeManagerResolver / EmployeeSupervisorService.ValidateDirectManagerAsync (EmployeeManagerResolutionStatus.LegacyConflict)"
+    permission: "Employee.Edit"
+    db: "Employees.ReportingManagerId vs EmployeeEmploymentHistory.ManagerId"
+
+  - id: F-EMP-092
+    name: L2-L5, Time Manager, ERO and CHRO Manager are freely assignable peer fields - each independently must exist, be Active, belong to the tenant, and cannot be the employee themselves; no cross-level consistency is enforced between them
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "SupervisorSectionForm L2-L5/Time/ERO/CHRO selectors"
+    api: "PUT /api/employees/{id}/supervisor"
+    service: "EmployeeSupervisorService.ValidateSupervisorReferencesAsync"
+    permission: "Employee.Edit"
+    db: "EmployeeSupervisors.L2..L5/TimeManager/Ero/ChroManager (Id/Code/Name triples)"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Supervisor_additional_roles_update_without_changing_authoritative_l1"]
+
+  - id: F-EMP-093
+    name: An employee cannot be assigned as their own supervisor at any level (L1-L5/Time/ERO/CHRO)
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/employees/{id}/supervisor"
+    service: "EmployeeSupervisorService.ValidateSupervisorReferencesAsync ('id == employeeId')"
+    permission: "Employee.Edit"
+    db: "none"
+
+  - id: F-EMP-094
+    name: A supervisor id belonging to another tenant, or an inactive employee, is rejected for every level
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/employees/{id}/supervisor"
+    service: "EmployeeSupervisorService.ValidateSupervisorReferencesAsync"
+    permission: "Employee.Edit"
+    db: "Employees"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Supervisor_manager_ids_are_tenant_scoped_and_cannot_self_reference"]
+
+  - id: F-EMP-095
+    name: The direct-manager cycle check (self, direct, and indirect cycles) runs on every proposed manager change on Employment, walking the full chain up to a 100-level hop limit
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "EmploymentSectionForm manager selector"
+    api: "POST /api/employees/{id}/employment-history (managerId)"
+    service: "EmployeeEmploymentService.WouldCreateManagerCycleAsync/WouldCreateManagerCycleAtDateAsync"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmploymentHistory"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Self_direct_and_indirect_manager_cycles_are_rejected", "xU:EmployeeEmploymentHardeningTests.Resolver_detects_a_reporting_cycle_introduced_at_a_future_boundary", "xU:EmployeeEmploymentHardeningTests.Resolver_keeps_today_valid_when_a_cycle_is_only_scheduled_for_a_future_date"]
+
+  - id: F-EMP-096
+    name: A manager assignment is rejected when the proposed manager has no active employment on the requested effective date (not yet joined, retired, or their employment record has since ended)
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history (managerId)"
+    service: "EmployeeEmploymentService.ValidateEmploymentReferencesAsync (managerHistory Count==0 or non-Active status on the effective date)"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmploymentHistory"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Resolver_rejects_missing_future_joining_and_retired_managers_by_date"]
+
+  - id: F-EMP-097
+    name: A confirmed Manager change updates EmployeeSupervisors.L1* in the SAME transaction as the employment history insert, so the resolver and the compatibility row can never disagree afterward
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history (ManagerChange)"
+    service: "EmployeeEmploymentService.SynchronizeCurrentSupervisorAsync (only when a Supervisor row already exists - it is never created as a side effect)"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeSupervisors.L1ManagerId/L1ManagerCode/L1ManagerName"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Manager_change_is_persisted_and_normal_changes_inherit_the_manager", "xU:EmployeeEmploymentHardeningTests.Current_employment_change_synchronizes_existing_supervisor_l1_compatibility_fields"]
+
+  - id: F-EMP-098
+    name: Manager resolution is date-aware - it reports the manager effective BEFORE, ON, and AFTER a scheduled future manager change, using the correct one for each date queried
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "n/a"
+    api: "n/a (internal - exercised through GET /api/employees/{id}/supervisor and GetAsOfAsync)"
+    service: "EmployeeManagerResolver.ResolveAsync"
+    permission: "n/a"
+    db: "EmployeeEmploymentHistory"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Resolver_uses_the_manager_effective_before_on_and_after_a_scheduled_change"]
+
+  - id: F-EMP-099
+    name: An explicit ManagerChange with a null manager is treated as a deliberate unassignment (no manager), not a fall-back to the legacy Employee.ReportingManagerId
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "EmploymentSectionForm manager selector 'clear'"
+    api: "POST /api/employees/{id}/employment-history (ChangeReason=ManagerChange, managerId=null)"
+    service: "EmployeeManagerResolver.ResolveAsync"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmploymentHistory.ManagerId"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Resolver_treats_explicit_manager_clearing_as_unassigned_without_legacy_fallback"]
+
+  - id: F-EMP-100
+    name: GET .../supervisor-options returns employees eligible for a given SupervisorType flag (L1/L2/L3/Other/HR/Time), scoped to the tenant, excluding the employee themselves, and excluding anyone not Active on today's business date
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "SupervisorSectionForm manager/ERO/CHRO/Time-manager selector dropdowns"
+    api: "GET /api/employees/{id}/supervisor-options?type="
+    service: "EmployeeSupervisorService.GetSupervisorOptionsAsync (ManagerCategories bitwise-AND check against Employee.ManagerCategories)"
+    permission: "Employee.View"
+    db: "Employees.ManagerCategories"
+
+  - id: F-EMP-101
+    name: An unrecognized supervisor type string on the options endpoint is a 400, not an empty list
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees/{id}/supervisor-options?type=NotARealType"
+    service: "EmployeeSupervisorService.GetSupervisorOptionsAsync (Enum.TryParse<SupervisorType> failure -> Invalid)"
+    permission: "Employee.View"
+    db: "none"
+
+  - id: F-EMP-102
+    name: Supervisor options exclude an employee whose eligible-manager future joining or past retirement makes them inactive on the current business date, mirroring the same date-awareness the resolver itself uses
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees/{id}/supervisor-options?type=L1"
+    service: "EmployeeSupervisorService.GetSupervisorOptionsAsync (currentHistory-aware Active check with a DateOfJoining fallback)"
+    permission: "Employee.View"
+    db: "Employees, EmployeeEmploymentHistory"
+
+  - id: F-EMP-103
+    name: The Supervisor GET/PUT endpoints reject a cross-tenant employee id
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "n/a"
+    api: "GET/PUT /api/employees/{id}/supervisor"
+    service: "EmployeeSupervisorService (tenant-filtered EmployeeExistsAsync)"
+    permission: "Employee.View / Employee.Edit"
+    db: "Employees"
+
+  - id: F-EMP-104
+    name: Manager role auto-provisioning - assigning someone as a direct manager (via an employment change) ensures they hold whatever capability a manager needs, in the same transaction
+    group: Manager / Supervisor
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history (managerId)"
+    service: "IManagerRoleProvisioningService.EnsureForManagerEmployeeAsync, invoked from EmployeeEmploymentService.CreateChangeAsync"
+    permission: "EmploymentHistory.Change"
+    db: "UserRoles (or equivalent, per ManagerRoleProvisioningService)"
+
+  # ── H. Status / Lifecycle, Update, Delete ─────────────────────────────────
+  - id: F-EMP-105
+    name: EmployeeStatus has exactly three members - Active, Resigned, Terminated - deliberately modeled as a lifecycle state, not a deletion
+    group: Lifecycle
+    status: Implemented
+    ui: "EmploymentSectionForm 'Employment status' <select>"
+    api: "POST /api/employees/{id}/employment-history (employmentStatus)"
+    service: "n/a (Domain enum)"
+    permission: "n/a"
+    db: "Employees.Status, EmployeeEmploymentHistory.EmploymentStatus"
+
+  - id: F-EMP-106
+    name: A status change to Resigned/Terminated (via an employment change effective today) stamps DateOfLeaving and, per CLAUDE.md's Delete remark, is the documented way to represent someone who has left - as opposed to the Delete endpoint, which is for correcting a mistaken record
+    group: Lifecycle
+    status: Implemented
+    ui: "EmployeesController Delete confirm dialog hint text"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.CreateChangeAsync"
+    permission: "EmploymentHistory.Change"
+    db: "Employees.DateOfLeaving/Status"
+
+  - id: F-EMP-107
+    name: Changing an unrelated field on Update does not force department/designation/manager re-validation UNLESS that specific reference actually changed - an existing reference to a since-retired master, or a since-departed manager, may be kept unchanged
+    group: Update
+    status: Implemented
+    ui: "n/a (legacy full-edit path; the modern Employment path always re-validates its own references, per F-EMP-075)"
+    api: "PUT /api/employees/{id}"
+    service: "EmployeeService.ValidateReferencesAsync ('existing?.DepartmentId != request.DepartmentId' etc.)"
+    permission: "Employee.Edit"
+    db: "Departments, Designations, Employees"
+    ex: ["xU:EmployeeServiceTests.Update_may_keep_a_department_that_has_since_been_retired", "xU:EmployeeServiceTests.Update_keeps_an_existing_manager_who_has_since_left"]
+
+  - id: F-EMP-108
+    name: Update rejects moving INTO a now-retired department/designation even though keeping an already-assigned retired one is allowed
+    group: Update
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/employees/{id}"
+    service: "EmployeeService.ValidateReferencesAsync"
+    permission: "Employee.Edit"
+    db: "Departments"
+    ex: ["xU:EmployeeServiceTests.Update_rejects_a_move_into_a_retired_department"]
+
+  - id: F-EMP-109
+    name: Update rejects an employee reporting to themselves and rejects a manager who (directly or indirectly) already reports up through this employee; it accepts a manager change that keeps the hierarchy a tree
+    group: Update
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/employees/{id}"
+    service: "EmployeeService.WouldCreateReportingCycleAsync"
+    permission: "Employee.Edit"
+    db: "Employees.ReportingManagerId"
+    ex: ["xU:EmployeeServiceTests.Update_rejects_an_employee_reporting_to_themselves", "xU:EmployeeServiceTests.Update_rejects_a_manager_who_reports_up_through_the_employee", "xU:EmployeeServiceTests.Update_accepts_a_manager_change_that_keeps_the_hierarchy_a_tree"]
+
+  - id: F-EMP-110
+    name: Update rejects an Employee Code that collides with a DIFFERENT employee's code, but allows saving the record's own unchanged code
+    group: Update
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/employees/{id}"
+    service: "EmployeeService.FindConflictAsync (excludeId=id)"
+    permission: "Employee.Edit"
+    db: "Employees (TenantId, EmployeeCode) unique index"
+    ex: ["xU:EmployeeServiceTests.Update_rejects_an_employee_code_another_employee_already_uses"]
+
+  - id: F-EMP-111
+    name: Update stamps ModifiedDate and replaces the full legacy field set; it does not touch Contact/Address/Bank/Employment/Supervisor sub-resources
+    group: Update
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/employees/{id}"
+    service: "EmployeeService.UpdateAsync"
+    permission: "Employee.Edit"
+    db: "Employees.ModifiedDate"
+    ex: ["xU:EmployeeServiceTests.Update_replaces_the_record_and_stamps_a_modified_date"]
+
+  - id: F-EMP-112
+    name: Update/Delete on a cross-tenant employee id is a 404 and mutates nothing
+    group: Update
+    status: Implemented
+    ui: "n/a"
+    api: "PUT/DELETE /api/employees/{id}"
+    service: "EmployeeService.UpdateAsync/DeleteAsync (tenant-filtered lookup)"
+    permission: "Employee.Edit / Employee.Delete"
+    db: "Employees"
+    ex: ["xU:EmployeeServiceTests.Update_of_another_tenants_employee_is_not_found_and_changes_nothing", "xU:EmployeeServiceTests.Delete_of_another_tenants_employee_is_not_found"]
+
+  - id: F-EMP-113
+    name: Delete is a HARD delete (row removal), refused with 409 when the employee still has direct reports; reassign them first
+    group: Delete
+    status: Implemented
+    ui: "EmployeesPage delete confirm dialog"
+    api: "DELETE /api/employees/{id}"
+    service: "EmployeeService.DeleteAsync"
+    permission: "Employee.Delete"
+    db: "Employees.ReportingManagerId (direct-report count check)"
+    ex: ["xU:EmployeeServiceTests.Delete_refuses_an_employee_who_still_has_direct_reports", "xU:EmployeeServiceTests.Delete_removes_an_employee_nobody_reports_to"]
+
+  - id: F-EMP-114
+    name: Delete on an employee with employment history, sub-resources, or a linked portal account fails with a handled Conflict (FK constraint caught as DbUpdateException) rather than a raw 500 - the record and all its history stay intact
+    group: Delete
+    status: Needs clarification
+    ui: "n/a"
+    api: "DELETE /api/employees/{id}"
+    service: "EmployeeService.DeleteAsync (catch DbUpdateException -> Conflict 'This employee record is still referenced and cannot be deleted.')"
+    permission: "Employee.Delete"
+    db: "EmployeeEmploymentHistory, EmployeeContacts, EmployeeAddresses, EmployeeBankDetails, AccountEmployeeCurrentLinks, etc. (FK-referencing tables)"
+
+  - id: F-EMP-115
+    name: Deleting a nonexistent employee id is a 404; deleting the same id twice in a row is 404 on the second call, not a repeated 200
+    group: Delete
+    status: Implemented
+    ui: "n/a"
+    api: "DELETE /api/employees/{id}"
+    service: "EmployeeService.DeleteAsync"
+    permission: "Employee.Delete"
+    db: "Employees"
+
+  - id: F-EMP-116
+    name: Without an authenticated tenant, every Employee operation (list/get/create/update/delete) returns Unauthorized
+    group: Lifecycle
+    status: Implemented
+    ui: "n/a"
+    api: "GET/POST/PUT/DELETE /api/employees*"
+    service: "every EmployeeService method's '_tenantContext.TenantId is null/not Guid' guard"
+    permission: "n/a"
+    db: "none"
+    ex: ["xU:EmployeeServiceTests.Without_a_tenant_every_operation_is_unauthorized"]
+
+  - id: F-EMP-117
+    name: A row-actions Delete control renders only for a caller who actually holds Employee.Delete - it is absent, not disabled, for anyone else
+    group: Delete
+    status: Implemented
+    ui: "EmployeesPage row actions (canDelete gate)"
+    api: "n/a"
+    service: "n/a"
+    permission: "Employee.Delete"
+    db: "none"
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::gives an HR Manager everything except the delete"]
+
+  - id: F-EMP-118
+    name: The Delete confirm dialog names the employee and their code before removing them, and re-reads the list afterward
+    group: Delete
+    status: Implemented
+    ui: "EmployeesPage ConfirmDialog"
+    api: "DELETE /api/employees/{id}"
+    service: "n/a"
+    permission: "Employee.Delete"
+    db: "none"
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::deletes an employee after naming them, then says so and re-reads the list"]
+
+  # ── I. Export / Import ─────────────────────────────────────────────────────
+  - id: F-EMP-119
+    name: Export produces a CSV with a UTF-8 BOM, CRLF row separators, and one header row followed by every matching (unpaged) employee
+    group: Export
+    status: Implemented
+    ui: "ExportEmployeesButton"
+    api: "GET /api/employees/export"
+    service: "EmployeeService.ExportAsync / CsvBuilder"
+    permission: "Employee.Export"
+    db: "Employees (filtered, unpaged)"
+    ex: ["xU:EmployeeExportTests.Export_leads_with_a_byte_order_mark_then_the_header_row", "xU:EmployeeExportTests.Export_separates_rows_with_a_carriage_return_and_line_feed", "xU:EmployeeExportTests.Export_ignores_paging"]
+
+  - id: F-EMP-120
+    name: Export values containing a comma, quote or line break are properly CSV-quoted; a formula-leading value (=, +, -, @) is neutralized against spreadsheet formula injection
+    group: Export
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees/export"
+    service: "CsvBuilder"
+    permission: "Employee.Export"
+    db: "none"
+    ex: ["xU:EmployeeExportTests.Export_quotes_values_containing_a_comma_a_quote_or_a_line_break", "xU:EmployeeExportTests.Export_neutralizes_values_a_spreadsheet_would_execute"]
+
+  - id: F-EMP-121
+    name: Export masks statutory identifiers (Aadhaar/PAN/PF/UAN/ESIC/Mediclaim) exactly as the API projection does - the raw values never appear in the file
+    group: Export
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees/export"
+    service: "EmployeeService.ExportAsync (row.MaskedXxx fields)"
+    permission: "Employee.Export"
+    db: "none"
+    ex: ["xU:EmployeeExportTests.Export_masks_statutory_identifiers_and_never_contains_the_raw_values"]
+
+  - id: F-EMP-122
+    name: An export result set larger than 10,000 rows is refused with a 400 explaining the limit, rather than silently truncated
+    group: Export
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees/export"
+    service: "EmployeeService.ExportAsync (MaxExportRows const)"
+    permission: "Employee.Export"
+    db: "Employees (Count probe before the data read)"
+    ex: ["xU:EmployeeExportTests.Export_refuses_a_result_set_above_the_row_limit"]
+
+  - id: F-EMP-123
+    name: The export filename is timestamped for the moment it was generated (employees-yyyyMMdd-HHmmss.csv), delivered via Content-Disposition
+    group: Export
+    status: Implemented
+    ui: "ExportEmployeesButton (api/employees.ts Content-Disposition parsing)"
+    api: "GET /api/employees/export"
+    service: "EmployeeService.ExportAsync"
+    permission: "Employee.Export"
+    db: "none"
+    ex: ["xU:EmployeeExportTests.Export_is_named_for_the_moment_it_was_generated", "V:api/employees.test.ts::returns the file with the name the API chose"]
+
+  - id: F-EMP-124
+    name: Export filters and sorts by the Employee entity's own snapshot columns (department/designation/status/reportingManagerId), NOT the effective-history-aware logic the List endpoint uses for the same filter/sort parameters
+    group: Export
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/employees/export?departmentId=... (employee's Employee.DepartmentId disagrees with their current Employment History, e.g. after a legacy full-edit)"
+    service: "EmployeeService.ExportAsync calls the plain ApplyFilters/ApplySort - not ApplyEffectiveFilters/ApplyEffectiveSort that GetAsync (the list) uses"
+    permission: "Employee.Export"
+    db: "Employees, EmployeeEmploymentHistory"
+    cr: [CR-47]
+
+  - id: F-EMP-125
+    name: Export does not apply the EmployeeAccessScopeService scope predicate that List/Get apply - a scope-restricted role (e.g. a Manager-scoped or department-scoped role assignment) holding Employee.Export can export every employee in the tenant, not just their own scope
+    group: Export
+    status: Needs clarification
+    ui: "n/a"
+    api: "GET /api/employees/export (as a scope-restricted role)"
+    service: "EmployeeService.ExportAsync (ApplyFilters(_db.Employees.AsNoTracking(), query) with no _accessScope.BuildPredicateAsync call anywhere in the method)"
+    permission: "Employee.Export"
+    db: "Employees"
+    cr: [CR-48]
+
+  - id: F-EMP-126
+    name: Employee Import is scaffolding-only - creating an import batch (POST /api/import) never parses or processes an uploaded file; the batch is created Pending with TotalRows=0 and stays that way, and there is no endpoint that actually accepts file content
+    group: Import
+    status: Needs clarification
+    ui: "n/a (no frontend page consumes /api/import at all)"
+    api: "POST /api/import?fileName="
+    service: "ImportBatchService.ImportAsync (creates an ImportBatch row; no CSV parsing, no Employee row is ever created by this path)"
+    permission: "Employee.Import"
+    db: "ImportBatches"
+    cr: [CR-50]
+
+  # ── J. Employee Code Integration seam (Module 4 carry-forward, Employee-side impact) ─
+  - id: F-EMP-127
+    name: A Personal-Details-created employee's EmployeeCode stays null until the FIRST employment-history record is recorded; the Personal Details/Employee list UI shows a 'new hire' placeholder, never a blank string
+    group: Employee Code Integration
+    status: Implemented
+    ui: "PersonalDetailsForm employee-code banner"
+    api: "GET /api/employees/{id}"
+    service: "EmployeeService (EmployeeCode remains null); frontend NEW_HIRE_LABEL fallback"
+    permission: "Employee.View"
+    db: "Employees.EmployeeCode"
+
+  - id: F-EMP-128
+    name: HRAdmin - the seeded role that actually performs Initial Employment via EmploymentHistory.Change - holds neither EmployeeCodeConfiguration.View nor .Manage, so a code-generation failure at Initial Employment cannot be diagnosed via the Configuration/Preview screens without escalating to TenantAdmin/SuperAdmin
+    group: Employee Code Integration
+    status: Needs clarification
+    ui: "HRAdmin never sees the 'Employee Code Configuration' nav entry, yet performs Initial Employment where a code error surfaces"
+    api: "POST /api/employees/{id}/employment-history (as HRAdmin, when generation fails) vs GET /api/employee-code-configuration (as HRAdmin, 403)"
+    service: "SeedData.RolePermissionMap[RoleNames.HRAdmin] (Employee.*/EmploymentHistory.* present, EmployeeCodeConfiguration.* absent)"
+    permission: "EmploymentHistory.Change vs EmployeeCodeConfiguration.View/Manage"
+    db: "RolePermissions seed data"
+    cr: [CR-44]
+
+  - id: F-EMP-129
+    name: Under Simple-mode Auto assignment, a code collision at Initial Employment is NOT re-checked before assignment (unlike Rule-Based) and surfaces as an unhandled exception rather than the Conflict every other duplicate-code path returns
+    group: Employee Code Integration
+    status: Needs clarification
+    ui: "n/a (reachable only when the Simple counter and Employees.EmployeeCode data have drifted apart - e.g. after a manual-mode-to-auto-mode switch, seeded/imported data, or a rewound counter)"
+    api: "POST /api/employees/{id}/employment-history (Initial Employment under Simple Auto, composed code already in use)"
+    service: "EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (Simple branch: no AnyAsync duplicate probe before 'employee.EmployeeCode = code', unlike the Rule-Based branch immediately below it)"
+    permission: "EmploymentHistory.Change"
+    db: "Employees (TenantId, EmployeeCode) unique index"
+    cr: [CR-45]
+
+  - id: F-EMP-130
+    name: Rule-Based generation at Initial Employment resolves master codes from the SAME references validated for the employment change itself - so an invalid/inactive master is rejected before code generation is even attempted, never partially
+    group: Employee Code Integration
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.CreateChangeAsync (AssignPendingEmployeeCodeAsync runs only after every ValidateEmploymentReferencesAsync check has already passed)"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeCodeRules, EmployeeCodeSequences"
+
+  - id: F-EMP-131
+    name: Manual-mode assignment at Initial Employment requires a client-supplied Employee Code and rejects a case-insensitive duplicate against any OTHER employee's code
+    group: Employee Code Integration
+    status: Implemented
+    ui: "EmploymentSectionForm 'Employee code' input (rendered only for the first employment record under Manual mode)"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (Manual branch)"
+    permission: "EmploymentHistory.Change"
+    db: "Employees.EmployeeCode"
+
+  - id: F-EMP-132
+    name: A tenant with no active Employee Code configuration version effective on the requested date rejects Initial Employment outright (Invalid), leaving the employee uncoded and with no history row created (fully transactional)
+    group: Employee Code Integration
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.AssignPendingEmployeeCodeAsync (matchingVersions.Count==0)"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeCodeConfigVersions, EmployeeEmploymentHistory (zero rows on failure)"
+
+  - id: F-EMP-133
+    name: A once-assigned Employee Code is never regenerated by any later employment change (Promotion, DepartmentChange, ManagerChange, etc.), even under an active Rule-Based configuration whose segments would render differently for the new context
+    group: Employee Code Integration
+    status: Implemented
+    ui: "EmploymentSectionForm (the manual-code input never reappears once a code exists)"
+    api: "POST /api/employees/{id}/employment-history (any ChangeReason after the first record)"
+    service: "EmployeeEmploymentService.CreateChangeAsync ('if (employee.EmployeeCode is null)' gate is false on every later call)"
+    permission: "EmploymentHistory.Change"
+    db: "Employees.EmployeeCode (unchanged)"
+
+  - id: F-EMP-134
+    name: A rejected Initial Employment (any validation failure, including a code error) leaves no employment history row, no sequence advance, and no employee mutation - the whole attempt is one transaction
+    group: Employee Code Integration
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "EmployeeEmploymentService.CreateChangeAsync (BeginTransactionAsync wraps the code assignment and the history insert together)"
+    permission: "EmploymentHistory.Change"
+    db: "EmployeeEmploymentHistory, EmployeeCodeSequences, Employees (all assert unchanged after a failed attempt)"
+
+  # ── K. Authorization / Tenant Isolation / Security ─────────────────────────
+  - id: F-EMP-135
+    name: Every Employee/EmploymentHistory/EmployeeSensitive permission is a distinct grant; SuperAdmin/TenantAdmin hold all of them, HRAdmin holds all but Import lacks nothing (full CRUD+sensitive+employment), HRManager lacks Delete/Import, Manager/HRBP/ERO/TimeManager/Accounts/SuperHR hold View-only (SuperHR also holds Edit+EmploymentHistory.Change but not Create/Delete/Export/Import), and the self-service Employee role holds NO Employee.* permission at all (self-service goes through MyEmployeeProfileService instead)
+    group: Authorization
+    status: Implemented
+    ui: "navigation.ts 'Employees' entry (Permissions.employee.view)"
+    api: "every route under /api/employees*"
+    service: "SeedData.RolePermissionMap"
+    permission: "Employee.View/Create/Edit/Delete/Export/Import, EmployeeSensitive.View/Edit, EmploymentHistory.View/Change"
+    db: "RolePermissions seed data"
+
+  - id: F-EMP-136
+    name: An unauthenticated request to any Employee endpoint is rejected with 401; a token lacking the specific required permission is rejected with 403, distinctly from a 401
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "every route under /api/employees*, /api/employees/{id}/*"
+    service: "[HasPermission] policy + the fallback-deny policy for any undeclared route"
+    permission: "n/a"
+    db: "none"
+
+  - id: F-EMP-137
+    name: Reading Bank Details' masked list needs only Employee.View, but writing (create/update/delete) or reading the unmasked edit view needs the additional EmployeeSensitive.Edit/.View
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "GET/POST/PUT/DELETE /api/employees/{id}/bank-details*"
+    service: "[HasPermission] stacking on EmployeeSubResourcesController's bank-detail actions"
+    permission: "Employee.View / Employee.Edit + EmployeeSensitive.Edit"
+    db: "none"
+
+  - id: F-EMP-138
+    name: Sub-resources with no dedicated permission (Contact, Address, Family, Education, Previous Employment, Supervisor, Additional Info, Documents, Audit Log) are all-or-nothing at the Employee.View/.Edit boundary - there is no way to grant edit access to, say, only Contact
+    group: Authorization
+    status: Implemented
+    ui: "n/a"
+    api: "every /api/employees/{id}/{sub-resource} route except bank-details and employment/employment-history"
+    service: "EmployeeSubResourcesController class-level XML doc + per-action [HasPermission(Employee.View|Edit)]"
+    permission: "Employee.View / Employee.Edit"
+    db: "none"
+
+  - id: F-EMP-139
+    name: An employment-scope role assignment (department/section/grade/etc. dimensions, AND-across-dimensions/OR-within-dimension) restricts List/Get to matching CURRENT employment history only; a scope-holding Manager additionally sees their own direct reports via the Attendance.MonthlyViewTeam permission bridge
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees, GET /api/employees/{id} (as a scoped role)"
+    service: "EmployeeAccessScopeService.BuildPredicateAsync"
+    permission: "n/a (interacts with, but is independent of, the declared Employee.* permission)"
+    db: "UserRoles, RoleScopes, EmployeeEmploymentHistory"
+
+  - id: F-EMP-140
+    name: Employee list/detail/create/update/delete are all isolated per tenant via the EF global TenantId query filter; a cross-tenant employee id is reported identically to a nonexistent one (404), never a 403 that would confirm the id's existence
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "GET/PUT/DELETE /api/employees/{id} (Tenant B token, Tenant A's employee id)"
+    service: "HrmsDbContext global query filter + every service's tenant-scoped lookup"
+    permission: "n/a"
+    db: "Employees"
+    ex: ["xU:EmployeeServiceTests.GetById_of_another_tenants_employee_is_not_found"]
+
+  - id: F-EMP-141
+    name: Every master reference an employment change accepts (department/designation/holding-company/.../work-location/cost-center/manager) is independently tenant-validated - a Tenant B id supplied against Tenant A's employee is reported as nonexistent, identically to a fabricated GUID
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "POST /api/employees/{id}/employment-history (any master field set to another tenant's id)"
+    service: "EmployeeEmploymentService.ValidateEmploymentReferencesAsync (every lookup includes '&& x.TenantId == tenantId')"
+    permission: "EmploymentHistory.Change"
+    db: "every master table referenced by EmployeeEmploymentHistory"
+
+  - id: F-EMP-142
+    name: A cross-tenant Bank master id on a bank detail write is rejected identically to an inactive/nonexistent one
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "POST/PUT /api/employees/{id}/bank-details*"
+    service: "EmployeeBankDetailService.BankExistsAndActiveAsync (implicitly tenant-scoped through the Banks DbSet's own global filter)"
+    permission: "Employee.Edit + EmployeeSensitive.Edit"
+    db: "Banks"
+
+  - id: F-EMP-143
+    name: A supervisor id (any level) belonging to another tenant is rejected identically to a nonexistent one
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "PUT /api/employees/{id}/supervisor"
+    service: "EmployeeSupervisorService.ValidateSupervisorReferencesAsync"
+    permission: "Employee.Edit"
+    db: "Employees"
+    ex: ["xU:EmployeeEmploymentHardeningTests.Supervisor_manager_ids_are_tenant_scoped_and_cannot_self_reference"]
+
+  - id: F-EMP-144
+    name: Export is tenant-isolated for its data (only the caller's own tenant's employees ever appear in the file) even though it is NOT scope-isolated (F-EMP-125)
+    group: Tenant Isolation
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees/export"
+    service: "EmployeeService.ExportAsync (EF global TenantId filter still applies - only the finer-grained scope predicate is missing)"
+    permission: "Employee.Export"
+    db: "Employees"
+    ex: ["xU:EmployeeExportTests.Export_contains_only_the_callers_own_employees"]
+
+  - id: F-EMP-145
+    name: The employee-detail route in the frontend never trusts a tenant id from the client; the API origin/host resolves the tenant, and every request the page issues omits any tenant parameter entirely
+    group: Tenant Isolation
+    status: Implemented
+    ui: "EmployeesPage / EmployeeFormPage network calls"
+    api: "GET /api/employees*"
+    service: "n/a (host-based tenant resolution, per CLAUDE.md)"
+    permission: "n/a"
+    db: "none"
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::never sends a tenant id: the server takes it from the token", "V:pages/employees/EmployeeFormPage.test.tsx::never sends a tenant id: the server takes it from the token"]
+
+  - id: F-EMP-146
+    name: A malformed GUID in any route segment (employee id, sub-resource id) is a routing 404 (ASP.NET's {id:guid} constraint), not a 400 reaching the service layer
+    group: Contract
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees/not-a-guid"
+    service: "n/a (route constraint)"
+    permission: "n/a"
+    db: "none"
+
+  # ── L. Frontend ─────────────────────────────────────────────────────────
+  - id: F-EMP-147
+    name: The Add-employee form shows only the Personal Details tab; Contact/Address/Bank/Employment/Supervisor tabs are inert (Address specifically) until the employee exists, since every sub-resource route needs a real employee id
+    group: Frontend
+    status: Implemented
+    ui: "EmployeeFormPage (Add mode)"
+    api: "n/a"
+    service: "n/a"
+    permission: "Employee.Create"
+    db: "none"
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::shows the three tabs on the Add form, with Address inert until the employee is created", "V:pages/employees/EmployeeFormPage.test.tsx::does not offer department, designation, reporting manager or email"]
+
+  - id: F-EMP-148
+    name: Saving Personal Details on a brand-new employee flips the form in place to Edit mode, showing the newly-assigned (or still-pending) employee code, without a page navigation
+    group: Frontend
+    status: Implemented
+    ui: "EmployeeFormPage"
+    api: "POST /api/employees/personal-details"
+    service: "n/a"
+    permission: "Employee.Create"
+    db: "none"
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::creates then flips in place to UPDATE showing the assigned code"]
+
+  - id: F-EMP-149
+    name: Personal Details SAVE succeeds without the sensitive-edit permission (fields are simply not rendered/sent), and does not surface a permission error
+    group: Frontend
+    status: Implemented
+    ui: "EmployeeFormPage"
+    api: "POST /api/employees/personal-details"
+    service: "n/a"
+    permission: "Employee.Create (EmployeeSensitive.Edit absent)"
+    db: "none"
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::allows Personal Details SAVE without the sensitive-edit permission"]
+
+  - id: F-EMP-150
+    name: A save that fails server-side validation shows the API's error message without discarding what the user already typed
+    group: Frontend
+    status: Implemented
+    ui: "EmployeeFormPage"
+    api: "POST/PUT .../personal-details"
+    service: "n/a"
+    permission: "Employee.Create / Employee.Edit"
+    db: "none"
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::shows an API validation error without losing the entry"]
+
+  - id: F-EMP-151
+    name: A record the page could not load (404/error) is explained rather than shown as a blank form
+    group: Frontend
+    status: Implemented
+    ui: "EmployeeFormPage (edit, bad id)"
+    api: "GET /api/employees/{id}"
+    service: "n/a"
+    permission: "Employee.View"
+    db: "none"
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::explains a record it could not read"]
+
+  - id: F-EMP-152
+    name: Cancel on the Add form leaves without saving
+    group: Frontend
+    status: Implemented
+    ui: "EmployeeFormPage 'Cancel'"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "none"
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::leaves without saving on Cancel"]
+
+  - id: F-EMP-153
+    name: The Address tab, once unlocked, loads the newly-created (or existing, in Edit) employee's addresses and saves against the real employee id
+    group: Frontend
+    status: Implemented
+    ui: "EmployeeFormPage Address tab"
+    api: "GET/POST /api/employees/{id}/addresses"
+    service: "n/a"
+    permission: "Employee.View / Employee.Edit"
+    db: "none"
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::saves address details from the Add form against the newly created employee", "V:pages/employees/EmployeeFormPage.test.tsx::Edit form Address tab loads the existing addresses for that employee"]
+
+  - id: F-EMP-154
+    name: The Employment section posts only master FK ids (never a typed-in free-text name), clears dependent-child selections when a parent is changed, and surfaces a server refusal (e.g. an overlapping period) as an inline error instead of pretending the save succeeded
+    group: Frontend
+    status: Implemented
+    ui: "EmploymentSectionForm"
+    api: "POST /api/employees/{id}/employment-history"
+    service: "n/a"
+    permission: "EmploymentHistory.Change"
+    db: "none"
+    ex: ["V:pages/employees/EmploymentSectionForm.test.tsx::posts the master FKs (never a typed-in name) when adding employment", "V:pages/employees/EmploymentSectionForm.test.tsx::clears dependent children when a parent is changed", "V:pages/employees/EmploymentSectionForm.test.tsx::surfaces a server refusal (overlapping period) as an error instead of saving"]
+
+  - id: F-EMP-155
+    name: The manager display renders the resolved manager's employee code and name, never the internal GUID; it renders a dash when no manager data is available
+    group: Frontend
+    status: Implemented
+    ui: "EmploymentSectionForm / SupervisorSectionForm manager display"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "none"
+    ex: ["V:pages/employees/EmploymentManagerDisplay.test.ts::renders the manager code and name, never the internal GUID", "V:pages/employees/EmploymentManagerDisplay.test.ts::renders a dash when manager display data is absent"]
+
+  - id: F-EMP-156
+    name: The list page paging/search/sort/filter state round-trips through the URL - a filtered view is a shareable link, Back steps through what was actually done, and an unrecognized value in a hand-edited URL (e.g. an invalid status) is dropped rather than sent to the API
+    group: Frontend
+    status: Implemented
+    ui: "EmployeesPage"
+    api: "GET /api/employees"
+    service: "n/a"
+    permission: "Employee.View"
+    db: "none"
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::asks for page one by first name, and fills both reference filters", "V:pages/employees/EmployeesPage.test.tsx::sends the paging, search, sort and all three filters it found in the URL", "V:pages/employees/EmployeesPage.test.tsx::drops a status a hand-edited URL invented"]
+
+  - id: F-EMP-157
+    name: Search debounces (fires once for a typed word, not once per keystroke); sorting asks the server and flips the arrow on the column already sorted
+    group: Frontend
+    status: Implemented
+    ui: "EmployeesPage search box, column headers"
+    api: "GET /api/employees"
+    service: "n/a"
+    permission: "Employee.View"
+    db: "none"
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::searches once for a word, not once per keystroke", "V:pages/employees/EmployeesPage.test.tsx::sorts by asking the server, and flips the column it already sorted by"]
+
+  - id: F-EMP-158
+    name: The Department/Designation reference filters render (and fetch their options) ONLY for a caller who holds Department.View/Designation.View respectively - a Manager (Employee.View only) never sees them and is not shown a 403 for something never requested; the page still lists employees when a reference-filter option list itself fails to load
+    group: Frontend
+    status: Implemented
+    ui: "EmployeesPage department/designation <select>"
+    api: "GET /api/master-data/departments, /api/master-data/designations"
+    service: "n/a"
+    permission: "Department.View / Designation.View"
+    db: "none"
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::hides the reference filters from someone who cannot read them", "V:pages/employees/EmployeesPage.test.tsx::gives a Manager the directory and nothing to change in it", "V:pages/employees/EmployeesPage.test.tsx::still lists employees when a reference filter cannot be filled"]
+
+  - id: F-EMP-159
+    name: The Export button is rendered only with Employee.Export, and carries exactly the on-screen filters (search/sort/department/designation/status) without the paging - so the file matches the filtered view, not just the visible page
+    group: Frontend
+    status: Implemented
+    ui: "ExportEmployeesButton"
+    api: "GET /api/employees/export"
+    service: "n/a"
+    permission: "Employee.Export"
+    db: "none"
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::exports the view on screen, without its paging"]
+
+  - id: F-EMP-160
+    name: Deleting the last row on a page steps back a page automatically rather than showing an empty table for a result set that still has rows; a delete refusal (409, direct reports) keeps the question open, in the server's own words
+    group: Frontend
+    status: Implemented
+    ui: "EmployeesPage"
+    api: "DELETE /api/employees/{id}"
+    service: "n/a"
+    permission: "Employee.Delete"
+    db: "none"
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::steps back a page when the last row on it is deleted", "V:pages/employees/EmployeesPage.test.tsx::keeps the question open, in the server’s words, when a delete is refused"]
+
+  # ── M. Other sub-resources (Family, Education, Previous Employment, Additional Info, Documents, Audit Log) ─
+  - id: F-EMP-161
+    name: Family members - CRUD list is unbounded per employee; first/last name and relationship are required, gender validated, and a nominee percentage (0.01-100) is validated only when IsNominee is set
+    group: Family / Education / Other
+    status: Implemented
+    ui: "FamilyDetailsForm.tsx ('Family Details' tab, rendered in both EmployeeFormPage and EmployeeDetailPage's TABS list)"
+    api: "GET/POST/PUT/DELETE /api/employees/{id}/family[/{familyId}]"
+    service: "EmployeeFamilyService; EmployeeFamilyRequestValidator"
+    permission: "Employee.View / Employee.Edit"
+    db: "EmployeeFamilies"
+    cr: [CR-60]
+
+  - id: F-EMP-162
+    name: Education records - Qualification required (max 200); Institute/University optional (max 200); EducationLevel/EducationType/YearOfPassing/Score/AreaOfSpecialization/DocumentOfProof are free-form with no validator rule beyond DTO shape
+    group: Family / Education / Other
+    status: Implemented
+    ui: "n/a - no frontend section renders Education (CR-52)"
+    api: "GET/POST/PUT/DELETE /api/employees/{id}/education[/{educationId}]"
+    service: "EmployeeEducationService; EmployeeEducationRequestValidator"
+    permission: "Employee.View / Employee.Edit"
+    db: "EmployeeEducations"
+
+  - id: F-EMP-163
+    name: Previous Employment records - Company required (max 200); Designation optional (max 200); tenure dates/location/type/documentOfProof are unvalidated beyond shape; supports linked supporting Documents
+    group: Family / Education / Other
+    status: Implemented
+    ui: "PreviousEmploymentForm.tsx ('Previous Employment' tab, rendered in both EmployeeFormPage and EmployeeDetailPage's TABS list)"
+    api: "GET/POST/PUT/DELETE /api/employees/{id}/previous-employment[/{previousEmploymentId}]"
+    service: "EmployeePreviousEmploymentService; EmployeePreviousEmploymentRequestValidator"
+    permission: "Employee.View / Employee.Edit"
+    db: "EmployeePreviousEmployments, EmployeeDocuments (PreviousEmploymentId FK)"
+
+  - id: F-EMP-164
+    name: Additional Info - a single upserted row per employee (Division/PaPsa/AdditionalEmployeeCode/ContractId); no validation rule at all beyond DTO shape
+    group: Family / Education / Other
+    status: Implemented
+    ui: "n/a - no frontend section renders Additional Info (CR-52)"
+    api: "GET/PUT /api/employees/{id}/additional-info"
+    service: "EmployeeAdditionalInfoService; EmployeeAdditionalInfoRequestValidator (empty - no rules)"
+    permission: "Employee.View / Employee.Edit"
+    db: "EmployeeAdditionalInfo"
+
+  - id: F-EMP-165
+    name: Documents - upload records metadata (name/category/number/filePath/fileSize/contentType/uploadedBy) via multipart form; optionally linked to a specific Previous Employment record; delete removes the metadata row
+    group: Family / Education / Other
+    status: Implemented
+    ui: "n/a - no frontend section renders Documents (CR-52)"
+    api: "GET/POST/DELETE /api/employees/{id}/documents[/{documentId}]"
+    service: "EmployeeDocumentService"
+    permission: "Employee.View / Employee.Edit"
+    db: "EmployeeDocuments"
+
+  - id: F-EMP-166
+    name: Audit Log - every Contact/Address/Family/Education/PreviousEmployment/BankDetail/Supervisor/AdditionalInfo/EmploymentHistory/Documents write is logged (module, section, entity, record id, field, old/new value, change type, changed-by) and readable, paged and filtered, per employee
+    group: Family / Education / Other
+    status: Implemented
+    ui: "n/a - no frontend section renders the Audit Log (CR-52)"
+    api: "GET /api/employees/{id}/audit-log"
+    service: "EmployeeAuditService.GetAsync; EmployeeSubResourcesController.LogAuditAsync (called from every sub-resource action)"
+    permission: "Employee.View"
+    db: "EmployeeAuditLogs"
+
+  - id: F-EMP-167
+    name: Every Family/Education/Previous Employment/Additional Info/Documents/Audit Log endpoint is tenant-isolated and 404s on a cross-tenant employee id, identically to Contact/Address/Bank/Supervisor
+    group: Family / Education / Other
+    status: Implemented
+    ui: "n/a"
+    api: "GET/POST/PUT/DELETE /api/employees/{id}/{family|education|previous-employment|additional-info|documents|audit-log}*"
+    service: "every EmployeeXxxService.EmployeeExistsAsync tenant-filtered gate"
+    permission: "Employee.View / Employee.Edit"
+    db: "Employees"
+
+  - id: F-EMP-168
+    name: Deleting a nonexistent Family/Education/Previous Employment/Document id (or one belonging to a different employee) is a 404
+    group: Family / Education / Other
+    status: Implemented
+    ui: "n/a"
+    api: "DELETE /api/employees/{id}/{family|education|previous-employment|documents}/{recordId}"
+    service: "every EmployeeXxxService.DeleteAsync (FirstOrDefaultAsync by both the record id and the employee id)"
+    permission: "Employee.Edit"
+    db: "EmployeeFamilies, EmployeeEducations, EmployeePreviousEmployments, EmployeeDocuments"
+
+  - id: F-EMP-169
+    name: Audit Log query supports paging and, per AuditQuery, filtering; an out-of-range page returns an empty page rather than an error
+    group: Family / Education / Other
+    status: Implemented
+    ui: "n/a"
+    api: "GET /api/employees/{id}/audit-log?page=&pageSize="
+    service: "EmployeeAuditService.GetAsync"
+    permission: "Employee.View"
+    db: "EmployeeAuditLogs"
+
+  - id: F-EMP-170
+    name: Frontend Employee sub-resource surface is 8 of the 11 implemented backend sub-resources (Personal/Contact/Address/Family/Bank/Previous Employment/Employment+History/Supervisor, all 8 present in EmployeeFormPage's and EmployeeDetailPage's TABS list); Education, Additional Info, Documents and the Audit Log have no frontend representation at all - confirmed by a repo-wide search showing getEducationRecords/getDocuments/getAdditionalInfo/getAuditLog (api/employeeSubsections.ts) are called nowhere outside that api module itself
+    group: Family / Education / Other
+    status: Needs clarification
+    ui: "EmployeeProfileSidebar.tsx (EmployeeSection union) vs EmployeeFormPage.tsx/EmployeeDetailPage.tsx TABS const (8 of 8 union members are rendered; Education/AdditionalInfo/Documents/AuditLog are not union members at all)"
+    api: "n/a"
+    service: "n/a"
+    permission: "n/a"
+    db: "none"
+    cr: [CR-52]

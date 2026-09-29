@@ -1,0 +1,197 @@
+sheet: Employee_Frontend
+submodule: Frontend - Employee list, form, and sub-resource sections
+defaults:
+  role: HR_ADMIN
+  perm: "Employee.View + Employee.Edit"
+  tenant: A
+  pre: "Signed in as HRAdmin in the browser at demo01.localhost:5173, tenant A resolved from the host."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: EMP-FE-001
+    func: [F-EMP-147]
+    sc: The Add-employee form shows only Personal Details; other tabs are inert until the employee exists
+    t: Contact/Address/Bank/Employment/Supervisor tabs are disabled (or explain they need an employee id first) before the first save
+    src: ["EmployeeFormPage.tsx (Add mode)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Navigate to /employees/new => only Personal Details is enabled; Address (and the other sub-resource tabs) show a 'needs employee' notice"
+      - "[UI] Inspect the Personal Details fields rendered on this Add form => no department, designation, reporting manager or email field is offered"
+    auto: UI
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::shows the three tabs on the Add form, with Address inert until the employee is created", "V:pages/employees/EmployeeFormPage.test.tsx::does not offer department, designation, reporting manager or email"]
+
+  - id: EMP-FE-002
+    func: [F-EMP-148]
+    sc: Saving Personal Details on a new employee flips the form in place to Edit mode
+    t: No page navigation occurs; the newly-assigned/pending code is shown immediately
+    src: ["EmployeeFormPage.tsx"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Fill valid Personal Details on /employees/new and Save => the form updates in place to show UPDATE mode, the employee code banner reflects the new/pending code, and every other tab is now enabled"
+    auto: UI
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::creates then flips in place to UPDATE showing the assigned code"]
+
+  - id: EMP-FE-003
+    func: [F-EMP-149]
+    sc: Personal Details SAVE succeeds without the sensitive-edit permission
+    t: The sensitive fields are simply not rendered/sent, and no permission error appears
+    src: ["EmployeeFormPage.tsx"]
+    type: Positive
+    tags: [Authorization]
+    pri: P2
+    role: HR_MANAGER
+    perm: "Employee.Create (no EmployeeSensitive.Edit)"
+    steps:
+      - "[UI] As a user without EmployeeSensitive.Edit, fill and Save Personal Details on a new employee => save succeeds with no error, and no Aadhaar/PAN/UAN inputs are visible on the form"
+    auto: UI
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::allows Personal Details SAVE without the sensitive-edit permission"]
+
+  - id: EMP-FE-004
+    func: [F-EMP-150]
+    sc: A server-side validation failure shows the API's message without discarding typed input
+    t: A rejected save keeps every field the user entered, with the error shown inline
+    src: ["EmployeeFormPage.tsx"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[UI] Submit Personal Details with a value the server rejects (e.g. an invalid PAN format) => the API's error message is shown, and every other typed field remains in the form"
+    auto: UI
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::shows an API validation error without losing the entry"]
+
+  - id: EMP-FE-005
+    func: [F-EMP-151]
+    sc: A record that fails to load is explained, not shown as a blank form
+    t: Navigating to Edit for a bad/nonexistent id shows an explanatory message
+    src: ["EmployeeFormPage.tsx"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[UI] Navigate to /employees/{a nonexistent id}/edit => an explanatory 'could not load this record' message is shown, not an empty form"
+    auto: UI
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::explains a record it could not read"]
+
+  - id: EMP-FE-006
+    func: [F-EMP-152]
+    sc: Cancel on the Add form leaves without saving
+    t: Clicking Cancel discards the in-progress entry and returns to the list
+    src: ["EmployeeFormPage.tsx"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Fill some Personal Details fields on /employees/new, then click Cancel => the user returns to the Employees list, and no employee was created"
+    auto: UI
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::leaves without saving on Cancel"]
+
+  - id: EMP-FE-007
+    func: [F-EMP-153]
+    sc: The Address tab, once unlocked, loads and saves against the real employee id
+    t: In both Add-then-created and Edit modes, Address correctly targets the actual employee
+    src: ["EmployeeFormPage.tsx Address tab"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] After creating a new employee via Personal Details, switch to Address and save a Current address => it saves against the newly-created employee's id"
+      - "[UI] Open Edit for an existing employee with a saved address => the Address tab loads that employee's existing address data"
+    auto: UI
+    ex: ["V:pages/employees/EmployeeFormPage.test.tsx::saves address details from the Add form against the newly created employee", "V:pages/employees/EmployeeFormPage.test.tsx::Edit form Address tab loads the existing addresses for that employee"]
+
+  - id: EMP-FE-008
+    func: [F-EMP-154]
+    sc: The Employment section posts only master FK ids, clears dependent children on parent change, and surfaces server refusals inline
+    t: No typed-in free-text name is ever posted for a master field; an overlapping-period rejection shows as an error, not a false success
+    src: ["EmploymentSectionForm.tsx"]
+    type: Positive
+    tags: [Negative]
+    pri: P1
+    steps:
+      - "[UI] Add an employment change, selecting Department then Sub-Department => the network request carries only the chosen ids, never a typed name"
+      - "[UI] Change Department after Sub-Department was already selected => the Sub-Department (and further dependents) selection clears"
+      - "[UI] Submit a change whose effective date the server rejects as overlapping => an inline error is shown; the UI does not pretend the save succeeded"
+    auto: UI
+    ex: ["V:pages/employees/EmploymentSectionForm.test.tsx::posts the master FKs (never a typed-in name) when adding employment", "V:pages/employees/EmploymentSectionForm.test.tsx::clears dependent children when a parent is changed", "V:pages/employees/EmploymentSectionForm.test.tsx::surfaces a server refusal (overlapping period) as an error instead of saving"]
+
+  - id: EMP-FE-009
+    func: [F-EMP-155]
+    sc: The manager display shows code+name, never the raw GUID
+    t: Both the Employment and Supervisor sections render a manager as '{code} — {name}', falling back to a dash when absent
+    src: ["EmploymentManagerDisplay.test.ts"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] View an employment record with a resolved manager => the manager is shown as its code and name, never a GUID"
+      - "[UI] View a record with no manager data available => a dash ('—') is shown instead"
+    auto: UI
+    ex: ["V:pages/employees/EmploymentManagerDisplay.test.ts::renders the manager code and name, never the internal GUID", "V:pages/employees/EmploymentManagerDisplay.test.ts::renders a dash when manager display data is absent"]
+
+  - id: EMP-FE-010
+    func: [F-EMP-156]
+    sc: List paging/search/sort/filter state round-trips through the URL
+    t: A filtered view is a shareable link; an invalid value in a hand-edited URL is dropped, not sent
+    src: ["EmployeesPage.tsx"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[UI] Apply a search term, a status filter and a sort, then copy the URL and reload it in a fresh tab => the exact same filtered/sorted view is restored"
+      - "[UI] Hand-edit the URL to include an invalid status value, then load it => the invalid value is dropped before the API call, not sent as-is"
+    auto: UI
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::asks for page one by first name, and fills both reference filters", "V:pages/employees/EmployeesPage.test.tsx::sends the paging, search, sort and all three filters it found in the URL", "V:pages/employees/EmployeesPage.test.tsx::drops a status a hand-edited URL invented"]
+
+  - id: EMP-FE-011
+    func: [F-EMP-157]
+    sc: Search debounces and sorting toggles the arrow on the already-sorted column
+    t: Typing a search term fires one request, not one per keystroke; clicking a sorted column's header flips direction
+    src: ["EmployeesPage.tsx"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Type a multi-character search word quickly => exactly one network request fires after the debounce, not one per keystroke"
+      - "[UI] Click a column header already sorted ascending => it flips to descending and the arrow indicator updates"
+    auto: UI
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::searches once for a word, not once per keystroke", "V:pages/employees/EmployeesPage.test.tsx::sorts by asking the server, and flips the column it already sorted by"]
+
+  - id: EMP-FE-012
+    func: [F-EMP-158]
+    sc: Department/Designation reference filters render only for a caller who can read them
+    t: A Manager (Employee.View only) never sees the reference filters, with no visible error for something never requested
+    src: ["EmployeesPage.tsx"]
+    type: Authorization
+    pri: P1
+    role: MANAGER
+    perm: Employee.View
+    steps:
+      - "[UI] Open the Employees list as a Manager who lacks Department.View/Designation.View => the department/designation filter selects are not rendered at all, and the status filter and search still work normally"
+      - "[UI] Simulate the department reference-data call failing (e.g. a transient 500) => the employee list itself still renders, just without that one filter's options"
+    auto: UI
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::hides the reference filters from someone who cannot read them", "V:pages/employees/EmployeesPage.test.tsx::gives a Manager the directory and nothing to change in it", "V:pages/employees/EmployeesPage.test.tsx::still lists employees when a reference filter cannot be filled"]
+
+  - id: EMP-FE-013
+    func: [F-EMP-159]
+    sc: The Export button carries the on-screen filters, but never the paging
+    t: Exporting from a filtered/sorted view produces a request matching search/sort/filters with no page/pageSize
+    src: ["ExportEmployeesButton.tsx"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Apply a department filter and a sort, then click Export => the export request carries the department filter and sort, but no page or pageSize parameter"
+      - "[UI] As HRManager (Employee.Export but no Employee.Delete) => the Export button IS rendered even though the Delete action is not"
+    auto: UI
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::exports the view on screen, without its paging"]
+
+  - id: EMP-FE-014
+    func: [F-EMP-160]
+    sc: Deleting the last row on a page steps back automatically; a delete refusal keeps the question open in the server's own words
+    t: The page never shows an empty table when rows remain elsewhere, and a 409 direct-reports refusal is shown verbatim
+    src: ["EmployeesPage.tsx"]
+    type: Positive
+    tags: [Negative]
+    pri: P2
+    steps:
+      - "[UI] On the last page with exactly one row, delete it => the view automatically steps back to the previous page instead of showing an empty table"
+      - "[UI] Attempt to delete an employee who still has direct reports => the server's own 409 message ('N employee(s) report to this person...') is shown verbatim, and the row is not removed"
+    auto: UI
+    ex: ["V:pages/employees/EmployeesPage.test.tsx::steps back a page when the last row on it is deleted", "V:pages/employees/EmployeesPage.test.tsx::keeps the question open, in the server’s words, when a delete is refused"]

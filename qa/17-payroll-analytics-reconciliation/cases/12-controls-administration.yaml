@@ -1,0 +1,217 @@
+sheet: PYA_Controls_Administration
+submodule: Payroll Variance Controls Administration
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-CTRL-001
+    func: [F-PYA-092]
+    sc: List controls happy path with search
+    t: ListControlsAsync lists the tenant's controls, ordered by Code, filterable by Code/Name search
+    src: "PayrollAnalyticsControlsController.List; PayrollAnalyticsService.ListControlsAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "3 controls exist: GROSS_LIMIT, NET_LIMIT, DEDUCTION_LIMIT"
+    role: HRAdmin (custom role holding Payroll.Analytics.View)
+    perm: Payroll.Analytics.View
+    tenant: "T1 (DEMO01)"
+    data: "search=LIMIT"
+    steps:
+      - "[GET /api/payroll/analytics-controls?search=LIMIT] => [200] all 3 returned, ordered DEDUCTION_LIMIT, GROSS_LIMIT, NET_LIMIT"
+    auto: API
+
+  - id: PYA-CTRL-002
+    func: [F-PYA-093]
+    sc: Create requires a code and at least one threshold
+    t: A blank Code, and separately a request with both AbsoluteThreshold and PercentageThreshold null, are both rejected with Invalid
+    src: "PayrollAnalyticsService.CreateControlAsync"
+    type: Negative
+    tags: [Validation]
+    pri: P0
+    sev: High
+    pre: none
+    role: HRAdmin (custom role holding Payroll.Analytics.Configure)
+    perm: Payroll.Analytics.Configure
+    tenant: "T1 (DEMO01)"
+    data: "code='', metric=GrossPay | code='X', absoluteThreshold=null, percentageThreshold=null"
+    steps:
+      - "[POST /api/payroll/analytics-controls] {code:'', name:'X', scope:'PayrollRun', metric:'GrossPay', effectiveFrom:'2026-01-01'} => [400] A control code and at least one threshold are required."
+      - "[POST /api/payroll/analytics-controls] {code:'X', name:'X', scope:'PayrollRun', metric:'GrossPay', absoluteThreshold:null, percentageThreshold:null, effectiveFrom:'2026-01-01'} => [400] A control code and at least one threshold are required."
+    auto: API
+
+  - id: PYA-CTRL-003
+    func: [F-PYA-094]
+    sc: Duplicate (Code, EffectiveFrom) is rejected; same Code with a different EffectiveFrom is allowed
+    t: Creating a second control with the same Code and EffectiveFrom returns Conflict; the same Code with a different EffectiveFrom succeeds
+    src: "PayrollAnalyticsService.CreateControlAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "GROSS_LIMIT already exists with EffectiveFrom=2026-01-01"
+    role: HRAdmin (custom role holding Payroll.Analytics.Configure)
+    perm: Payroll.Analytics.Configure
+    tenant: "T1 (DEMO01)"
+    data: "code='GROSS_LIMIT', effectiveFrom='2026-01-01' | code='GROSS_LIMIT', effectiveFrom='2027-01-01'"
+    steps:
+      - "[POST /api/payroll/analytics-controls] {code:'GROSS_LIMIT', name:'Dup', scope:'PayrollRun', metric:'GrossPay', absoluteThreshold:1, effectiveFrom:'2026-01-01'} => [409] A control with this code and effective date already exists."
+      - "[POST /api/payroll/analytics-controls] {code:'GROSS_LIMIT', name:'Next version', scope:'PayrollRun', metric:'GrossPay', absoluteThreshold:1, effectiveFrom:'2027-01-01'} => [200] succeeds"
+    auto: API
+
+  - id: PYA-CTRL-004
+    func: [F-PYA-095]
+    sc: Update happy path and not-found
+    t: UpdateControlAsync overwrites every field for an existing control; a random id returns NotFound
+    src: "PayrollAnalyticsControlsController.Update; PayrollAnalyticsService.UpdateControlAsync"
+    type: Positive
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "NET_LIMIT exists with Name='Net limit v1', AbsoluteThreshold=100"
+    role: HRAdmin (custom role holding Payroll.Analytics.Configure)
+    perm: Payroll.Analytics.Configure
+    tenant: "T1 (DEMO01)"
+    data: "id=NET_LIMIT id, id=<random guid>"
+    steps:
+      - "[PUT /api/payroll/analytics-controls/{NET_LIMIT-ID}] {code:'NET_LIMIT', name:'Net limit v2', scope:'PayrollRun', metric:'NetPay', absoluteThreshold:200, effectiveFrom:'2026-01-01'} => [200] Name='Net limit v2', AbsoluteThreshold=200"
+      - "[PUT /api/payroll/analytics-controls/{RANDOM-GUID}] {code:'X', name:'X', scope:'PayrollRun', metric:'NetPay', absoluteThreshold:1, effectiveFrom:'2026-01-01'} => [404] Analytics control not found."
+    auto: API
+
+  - id: PYA-CTRL-005
+    func: [F-PYA-096]
+    sc: Update does not increment ConcurrencyVersion and does not re-check uniqueness
+    t: Updating a control's Code+EffectiveFrom to collide with ANOTHER existing control's own Code+EffectiveFrom is not rejected, unlike Create
+    src: "PayrollAnalyticsService.UpdateControlAsync, Apply"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "CTRL-A (Code='A_LIMIT', EffectiveFrom=2026-01-01) and CTRL-B (Code='B_LIMIT', EffectiveFrom=2026-01-01) both exist"
+    role: HRAdmin (custom role holding Payroll.Analytics.Configure)
+    perm: Payroll.Analytics.Configure
+    tenant: "T1 (DEMO01)"
+    data: "id=CTRL-B, code='A_LIMIT', effectiveFrom='2026-01-01'"
+    steps:
+      - "[GET /api/payroll/analytics-controls?search=A_LIMIT] => [200] note ConcurrencyVersion=1 for CTRL-A before the update"
+      - "[PUT /api/payroll/analytics-controls/{CTRL-B-ID}] {code:'A_LIMIT', name:'B renamed to A', scope:'PayrollRun', metric:'GrossPay', absoluteThreshold:1, effectiveFrom:'2026-01-01'} => [200] succeeds despite duplicating CTRL-A's own (Code, EffectiveFrom) pair - Update performs no uniqueness re-check"
+    auto: DB-assisted
+    db: "Assert 2 PayrollVarianceControls rows now share Code='A_LIMIT'/EffectiveFrom=2026-01-01, and CTRL-B's own ConcurrencyVersion is still 1 after the update"
+    cr: [CR-290]
+
+  - id: PYA-CTRL-006
+    func: [F-PYA-097]
+    sc: A control may be saved with any Scope/Metric combination with no server-side rejection
+    t: Creating a control with Scope=Employee and Metric=BankAdviceTotal (neither ever evaluated together anywhere) succeeds with 200, not a validation error
+    src: "PayrollAnalyticsService.CreateControlAsync"
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: HRAdmin (custom role holding Payroll.Analytics.Configure)
+    perm: Payroll.Analytics.Configure
+    tenant: "T1 (DEMO01)"
+    data: "code='DEAD_COMBO', scope='Employee', metric='BankAdviceTotal', absoluteThreshold=1"
+    steps:
+      - "[POST /api/payroll/analytics-controls] {code:'DEAD_COMBO', name:'Dead combo', scope:'Employee', metric:'BankAdviceTotal', absoluteThreshold:1, effectiveFrom:'2026-01-01'} => [200] control created and listed normally"
+    auto: API
+    cr: [CR-293, CR-294]
+
+  - id: PYA-CTRL-007
+    func: [F-PYA-098]
+    sc: IsActive=false and an expired EffectiveTo both exclude a control from evaluation
+    t: Flipping IsActive back to true (via Update) re-enables an otherwise correctly-configured control for the next generation
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync, UpdateControlAsync"
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "CTRL-REACTIVATE (Scope=PayrollRun, Metric=GrossPay, AbsoluteThreshold=1, IsActive=false) exists; RUN1 (Gross=50000) has no active bank/journal reconciliation generated yet"
+    role: HRAdmin (custom role holding Payroll.Analytics.Configure + Payroll.Reconciliation.Generate)
+    perm: "Payroll.Analytics.Configure, Payroll.Reconciliation.Generate"
+    tenant: "T1 (DEMO01)"
+    data: "id=CTRL-REACTIVATE"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] (while inactive) => [200] Findings does not contain CTRL-REACTIVATE"
+      - "[PUT /api/payroll/analytics-controls/{CTRL-REACTIVATE-ID}] {..., isActive:true} => [200] IsActive=true"
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] (after reactivation) => [200] Findings now contains CTRL-REACTIVATE"
+    auto: API
+
+  - id: PYA-CTRL-008
+    func: [F-PYA-099]
+    sc: AppliesToRunType=null applies to every RunType
+    t: A control with AppliesToRunType=null fires identically for a Regular run and an OffCycle run with the same breached metric
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Positive
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "CTRL-ANY-TYPE (AppliesToRunType=null, Metric=GrossPay, AbsoluteThreshold=1) exists; RUN-REG (Regular, Gross=50000) and RUN-OFF (OffCycle, Gross=50000)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN-REG, runId=RUN-OFF"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN-REG}/post] => [200] Findings contains CTRL-ANY-TYPE"
+      - "[POST /api/payroll/reconciliation/runs/{RUN-OFF}/post] => [200] Findings also contains CTRL-ANY-TYPE"
+    auto: API
+
+  - id: PYA-CTRL-009
+    func: [F-PYA-100]
+    sc: ConcurrencyVersion is surfaced but never enforced
+    t: The DTO's ConcurrencyVersion field is returned to callers, but two sequential Update calls both succeed unconditionally regardless of the ConcurrencyVersion value the caller last observed
+    src: "PayrollAnalyticsService (DTO shape only)"
+    type: Negative
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "CTRL-STALE exists with ConcurrencyVersion=1 in its DTO"
+    role: HRAdmin (custom role holding Payroll.Analytics.Configure)
+    perm: Payroll.Analytics.Configure
+    tenant: "T1 (DEMO01)"
+    data: "id=CTRL-STALE"
+    steps:
+      - "[PUT /api/payroll/analytics-controls/{CTRL-STALE-ID}] {..., name:'First writer'} (a client reading ConcurrencyVersion=1) => [200] succeeds, ConcurrencyVersion in response is still 1 (never incremented)"
+      - "[PUT /api/payroll/analytics-controls/{CTRL-STALE-ID}] {..., name:'Second writer, stale view'} (a second client that ALSO read ConcurrencyVersion=1 before the first write) => [200] ALSO succeeds and silently overwrites the first writer's Name - no 409 despite acting on stale data"
+    auto: API
+    cr: [CR-290]
+
+  - id: PYA-CTRL-010
+    func: [F-PYA-101]
+    sc: Controls are strictly tenant-scoped for list/create/update
+    t: A control created under Tenant A is invisible to Tenant B's list, and Tenant B cannot update it by guessing its id
+    src: "PayrollAnalyticsService.ListControlsAsync, UpdateControlAsync"
+    type: Tenant-Isolation
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "CTRL-T1 exists under Tenant T1 (DEMO01)"
+    role: HRAdmin (custom role holding Payroll.Analytics.View + Payroll.Analytics.Configure, tenant T2)
+    perm: "Payroll.Analytics.View, Payroll.Analytics.Configure"
+    tenant: "T2 (DEMO02)"
+    data: "id=CTRL-T1"
+    steps:
+      - "[GET /api/payroll/analytics-controls] (authenticated to T2) => [200] does not include CTRL-T1"
+      - "[PUT /api/payroll/analytics-controls/{CTRL-T1-ID}] {...} (authenticated to T2) => [404] Analytics control not found."
+    auto: API
+
+  - id: PYA-CTRL-011
+    func: [F-PYA-102]
+    sc: There is no delete endpoint - deactivation via Update is the only lifecycle exit
+    t: A DELETE request to the analytics-controls route is rejected as an unsupported method; the only way to stop evaluation is IsActive=false via PUT
+    src: "PayrollAnalyticsControlsController (route surface)"
+    type: Negative
+    tags: []
+    pri: P2
+    sev: Low
+    pre: "CTRL-NO-DELETE exists"
+    role: HRAdmin (custom role holding Payroll.Analytics.Configure)
+    perm: Payroll.Analytics.Configure
+    tenant: "T1 (DEMO01)"
+    data: "id=CTRL-NO-DELETE"
+    steps:
+      - "[DELETE /api/payroll/analytics-controls/{CTRL-NO-DELETE-ID}] => [405] Method Not Allowed (no DELETE route is registered for this controller)"
+    auto: API

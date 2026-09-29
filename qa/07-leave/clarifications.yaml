@@ -1,0 +1,342 @@
+# Module 7 QA-risk register. Numbering continues after Module 6's CR-76 (qa/06-rbac-account-linking/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. classification starts 'Open - awaiting decision'.
+#
+# CR-53 and CR-57 are carried forward from Module 5 (per the brief's explicit dependency list) because
+# Leave test cases exercise their practical impact directly, and Leave introduces a THIRD independent
+# scope/manager mechanism (CR-77) alongside the two CR-57 already describes. Each carried-forward entry
+# below is a short cross-reference, not a restatement - see the originating module's own clarifications.yaml
+# for the full observation/risk/source text. They are re-declared here only so a Module 7 case's `cr:`
+# field resolves against THIS module's own registry (qa/tools/build_test_catalogue.py validates `cr:` per
+# module).
+
+clarifications:
+  - id: CR-53
+    title: "(carried forward from Module 5, confirmed in Module 6) Terminated/Resigned employees keep an active portal login - no Employee or Employment endpoint ever revokes it"
+    observation: "See qa/05-employee/clarifications.yaml#CR-53 and qa/06-rbac-account-linking/clarifications.yaml#CR-53 for the full observation. Module 7 confirms the LEAVE-side consequence directly and distinguishes it sharply from Leave's own, genuine, independent business-eligibility gate: a separated employee's account keeps Leave.RequestCreate/RequestViewOwn/BalanceViewOwn (F-LEAVE-289), their Leave balance stays fully visible via GET /api/leave-balances/mine (F-LEAVE-291, no employment-eligibility gate exists on that read path at all), and their pre-existing requests remain visible on the Calendar and in their former manager's inbox (F-LEAVE-292) - all of this is CR-53's login/RBAC-retention gap operating exactly as described in Module 5/6. Separately, and NOT part of CR-53's own finding, LeaveRequestValidationService.ValidateEmploymentContext DOES correctly reject a NEW leave request whose start date falls after the employee's own DateOfLeaving (F-LEAVE-290) - a real, working business rule. The two must not be conflated: CR-53 explains why a separated employee can still *reach* the Leave UI/API surface at all; Leave's own ValidateEmploymentContext is what actually stops them from filing a *new* request once there. Also confirmed: a manager CAN still approve/reject a separated former-report's still-pending request (F-LEAVE-293), since LeaveRequestApprovalService.AuthorizeAsync checks only the approver's own authorization, never the target employee's status."
+    risk: "Leave provides no independent safety net for CR-53 on the READ side (balance, calendar, approval-inbox visibility) - only the WRITE path (new-request submission) is protected, by its own unrelated business rule. A separated employee's historical Leave footprint remains fully visible and their balance fully queryable indefinitely, and a manager can still action a pending request left over from before separation with no special warning that the requester has since separated."
+    source: "Backend/HRMS.Application/Services/LeaveRequestValidationService.cs (ValidateEmploymentContext); LeaveBalanceSummaryReader.cs (GetMineAsync, no eligibility gate); LeaveRequestApprovalService.cs (AuthorizeAsync, no target-employee status check); qa/05-employee/clarifications.yaml and qa/06-rbac-account-linking/clarifications.yaml (CR-53)"
+    classification: Open - awaiting decision
+
+  - id: CR-57
+    title: "(carried forward from Module 5/6) The Manager role's scope narrowing is implemented by a cross-module permission coupling invisible from Permissions.cs alone - Leave adds a THIRD, independent implementation of the same underlying idea (see CR-77)"
+    observation: "See qa/05-employee/clarifications.yaml#CR-57 and qa/06-rbac-account-linking/clarifications.yaml#CR-57 for the full observation of EmployeeAccessScopeService's Attendance-permission-keyed narrowing. Module 7 confirms Leave does NOT reuse that mechanism, and does NOT reuse RoleScopeResolver/UserRoleAssignmentScope for the manager dimension either - it has its OWN, third, independent implementation living in LeaveAuthorizationService.BuildCurrentManagerPredicate/CanAccessEmployeeAsync, keyed directly off EmployeeEmploymentHistory.ManagerId (see CR-77). A role combination such as Manager+HRBP therefore has, across the whole product, potentially THREE non-communicating scope mechanisms in simultaneous effect depending on which module is being read (Employee/Attendance's CR-57 mechanism, RBAC's RoleScopeResolver, and Leave's own CR-77 mechanism)."
+    risk: "A tester or developer who has only read Module 5/6's CR-57 writeup would reasonably assume Leave's manager-approval scoping reuses the SAME Attendance-permission-keyed coupling - it does not. Fixing or auditing 'manager scope' as a single concept requires touching three separate code paths, not one."
+    source: "Backend/HRMS.Application/Services/EmployeeAccessScopeService.cs; Backend/HRMS.Application/Services/RoleScopeResolver.cs; Backend/HRMS.Application/Services/LeaveAuthorizationService.cs; qa/05-employee/clarifications.yaml (CR-57); qa/06-rbac-account-linking/clarifications.yaml (CR-57)"
+    classification: Open - awaiting decision
+
+  - id: CR-66
+    title: "(carried forward from Module 6) PageAccess.Manage lets HRAdmin/SuperHR self-grant any permission, including every Leave.* permission the seeded matrix deliberately withholds from them"
+    observation: "See qa/06-rbac-account-linking/clarifications.yaml#CR-66 for the full observation of PageAccessService.UpdateAsync's unrestricted grant behavior. Module 7 confirms the concrete Leave-side impact: an HRAdmin or SuperHR session, neither of which holds Leave.PolicyManage/PolicyPublish/TypeManage/PeriodManage/BalanceImport/Approve in the seeded RolePermissionMap (CR-78/CR-79), can grant their OWN role every one of those permissions in a single PUT /api/page-access/roles/{roleId} call, then immediately configure Leave Policies, publish them, import/adjust balances, and approve leave requests end-to-end - defeating the module's own least-privilege design with no additional check or carve-out anywhere in the Leave module itself."
+    risk: "Leave's careful permission segregation (F-LEAVE-040, CR-78, CR-79) is entirely dependent on Module 6's PageAccess.Manage boundary holding - it provides no independent defense of its own. The change IS fully audited (AuthorizationConfigurationEvents), so it is traceable after the fact, but nothing prevents or flags it at write time."
+    source: "Backend/HRMS.Application/Services/PageAccessService.cs (UpdateAsync); Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[HRAdmin]/[SuperHR] hold PageAccess.Manage but not the Leave.* permissions in question); qa/06-rbac-account-linking/clarifications.yaml (CR-66)"
+    classification: Open - awaiting decision
+
+  - id: CR-77
+    title: "LeaveAuthorizationService.BuildCurrentManagerPredicate/CanAccessEmployeeAsync is a THIRD independent manager/scope mechanism, distinct from both RoleScopeResolver (Module 6) and EmployeeAccessScopeService's Attendance-permission-keyed narrowing (Module 5/6, CR-57) - and several Leave services carry a PARALLEL 'legacy' code path with materially different behavior when ILeaveAuthorizationService is not registered in DI"
+    observation: >
+      LeaveAuthorizationService resolves "is the caller the current manager of this employee" by querying
+      EmployeeEmploymentHistory directly for a non-superseded, effective-dated row whose ManagerId equals the
+      caller's own EmployeeId (BuildCurrentManagerPredicate), combined with an OR against
+      IEmployeeAccessScopeService.BuildRoleScopePredicateAsync (Module 6's RoleScopeResolver mechanism) for
+      the role-scope dimension. This single service backs Approval (inbox, detail, approve/reject
+      authorization), Calendar, HR Dashboard, and Reports - every Leave read/action surface that needs
+      "who can see/act on whose leave" funnels through BuildEmployeePredicateAsync/CanAccessEmployeeAsync.
+      However, LeaveRequestApprovalService.AuthorizeAsync, LeaveApprovalReadService (GetInboxAsync/
+      GetByIdAsync/IsCurrentManagerAsync), and LeaveCalendarService.GetAsync EACH carry an entirely separate
+      "legacy" branch, used when the constructor's optional ILeaveAuthorizationService parameter is null (as
+      several existing xUnit test harnesses construct these services directly, without DI). The legacy branch
+      re-implements manager resolution via IEmployeeManagerResolver plus a raw UserRoles/RolePermissions/
+      Permissions join for Leave.Approve, and has NO role-scope (HRBP/SuperHR) fallback at all - and for
+      Calendar specifically, the legacy branch's VISIBILITY semantics for PendingApproval requests differ
+      materially from the new path's (see CR-83).
+    risk: >
+      "Who can approve/view whose Leave" is resolved by up to three independent, non-communicating code
+      paths across the product (this module's own CR-77 mechanism, Module 6's RoleScopeResolver, and Module
+      5/6's Attendance-permission-keyed EmployeeAccessScopeService), plus a FOURTH internal fork (new vs.
+      legacy) within this module alone depending on how a given code path constructs its services. A change
+      to one does not automatically apply to the others, and a role-scope-only approver (HRBP/SuperHR with no
+      manager relationship) has NO fallback authorization at all if the legacy branch is ever exercised in
+      production by some future wiring change.
+    source: "Backend/HRMS.Application/Services/LeaveAuthorizationService.cs; LeaveRequestApprovalService.cs (AuthorizeAsync); LeaveApprovalReadService.cs (legacy else-branches); LeaveCalendarService.cs (legacyCanViewTeam branch); qa/05-employee/clarifications.yaml and qa/06-rbac-account-linking/clarifications.yaml (CR-57)"
+    classification: Open - awaiting decision
+
+  - id: CR-78
+    title: "HRAdmin, the primary operational HR role, holds NONE of Leave.TypeManage / PeriodManage / PolicyManage / PolicyPublish / Approve / BalanceImport / BalanceViewImportHistory / BalanceAdjust - only SuperAdmin/TenantAdmin can configure Leave Types, Policies, Periods, approve leave, or import/adjust balances"
+    observation: >
+      SeedData.RolePermissionMap[HRAdmin] grants Leave.DashboardViewAll, Leave.ReportsView, and
+      Leave.ReportsExport only. Every other Leave.* permission - TypeManage, PeriodManage, PolicyManage,
+      PolicyPublish, Approve, BalanceImport, BalanceViewImportHistory, BalanceAdjust - is granted to NEITHER
+      HRAdmin NOR any other seeded role except SuperAdmin/TenantAdmin (which hold everything via the
+      AccountEmployeeLink-only carve-out). This mirrors the pattern Module 4/5/6's own CR-44 already
+      documented for Employee Code Configuration: HRAdmin is operationally central (creates/edits employees,
+      runs Initial Employment, views the Leave dashboard and reports) yet is permission-gapped for the
+      Leave module's own configuration and approval surface.
+    risk: >
+      In the seeded matrix, standing up or changing a single Leave Policy, Leave Type, Leave Period, or
+      importing opening balances requires a SuperAdmin/TenantAdmin session - HRAdmin, who a reasonable
+      product owner would expect to own this, cannot. HRAdmin also cannot approve ANY leave request through
+      Leave.Approve (though HRAdmin's own linked-employee identity may still auto-hold the Employee role's
+      self-service permissions, per Module 6's EmployeeRoleProvisioningService). Whether this is an accepted
+      "only Super/TenantAdmin configures Leave" design or an unaddressed gap has not been confirmed.
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[HRAdmin]); qa/04-employee-code/clarifications.yaml and qa/05-employee/clarifications.yaml (CR-44, for the analogous pattern)"
+    classification: Open - awaiting decision
+
+  - id: CR-79
+    title: "HRManager, a seeded role whose name implies HR authority, holds ZERO Leave.* or Attendance.CompOff.* permissions - cannot view the Leave dashboard, reports, approve leave, or see Comp-Off data through its own role at all"
+    observation: >
+      SeedData.RolePermissionMap[HRManager] lists Employee/EmploymentHistory/Department/Designation/
+      Attendance-report/Payroll-tax-review/Separation permissions, but not a single Leave.* or
+      Attendance.CompOff.* entry anywhere in its array. An account holding only HRManager (no other role, no
+      auto-granted Employee role because e.g. it is not linked to an employee) cannot open the Leave
+      Dashboard, Leave Reports, the Approvals inbox, or any Comp-Off view - the "Leave Dashboard"/"Leave
+      Reports" nav items are simply absent for this role.
+    risk: >
+      A tester or administrator relying on the role's name ("HR Manager") to infer its capabilities would be
+      surprised to find it has no Leave-module standing whatsoever - a HRManager account can manage
+      Employees, Attendance reports, and Separation, but is entirely blind to Leave. Whether this is
+      deliberate (HRManager is meant as an Attendance/Separation-focused role, distinct from HRAdmin/HRBP for
+      Leave) or an oversight has not been confirmed.
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[HRManager])"
+    classification: Open - awaiting decision
+
+  - id: CR-80
+    title: "Leave.BalanceView and Leave.BalanceAdjust are permissions declared in Permissions.cs and seeded into the Permissions table, but are required by NO controller endpoint anywhere and granted to NO role in RolePermissionMap - dead, unreachable permissions with no supported feature behind them"
+    observation: >
+      A repo-wide search for Permissions.Leave.BalanceView and Permissions.Leave.BalanceAdjust usage finds
+      them only in Permissions.cs's own declaration and SeedData's PermissionId map (which seeds every
+      declared permission unconditionally) - no [HasPermission(Permissions.Leave.BalanceView)] or
+      [HasPermission(Permissions.Leave.BalanceAdjust)] attribute exists on any controller action, and no
+      entry in RolePermissionMap grants either permission to any role including SuperAdmin/TenantAdmin's
+      otherwise-near-universal grant (they DO receive it incidentally via DomainPermissions.All, but no
+      endpoint ever checks for it). There is consequently no HR-wide "view any employee's balance" or
+      "manually adjust a balance" feature anywhere in the product - HR's only balance visibility is the
+      Reports module's Balances report (gated by the unrelated Leave.ReportsView), and there is no manual
+      balance-adjustment UI/API at all (only Balance Import's Opening-type credit, and the accrual/
+      period-close/reservation transaction types).
+    risk: >
+      An administrator reading Permissions.cs or the Page Access Management matrix would reasonably assume
+      granting Leave.BalanceAdjust to a role enables some balance-correction capability - it enables nothing,
+      since no code path checks for it. This is a "vestigial permission" risk: it looks configurable and
+      meaningful but silently does nothing, which could mislead a future developer building a real
+      balance-adjustment feature into believing the permission is already wired up.
+    source: "Backend/HRMS.Domain/Authorization/Permissions.cs (Leave.BalanceView, Leave.BalanceAdjust declarations); grep across Backend/HRMS.API/Controllers and Backend/HRMS.Application/Services for both strings (zero HasPermission usages); Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap, neither permission appears in any role's array)"
+    classification: Open - awaiting decision
+
+  - id: CR-81
+    title: "The Leave request runtime hard-rejects half-day requests, sandwich-leave rules, attachment requirements, and clubbing rules - yet the Policy Editor UI freely allows configuring all four, with no warning at save or Publish time, making a policy published with any of them entirely unusable for real leave requests"
+    observation: >
+      LeaveRequestValidationService.ValidateSupportedPolicy - the single gate every Preview/Submit call
+      passes through after policy resolution - returns an "UnsupportedConfiguration" failure if: the
+      resolved RequestRule.PartialDayMode is HalfDayAllowed (not FullDayOnly); the resolved
+      CalendarRule.SandwichMode is anything other than Disabled, or ApplyToPrefix/ApplyToSuffix/
+      ApplyToBetween is true; the resolved AttachmentRule.AttachmentRequirement is anything other than None;
+      or any LeavePolicyClubbingRule of relation NotAllowed references the resolved rule (as either the lower
+      or higher LeaveType). None of these four conditions are checked by LeavePolicyFoundationService
+      .ValidateForPublishAsync, and all four are fully editable, without any warning banner, through
+      LeavePolicyRequestRulesSection.tsx (partialDayMode dropdown offers 'HalfDayAllowed'),
+      LeavePolicyCalendarSection.tsx (sandwichMode dropdown offers Holiday/WeekOff/HolidayAndWeekOff plus
+      three boolean flags), LeavePolicyAttachmentSection.tsx (attachmentRequirement dropdown offers Optional/
+      Required/RequiredAboveQuantity), and LeavePolicyClubbingSection.tsx (a full clubbing-rule editor). A
+      policy version published with any of these four settings passes Publish validation cleanly, then fails
+      EVERY subsequent Preview/Submit call against it with the same generic UnsupportedConfiguration message.
+    risk: >
+      An HR administrator (or, in the seeded matrix, only a SuperAdmin/TenantAdmin per CR-78) can fully
+      configure and Publish a Leave Policy using any of these four commonly-expected leave features (half-day
+      leave, sandwich-day treatment, mandatory medical-certificate attachments above N days, "cannot club
+      Sick Leave with Casual Leave") with zero indication that doing so silently breaks the policy for every
+      employee it applies to. The failure is discovered only when an employee actually tries to request
+      leave against it, at which point the error message ("UnsupportedConfiguration: ...") gives no actionable
+      guidance back to a non-technical HR user about which policy setting caused it.
+    source: "Backend/HRMS.Application/Services/LeaveRequestValidationService.cs (ValidateSupportedPolicy); Backend/HRMS.Application/Services/LeavePolicyFoundationService.cs (ValidateForPublishAsync, no check for any of the four); Frontend/HRMS.Web/src/pages/leave/LeavePolicyRequestRulesSection.tsx, LeavePolicyCalendarSection.tsx, LeavePolicyAttachmentSection.tsx, LeavePolicyClubbingSection.tsx"
+    classification: Open - awaiting decision
+
+  - id: CR-82
+    title: "CompOffController.Operations (the manager/HR-facing multi-employee Comp-Off query) carries no [HasPermission] attribute at all - the only declarative gate is the controller-level [Authorize]; authorization is enforced entirely inside CompOffService.BuildOperationalScopeAsync's own internal permission scan"
+    observation: >
+      Every other action in CompOffController (and every other Leave controller in the module) declares
+      [HasPermission(Permissions.Attendance.CompOffXxx)] or the Leave.* equivalent directly on the action.
+      GetOperationalAsync's HTTP action ("[HttpGet(\"operations\")] public async Task&lt;...&gt; Operations(...)")
+      has no such attribute - only [Authorize] at the controller level applies. The endpoint's actual
+      authorization is performed entirely inside the SERVICE method, BuildOperationalScopeAsync, which tries
+      CompOffViewAll, then CompOffViewTeam, then CompOffManage, then CompOffApprove, then CompOffViewHistory
+      in turn via IAttendanceAuthorizationService.BuildEmployeePredicateAsync, using whichever first succeeds.
+      This is a structurally different authorization pattern from every other endpoint in Modules 1-7, all of
+      which rely on the declarative [HasPermission] attribute (which itself maps to an ASP.NET Core
+      authorization policy) rather than an in-service permission scan.
+    risk: >
+      Because there is no declarative permission requirement on this action, its actual authorization
+      behavior is invisible to anyone auditing the codebase via [HasPermission] attributes or the
+      Permissions.All-derived policy list alone - a security review that greps for HasPermission usages
+      (as this very QA effort largely does) would miss this endpoint's real gate entirely. It also means
+      CLAUDE.md's own documented fallback ("the fallback policy denies endpoints with no declared
+      authorization") is satisfied here only by the controller-level [Authorize] (any authenticated user of
+      any role), not by a specific permission - functionally different from every sibling endpoint, even
+      though the end result (only certain roles can retrieve data) is the same once the service-level check
+      runs.
+    source: "Backend/HRMS.API/Controllers/CompOffController.cs (Operations action, no HasPermission attribute); Backend/HRMS.Application/Services/CompOffService.cs (BuildOperationalScopeAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-83
+    title: "LeaveCalendarService's 'new' (ILeaveAuthorizationService-backed) and 'legacy' (fallback) code paths expose materially different visibility rules for PendingApproval requests, depending purely on DI wiring rather than a product decision"
+    observation: >
+      With ILeaveAuthorizationService registered, LeaveCalendarService.GetAsync builds the authorized-
+      employee set as {self} UNION {BuildEmployeePredicateAsync(Leave.Approve, includeManager:true,
+      includeRoleScope:true)}, and then includes BOTH Approved and PendingApproval events for every employee
+      in that set (the `authorizationEnabled || ...` short-circuit makes the later `x.Status == Approved`
+      test irrelevant whenever the new path is active). Without it (the "legacy" branch, used by some
+      existing test harnesses that construct the service directly), the query instead scans ALL employees in
+      the tenant but only shows Approved events to a non-self viewer UNLESS that viewer additionally holds
+      Leave.Approve (`legacyCanViewTeam`), in which case a PER-CANDIDATE manager-relationship check
+      (`IEmployeeManagerResolver`) is still required before a PendingApproval event becomes visible. In other
+      words: the "new" path shows an in-scope viewer their scoped reports' PENDING requests as a matter of
+      course; the "legacy" path shows them only to the exact current direct manager, and never via role-scope
+      at all.
+    risk: >
+      Which of these two materially different privacy postures for PendingApproval requests is "correct"
+      appears to be an artifact of which constructor overload happens to be used at a given call site, not a
+      documented product decision - a future change to DI registration (e.g. removing
+      ILeaveAuthorizationService from a particular composition root, or a test harness pattern being copied
+      into production wiring by mistake) would silently change who can see a colleague's still-undecided
+      leave request on the team calendar.
+    source: "Backend/HRMS.Application/Services/LeaveCalendarService.cs (GetAsync, both branches)"
+    classification: Open - awaiting decision
+
+  - id: CR-84
+    title: "'Who can approve/view whose leave' does not key off the RoleNames.Manager role at all - a Leave.Approve grant through ANY role (including a future Page-Access-Management-created custom role, or an escalation per CR-66) authorizes the SAME employment-history-manager check, and an actual Manager-role holder who is nobody's current manager gets zero manager-path visibility"
+    observation: >
+      LeaveAuthorizationService.CanAccessEmployeeAsync's includeManager branch resolves the CURRENT manager
+      of the TARGET employee via IEmployeeManagerResolver and compares it to the CALLER's own EmployeeId - it
+      never inspects which ROLE granted the caller's Leave.Approve permission. A caller holding Leave.Approve
+      through HRBP, SuperHR, a custom Page-Access-granted role, or (per Module 6's CR-66) a self-escalated
+      grant, is authorized via the manager path exactly like a "real" Manager-role holder, PROVIDED they
+      happen to be that employee's current manager per EmployeeEmploymentHistory.ManagerId - a fact entirely
+      independent of which roles they hold. Conversely, an employee whose Manager role was auto-granted
+      (Module 6's ManagerRoleProvisioningService) but who currently has zero direct reports (all reassigned
+      elsewhere, per Module 6's CR-71 "additive-only" finding) gets no visibility via the manager path for
+      anyone, and only role-scope (if any) can grant them anything in Leave.
+    risk: >
+      "Manager" as a Leave-module concept is really "whoever's EmployeeId appears as ManagerId on someone's
+      current EmployeeEmploymentHistory row AND who separately holds Leave.Approve through some role" - the
+      RBAC role named "Manager" is neither necessary nor sufficient for Leave-approval manager-path access.
+      Combined with CR-77/CR-57, this means the product has no single authoritative definition of "is a
+      manager" that Leave, Attendance, and RBAC all agree on.
+    source: "Backend/HRMS.Application/Services/LeaveAuthorizationService.cs (CanAccessEmployeeAsync, includeManager branch); qa/06-rbac-account-linking/clarifications.yaml (CR-71, for the 'additive-only, no direct reports left' scenario)"
+    classification: Open - awaiting decision
+
+  - id: CR-85
+    title: "LeaveBalanceImportService resolves Employee/LeaveType/LeavePeriod lookups by Code alone, with no explicit TenantId filter on those specific queries - correctness currently depends entirely on the per-tenant shard-database boundary, not a defense-in-depth predicate, unlike most other Leave read paths"
+    observation: >
+      ValidateAsync's per-row lookups (`_db.Employees...SingleOrDefaultAsync(x => x.EmployeeCode ==
+      row.EmployeeCode.Trim())`, the equivalent LeaveTypes and LeavePeriods queries) carry no `x.TenantId ==
+      tenantId` clause, unlike LeaveConfigurationService's own Create/Update paths (which do check
+      uniqueness within the tenant explicitly) and unlike most other Leave services reviewed in this module.
+      Given HRMS's per-tenant-shard-database architecture (CLAUDE.md: "Tenant data lives in that shard DB"),
+      this is very likely a non-issue in practice - there is no OTHER tenant's row in the same physical
+      database to accidentally match. It is flagged here as a defense-in-depth gap analogous to Module 6's
+      CR-76 (AccountEmployeeLinkService.GetHistoryAsync's missing explicit TenantId filter), not as a proven
+      cross-tenant read.
+    risk: >
+      If a future refactor ever pools multiple tenants into one shared database (a materially different
+      architecture from today's), or if a shared/cross-shard read path is introduced elsewhere that reuses
+      this method, the missing explicit filter would become an exploitable cross-tenant data leak with no
+      code change to this file required to surface it.
+    source: "Backend/HRMS.Application/Services/LeaveBalanceImportService.cs (ValidateAsync); qa/06-rbac-account-linking/clarifications.yaml (CR-76, for the analogous defense-in-depth pattern)"
+    classification: Open - awaiting decision
+
+  - id: CR-86
+    title: "LeaveAccrualWorker and LeaveApprovalReminderWorker are both DISABLED by default (Enabled=false) with no seeded configuration turning them on - entitlement accrual and approval reminders never run in a fresh Development environment or the demo tenants unless an operator explicitly configures them"
+    observation: >
+      LeaveAccrualOptions.Enabled and LeaveReminderOptions.Enabled both default to false, and no
+      appsettings.json/appsettings.Development.json entry found in the codebase review overrides either to
+      true. Both BackgroundServices' own ExecuteAsync methods return immediately (LeaveAccrualWorker) or log
+      "disabled" and return (LeaveApprovalReminderWorker) when the flag is false. Since demo tenants are not
+      seeded in the MySQL Development runtime (per CLAUDE.md) and no other bootstrap path sets these flags,
+      a fresh clone of the repository never accrues Leave entitlement or sends reminder emails until someone
+      explicitly sets `LeaveAccrual:Enabled=true` and `LeaveReminders:Enabled=true`.
+    risk: >
+      A tester or new developer exploring the Leave module's entitlement/accrual and reminder features by
+      simply running the app will observe NOTHING happening (no periodic accrual, no reminder emails) and
+      could easily conclude the feature is broken or unimplemented, when in fact it is fully implemented but
+      silently disabled by a default configuration flag with no in-product indication (no admin UI shows
+      "Accrual: Disabled" anywhere in the inventory reviewed).
+    source: "Backend/HRMS.Application/Abstractions/LeaveAccrualOptions.cs, LeaveReminderOptions.cs (Enabled defaults); Backend/HRMS.Infrastructure/Accrual/LeaveAccrualWorker.cs, Reminders/LeaveApprovalReminderWorker.cs (ExecuteAsync gate)"
+    classification: Open - awaiting decision
+
+  - id: CR-87
+    title: "Cross-policy overlap (two DIFFERENT LeavePolicies both applicable to the same LeaveType and date range) is never blocked at Publish time, only passively counted as an informational badge on the policy list - LeavePolicyResolver's own priority/specificity tie-break is the only thing standing between a clean resolution and a ConfigurationAmbiguity 409 at actual request time"
+    observation: >
+      LeavePolicyFoundationService.ValidateForPublishAsync's own overlap check (the `overlaps` variable)
+      only queries OTHER versions of the SAME LeavePolicyId - it has no equivalent check against a different
+      policy. LeaveConfigurationService.GetPoliciesAsync separately computes `overlapCount` (cross-policy,
+      same-LeaveType, overlapping-date-range Published versions) purely for display in the policy list's
+      "Overlaps" column - this count is never consulted by Publish, and there is no corresponding
+      acknowledgment/override flow for it (unlike the same-policy case, which does have
+      `acknowledgeOverlap`).
+    risk: >
+      An administrator can freely publish two different, fully-valid policies that both apply to the same
+      LeaveType for overlapping employees/dates, discovering the conflict only when LeavePolicyResolver
+      either picks a "winner" by priority/specificity (silently, with no admin-facing warning at the moment
+      of the SECOND publish) or, if priority AND specificity tie, returns ConfigurationAmbiguity for every
+      affected employee's leave request from that point forward. The passive "Overlaps" count on the list
+      page is easy to miss and gives no actionable detail (which policy, which date range, which LeaveType).
+    source: "Backend/HRMS.Application/Services/LeavePolicyFoundationService.cs (ValidateForPublishAsync, same-policy-only overlap check); Backend/HRMS.Application/Services/LeaveConfigurationService.cs (GetPoliciesAsync, overlapPolicyIds computation, display-only)"
+    classification: Open - awaiting decision
+
+  - id: CR-88
+    title: "Every Leave configuration page (Types, Policies, Periods, Working-Day Calendar, Balance Import) renders fully for any role that can reach the nav item, but every mutating action on those pages 403s for every role except SuperAdmin/TenantAdmin (a frontend consequence of CR-78)"
+    observation: >
+      LeaveTypesPage, LeavePoliciesPage, LeavePeriodsPage, LeaveWorkingDayCalendarPage, and
+      LeaveBalanceImportPage each render their full create/edit/publish/import UI regardless of which
+      specific Leave.*Manage/Publish/Import permission the signed-in role actually holds; the pages rely on
+      the underlying API calls to reject unauthorized mutations at submit time (a 403 banner), rather than
+      hiding or disabling the actions up front for a role like HRAdmin that (per CR-78) holds none of the
+      required Manage/Publish/Import permissions.
+    risk: >
+      An HRAdmin who is shown a fully-interactive "Create Leave Policy" or "Commit Import" UI, only to have
+      every such action rejected 403, experiences the same UX gap Module 4/5's CR-44 already documented for
+      Employee Code Configuration - a page that promises a capability the role does not actually have,
+      discovered only after attempting the action rather than being told up front.
+    source: "Frontend/HRMS.Web/src/pages/leave/LeaveTypesPage.tsx, LeavePoliciesPage.tsx, LeavePeriodsPage.tsx, LeaveWorkingDayCalendarPage.tsx, LeaveBalanceImportPage.tsx; qa/04-employee-code/clarifications.yaml, qa/05-employee/clarifications.yaml (CR-44, for the analogous UX pattern)"
+    classification: Open - awaiting decision
+
+  - id: CR-89
+    title: "LeavePolicyCancellationRule.WithdrawAllowed is configurable, saved, and rendered in the Policy Editor, but LeaveRequestWithdrawalService never reads it - withdrawal of any still-PendingApproval request is unconditionally allowed, regardless of policy"
+    observation: >
+      LeaveRequestWithdrawalService.AttemptAsync's only preconditions are ownership (request.EmployeeId ==
+      identity.EmployeeId) and status (Status == PendingApproval); it never loads or inspects the resolved
+      policy rule's CancellationRule at all. This is a genuine asymmetry with Cancellation
+      (LeaveRequestCancellationService), which DOES gate on CancellationRule.CancelAllowed and, per F-LEAVE-210,
+      treats an ABSENT CancellationRule as "not allowed" (restrictive-by-default). LeavePolicyCancellationSection.tsx
+      in the Policy Editor nonetheless renders "Allow Withdraw" as a live, savable toggle alongside "Allow
+      Cancel" and "Allow Modify" with no visual distinction suggesting it is inert.
+    risk: >
+      An HR administrator who explicitly configures WithdrawAllowed=false (intending to prevent employees from
+      retracting their own pending leave requests once submitted, e.g. for audit/planning reasons) will observe
+      no actual change in behavior - every PendingApproval request remains withdrawable by its owner regardless.
+      The toggle looks functional (it saves, it round-trips through GET, it is validated at Publish time
+      alongside its two sibling flags) but has zero runtime effect for Withdraw specifically.
+    source: "Backend/HRMS.Application/Services/LeaveRequestWithdrawalService.cs (AttemptAsync, no CancellationRule reference); Backend/HRMS.Application/Services/LeaveRequestCancellationService.cs (AttemptAsync, for contrast - DOES enforce CancelAllowed); Frontend/HRMS.Web/src/pages/leave/LeavePolicyCancellationSection.tsx"
+    classification: Open - awaiting decision
+
+  - id: CR-90
+    title: "Withdrawing a PendingApproval Comp-Off-type leave request has no CompOff-specific release branch - unlike Submission/Approval/Cancellation, which all explicitly check LeaveType.IsCompOff and delegate to ICompOffService"
+    observation: >
+      LeaveRequestSubmissionService, LeaveRequestApprovalService, and LeaveRequestCancellationService each
+      contain an explicit `if (leaveType.IsCompOff) { ... ICompOffService... }` branch alongside their generic
+      Allocated-entitlement balance-accounting branch. LeaveRequestWithdrawalService.AttemptAsync has no such
+      branch anywhere in the file - only the generic `EntitlementMode == Allocated` path calls
+      ReleaseReservationAsync, and whether a Comp-Off LeaveType's own resolved rule is itself classified as
+      EntitlementMode.Allocated (as opposed to some other mode the Comp-Off integration relies on being
+      distinct) determines whether ANY release happens for this specific transition at all.
+    risk: >
+      If a Comp-Off LeaveType's rule is NOT classified as Allocated (plausible, since Comp-Off balance is
+      tracked entirely through CompOffLedgerEntries/CompOffLeaveAllocations, a wholly separate ledger from
+      EmployeeLeaveBalances), withdrawing a still-pending Comp-Off leave request releases NOTHING - the
+      CompOffLeaveAllocation row created at Reserve time stays in its "Reserved" state indefinitely, holding
+      those minutes unavailable to the employee even though the leave request itself is now Withdrawn. This
+      would be a genuine balance-integrity defect, not merely a documentation gap, and is a direct, concrete
+      instance of the pattern the brief's own Comp-Off section asks to verify ("Do not assume UI exists for
+      every backend operation" - here the concern is a MISSING backend code path, not a missing UI).
+    source: "Backend/HRMS.Application/Services/LeaveRequestWithdrawalService.cs (AttemptAsync, no IsCompOff branch); Backend/HRMS.Application/Services/LeaveRequestSubmissionService.cs, LeaveRequestApprovalService.cs, LeaveRequestCancellationService.cs (all three, for contrast - each has an explicit IsCompOff branch); Backend/HRMS.Application/Services/CompOffService.cs (ApplyLeaveAsync/TransitionLeaveAsync)"
+    classification: Open - awaiting decision

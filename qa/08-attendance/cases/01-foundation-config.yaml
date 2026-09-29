@@ -1,0 +1,1016 @@
+sheet: Attendance_Config
+submodule: Foundation/Configuration - Shift, Shift Pattern, Shift Applicability, Roster Assignment/Query/Upload, Calendar Overrides, Effective Dating
+defaults:
+  role: HRADMIN
+  perm: "Attendance.ShiftManage"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (holds Attendance.View/ShiftManage/PatternManage/RosterManage/RosterUpload) unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  # ---------- Shift Config ----------
+  - id: ATT-SHIFT-001
+    func: [F-ATT-001]
+    sc: List Shifts for the tenant
+    t: GET shifts returns the tenant's configured shifts
+    src: ["AttendanceFoundationService.GetShiftsAsync"]
+    type: Positive
+    pri: P1
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/shifts] => [200] list of Shift rows for the caller's tenant only"
+    auto: API
+
+  - id: ATT-SHIFT-002
+    func: [F-ATT-002]
+    sc: Create a Shift with all required fields succeeds
+    t: A valid ShiftRequest (ShiftCode, ShiftName, StartTime/EndTime, EffectiveFrom) is created
+    src: ["AttendanceFoundationService.SaveShiftAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/shifts] ShiftCode=GEN1, ShiftName=General Shift, StartTime=09:00, EndTime=18:00, EffectiveFrom=today => [200/201] Shift created, ShiftCode/ShiftName persisted exactly as submitted"
+    auto: API
+
+  - id: ATT-SHIFT-003
+    func: [F-ATT-002]
+    sc: Blank ShiftCode/ShiftName are rejected
+    t: Empty ShiftCode is rejected before empty ShiftName is even reached (validation order)
+    src: ["AttendanceFoundationService.ValidateShift"]
+    type: Negative
+    pri: P1
+    tags: [Validation]
+    steps:
+      - "[POST /api/attendance/shifts] ShiftCode='' => [400] field shiftCode 'Shift code is required.'"
+      - "[POST /api/attendance/shifts] ShiftCode=OK1, ShiftName='' => [400] field shiftName 'Shift name is required.'"
+    auto: API
+
+  - id: ATT-SHIFT-004
+    func: [F-ATT-002, F-ATT-010]
+    sc: Duplicate ShiftCode within the same tenant is rejected
+    t: A second Shift with the same (trimmed) ShiftCode Conflicts, case-sensitively per DB collation
+    src: ["AttendanceFoundationService.SaveShiftAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/attendance/shifts] ShiftCode=DUP1 (first) => [200/201] created"
+      - "[POST /api/attendance/shifts] ShiftCode=DUP1 (second, same tenant) => [409] 'Shift code already exists in this tenant.'"
+    auto: API
+
+  - id: ATT-SHIFT-005
+    func: [F-ATT-009]
+    sc: EffectiveTo before EffectiveFrom is rejected
+    t: A Shift with EffectiveTo earlier than EffectiveFrom fails validation
+    src: ["AttendanceFoundationService.SaveShiftAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/shifts] EffectiveFrom=2026-06-01, EffectiveTo=2026-05-01 => [400] field effectiveTo 'EffectiveTo cannot be before EffectiveFrom.'"
+    auto: API
+
+  - id: ATT-SHIFT-006
+    func: [F-ATT-004]
+    sc: Negative minute values are rejected for the validated fields but silently accepted for the unvalidated ones
+    t: BreakDurationMinutes/MinimumWorkMinutes/FullDayWorkMinutes/GraceInMinutes/GraceOutMinutes/MaximumEarlyMarkInMinutes/MaximumPostShiftMinutes negative => rejected; HalfDayWorkMinutes/LateThresholdMinutes/EarlyOutThresholdMinutes negative => accepted (documented gap)
+    src: ["AttendanceFoundationService.ValidateShift"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/shifts] MinimumWorkMinutes=-5 => [400] field minutes 'Minute values cannot be negative.'"
+      - "[POST /api/attendance/shifts] all other minute fields valid, HalfDayWorkMinutes=-30, LateThresholdMinutes=-10, EarlyOutThresholdMinutes=-10 => [200/201] created with the negative values persisted as-is - no validation error"
+    auto: API
+    cr: [CR-91]
+
+  - id: ATT-SHIFT-007
+    func: [F-ATT-002]
+    sc: Mandatory attendance window validation
+    t: MandatoryEndTime <= MandatoryStartTime is rejected
+    src: ["AttendanceFoundationService.ValidateShift"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/attendance/shifts] MandatoryStartTime=10:00, MandatoryEndTime=09:00 => [400] field mandatoryWindow 'Mandatory attendance window is invalid.'"
+    auto: API
+
+  - id: ATT-SHIFT-008
+    func: [F-ATT-008]
+    sc: Capture-source cross-validation - methodology override requires at least one source
+    t: UseDefaultAttendanceMethodology=false with AllowedAttendanceSources=0 is rejected
+    src: ["AttendanceFoundationService.ValidateCaptureSources"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/shifts] UseDefaultAttendanceMethodology=false, AllowedAttendanceSources=0 => [400] field allowedAttendanceSources 'At least one attendance source is required when methodology override is enabled.'"
+      - "[POST /api/attendance/shifts] PrimaryAttendanceSource=AutoLoginLogout, AllowedAttendanceSources=Biometric|Portal (does not include AutoLoginLogout) => [400] field primaryAttendanceSource 'Primary attendance source must be one of the allowed sources.'"
+    auto: API
+
+  - id: ATT-SHIFT-009
+    func: [F-ATT-005]
+    sc: Two active default Shifts with overlapping effective intervals cannot both be created
+    t: A second IsDefault=true Shift overlapping the first's effective range Conflicts
+    src: ["AttendanceFoundationService.SaveShiftAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/attendance/shifts] IsDefault=true, EffectiveFrom=2026-01-01, EffectiveTo=2026-12-31 (first) => [200/201] created"
+      - "[POST /api/attendance/shifts] IsDefault=true, EffectiveFrom=2026-06-01, EffectiveTo=2026-12-31 (overlapping) => [409] 'Another default Shift overlaps this effective interval.'"
+    auto: API
+
+  - id: ATT-SHIFT-010
+    func: [F-ATT-005]
+    sc: An INACTIVE default Shift still blocks creating a new overlapping default Shift
+    t: The overlap guard's query does not filter the other shift by IsActive, so deactivating the first default does not free the interval
+    src: ["AttendanceFoundationService.SaveShiftAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Default Shift A, EffectiveFrom=2026-01-01..2026-12-31, IsDefault=true => created"
+      - "[POST /api/attendance/shifts] Deactivate Shift A (IsActive=false) via update => [200] IsActive=false"
+      - "[POST /api/attendance/shifts] IsDefault=true, EffectiveFrom=2026-06-01..2026-12-31 (overlaps A's still-active interval definition) => [409] 'Another default Shift overlaps this effective interval.' - even though A is now inactive"
+    auto: API
+    cr: [CR-91]
+
+  - id: ATT-SHIFT-011
+    func: [F-ATT-006]
+    sc: Break validation - unique sequence and end-after-start
+    t: Duplicate break Sequence values, or a break EndTime<=StartTime, are rejected
+    src: ["AttendanceFoundationService.SaveShiftAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/shifts] Breaks=[{Sequence:1,Start:12:00,End:12:30},{Sequence:1,Start:15:00,End:15:15}] (duplicate sequence) => [400] field breaks 'Breaks require unique sequence values and an end time after the start time.'"
+      - "[POST /api/attendance/shifts] Breaks=[{Sequence:1,Start:12:30,End:12:00}] (end before start) => [400] same field/message - breaks cannot cross midnight even though the parent Shift can"
+    auto: API
+
+  - id: ATT-SHIFT-012
+    func: [F-ATT-006]
+    sc: Every save fully replaces Breaks; break identity (Id) is never preserved
+    t: Updating a Shift's breaks always deletes and recreates all ShiftBreak rows with new Ids, even for unchanged breaks
+    src: ["AttendanceFoundationService.SaveShiftAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/shifts] Create with one break, Sequence=1 => [200/201] note the returned break's Id=B1"
+      - "[PUT /api/attendance/shifts/{id}] Resubmit the identical break payload (Sequence=1, same Name/times), with a valid ConcurrencyToken => [200] the returned break's Id is a NEW guid, not B1 - break identity is not preserved across saves"
+    auto: API
+
+  - id: ATT-SHIFT-013
+    func: [F-ATT-003]
+    sc: Update requires a matching ConcurrencyToken
+    t: Updating without a ConcurrencyToken (null/blank) always Conflicts; a stale token also Conflicts; a fresh token succeeds
+    src: ["AttendanceFoundationService.SaveShiftAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[Setup] Create Shift S1 => [200/201] created, note ConcurrencyToken T1"
+      - "[PUT /api/attendance/shifts/{id}] ConcurrencyToken=null => [409] 'Shift changed by another user. Reload before saving.'"
+      - "[PUT /api/attendance/shifts/{id}] ConcurrencyToken=T1 (valid, unchanged since read) => [200] update succeeds, response includes a new token T2"
+      - "[PUT /api/attendance/shifts/{id}] ConcurrencyToken=T1 again (now stale since the prior update changed it to T2) => [409] same Conflict message"
+    auto: API
+
+  - id: ATT-SHIFT-014
+    func: [F-ATT-007]
+    sc: Deactivating a Shift does not invalidate an EmployeeRosterDay row already pointing at it
+    t: A manually-assigned roster day keeps resolving to its Shift after that Shift is deactivated
+    src: ["AttendanceFoundationService.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Shift S1 active; manually assign S1 to Employee E1 for 2026-07-10 via roster/assign => [200] assigned"
+      - "[PUT /api/attendance/shifts/{id}] Deactivate S1 (IsActive=false) => [200]"
+      - "[GET /api/attendance/employees/{E1}/roster/2026-07-10] => [200] resolved ShiftId is still S1, with no warning that the shift is inactive"
+    auto: API
+    cr: [CR-94]
+
+  - id: ATT-SHIFT-015
+    func: [F-ATT-010]
+    sc: Tenant isolation - a Shift created in Tenant A is invisible and unreachable from Tenant B
+    t: Cross-tenant GET/PUT of another tenant's Shift is denied/not-found
+    src: ["AttendanceFoundationService.GetShiftsAsync/SaveShiftAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/attendance/shifts] As Tenant B => [200] Tenant A's shift is never present"
+      - "[PUT /api/attendance/shifts/{tenantAShiftId}] As Tenant B, HRAdmin => [404] Shift was not found in this tenant, or equivalent not-found - cross-tenant update is denied"
+    auto: API
+
+  - id: ATT-SHIFT-016
+    func: [F-ATT-002]
+    sc: Only ShiftManage can create/update Shifts
+    t: A caller with Attendance.View only is forbidden from POST/PUT
+    src: ["AttendanceFoundationController"]
+    type: Authorization
+    pri: P0
+    role: EMPLOYEE
+    perm: "Attendance.View"
+    steps:
+      - "[POST /api/attendance/shifts] As a caller holding only Attendance.View => [403] Forbidden"
+    auto: API
+
+  # ---------- Shift Pattern ----------
+  - id: ATT-PATTERN-001
+    func: [F-ATT-011]
+    sc: List Shift Patterns
+    t: GET patterns returns the tenant's patterns
+    src: ["AttendanceFoundationService.GetPatternsAsync"]
+    type: Positive
+    pri: P2
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/patterns] => [200] list of Shift Patterns for the caller's tenant"
+    auto: API
+
+  - id: ATT-PATTERN-002
+    func: [F-ATT-012]
+    sc: Create a valid N-day Shift Pattern
+    t: CycleLengthDays matches Days.Count with sequential unique SequenceDay values
+    src: ["AttendanceFoundationService.CreatePatternAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Attendance.PatternManage"
+    steps:
+      - "[POST /api/attendance/patterns] Code=P4, Name=4-Day Rotation, CycleLengthDays=4, Days=[{1,ShiftS1,Shift},{2,ShiftS1,Shift},{3,null,WeeklyOff},{4,ShiftS1,Shift}] => [200/201] created"
+    auto: API
+
+  - id: ATT-PATTERN-003
+    func: [F-ATT-012]
+    sc: CycleLengthDays/Days.Count mismatch and duplicate SequenceDay are rejected
+    t: A pattern whose Days.Count doesn't equal CycleLengthDays, or has a duplicate SequenceDay, fails validation
+    src: ["AttendanceFoundationService.CreatePatternAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/patterns] CycleLengthDays=3, Days.Count=2 => [400] field days 'A pattern must contain one row for every sequence day in its N-day cycle.'"
+      - "[POST /api/attendance/patterns] CycleLengthDays=3, Days=[{1},{1},{3}] (duplicate SequenceDay=1) => [400] same field/message"
+    auto: API
+
+  - id: ATT-PATTERN-004
+    func: [F-ATT-012]
+    sc: CycleLengthDays boundary - 0 and 367 are rejected, 1 and 366 are accepted
+    t: CycleLengthDays must be in [1,366]
+    src: ["AttendanceFoundationService.CreatePatternAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/patterns] CycleLengthDays=0, Days.Count=0 => [400] field days message"
+      - "[POST /api/attendance/patterns] CycleLengthDays=367, Days.Count=367 => [400] same field/message"
+    auto: API
+
+  - id: ATT-PATTERN-005
+    func: [F-ATT-013]
+    sc: Every ShiftId referenced by a pattern day must be active and in-tenant
+    t: A pattern day referencing an inactive or cross-tenant Shift is rejected
+    src: ["AttendanceFoundationService.CreatePatternAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Deactivate Shift S1 => [200]"
+      - "[POST /api/attendance/patterns] Days include ShiftId=S1 (now inactive) => [400] field days 'Every selected Shift must be active and belong to this tenant.'"
+    auto: API
+
+  - id: ATT-PATTERN-006
+    func: [F-ATT-015]
+    sc: A Shift day type with a null ShiftId is accepted by the backend with no error
+    t: DayType=Shift, ShiftId=null persists cleanly despite representing an unconfigured working day
+    src: ["AttendanceFoundationService.CreatePatternAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/patterns] Days=[{1,ShiftId:null,DayType:Shift}] (only day, CycleLengthDays=1) => [200/201] created with no validation error - ResolveAsync for an employee whose pattern lands on this day will later resolve ShiftId=null"
+    auto: API
+    cr: [CR-91]
+
+  - id: ATT-PATTERN-007
+    func: [F-ATT-016]
+    sc: EffectiveTo before EffectiveFrom is NOT rejected for a Shift Pattern (inconsistent with Shift/Applicability)
+    t: Unlike Shift/Applicability, Pattern create has no ordering check on EffectiveFrom/EffectiveTo
+    src: ["AttendanceFoundationService.CreatePatternAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/patterns] EffectiveFrom=2026-06-01, EffectiveTo=2026-01-01 (inverted) => [200/201] created - no 'EffectiveTo cannot be before EffectiveFrom' error is raised, unlike Shift/Applicability"
+    auto: API
+    cr: [CR-91]
+
+  - id: ATT-PATTERN-008
+    func: [F-ATT-017]
+    sc: Shift Pattern creation is not blocked by a closed Attendance period
+    t: Unlike Shift/Applicability/Roster, creating a pattern whose effective range intersects a closed period succeeds
+    src: ["AttendanceFoundationService.CreatePatternAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Close the Attendance period covering 2026-06 => [200] period Closed"
+      - "[POST /api/attendance/patterns] EffectiveFrom=2026-06-01 (inside the closed period) => [200/201] created - no period-lock Conflict, unlike Shift/Applicability/Roster in the same closed window"
+    auto: API
+
+  - id: ATT-PATTERN-009
+    func: [F-ATT-014]
+    sc: No update or delete endpoint exists for Shift Patterns
+    t: PUT/DELETE against a pattern route return 404 (route not registered) - patterns can only be created, never corrected or retired
+    src: ["AttendanceFoundationController"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[PUT /api/attendance/patterns/{id}] => [404] no such route is registered"
+      - "[DELETE /api/attendance/patterns/{id}] => [404] no such route is registered"
+    auto: API
+
+  - id: ATT-PATTERN-010
+    func: [F-ATT-011]
+    sc: Tenant isolation for Shift Patterns
+    t: A Tenant B caller never sees Tenant A's patterns
+    src: ["AttendanceFoundationService.GetPatternsAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/patterns] As Tenant B => [200] Tenant A's pattern never appears"
+    auto: API
+
+  # ---------- Shift Applicability Rules ----------
+  - id: ATT-APPLIC-001
+    func: [F-ATT-019]
+    sc: Create a valid Applicability rule targeting a Department with a Shift
+    t: RuleName, exactly one target (ShiftId), and Priority persist
+    src: ["AttendanceFoundationService.AddApplicabilityAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Attendance.PatternManage"
+    steps:
+      - "[POST /api/attendance/applicability] RuleName='Engineering Day Shift', ShiftId=S1, DepartmentId=D1, Priority=10, EffectiveFrom=today => [200/201] created"
+    auto: API
+
+  - id: ATT-APPLIC-002
+    func: [F-ATT-019]
+    sc: RuleName required and length-capped
+    t: Blank RuleName and a RuleName over 200 characters are both rejected
+    src: ["AttendanceFoundationService.AddApplicabilityAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/applicability] RuleName='' => [400] field ruleName 'Rule name is required.'"
+      - "[POST /api/attendance/applicability] RuleName=<201 characters> => [400] field ruleName 'Rule name cannot exceed 200 characters.'"
+    auto: API
+
+  - id: ATT-APPLIC-003
+    func: [F-ATT-019]
+    sc: Exactly one of ShiftId/ShiftPatternId must be set
+    t: Neither set, or both set, is rejected as XOR violation
+    src: ["AttendanceFoundationService.AddApplicabilityAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/attendance/applicability] ShiftId=null, ShiftPatternId=null => [400] field shiftId 'Specify exactly one Shift or Shift Pattern.'"
+      - "[POST /api/attendance/applicability] ShiftId=S1, ShiftPatternId=P1 (both set) => [400] same field/message"
+    auto: API
+
+  - id: ATT-APPLIC-004
+    func: [F-ATT-019]
+    sc: ShiftId/ShiftPatternId/EmployeeId must exist, be active, and be in-tenant at creation
+    t: A rule referencing an inactive Shift, or a cross-tenant Employee, is rejected
+    src: ["AttendanceFoundationService.AddApplicabilityAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Deactivate Shift S2 => [200]"
+      - "[POST /api/attendance/applicability] ShiftId=S2 (inactive) => [400] field shiftId 'Shift was not found in this tenant.'"
+      - "[POST /api/attendance/applicability] EmployeeId=<Tenant B employee id> => [400] field employeeId 'Employee was not found in this tenant.'"
+    auto: API
+
+  - id: ATT-APPLIC-005
+    func: [F-ATT-022]
+    sc: GET rule detail drops most dimension conditions from the response
+    t: A rule saved with Gender and OrganisationId set does not surface either key in the GET response's Conditions dictionary
+    src: ["AttendanceFoundationService.ToApplicabilityDto"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/applicability] Gender=Female, OrganisationId=O1, ShiftId=S1 => [200/201] created"
+      - "[GET /api/attendance/shift-applicability/{id}] => [200] Conditions dictionary contains Department/WorkLocation/EmployeeType/Grade/Designation/CostCenter/Employee keys ONLY - Gender and Organisation are absent even though they were persisted and are used for matching"
+    auto: API
+    cr: [CR-91]
+
+  - id: ATT-APPLIC-006
+    func: [F-ATT-020]
+    sc: Update an Applicability rule via the shift-applicability route
+    t: PUT correctly persists RuleName/target/dimension changes
+    src: ["AttendanceFoundationService.UpdateApplicabilityAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/attendance/shift-applicability/{id}] RuleName='Engineering Day Shift v2', switch target from ShiftId to ShiftPatternId=P1 => [200] update persisted, target switched"
+    auto: API
+
+  - id: ATT-APPLIC-007
+    func: [F-ATT-020]
+    sc: XOR-target violation on update returns a different error field name than create for the same rule
+    t: Update's XOR violation uses field 'target', not 'shiftId' as create does
+    src: ["AttendanceFoundationService.UpdateApplicabilityAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[PUT /api/attendance/shift-applicability/{id}] ShiftId and ShiftPatternId both set => [400] field target 'Specify exactly one Shift or Shift Pattern.' - contrast with create's field name 'shiftId' for the identical business rule"
+    auto: API
+
+  - id: ATT-APPLIC-008
+    func: [F-ATT-023]
+    sc: Update does not re-validate ShiftId/ShiftPatternId/EmployeeId existence or active status
+    t: A PUT can silently point a rule at an inactive Shift or a nonexistent Employee with no validation error, unlike Create
+    src: ["AttendanceFoundationService.UpdateApplicabilityAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[Setup] Deactivate Shift S3 => [200]"
+      - "[PUT /api/attendance/shift-applicability/{id}] ShiftId=S3 (inactive) => [200] update SUCCEEDS with no error, unlike POST /api/attendance/applicability with the same inactive ShiftId which would reject with 400"
+    auto: API
+    cr: [CR-95]
+
+  - id: ATT-APPLIC-009
+    func: [F-ATT-021]
+    sc: Delete an Applicability rule
+    t: DELETE removes the rule with no dependency/usage check
+    src: ["AttendanceFoundationService.DeleteApplicabilityAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[DELETE /api/attendance/shift-applicability/{id}] => [200/204] rule removed"
+      - "[GET /api/attendance/shift-applicability/{id}] => [404] rule no longer exists"
+    auto: API
+
+  - id: ATT-APPLIC-010
+    func: [F-ATT-024]
+    sc: Two equally-specific, equally-prioritized overlapping rules can both be saved; ambiguity is only caught at resolve time
+    t: Creating both rules succeeds; resolving an affected employee/date returns an explicit Conflict, not an arbitrary pick
+    src: ["AttendanceFoundationService.ResolveAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/attendance/applicability] Rule R1: DepartmentId=D1, Priority=10, ShiftId=S1 => [200/201] created"
+      - "[POST /api/attendance/applicability] Rule R2: DepartmentId=D1, Priority=10, ShiftId=S2 (same specificity, same priority, overlapping effective range) => [200/201] created - both rules coexist, no creation-time rejection"
+      - "[GET /api/attendance/employees/{d1EmployeeId}/roster/{date}] => [409] 'Multiple Shift applicability rules have the same best priority and specificity.'"
+    auto: API
+
+  - id: ATT-APPLIC-011
+    func: [F-ATT-025]
+    sc: Resolution precedence - explicit roster row beats a matching Applicability rule
+    t: An employee with both a manual roster row and a matching rule resolves to the manual roster row
+    src: ["AttendanceFoundationService.ResolveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[Setup] Applicability rule matches Employee E1 for date D => resolves to Shift S1 if queried alone"
+      - "[Setup] Manually assign Shift S2 to E1 for date D via roster/assign => [200]"
+      - "[GET /api/attendance/employees/{E1}/roster/{D}] => [200] resolved ShiftId=S2 (manual roster row), message references explicit roster override, NOT the applicability rule's S1"
+    auto: API
+
+  - id: ATT-APPLIC-012
+    func: [F-ATT-025]
+    sc: Resolution precedence - higher Priority rule wins; equal priority ties on Specificity (EmployeeId-specific beats broader dimension match)
+    t: Priority is the first tiebreak, Specificity (EmployeeId=100 + 1 per set dimension) is the second
+    src: ["AttendanceFoundationService.ResolveAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] Rule A: DepartmentId=D1, Priority=5, ShiftId=S1 => created"
+      - "[Setup] Rule B: DepartmentId=D1, Priority=10, ShiftId=S2 (higher priority) => created"
+      - "[GET /api/attendance/employees/{d1EmployeeId}/roster/{date}] => [200] resolved ShiftId=S2 - higher Priority wins"
+      - "[Setup] Rule C: EmployeeId=<same employee>, Priority=10, ShiftId=S3 (same priority as B, but employee-specific = higher specificity) => created"
+      - "[GET /api/attendance/employees/{sameEmployeeId}/roster/{date}] => [200] resolved ShiftId=S3 - equal priority, higher specificity wins"
+    auto: API
+
+  - id: ATT-APPLIC-013
+    func: [F-ATT-025]
+    sc: Resolution falls back to the tenant default Shift when no rule matches, then to calendar Holiday/WeeklyOff, then to NotConfigured
+    t: The full fallback chain resolves in order when progressively less config is present
+    src: ["AttendanceFoundationService.ResolveAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[GET /api/attendance/employees/{unmatchedEmployeeId}/roster/{workingDate}] No rule matches, a tenant default Shift exists and is active/effective => [200] resolved via System source to the default Shift"
+      - "[GET /api/attendance/employees/{unmatchedEmployeeId}/roster/{holidayDate}] No rule matches, no default Shift configured, date is a configured Holiday => [200] resolved as Holiday"
+      - "[GET /api/attendance/employees/{unmatchedEmployeeId}/roster/{plainDate}] No rule, no default, not a Holiday/WeeklyOff => [200] resolved with source Auto, message 'NotConfigured: no applicable Shift or Pattern rule was found.'"
+    auto: API
+
+  - id: ATT-APPLIC-014
+    func: [F-ATT-025]
+    sc: Resolution walks an N-day pattern to the correct cycle day
+    t: A matching rule resolving to a Pattern picks the pattern day using (date - EffectiveFrom) mod CycleLengthDays
+    src: ["AttendanceFoundationService.ResolveAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] 4-day Pattern P4 (Days 1-4), EffectiveFrom=2026-07-01; Applicability rule matches Employee E1 to P4 => created"
+      - "[GET /api/attendance/employees/{E1}/roster/2026-07-05] (offset 4 days = SequenceDay 1, since (4 mod 4)+1=1) => [200] resolved to Pattern Day 1's configured ShiftId/DayType"
+    auto: API
+
+  - id: ATT-APPLIC-015
+    func: [F-ATT-027]
+    sc: Applicability effective dates are inclusive on both ends
+    t: A rule effective exactly on EffectiveFrom or EffectiveTo applies
+    src: ["AttendanceFoundationService.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Rule R, EffectiveFrom=2026-08-01, EffectiveTo=2026-08-31 => created"
+      - "[GET /api/attendance/employees/{matchedEmployeeId}/roster/2026-08-01] => [200] rule applies (inclusive start)"
+      - "[GET /api/attendance/employees/{matchedEmployeeId}/roster/2026-08-31] => [200] rule applies (inclusive end)"
+      - "[GET /api/attendance/employees/{matchedEmployeeId}/roster/2026-09-01] => [200] rule no longer applies, falls through to next precedence level"
+    auto: API
+
+  - id: ATT-APPLIC-016
+    func: [F-ATT-027]
+    sc: Resolution uses the employee's HISTORICAL effective employment snapshot on the resolution date, not current employment
+    t: Resolving a past date uses the department/dimensions the employee held on that date, not today's
+    src: ["AttendanceFoundationService.ResolveAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Employee E1 was in Department D1 until 2026-03-31, then moved to D2 from 2026-04-01; a rule matches D1 => resolves to Shift S1"
+      - "[GET /api/attendance/employees/{E1}/roster/2026-03-15] => [200] resolved via the D1 rule (S1) - historical dimension used"
+      - "[GET /api/attendance/employees/{E1}/roster/2026-04-15] => [200] the D1 rule no longer matches - resolution reflects E1's current D2 dimension"
+    auto: API
+
+  - id: ATT-APPLIC-017
+    func: [F-ATT-018, F-ATT-028]
+    sc: Tenant isolation for Applicability rules
+    t: A Tenant B caller cannot list, read, update, or delete Tenant A's rule
+    src: ["AttendanceFoundationService"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    steps:
+      - "[GET /api/attendance/shift-applicability] As Tenant B => [200] Tenant A's rule never appears"
+      - "[GET /api/attendance/shift-applicability/{tenantARuleId}] As Tenant B => [404] not found"
+      - "[PUT /api/attendance/shift-applicability/{tenantARuleId}] As Tenant B => [404] not found"
+      - "[DELETE /api/attendance/shift-applicability/{tenantARuleId}] As Tenant B => [404] not found"
+    auto: API
+
+  - id: ATT-APPLIC-018
+    func: [F-ATT-026]
+    sc: Applicability create and CRUD use inconsistent route naming
+    t: Create is POST api/attendance/applicability; list/detail/update/delete are under api/attendance/shift-applicability
+    src: ["AttendanceFoundationController"]
+    type: Contract
+    pri: P3
+    steps:
+      - "[POST /api/attendance/applicability] valid payload => [200/201] created, note the id"
+      - "[GET /api/attendance/shift-applicability/{id}] (different route stem than create) => [200] the same rule is retrieved successfully"
+    auto: API
+
+  # ---------- Roster Assignment ----------
+  - id: ATT-ROSTER-001
+    func: [F-ATT-029]
+    sc: Assign a Shift to one employee for a single date
+    t: A valid single-employee, single-date roster assignment succeeds
+    src: ["AttendanceFoundationService.AssignRosterAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "Attendance.RosterManage"
+    steps:
+      - "[POST /api/attendance/roster/assign] EmployeeIds=[E1], FromDate=ToDate=2026-07-10, DayType=Shift, ShiftId=S1, Reason='Cover shift' => [200] assigned, history row written"
+    auto: API
+
+  - id: ATT-ROSTER-002
+    func: [F-ATT-029]
+    sc: Empty employee list or inverted date range is rejected
+    t: EmployeeIds.Count==0, or FromDate>ToDate, is a validation error
+    src: ["AttendanceFoundationService.AssignRosterAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/roster/assign] EmployeeIds=[] => [400] field dateRange 'A valid employee list and date range are required.'"
+      - "[POST /api/attendance/roster/assign] FromDate=2026-07-10, ToDate=2026-07-01 => [400] same field/message"
+    auto: API
+
+  - id: ATT-ROSTER-003
+    func: [F-ATT-029]
+    sc: Row-count safety cap - days x employees over 100,000 is rejected
+    t: A large batch exceeding the safe limit is rejected before any write
+    src: ["AttendanceFoundationService.AssignRosterAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/roster/assign] EmployeeIds with 1,000 ids, FromDate..ToDate spanning 101 days (101,000 rows) => [400] field dateRange 'The request exceeds the safe limit of 100,000 roster rows.'"
+    auto: API
+
+  - id: ATT-ROSTER-004
+    func: [F-ATT-030]
+    sc: DayType=Shift requires a ShiftId; ShiftId must be an active in-tenant Shift
+    t: Missing ShiftId, and an inactive/cross-tenant ShiftId, are both rejected
+    src: ["AttendanceFoundationService.AssignRosterAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/roster/assign] DayType=Shift, ShiftId=null => [400] field shiftId 'Shift is required for a working roster day.'"
+      - "[Setup] Deactivate Shift S9 => [200]"
+      - "[POST /api/attendance/roster/assign] DayType=Shift, ShiftId=S9 (inactive) => [400] field shiftId 'Shift was not found in this tenant.'"
+    auto: API
+
+  - id: ATT-ROSTER-005
+    func: [F-ATT-029]
+    sc: One nonexistent employee in the batch fails the whole request with no partial write
+    t: If any EmployeeId is not in-tenant, the entire assignment call fails atomically
+    src: ["AttendanceFoundationService.AssignRosterAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/roster/assign] EmployeeIds=[E1 (valid), E999 (does not exist)] => [400] field employeeIds 'One or more employees were not found in this tenant.'"
+      - "[GET /api/attendance/roster?fromDate=...&toDate=...&employeeId=E1] => [200] confirms E1 has NO new roster row from the failed batch - the whole request is atomic"
+    auto: API
+
+  - id: ATT-ROSTER-006
+    func: [F-ATT-031]
+    sc: Assigning/removing roster for an out-of-scope employee returns NotFound, not Forbidden
+    t: A manager holding RosterManage but no scope over a given employee gets 404, hiding the employee's existence
+    src: ["AttendanceFoundationService.AssignRosterAsync"]
+    type: Security
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.RosterManage"
+    steps:
+      - "[POST /api/attendance/roster/assign] EmployeeIds=[<employee outside caller's scope>] => [404] 'Roster assignment was not found.' - not 403"
+    auto: API
+
+  - id: ATT-ROSTER-007
+    func: [F-ATT-032]
+    sc: Re-submitting an identical Manual assignment is a silent no-op with no new history row
+    t: Repeating the exact same manual assignment writes nothing extra
+    src: ["AttendanceFoundationService.AssignRosterAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/roster/assign] EmployeeIds=[E1], date=D, DayType=Shift, ShiftId=S1 (first call) => [200] history count = 1"
+      - "[POST /api/attendance/roster/assign] identical payload (second call) => [200] no error, but history count is STILL 1 - the identical Manual-sourced row is a no-op"
+    auto: API
+
+  - id: ATT-ROSTER-008
+    func: [F-ATT-032]
+    sc: An identical-looking assignment over an Upload-sourced row is NOT a no-op
+    t: Re-assigning the same Shift/DayType via manual assign over a row whose current source is Upload still writes a new row and history entry, upgrading the source to Manual
+    src: ["AttendanceFoundationService.AssignRosterAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] Commit a Roster Upload that assigns E1/date D to Shift S1 (AssignmentSource=Upload) => committed"
+      - "[POST /api/attendance/roster/assign] EmployeeIds=[E1], date=D, ShiftId=S1 (same Shift/DayType, but existing row's source is Upload, not Manual) => [200] a NEW history row is written and AssignmentSource is upgraded to Manual - the no-op check does not apply"
+    auto: API
+
+  - id: ATT-ROSTER-009
+    func: [F-ATT-033]
+    sc: Assigning WeeklyOff over an already-working calendar day is unconditionally flagged as a calendar override
+    t: IsCalendarOverride=true even when the underlying calendar day was already a plain working day, not a Holiday/WeeklyOff
+    src: ["AttendanceFoundationService.AssignRosterAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] date D has no Holiday/WeeklyOff configured (plain working day) => confirmed via roster grid"
+      - "[POST /api/attendance/roster/assign] EmployeeIds=[E1], date=D, DayType=WeeklyOff => [200] the resulting row/history has IsCalendarOverride=true, even though nothing about the underlying calendar was actually overridden"
+    auto: API
+    cr: [CR-91]
+
+  - id: ATT-ROSTER-010
+    func: [F-ATT-034]
+    sc: OriginalShiftId is captured on first override and never updated, and no endpoint ever reads it
+    t: A second re-assignment does not change OriginalShiftId from what the first override set
+    src: ["AttendanceFoundationService.AssignRosterAsync"]
+    type: Boundary
+    pri: P3
+    steps:
+      - "[Setup] Default calendar Shift for date D is S0 (via applicability/default) => precondition established for the steps below"
+      - "[POST /api/attendance/roster/assign] EmployeeIds=[E1], date=D, ShiftId=S1 (first override) => [200] OriginalShiftId internally set to S0 (not directly exposed via a GET response in this API surface)"
+      - "[POST /api/attendance/roster/assign] EmployeeIds=[E1], date=D, ShiftId=S2 (second override) => [200] OriginalShiftId remains S0, not S1 - it is never refreshed, and no endpoint anywhere reads or restores from it"
+    auto: DB-assisted
+    cr: [CR-91]
+
+  - id: ATT-ROSTER-011
+    func: [F-ATT-035]
+    sc: Remove a roster override
+    t: DELETE removes the explicit row and reverts resolution to calendar/automatic
+    src: ["AttendanceFoundationService.RemoveRosterAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Setup] Manually assign S1 to E1 for date D => [200]"
+      - "[DELETE /api/attendance/roster/{E1}/{D}] => [200] 'Roster override removed; calendar/automatic resolution will apply.'"
+      - "[GET /api/attendance/employees/{E1}/roster/{D}] => [200] resolution now falls back to applicability/default/calendar, not S1"
+    auto: API
+
+  - id: ATT-ROSTER-012
+    func: [F-ATT-035]
+    sc: Removing a roster override with no existing explicit row is NotFound
+    t: DELETE against a date with no manual/upload row fails
+    src: ["AttendanceFoundationService.RemoveRosterAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[DELETE /api/attendance/roster/{E1}/{dateWithNoExplicitRow}] => [404] 'Roster assignment was not found.'"
+    auto: API
+
+  - id: ATT-ROSTER-013
+    func: [F-ATT-036]
+    sc: Roster assign/remove is blocked by a closed Attendance period
+    t: A closed period rejects both assign and remove for a date inside it, with roster-specific wording
+    src: ["AttendanceFoundationService.AssignRosterAsync/RemoveRosterAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Close the Attendance period covering date D => [200] period Closed"
+      - "[POST /api/attendance/roster/assign] date=D => [409] 'The Attendance period is closed and must be reopened before this change.'"
+      - "[DELETE /api/attendance/roster/{E1}/{D}] => [409] same message"
+    auto: API
+
+  # ---------- Roster Grid Query ----------
+  - id: ATT-ROSTER-014
+    func: [F-ATT-037]
+    sc: Roster grid query requires FromDate/ToDate and caps the range at 366 days
+    t: Missing dates, inverted range, and an over-366-day range are all rejected
+    src: ["AttendanceFoundationService.GetRosterAsync"]
+    type: Boundary
+    pri: P1
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/roster] no fromDate/toDate => [400] field dateRange 'FromDate and ToDate are required for roster queries.'"
+      - "[GET /api/attendance/roster?fromDate=2026-07-10&toDate=2026-07-01] (inverted) => [400] field dateRange 'FromDate cannot be after ToDate.'"
+      - "[GET /api/attendance/roster?fromDate=2026-01-01&toDate=2027-01-02] (367 days) => [400] field dateRange 'Roster query range cannot exceed 366 days.'"
+    auto: API
+
+  - id: ATT-ROSTER-015
+    func: [F-ATT-038]
+    sc: Roster grid query is scoped to the caller's authorized employees
+    t: A manager's roster grid never returns rows for employees outside their scope
+    src: ["AttendanceFoundationService.GetRosterAsync"]
+    type: Authorization
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/roster?fromDate=2026-07-01&toDate=2026-07-31] As a manager with 2 direct reports => [200] only the 2 direct reports' rows are present, never an unrelated employee's"
+    auto: API
+
+  - id: ATT-ROSTER-015B
+    func: [F-ATT-039]
+    sc: Roster grid resolves every employee x every day in range before paginating in memory
+    t: Page/PageSize do not reduce the underlying per-cell resolution work, a scale risk beyond the 366-day cap
+    src: ["AttendanceFoundationService.GetRosterAsync"]
+    type: Boundary
+    pri: P2
+    tags: [Boundary]
+    steps:
+      - "[Setup] A tenant with 500 in-scope employees and a query spanning 31 days (15,500 employee-day cells) => precondition established for the steps below"
+      - "[GET /api/attendance/roster?fromDate=2026-07-01&toDate=2026-07-31&page=1&pageSize=25] => [200] the requested 25-row page is returned correctly, but confirm via timing/logging that ALL 15,500 employee-day cells were resolved via ResolveAsync before the in-memory OrderBy/Skip/Take ran - requesting page 1 of 25 costs the same underlying work as requesting the full unpaged set"
+    auto: DB-assisted
+
+  - id: ATT-ROSTER-016
+    func: [F-ATT-040]
+    sc: Grid classifies WeeklyOff/Holiday rows by parsing the resolution Message string, not a structured field
+    t: A Holiday date with no explicit roster row shows DayType=Holiday in the grid, derived from the message text
+    src: ["AttendanceFoundationService.GetRosterAsync"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[GET /api/attendance/roster?fromDate=<holidayDate>&toDate=<holidayDate>&employeeId=E1] no explicit roster row for that date => [200] row DayType=Holiday, sourced from parsing the resolution Message prefix rather than a dedicated enum field"
+    auto: API
+    cr: [CR-91]
+
+  - id: ATT-ROSTER-017
+    func: [F-ATT-041]
+    sc: Roster grid tenant isolation across every data source
+    t: A Tenant B caller's grid never includes Tenant A rows from manual, upload, applicability, pattern, default, or calendar sources
+    src: ["AttendanceFoundationService.GetRosterAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    perm: "Attendance.View"
+    steps:
+      - "[GET /api/attendance/roster?fromDate=2026-07-01&toDate=2026-07-31] As Tenant B => [200] zero Tenant A rows of any source appear"
+    auto: API
+
+  # ---------- Roster Upload ----------
+  - id: ATT-UPLOAD-001
+    func: [F-ATT-042]
+    sc: Download the roster upload CSV template
+    t: The template endpoint returns the exact expected header row
+    src: ["AttendanceFoundationController"]
+    type: Positive
+    pri: P3
+    perm: "Attendance.RosterUpload"
+    steps:
+      - "[GET /api/attendance/roster/template] => [200] file attendance-roster-template.csv, content exactly 'EmployeeCode,Date,ShiftCode,DayType\\r\\n'"
+    auto: API
+
+  - id: ATT-UPLOAD-002
+    func: [F-ATT-043]
+    sc: An empty file is rejected at the controller before reaching the service
+    t: No file, or a zero-length file, fails validation
+    src: ["AttendanceFoundationController.ValidateUpload"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/roster/upload/validate] file=null => [400] field file 'A non-empty CSV file is required.'"
+      - "[POST /api/attendance/roster/upload/validate] file=<0 bytes> => [400] same field/message"
+    auto: API
+
+  - id: ATT-UPLOAD-003
+    func: [F-ATT-043]
+    sc: Header row must exactly match the required column order
+    t: A CSV with different/reordered/missing headers is rejected
+    src: ["AttendanceFoundationService.ValidateRosterUploadAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/roster/upload/validate] header='Date,EmployeeCode,ShiftCode,DayType' (reordered) => [400] field file 'CSV headers must be EmployeeCode,Date,ShiftCode,DayType.'"
+    auto: API
+
+  - id: ATT-UPLOAD-004
+    func: [F-ATT-043]
+    sc: Row-count cap of 100,000 and 10MB request-size cap
+    t: A file over the row cap, or over 10MB, is rejected
+    src: ["AttendanceFoundationService.ValidateRosterUploadAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/roster/upload/validate] file with 100,001 data rows => [400] field file 'The file exceeds the safe limit of 100,000 rows.'"
+      - "[POST /api/attendance/roster/upload/validate] file > 10,000,000 bytes => [413] request rejected by RequestSizeLimit before validation logic even runs"
+    auto: API
+
+  - id: ATT-UPLOAD-005
+    func: [F-ATT-044]
+    sc: Per-row validation catches invalid Date/DayType/EmployeeCode/ShiftCode independently, each row validated on its own
+    t: A file with several distinct bad rows reports each row's own specific error, not fail-fast on the first
+    src: ["AttendanceFoundationService.ValidateRosterUploadAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/roster/upload/validate] Row1 Date='notadate' => row error 'Date is invalid.'"
+      - "Row2 EmployeeCode='NOPE999' (not in tenant) => row error 'EmployeeCode was not found in this tenant.'"
+      - "Row3 DayType=Shift, ShiftCode='INACTIVE1' (inactive shift) => row error 'ShiftCode was not found or is inactive.' => [200] response lists all three row errors together, batch.Status=Failed, InvalidRows=3"
+    auto: API
+
+  - id: ATT-UPLOAD-006
+    func: [F-ATT-044]
+    sc: DayType=NonWorking requires an empty ShiftCode
+    t: A NonWorking row with a non-empty ShiftCode is invalid
+    src: ["AttendanceFoundationService.ValidateRosterUploadAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/attendance/roster/upload/validate] Row DayType=NonWorking, ShiftCode='S1' => [200] row error 'ShiftCode must be empty for NonWorking.'"
+    auto: API
+
+  - id: ATT-UPLOAD-007
+    func: [F-ATT-045]
+    sc: A duplicate EmployeeCode|Date row invalidates BOTH occurrences
+    t: Two rows with the same EmployeeCode and Date both end up invalid, not just the second
+    src: ["AttendanceFoundationService.ValidateRosterUploadAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/attendance/roster/upload/validate] Row1: E1|2026-07-10|S1|Shift, Row2: E1|2026-07-10|S2|Shift (same employee+date) => [200] BOTH Row1 and Row2 report 'Duplicate employee/date row.' - the first occurrence is retroactively invalidated too, InvalidRows increments for both"
+    auto: API
+
+  - id: ATT-UPLOAD-008
+    func: [F-ATT-046]
+    sc: A Failed batch is still persisted permanently
+    t: A batch with InvalidRows>0 is retrievable/auditable even though it cannot be committed
+    src: ["AttendanceFoundationService.ValidateRosterUploadAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/attendance/roster/upload/validate] a file with at least one invalid row => [200] batch.Status=Failed, batchId returned"
+      - "[POST /api/attendance/roster/upload/{batchId}/commit] attempt to commit the Failed batch => [409] 'Only a validated roster upload can be committed.'"
+    auto: DB-assisted
+
+  - id: ATT-UPLOAD-009
+    func: [F-ATT-047]
+    sc: A fully valid file validates to Validated and commits successfully
+    t: The happy path end-to-end validate-then-commit
+    src: ["AttendanceFoundationService.ValidateRosterUploadAsync/CommitRosterUploadAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/attendance/roster/upload/validate] all rows valid (New action) => [200] batch.Status=Validated, InvalidRows=0"
+      - "[POST /api/attendance/roster/upload/{batchId}/commit] => [200] batch.Status=Committed, EmployeeRosterDays and history updated for each row"
+    auto: API
+
+  - id: ATT-UPLOAD-010
+    func: [F-ATT-047]
+    sc: Committing an already-Committed batch is rejected
+    t: A second commit call against the same batchId fails
+    src: ["AttendanceFoundationService.CommitRosterUploadAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/attendance/roster/upload/{batchId}/commit] first call, valid batch => [200] Committed"
+      - "[POST /api/attendance/roster/upload/{batchId}/commit] second call, same batchId => [409] 'Only a validated roster upload can be committed.'"
+    auto: API
+
+  - id: ATT-UPLOAD-011
+    func: [F-ATT-048]
+    sc: A batch that fails commit mid-loop due to a scope change since validation is left permanently stuck at Validated
+    t: If an employee's authorization scope narrows between validate and commit, commit fails and the batch can never be committed or retried
+    src: ["AttendanceFoundationService.CommitRosterUploadAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    role: MANAGER
+    perm: "Attendance.RosterUpload"
+    steps:
+      - "[POST /api/attendance/roster/upload/validate] a manager validates a batch covering employee E1, currently in their scope => [200] batch.Status=Validated"
+      - "[Setup] Narrow the manager's scope so E1 is no longer accessible (e.g. reassign E1 to a different manager) => scope change takes effect"
+      - "[POST /api/attendance/roster/upload/{batchId}/commit] => [403 or Failure] commit fails on E1's row; nothing from this batch is persisted (SaveChanges never reached)"
+      - "[POST /api/attendance/roster/upload/{batchId}/commit] retry, same conditions => [403 or Failure] fails identically every time - batch remains stuck at Validated with no repair path"
+    auto: DB-assisted
+    cr: [CR-92]
+
+  - id: ATT-UPLOAD-012
+    func: [F-ATT-049]
+    sc: Unchanged rows are skipped at commit with no new history
+    t: A row whose CSV values match the current DB state exactly writes no history entry
+    src: ["AttendanceFoundationService.CommitRosterUploadAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Setup] E1/date D is already assigned Shift S1 via a prior committed upload => precondition established for the steps below"
+      - "[POST /api/attendance/roster/upload/validate] same file, same E1/D/S1 row => [200] Action=Unchanged for that row"
+      - "[POST /api/attendance/roster/upload/{batchId}/commit] => [200] Committed, but no new EmployeeRosterChangeHistory row is written for the Unchanged row"
+    auto: DB-assisted
+
+  - id: ATT-UPLOAD-013
+    func: [F-ATT-050]
+    sc: Roster upload validate/commit are tenant-isolated
+    t: EmployeeCode/ShiftCode resolution during validate only matches rows within the caller's own tenant
+    src: ["AttendanceFoundationService.ValidateRosterUploadAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    perm: "Attendance.RosterUpload"
+    steps:
+      - "[POST /api/attendance/roster/upload/validate] As Tenant B, a row references an EmployeeCode that only exists in Tenant A => [200] row error 'EmployeeCode was not found in this tenant.'"
+    auto: API
+
+  # ---------- Calendar Overrides ----------
+  - id: ATT-CAL-001
+    func: [F-ATT-051]
+    sc: If the working-day calendar resolver is not wired, Holiday/WeeklyOff signals silently disappear
+    t: With no calendar resolver, a configured Holiday date resolves as a plain unmatched day, not as Holiday
+    src: ["AttendanceFoundationService.CalendarDayTypeAsync"]
+    type: Boundary
+    pri: P2
+    tags: [Environment]
+    steps:
+      - "[Manual/Config] Deploy/run against a host where IWorkingDayCalendarResolver is not registered (e.g. a minimal test harness) => the forced condition is established"
+      - "[GET /api/attendance/employees/{id}/roster/{holidayDate}] no rule/default matches => [200] resolves to 'NotConfigured', NOT 'Holiday' - the calendar signal is silently absent rather than erroring"
+    auto: DB-assisted
+    cr: [CR-91]
+
+  - id: ATT-CAL-002
+    func: [F-ATT-052]
+    sc: Removing an override does not distinguish a calendar override from a plain manual assignment
+    t: Removing either type of override uses the identical code path and message
+    src: ["AttendanceFoundationService.RemoveRosterAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[Setup] date D is a configured Holiday; assign a working Shift to E1 on D (a genuine calendar override, IsCalendarOverride=true) => [200]"
+      - "[DELETE /api/attendance/roster/{E1}/{D}] => [200] 'Roster override removed; calendar/automatic resolution will apply.' - identical message to removing a plain non-override manual assignment"
+      - "[GET /api/attendance/employees/{E1}/roster/{D}] => [200] resolves back to Holiday"
+    auto: API
+
+  # ---------- Effective Dating / cross-cutting ----------
+  - id: ATT-CAL-003
+    func: [F-ATT-053]
+    sc: Period-lock guard coverage is inconsistent across Foundation-management endpoints
+    t: Shift, Applicability, and Roster are all blocked by a closed period intersecting their effective range; Shift Pattern create is not
+    src: ["AttendanceFoundationService"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[Setup] Close the Attendance period covering 2026-09 => [200] Closed"
+      - "[POST /api/attendance/shifts] EffectiveFrom inside 2026-09 => [409] period-lock Conflict"
+      - "[POST /api/attendance/applicability] EffectiveFrom inside 2026-09 => [409] period-lock Conflict"
+      - "[POST /api/attendance/roster/assign] date inside 2026-09 => [409] period-lock Conflict"
+      - "[POST /api/attendance/patterns] EffectiveFrom inside 2026-09 => [200/201] created with NO period-lock Conflict - Pattern is the odd one out"
+    auto: API
+
+  - id: ATT-CAL-004
+    func: [F-ATT-054]
+    sc: EffectiveTo-before-EffectiveFrom validation is inconsistent across sibling entities
+    t: Shift and Applicability reject an inverted effective range; Pattern does not
+    src: ["AttendanceFoundationService"]
+    type: Contract
+    pri: P3
+    steps:
+      - "[POST /api/attendance/shifts] EffectiveFrom=2026-06-01, EffectiveTo=2026-01-01 => [400] rejected"
+      - "[POST /api/attendance/applicability] EffectiveFrom=2026-06-01, EffectiveTo=2026-01-01 => [400] rejected"
+      - "[POST /api/attendance/patterns] EffectiveFrom=2026-06-01, EffectiveTo=2026-01-01 => [200/201] accepted with no ordering check"
+    auto: API

@@ -1,0 +1,108 @@
+sheet: Payroll_Provider_Scale
+submodule: SQL Server/MySQL provider parity for concurrency-sensitive paths, and large-data/paging proof
+defaults:
+  role: HRADMIN
+  perm: "n/a"
+  tenant: A
+  pre: "A disposable, non-production SQL Server and/or MySQL database configured via HRMS_SQLSERVER_TEST_CONNECTION / HRMS_MYSQL_TEST_CONNECTION, unless stated. Cases report NOT EXECUTED - environment unavailable when the relevant env var is absent."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: PAY-PROV-001
+    func: [F-PAY-240]
+    sc: Optimistic concurrency holds identically on both providers
+    t: A stale-version update on SalaryComponent/SalaryStructure/EmployeeSalaryAssignment/PayrollPeriod/PayrollRun/PayrollAdjustment/Payslip is Conflict on SQL Server and on MySQL alike
+    src: ["SalaryComponentService.UpdateAsync (and siblings) on real providers"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[MySQL env] Run the concurrency-version-mismatch scenario for each of the 7 entities against a real MySQL database => [409] Conflict on every one, or NOT EXECUTED - environment unavailable if HRMS_MYSQL_TEST_CONNECTION is unset"
+      - "[SQL Server env] Repeat against a real SQL Server database => [409] Conflict on every one, or NOT EXECUTED - environment unavailable if HRMS_SQLSERVER_TEST_CONNECTION is unset"
+    auto: DB-assisted
+
+  - id: PAY-PROV-002
+    func: [F-PAY-241]
+    sc: Adjustment number sequence and reimbursement claim number are race-free on real providers
+    t: 20 concurrent adjustment creates and 20 concurrent claim creates each produce 20 distinct, gap-free-or-explainable numbers with zero duplicates on both providers
+    src: ["PayrollAdjustmentService.NextNumberAsync, ReimbursementService.NextClaimNumberAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[MySQL env] Fire 20 concurrent POST /api/payroll/adjustments against a real MySQL database => 20 distinct AdjustmentNumbers, zero duplicates"
+      - "[MySQL env] Fire 20 concurrent POST /api/payroll/reimbursements against the same database => 20 distinct ClaimNumbers, zero duplicates - this is the higher-risk case since ClaimNumber has no dedicated sequence row"
+      - "[SQL Server env] Repeat both scenarios => same zero-duplicate guarantee, or NOT EXECUTED - environment unavailable"
+    auto: DB-assisted
+
+  - id: PAY-PROV-003
+    func: [F-PAY-242]
+    sc: Serializable-isolation Post/Approve races resolve safely on both providers
+    t: Two concurrent PayrollInputService.PostAsync calls against the same batch, and two concurrent ReimbursementService.ApproveAsync calls against the same claim, each resolve to exactly one effective outcome
+    src: ["PayrollInputService.PostAsync, ReimbursementService.ApproveAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[MySQL env] Fire two concurrent POST /api/payroll/input-batches/{id}/post calls => exactly one set of PayrollAdjustments is created, never doubled"
+      - "[SQL Server env] Repeat => same guarantee, or NOT EXECUTED - environment unavailable"
+    auto: DB-assisted
+
+  - id: PAY-PROV-004
+    func: [F-PAY-243]
+    sc: MySQL deadlock 1213 is retried; lock-timeout 1205 is not
+    t: A simulated deadlock during adjustment-number allocation is retried to success; a simulated lock-timeout surfaces as a failure rather than looping
+    src: ["PayrollAdjustmentService.NextNumberAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[MySQL env] Force a transient deadlock (error 1213) during POST /api/payroll/adjustments's sequence allocation => the request ultimately succeeds after an internal retry, or NOT EXECUTED - environment unavailable"
+      - "[MySQL env] Force a lock-timeout (error 1205) during the same allocation => the request fails without an internal retry loop, consistent with CLAUDE.md's documented distinction"
+    auto: DB-assisted
+
+  - id: PAY-PROV-005
+    func: [F-PAY-244]
+    sc: Bulk payslip publish translates identically on both providers
+    t: Publishing 100 Generated payslips in one call moves all 100 to Published on both MySQL and SQL Server
+    src: ["PayrollOutputService.PublishAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[MySQL env] POST /api/payroll/runs/{id}/payslips/publish against 100 Generated payslips => [200] all 100 now Published, or NOT EXECUTED - environment unavailable"
+      - "[SQL Server env] Repeat => same result"
+    auto: DB-assisted
+
+  - id: PAY-PROV-006
+    func: [F-PAY-245]
+    sc: Large-data coverage gap is documented, not silently assumed
+    t: "A grep of the test suite confirms which in-scope areas DO have a dedicated *LargeDataTests class and which rely solely on this QA module's own scale cases"
+    src: ["Backend/HRMS.Tests/*LargeDataTests.cs"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual] Grep Backend/HRMS.Tests for '*LargeDataTests.cs' filenames touching in-scope areas => only PayrollAnalyticsLargeDataTests.cs and PayrollReportsLargeDataTests.cs exist; Salary Master, Periods/Runs, Calculation, Adjustments, Reimbursements, Settlement, and Inputs have no dedicated large-data automated suite"
+    auto: "Manual only"
+
+  - id: PAY-PROV-007
+    func: [F-PAY-246]
+    sc: A 1000-employee payroll run stays within a defined time ceiling with zero cross-run leakage
+    t: Preparing and calculating a run for 1000 employees completes within an agreed ceiling, and a second, unrelated run's population is provably untouched
+    src: ["PayrollRunService.PrepareAsync", "PayrollCalculationEngine.CalculateAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Setup] Seed 1000 active employees, each with a current salary assignment => precondition established"
+      - "[POST /api/payroll/runs/{id}/prepare] => [200] completes within 30 seconds, EmployeeCount=1000"
+      - "[POST /api/payroll/runs/{id}/calculate] => [200] completes within 2 minutes, 1000 PayrollResults produced"
+      - "[GET /api/payroll/runs/{anUnrelatedRunId}/employees] => [200] exact count unchanged - zero leakage from the 1000-employee run's preparation"
+    auto: DB-assisted
+
+  - id: PAY-PROV-008
+    func: [F-PAY-247]
+    sc: A skipped provider-acceptance run is reported honestly, not as a pass
+    t: Every case in this sheet reports NOT EXECUTED - environment unavailable, not Pass, when its env var is absent
+    src: ["MySql*/SqlServer* provider-acceptance test classes"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[Manual] Run this sheet's cases with HRMS_MYSQL_TEST_CONNECTION and HRMS_SQLSERVER_TEST_CONNECTION both unset => every provider-gated case reports NOT EXECUTED - environment unavailable, never a false Pass"
+    auto: "Manual only"

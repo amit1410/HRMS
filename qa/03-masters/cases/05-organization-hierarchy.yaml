@@ -1,0 +1,223 @@
+sheet: Masters_Hierarchy
+submodule: Organization Structure - Parent/Child Cascading Masters
+defaults:
+  role: HR_ADMIN
+  perm: Geography.Manage
+  tenant: A
+  pre: "Tenant A signed in as a user holding the HRAdmin role (Geography.View+Manage)."
+  data: "kind and record ids as named in each case's steps."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: HIER-001
+    func: [F-MST-14]
+    sc: Organisation is a flat master, not nested under Holding Company or Line of Business
+    t: Creating an Organisation accepts no parent field at all, confirming it is independent of the Holding Company / LOB chain despite sitting in the same 'Organization' UI group
+    src: ["Backend/HRMS.Domain/Entities/Organisation.cs ('Independent master - flat, not parented to HoldingCompany or LOB')"]
+    type: Contract
+    pri: P2
+    data: "kind=organisations"
+    steps:
+      - "[POST /api/masters/organisations] Body {code: 'ORG01', name: 'Acme Corp', parentId: '{any Holding Company id}'} => [201] parentId in the response is null - the value is accepted by the DTO but never has anywhere to be stored"
+    auto: API
+
+  - id: HIER-002
+    func: [F-MST-11, F-MST-12]
+    sc: A four-level chain (Department -> Sub Department -> Section -> Sub Section) can be built and each level only ever exposes its immediate parent
+    t: Building DEPT01 -> SUBDEPT01 -> SECTION01 -> SUBSECTION01 and reading SUBSECTION01 back shows Section01 as its parent, with no grandparent (Sub Department) or great-grandparent (Department) information anywhere in the response
+    src: ["MasterManagementRecordDto (ParentId/ParentCode/ParentName - a single level only)"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    pre: "Tenant A has active Department DEPT01."
+    steps:
+      - "[POST /api/masters/sub-departments] Body {code: 'SUBDEPT01', name: 'Frontend', parentId: '{DEPT01 id}'} => [201]"
+      - "[POST /api/masters/sections] Body {code: 'SECTION01', name: 'Web Team', parentId: '{SUBDEPT01 id}'} => [201]"
+      - "[POST /api/masters/sub-sections] Body {code: 'SUBSECTION01', name: 'Checkout Squad', parentId: '{SECTION01 id}'} => [201]"
+      - "[GET /api/masters/sub-sections/{SUBSECTION01 id}] Call => [200] parentId={SECTION01 id}, parentCode=SECTION01, parentName='Web Team' - the response contains no field referencing SUBDEPT01 or DEPT01 at any level"
+    auto: API
+
+  - id: HIER-003
+    func: [F-MST-11, F-MST-24]
+    sc: The lookup endpoint returns only the correct children for a given parent
+    t: GET .../sub-departments?parentId=DEPT01 returns SUBDEPT01 and excludes sub-departments belonging to a different department
+    src: ["MasterLookupService.GetSubDepartmentsAsync (ParentId filter)"]
+    type: Positive
+    pri: P0
+    pre: "Tenant A has a second Department DEPT02 with its own Sub Department SUBDEPT07."
+    steps:
+      - "[GET /api/master-data/sub-departments?parentId={DEPT01 id}] Call => [200] items contains SUBDEPT01, does not contain SUBDEPT07"
+      - "[GET /api/master-data/sub-departments?parentId={DEPT02 id}] Call => [200] items contains SUBDEPT07, does not contain SUBDEPT01"
+    auto: API
+
+  - id: HIER-004
+    func: [F-MST-11, F-MST-24]
+    sc: A parent with no children returns an empty lookup list, not an error
+    t: A freshly created Department with zero Sub Departments returns items=[] from the lookup, not a 404
+    src: ["MasterLookupService.GetSubDepartmentsAsync"]
+    type: Boundary
+    pri: P2
+    pre: "Tenant A has Department DEPT03 with no Sub Departments."
+    steps:
+      - "[GET /api/master-data/sub-departments?parentId={DEPT03 id}] Call => [200] items=[]"
+    auto: API
+
+  - id: HIER-005
+    func: [F-MST-06]
+    sc: A completely unrelated master's id is rejected as an invalid parent, not misinterpreted as a valid one
+    t: Passing a Grade's id where a Department id is expected (as a Sub Department's parentId) is refused, because the parent lookup is strongly typed to the Departments table and simply will not find a Grade row there
+    src: ["MasterManagementService.ParentExistsAsync (parent.Find is bound to the specific parent DbSet at registration time, e.g. BuildParent(_db.Departments))"]
+    type: Negative
+    tags: [Security]
+    pri: P1
+    pre: "Tenant A has an active Grade G1."
+    data: "kind=sub-departments, parentId=G1's id (wrong type)"
+    steps:
+      - "[POST /api/masters/sub-departments] Body {code: 'SUBDEPT08', name: 'Type Confusion Test', parentId: '{G1 id}'} => [400] field 'parentId' - a Grade id is never resolved against the Departments table, so no type confusion between master kinds is possible through this endpoint"
+    auto: API
+
+  - id: HIER-006
+    func: [F-MST-06, F-MST-11]
+    sc: Re-parenting is reflected immediately in the child-lookup for both the old and new parent
+    t: After moving a Sub Department from DEPT01 to DEPT02, the old parent's lookup no longer lists it and the new parent's lookup does
+    src: ["MasterLookupService.GetSubDepartmentsAsync; MasterManagementService.WriteAsync"]
+    type: Positive
+    pri: P1
+    pre: "SUBDEPT01 currently belongs to DEPT01; DEPT02 exists and is active."
+    steps:
+      - "[PUT /api/masters/sub-departments/{SUBDEPT01 id}] Body {code: 'SUBDEPT01', name: 'Frontend', parentId: '{DEPT02 id}'} => [200]"
+      - "[GET /api/master-data/sub-departments?parentId={DEPT01 id}] Call => [200] items no longer contains SUBDEPT01"
+      - "[GET /api/master-data/sub-departments?parentId={DEPT02 id}] Call => [200] items now contains SUBDEPT01"
+    auto: API
+
+  - id: HIER-007
+    func: [F-MST-07, F-MST-11]
+    sc: Deactivating a Department does not cascade to, or block on, its Sub Departments
+    t: DEPT01 has no HasReferencesAsync case checking for child Sub Departments (only the employment-history checks that apply to Department are missing entirely per CR-28); deactivating it succeeds even though SUBDEPT01 still points to it, and SUBDEPT01 itself is left untouched and still active
+    src: ["MasterManagementService.HasReferencesAsync (no 'departments' case at all)"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    pre: "DEPT01 is active and has active child SUBDEPT01 (parentId=DEPT01)."
+    data: "kind=departments"
+    steps:
+      - "[DELETE /api/masters/departments/{DEPT01 id}] Call => [200] deactivated, no 409 despite SUBDEPT01 existing"
+      - "[GET /api/masters/sub-departments/{SUBDEPT01 id}] Call => [200] SUBDEPT01 is still isActive=true, and its parentId/parentCode still point to the now-inactive DEPT01"
+    auto: API
+    cr: [CR-28]
+
+  - id: HIER-008
+    func: [F-MST-07, F-MST-12]
+    sc: Deactivating a Sub Department does not check for, or block on, its child Sections (a narrower and separate gap from HIER-007)
+    t: A Sub Department with an active child Section is deactivated with no 409, because its HasReferencesAsync case checks only employment history, never Section.SubDepartmentId
+    src: ["MasterManagementService.HasReferencesAsync ('sub-departments' case: EmploymentReferencesAsync only)"]
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    pre: "Tenant A has an active Sub Department SUBDEPT09 with an active child Section SECTION02 (parentId=SUBDEPT09)."
+    data: "kind=sub-departments"
+    steps:
+      - "[DELETE /api/masters/sub-departments/{SUBDEPT09 id}] Call => [200] deactivated, no 409 despite SECTION02 pointing to it"
+    auto: API
+    cr: [CR-35]
+
+  - id: HIER-009
+    func: [F-MST-07, F-MST-10]
+    sc: Deactivating a Holding Company IS blocked while it still has a child Line of Business (contrast with HIER-007/HIER-008)
+    t: Unlike Department and Sub Department, Holding Company's HasReferencesAsync case does check for a child Line of Business, and correctly refuses
+    src: ["MasterManagementService.HasReferencesAsync ('holding-companies' checks LinesOfBusiness.HoldingCompanyId)"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    pre: "Tenant A has an active Holding Company HC40 with an active child Line of Business."
+    data: "kind=holding-companies"
+    steps:
+      - "[DELETE /api/masters/holding-companies/{HC40 id}] Call => [409] confirming the child-master check does exist and work correctly for this specific kind"
+    auto: API
+    cm: "Deliberately paired with HIER-007/HIER-008 to demonstrate the same class of check exists for Holding Company/Function but is missing for Department/Sub Department/Section/Designation - this is what makes CR-28/CR-35 an inconsistency rather than a universal design choice."
+
+  - id: HIER-010
+    func: [F-MST-11]
+    sc: A parent deactivated after its children were created leaves those children pointing at an inactive parent, and blocks further re-selection of it
+    t: Once DEPT01 (from HIER-007) is inactive, attempting to update SUBDEPT01 while re-submitting DEPT01 as its parentId is rejected exactly like any other inactive-parent case, even though SUBDEPT01 already had that same parentId before DEPT01 was deactivated
+    src: ["MasterManagementService.ParentExistsAsync (re-validated on every write, not only when the parent changes)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    pre: "Continues from HIER-007: DEPT01 is now inactive, SUBDEPT01.parentId is still DEPT01's id."
+    steps:
+      - "[PUT /api/masters/sub-departments/{SUBDEPT01 id}] Body {code: 'SUBDEPT01', name: 'Frontend Renamed', parentId: '{DEPT01 id}'} (parentId unchanged, but DEPT01 is now inactive) => [400] field 'parentId' - even resubmitting an already-in-place parent fails once that parent goes inactive, because ParentExistsAsync re-checks IsActive on every write, not only on a parent change"
+      - "[PUT /api/masters/sub-departments/{SUBDEPT01 id}] Body {code: 'SUBDEPT01', name: 'Frontend Renamed', parentId: '{DEPT02 id}'} (re-parent to an active department instead) => [200] succeeds - SUBDEPT01 is unblocked once given a currently-active parent"
+    auto: API
+
+  - id: HIER-011
+    func: [F-MST-11]
+    sc: Reactivating a deactivated parent restores the ability to keep referencing it
+    t: Once DEPT01 is reactivated, a child can once again be created or updated with DEPT01 as its parent
+    src: ["MasterManagementService.ParentExistsAsync"]
+    type: Positive
+    pri: P2
+    pre: "DEPT01 is currently inactive (from HIER-007)."
+    steps:
+      - "[PUT /api/masters/departments/{DEPT01 id}] Body {code: 'DEPT01', name: 'Department One', isActive: true} => [200] DEPT01 reactivated"
+      - "[POST /api/masters/sub-departments] Body {code: 'SUBDEPT10', name: 'New Child Of Reactivated Parent', parentId: '{DEPT01 id}'} => [201] succeeds now that DEPT01 is active again"
+    auto: API
+
+  - id: HIER-012
+    func: [F-MST-13]
+    sc: Function -> Sub Function hierarchy mirrors Holding Company -> LOB (optional parent, child-reference check present)
+    t: A Sub Function can be created with or without a Function parent, and deleting a Function with an active child Sub Function is blocked
+    src: ["MasterManagementService.DefinitionFor ('sub-functions', ParentRequired=false); HasReferencesAsync ('functions' checks SubFunctions)"]
+    type: Positive
+    pri: P1
+    pre: "Tenant A has active Function FN03."
+    data: "kind=sub-functions / functions"
+    steps:
+      - "[POST /api/masters/sub-functions] Body {code: 'SUBFN01', name: 'Unparented Sub Function'} (no parentId) => [201] parentId=null"
+      - "[POST /api/masters/sub-functions] Body {code: 'SUBFN02', name: 'Parented Sub Function', parentId: '{FN03 id}'} => [201] parentId={FN03 id}"
+      - "[DELETE /api/masters/functions/{FN03 id}] Call => [409] (SUBFN02 still references it)"
+    auto: API
+
+  - id: HIER-013
+    func: [F-MST-12]
+    sc: Section and Sub Section both accept an optional parent, and both can exist unparented simultaneously with parented siblings
+    t: SECTION02 (no SubDepartment parent) and SECTION01 (parented) coexist without conflict; the same holds one level down for Sub Sections
+    src: ["MasterManagementService.DefinitionFor ('sections'/'sub-sections', ParentRequired=false)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    data: "kind=sections"
+    steps:
+      - "[POST /api/masters/sections] Body {code: 'SECTION03', name: 'Standalone Section'} (no parentId) => [201] parentId=null"
+      - "[GET /api/master-data/sections] Call with no parentId filter => [200] items includes both SECTION03 (unparented) and any parented sections such as SECTION01"
+    auto: API
+
+  - id: HIER-014
+    func: [F-MST-14]
+    sc: Every remaining flat kind (Grade, Employee Type, Work Location, Cost Center, Position Change Reason, Function) accepts no parent, confirmed as a coverage-matrix spot check
+    t: One representative create per remaining flat kind confirms none of them exposes or persists a parent relationship
+    src: ["MasterManagementService.DefinitionFor (ParentProperty=null for these kinds)"]
+    type: Positive
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[POST /api/masters/grades] Body {code: 'G6', name: 'Grade Six'} => [201] no parentId field is meaningful in the response (always null)"
+      - "[POST /api/masters/employee-types] Body {code: 'CT', name: 'Contract'} => [201] parentId=null"
+      - "[POST /api/masters/work-locations] Body {code: 'WL02', name: 'Bengaluru Office'} => [201] parentId=null"
+      - "[POST /api/masters/cost-centers] Body {code: 'CC03', name: 'R&D'} => [201] parentId=null"
+      - "[POST /api/masters/position-change-reasons] Body {code: 'RELOC', name: 'Relocation'} => [201] parentId=null"
+    auto: API
+
+  - id: HIER-015
+    func: [F-MST-06]
+    sc: Deep-hierarchy invalid GUID parent is rejected identically at every level
+    t: A syntactically invalid GUID string in parentId is rejected by model binding before the service is reached, at every level of the hierarchy (Sub Department, Section, Sub Section, Sub Function, LOB)
+    src: ["ASP.NET Core model binding (Guid? parentId)"]
+    type: Negative
+    tags: [Validation]
+    pri: P2
+    sev: Low
+    steps:
+      - "[POST /api/masters/sub-departments] Body {code: 'SUBDEPT11', name: 'Bad Guid', parentId: 'not-a-guid'} => [400] model-binding error (the request never reaches MasterManagementService.WriteAsync)"
+    auto: API

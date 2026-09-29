@@ -1,0 +1,213 @@
+sheet: Platform_Tenant_Update
+submodule: Tenant Metadata Update
+defaults:
+  role: PLATFORM_ADMIN
+  perm: PlatformTenant.Create
+  tenant: None (platform identity domain)
+  pre: "QA platform.localhost stack; Tenant A onboarded and Active; a second disposable Inactive QA tenant available where noted."
+  data: "PUT body {tenantName, host, email?, phone?, address?}."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: PLAT-UPDATE-001
+    func: [F-PLAT-13]
+    sc: Update an Active tenant's safe metadata
+    t: TenantName, Host, Email, Phone and Address can be edited on an Active tenant
+    src: ["PlatformTenantService.UpdateInactiveAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[PUT /api/platform/tenants/{Tenant A id}] Send {tenantName:'QA Renamed Co', host:'qa-renamed.localhost', email:'ops@qa.example', phone:'+1-555-0100', address:'1 QA Way'} => [200] success=true, data reflects every new value"
+      - "[GET /api/tenants/current/branding] Call at the NEW host, anonymously => [200] displayName='QA Renamed Co' (branding synced), supportEmail='ops@qa.example'"
+      - "[GET /api/tenants/current/branding] Call at the OLD host => [404]/[200-neutral]; the old host no longer resolves to this tenant"
+      - "[POST /api/auth/login] Existing tenant users can still sign in at the NEW host with unchanged credentials => [200]"
+    db: "Catalog Tenants (TenantName/Host/Email/Phone/Address), Catalog TenantBranding (DisplayName/SupportEmail synced)."
+    auto: API
+    cm: "Confirms the module title's word 'Inactive' does not restrict which tenant statuses this endpoint accepts (see PLAT-UPDATE-009)."
+
+  - id: PLAT-UPDATE-002
+    func: [F-PLAT-13]
+    sc: Update mandatory fields
+    t: TenantName and Host are required
+    src: ["UpdateInactivePlatformTenantRequestValidator"]
+    type: Negative
+    tags: [Validation]
+    pri: P0
+    steps:
+      - "[PUT /api/platform/tenants/{Tenant A id}] Send {} => [400] field errors for 'tenantName' and 'host'"
+      - "[PUT /api/platform/tenants/{Tenant A id}] Send {tenantName:'', host:'qa.localhost'} => [400] 'tenantName' required"
+      - "[PUT /api/platform/tenants/{Tenant A id}] Send {tenantName:'QA', host:''} => [400] 'host' required"
+    auto: API
+    ex: ["xU:PlatformTenantRecoveryValidatorTests.Inactive_update_requires_a_host_and_name"]
+
+  - id: PLAT-UPDATE-003
+    func: [F-PLAT-13]
+    sc: Optional contact field validation and length boundaries
+    t: Email format and Phone/Address maximum lengths are enforced when present
+    src: ["UpdateInactivePlatformTenantRequestValidator"]
+    type: Boundary
+    tags: [Negative]
+    pri: P1
+    steps:
+      - "[PUT /api/platform/tenants/{Tenant A id}] Email='not-an-email' => [400]"
+      - "[PUT /api/platform/tenants/{Tenant A id}] Phone of 31 characters (validator max 30) => [400]"
+      - "[PUT /api/platform/tenants/{Tenant A id}] Address of 501 characters (validator max 500) => [400]"
+      - "[PUT /api/platform/tenants/{Tenant A id}] TenantName of 201 characters (validator max 200) => [400]"
+      - "[PUT /api/platform/tenants/{Tenant A id}] Host of 254 characters (validator max 253) => [400]"
+    auto: API
+
+  - id: PLAT-UPDATE-004
+    func: [F-PLAT-13]
+    sc: Host development format still enforced on update
+    t: The same <workspace>.localhost rule applies to the new host on update
+    src: ["PlatformTenantService.UpdateInactiveAsync (ValidateNormalizedValues developmentHostRequired)"]
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[PUT /api/platform/tenants/{Tenant A id}] host='not-localhost-form.example.com' => [400] 'Development tenant hosts must use the supported <workspace>.localhost format.'"
+    auto: API
+
+  - id: PLAT-UPDATE-005
+    func: [F-PLAT-15]
+    sc: Reserved platform host is rejected on update
+    t: Setting the tenant's host to the platform's reserved host is refused
+    src: ["PlatformTenantService.UpdateInactiveAsync (IsReservedPlatformHost)"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: High
+    steps:
+      - "[PUT /api/platform/tenants/{Tenant A id}] host='platform.localhost' (the configured Platform:AllowedHosts entry) => [400] 'The platform host is reserved for platform administration.'"
+      - "[GET /api/platform/tenants/{Tenant A id}] Confirm the host is unchanged => confirmed"
+    sec: "Only the update path enforces this; see PLAT-CREATE-008/CR-22 for the create-path gap."
+    auto: API
+
+  - id: PLAT-UPDATE-006
+    func: [F-PLAT-13]
+    sc: Duplicate host on update
+    t: Updating one tenant's host to another tenant's existing host is refused
+    src: ["PlatformTenantService.UpdateInactiveAsync (AnyAsync x.Id != id && Host)"]
+    type: Negative
+    pri: P0
+    sev: High
+    steps:
+      - "[PUT /api/platform/tenants/{Tenant A id}] host = Tenant B's current host => [409] 'Host is already in use.'"
+      - "[GET /api/platform/tenants/{Tenant A id}] Confirm Tenant A's host is unchanged => confirmed"
+    auto: API
+
+  - id: PLAT-UPDATE-007
+    func: [F-PLAT-13]
+    sc: Updating a tenant to its own current host is allowed
+    t: Re-submitting the tenant's existing host alongside other changed fields succeeds
+    src: ["PlatformTenantService.UpdateInactiveAsync (x.Id != id excludes self)"]
+    type: Positive
+    tags: [Boundary]
+    pri: P2
+    sev: Medium
+    steps:
+      - "[PUT /api/platform/tenants/{Tenant A id}] Send Tenant A's current host unchanged, with a new tenantName => [200] succeeds"
+    auto: API
+
+  - id: PLAT-UPDATE-008
+    func: [F-PLAT-14]
+    sc: Provisioning identity cannot be changed through this endpoint
+    t: The update request contract has no fields for TenantCode, DatabaseProvider or ShardKey
+    src: ["UpdateInactivePlatformTenantRequest properties"]
+    type: Security
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[PUT /api/platform/tenants/{Tenant A id}] Include extra JSON properties 'databaseProvider':'MySql', 'shardKey':'hijacked', 'tenantCode':'HIJACK' alongside the valid fields => [200] succeeds but those properties are silently ignored (model binding drops unknown/unmapped properties)"
+      - "[GET /api/platform/tenants/{Tenant A id}] Confirm databaseProvider/shardKey/tenantCode are unchanged from before the call => confirmed"
+    sec: "Provisioning identity is immutable via the public contract regardless of request-body tampering."
+    auto: API
+    ex: ["xU:PlatformTenantAuthorizationTests.Tenant_metadata_update_contract_excludes_provisioning_identity_and_credentials"]
+
+  - id: PLAT-UPDATE-009
+    func: [F-PLAT-13]
+    sc: Update works on an Inactive tenant too (naming vs. behaviour)
+    t: A tenant left Inactive after a failed onboarding can have its name/host corrected before retry
+    src: ["docs/platform-identity-tenant-onboarding.md 'Failed onboarding recovery'"]
+    type: Positive
+    pri: P0
+    sev: High
+    role: PLATFORM_ADMIN
+    steps:
+      - "Using the Inactive tenant produced by PLAT-CREATE-020 (or an equivalent disposable Inactive QA tenant), send [PUT /api/platform/tenants/{id}] with a corrected host => [200] succeeds"
+      - "[POST /api/platform/tenants/{id}/retry-provisioning] Retry afterward with the corrected identity => [200]/[201] depending on outcome, confirming the update unblocked the retry"
+    auto: API
+    cm: "This is the documented, intended use of the endpoint despite it accepting Active tenants too (see PLAT-UPDATE-001)."
+
+  - id: PLAT-UPDATE-010
+    func: [F-PLAT-13]
+    sc: Update on a Suspended tenant
+    t: The update endpoint's behaviour for a Suspended tenant is exercised (Suspended is otherwise unreachable via the API; DB-assisted setup)
+    src: ["PlatformTenantService.UpdateInactiveAsync (no status guard at all)"]
+    type: Boundary
+    tags: [Negative]
+    pri: P2
+    sev: Medium
+    pre: "DB-assisted: set a disposable QA tenant's catalog Status directly to Suspended, since no API path produces it."
+    steps:
+      - "[PUT /api/platform/tenants/{suspended tenant id}] Send a valid update body => record actual: current code contains no status check at all, so this is expected to succeed [200] despite the tenant being Suspended"
+    db: "Catalog Tenants.Status set to Suspended directly for setup."
+    auto: DB-assisted
+    cr: [CR-24]
+    cm: "Exposes CR-24: UpdateInactiveAsync applies no tenant-status guard whatsoever (unlike SetStatusAsync, which explicitly refuses Suspended). Confirm whether editing a Suspended tenant's metadata should be blocked."
+
+  - id: PLAT-UPDATE-011
+    func: [F-PLAT-13]
+    sc: Update an unknown tenant
+    t: A well-formed id with no matching tenant returns 404
+    src: ["PlatformTenantService.UpdateInactiveAsync (tenant is null)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[PUT /api/platform/tenants/{random GUID}] Send a valid body => [404] 'Tenant was not found.'"
+    auto: API
+
+  - id: PLAT-UPDATE-012
+    func: [F-PLAT-24]
+    sc: Update requires PlatformTenant.Create
+    t: A platform user without PlatformTenant.Create cannot update tenant metadata
+    src: ["[PlatformPermission(PlatformPermissions.TenantCreate)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: PLATFORM_VIEWER (PlatformTenant.View only)
+    steps:
+      - "[PUT /api/platform/tenants/{Tenant A id}] As PLATFORM_VIEWER => [403]"
+    auto: API
+
+  - id: PLAT-UPDATE-013
+    func: [F-PLAT-13]
+    sc: Concurrent host swap
+    t: Two tenants cannot both end up with the same host through a race on simultaneous updates
+    src: ["PlatformTenantService.UpdateInactiveAsync (AnyAsync race + DbUpdateException fallback)"]
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: High
+    steps:
+      - "[PUT /api/platform/tenants/{Tenant A id}] and [PUT /api/platform/tenants/{Tenant B id}] Fire concurrently, each attempting to set its host to the SAME new value => exactly one succeeds [200]; the other is refused [409] 'Host is already in use.' or 'Tenant details could not be saved because the host is already in use.'"
+    db: "Only one of the two tenants ends up with the contested host."
+    auto: API
+
+  - id: PLAT-UPDATE-014
+    func: [F-PLAT-13, F-PLAT-32]
+    sc: Update is unreachable at a tenant host
+    t: PUT /api/platform/tenants/{id} at a customer host is blocked before authentication
+    src: ["PlatformRequestRoutingMiddleware"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    tenant: A
+    steps:
+      - "[PUT /api/platform/tenants/{Tenant A id}] Call at the Tenant A host with a valid platform token => [404]"
+    auto: API

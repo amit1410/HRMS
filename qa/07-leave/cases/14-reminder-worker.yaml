@@ -1,0 +1,188 @@
+sheet: Leave_Reminders
+submodule: Leave Approval Reminder Worker - eligibility, occurrence numbering, claim/lease, retry, and tenant isolation (DB-assisted/provider tests, not UI)
+defaults:
+  role: TENANT_ADMIN
+  perm: "n/a"
+  tenant: A
+  pre: "Tenant A active; LeaveReminders:Enabled=true for the test run (default false)."
+  data: "InitialDelayHours=24, RepeatIntervalHours=24, WorkerIntervalMinutes=15, BatchSize=100, MaxAttempts=3, ClaimLeaseMinutes=30 unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: LEAVE-REM-001
+    func: [F-LEAVE-263]
+    sc: A request becomes reminder-eligible only after InitialDelayHours has elapsed
+    t: A request submitted 23 hours ago is not yet due; one submitted 24+ hours ago is
+    src: ["LeaveApprovalReminderProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P0
+    smoke: true
+    steps:
+      - "[Manual/DB] PendingApproval request with SubmittedAtUtc = now-23h => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] Run ProcessAsync(now) => [Pass] the 23h-old request is NOT in the candidate set"
+      - "[Manual/DB] A second request with SubmittedAtUtc = now-24h1m => [Pass] IS in the candidate set and receives occurrence 0"
+    auto: DB-assisted
+
+  - id: LEAVE-REM-002
+    func: [F-LEAVE-264]
+    sc: A request with no resolvable current manager is skipped, not failed
+    t: The batch continues past a manager-less request without erroring the whole run
+    src: ["LeaveApprovalReminderProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] A due PendingApproval request whose employee has ManagerId=null on their current employment row => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] Run ProcessAsync(now) => [Pass] this request contributes to 'skipped', a warning is logged, and NO LeaveReminderDelivery row is created for it - the run itself completes successfully for every other candidate"
+    auto: DB-assisted
+
+  - id: LEAVE-REM-003
+    func: [F-LEAVE-265]
+    sc: Occurrence numbering advances by RepeatIntervalHours after the first reminder
+    t: Occurrence 0 fires just past InitialDelayHours; occurrence 1 fires RepeatIntervalHours later, each a distinct delivery row
+    src: ["LeaveApprovalReminderProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Manual/DB] Run ProcessAsync at now = SubmittedAtUtc+24h => [Pass] LeaveReminderDelivery row 'requestId:0' created, Sent"
+      - "[Manual/DB] Run ProcessAsync again at now = SubmittedAtUtc+48h => [Pass] a NEW row 'requestId:1' created, Sent - occurrence 0's row is untouched"
+    auto: DB-assisted
+    ex: ["xU:MySqlLeaveReminderConcurrencyTests.MySql_failed_reminder_persists_and_recreated_processor_suppresses_or_retries_by_window"]
+
+  - id: LEAVE-REM-004
+    func: [F-LEAVE-266]
+    sc: MaxAttempts permanently stops one occurrence's retries
+    t: After 3 failed attempts, TryClaimAsync refuses to claim that occurrence again, but the NEXT occurrence gets its own fresh budget
+    src: ["LeaveApprovalReminderProcessor.TryClaimAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Occurrence 0's delivery row already has AttemptCount=3 (MaxAttempts) and Status=Failed => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] Run ProcessAsync => [Pass] occurrence 0 is NOT reclaimed, permanently stuck Failed"
+      - "[Manual/DB] Once occurrence 1's window arrives (SubmittedAtUtc+48h) => [Pass] a fresh 'requestId:1' row is claimable and gets its OWN AttemptCount budget starting at 0"
+    auto: DB-assisted
+
+  - id: LEAVE-REM-005
+    func: [F-LEAVE-267]
+    sc: A delivery failure schedules the next attempt via NextAttemptAtUtc, not an immediate retry
+    t: A Failed status with NextAttemptAtUtc in the future is not reclaimable until that time passes
+    src: ["LeaveApprovalReminderProcessor.FailAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Force the notification provider to fail delivery once => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] Run ProcessAsync => [Pass] Status=Failed, NextAttemptAtUtc=now+RepeatIntervalHours, LastError set, AttemptCount=1"
+      - "[Manual/DB] Run ProcessAsync again immediately (before NextAttemptAtUtc) => [Pass] this occurrence is NOT reclaimed yet"
+      - "[Manual/DB] Run ProcessAsync once NextAttemptAtUtc has passed => [Pass] reclaimed, AttemptCount=2, retried"
+    auto: DB-assisted
+
+  - id: LEAVE-REM-006
+    func: [F-LEAVE-268]
+    sc: Two concurrent workers racing on the same occurrence produce exactly one send
+    t: The atomic conditional-UPDATE claim pattern prevents a double-send
+    src: ["LeaveApprovalReminderProcessor.TryClaimAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    smoke: true
+    steps:
+      - "[Manual/DB, MySQL] Two independent LeaveApprovalReminderProcessor instances call ProcessAsync CONCURRENTLY against the same due occurrence => [Pass] exactly ONE claims it and sends; the other's claim attempt affects 0 rows and moves on"
+    auto: DB-assisted
+    ex: ["xU:MySqlLeaveReminderConcurrencyTests.Two_independent_processors_only_one_claims_and_sends_one_occurrence"]
+
+  - id: LEAVE-REM-007
+    func: [F-LEAVE-269]
+    sc: An expired lease becomes reclaimable, still with only one winner
+    t: A Claimed row whose LeaseExpiresAtUtc has passed (the original claimant crashed) is reclaimable by the next pass, and two simultaneous reclaim attempts still produce one winner
+    src: ["LeaveApprovalReminderProcessor.TryClaimAsync"]
+    type: Integration-Concurrency
+    pri: P0
+    steps:
+      - "[Manual/DB] Force a delivery row to Status=Claimed with LeaseExpiresAtUtc in the past (an abandoned claim) => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] Run ProcessAsync => [Pass] the row is reclaimed and completed (Sent or Failed), never left permanently stuck"
+    auto: DB-assisted
+
+  - id: LEAVE-REM-008
+    func: [F-LEAVE-270]
+    sc: A worker restart resumes from the durable delivery ledger with no loss or duplication
+    t: Killing and restarting the worker process mid-run does not lose a pending reminder or double-send a completed one
+    src: ["LeaveApprovalReminderWorker.ExecuteAsync"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Manual/DB] Simulate a worker crash after Claimed but before Sent for one occurrence, then start a fresh worker process => [Pass] the fresh worker's next tick reclaims (once the lease expires) and completes it exactly once"
+    auto: DB-assisted
+
+  - id: LEAVE-REM-009
+    func: [F-LEAVE-271]
+    sc: Approval/rejection immediately stops future reminders with no explicit cancel action
+    t: A request approved between two ticks is simply excluded from the next candidate query
+    src: ["LeaveApprovalReminderProcessor.ProcessAsync"]
+    type: Positive
+    pri: P0
+    steps:
+      - "[Manual/DB] A due PendingApproval request receives occurrence 0's reminder => the forced/simulated state is established for the steps below"
+      - "[POST /api/leave-requests/{requestId}/approve] Approve the request before occurrence 1 is due => [200]"
+      - "[Manual/DB] Run ProcessAsync at occurrence 1's window => [Pass] this request no longer appears in the candidate query at all - Status=PendingApproval is no longer true"
+    auto: DB-assisted
+
+  - id: LEAVE-REM-010
+    func: [F-LEAVE-271]
+    sc: A rejected request is likewise never reminded again
+    t: Rejection has the same exclusion effect as approval
+    src: ["LeaveApprovalReminderProcessor.ProcessAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/leave-requests/{requestId}/reject] Reject before the next occurrence is due => [200]"
+      - "[Manual/DB] Run ProcessAsync at the next occurrence window => [Pass] no reminder is sent"
+    auto: DB-assisted
+
+  - id: LEAVE-REM-011
+    func: [F-LEAVE-272]
+    sc: A manager change between occurrences redirects the NEXT reminder to the new manager
+    t: Occurrence 0 goes to the old manager; after a manager change, occurrence 1 goes to the new one
+    src: ["LeaveApprovalReminderProcessor.ProcessAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Occurrence 0 sent to Manager X (the manager as of send time) => the forced/simulated state is established for the steps below"
+      - "[POST /api/employees/{employeeId}/employment-history] Change the employee's manager to Manager Y, effective today => [201]"
+      - "[Manual/DB] Run ProcessAsync at occurrence 1's window => [Pass] the reminder's recipient resolves to Manager Y, not Manager X - re-resolved fresh at send time, not cached from occurrence 0"
+    auto: DB-assisted
+
+  - id: LEAVE-REM-012
+    func: [F-LEAVE-273]
+    sc: One tenant's processing failure does not abort the sweep for other tenants
+    t: An exception while processing Tenant A's candidates is caught and logged; Tenant B's own processing still completes
+    src: ["LeaveApprovalReminderWorker.ProcessTenantsAsync"]
+    type: Boundary
+    pri: P1
+    tenant: B
+    steps:
+      - "[Manual/DB] Force an exception while processing Tenant A's reminder candidates on one tick => the forced/simulated state is established for the steps below"
+      - "[Manual/DB] Same tick => [Pass] Tenant B's own due reminders are still claimed and sent normally"
+    auto: DB-assisted
+
+  - id: LEAVE-REM-013
+    func: [F-LEAVE-274]
+    sc: Reminder deliveries are tenant-isolated by construction
+    t: Tenant A's worker run never reads or writes Tenant B's LeaveReminderDeliveries rows
+    src: ["LeaveApprovalReminderWorker.ProcessTenantsAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: B
+    steps:
+      - "[Manual/DB] Run the reminder sweep for both tenants => [Pass] each tenant's LeaveReminderDeliveries rows carry only that tenant's own TenantId, and neither tenant's candidate query ever returns the other's LeaveRequests"
+    auto: DB-assisted
+
+  - id: LEAVE-REM-014
+    func: [F-LEAVE-263, F-LEAVE-265]
+    sc: The worker sweep is disabled entirely unless explicitly enabled
+    t: With LeaveReminders:Enabled=false (the documented default), the worker's ExecuteAsync logs and returns immediately - no reminders are ever sent
+    src: ["LeaveApprovalReminderWorker.ExecuteAsync", "LeaveReminderOptions.Enabled default false"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Manual] Start the worker host with LeaveReminders:Enabled unset (default false) and one long-overdue PendingApproval request present => [Pass] the worker logs 'disabled' and performs no candidate query at all, ever"
+    auto: Manual only
+    cr: [CR-86]

@@ -1,0 +1,203 @@
+# Module 4 QA-risk register. Numbering continues after Module 3's CR-36 (qa/03-masters/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. classification starts 'Open - awaiting decision'.
+
+clarifications:
+  - id: CR-37
+    title: "A legacy Prefix+NextNumber Employee Code path in EmployeeService.cs has zero callers anywhere in the solution"
+    observation: >
+      EmployeeService.cs still defines ResolveEmployeeCodeAsync and PersistEmployeeCodeCounterAsync - a
+      simpler, non-versioned implementation that reads EmployeeCodeConfig.AutoGenerate/Prefix/Padding/
+      NextNumber and, on auto-generate, composes Prefix+NextNumber and advances NextNumber by 1. A
+      repository-wide search finds no call site for either method: CreatePersonalDetailsCoreAsync sets
+      `EmployeeCode = null` unconditionally with a comment that the code "is assigned atomically with
+      Initial Employment", and the only live assignment path is
+      EmployeeEmploymentService.AssignPendingEmployeeCodeAsync, which reads EmployeeCodeConfigVersion (not
+      EmployeeCodeConfig directly) and advances a version-scoped NextNumber, not the EmployeeCodeConfig row
+      these two dead methods would touch.
+    risk: >
+      Not currently exploitable (dead code never executes), but the two methods still compile against and
+      would mutate the same EmployeeCodeConfig.NextNumber/Prefix/Padding fields that the live path leaves
+      untouched (the live path only ever mutates EmployeeCodeConfigVersion.NextNumber and the mirrored
+      EmployeeCodeConfig fields are kept only for the DTO's non-versioned fallback view). If either method is
+      ever wired back into a future endpoint, it would silently produce a counter that drifts independently
+      of the version-based counter and could reissue an already-used number.
+    source: "Backend/HRMS.Application/Services/EmployeeService.cs (ResolveEmployeeCodeAsync, PersistEmployeeCodeCounterAsync, CreatePersonalDetailsCoreAsync's EmployeeCode=null comment) vs EmployeeEmploymentService.cs (AssignPendingEmployeeCodeAsync)"
+    classification: Open - awaiting decision
+
+  - id: CR-38
+    title: "No unique constraint or transaction guards the first-ever EmployeeCodeConfig row per tenant against concurrent creation"
+    observation: >
+      EmployeeCodeConfigurationService.SaveAsync does `var config = await _db.EmployeeCodeConfigs
+      .FirstOrDefaultAsync(...); if (config is null) { config = new EmployeeCodeConfig { ... }; _db.Add(config); }`
+      with no unique index on EmployeeCodeConfigs.TenantId (the EF configuration only declares the (TenantId,
+      Id) alternate key, which cannot block a second, distinct Id) and no serializable transaction or upsert
+      semantics around the check. Two concurrent first-time "Save Configuration" requests for the same
+      tenant can both observe `config is null` and both insert a row.
+    risk: >
+      Every other read of the configuration (`GetAsync`, `AssignPendingEmployeeCodeAsync`,
+      `SaveRuleAsync`, `PreviewAsync`) uses a bare `FirstOrDefaultAsync()`/`.FirstOrDefaultAsync(cancellationToken)`
+      with no explicit ordering, so which of the two duplicate rows is returned - and therefore which
+      Prefix/effective-version set governs new hires - would be nondeterministic (EF/provider row order) once
+      a duplicate exists, until someone notices and manually cleans it up.
+    source: "Backend/HRMS.Application/Services/EmployeeCodeConfigurationService.cs (SaveAsync); Backend/HRMS.Infrastructure/Persistence/Configurations/EmployeeCodeConfigConfiguration.cs (HasAlternateKey(TenantId, Id) only, no HasIndex(TenantId).IsUnique())"
+    classification: Open - awaiting decision
+
+  - id: CR-39
+    title: "Sequential-number padding is capped at 10 for Simple configuration but at 12 for a Rule-Based sequence segment"
+    observation: >
+      EmployeeCodeConfigurationRequestValidator.Padding is `InclusiveBetween(0, 10)` (the Simple-mode,
+      config-level padding used by EmployeeCodeConfigurationDto.Padding and
+      AssignPendingEmployeeCodeAsync's Simple branch). A Rule-Based SequentialNumber segment's
+      PaddingLength, validated in EmployeeCodeConfigurationService.SaveRuleAsync, instead allows
+      `s.PaddingLength is < 0 or > 12` - two digits wider. The frontend rule-builder's padding <input>
+      also caps at max=10 in its JSX even though the backend accepts up to 12 for that same field, so a
+      caller going through the API directly (or a future UI update) can save a 11- or 12-digit padded
+      sequence that the current UI's own input control cannot express.
+    risk: >
+      No stated reason for the two different ceilings on what is conceptually the same "how many digits does
+      the running number use" setting; a rule saved via direct API call with PaddingLength 11 or 12 renders
+      correctly (EmployeeCodeRenderer just uses `D{PaddingLength}`) but could not have been entered through
+      the shipped rule-builder UI, and a tenant migrating a Rule-Based rule's padding value into the Simple
+      config field (or vice versa) would unexpectedly hit a different validation ceiling.
+    source: "Backend/HRMS.Application/Validators/Employees/EmployeeCodeConfigurationRequestValidator.cs (Padding); Backend/HRMS.Application/Services/EmployeeCodeConfigurationService.cs (SaveRuleAsync, PaddingLength check); Frontend/HRMS.Web/src/pages/EmployeeCodeConfigurationPage.tsx (segment padding <input max=10>)"
+    classification: Open - awaiting decision
+
+  - id: CR-40
+    title: "No SQL Server/MySQL provider-acceptance or dedicated concurrency test exists for Employee Code sequence allocation"
+    observation: >
+      Two provider-specific IEmployeeCodeSequenceUpdater implementations exist
+      (SqlServerEmployeeCodeSequenceUpdater, MySqlEmployeeCodeSequenceUpdater - the latter additionally
+      stamps an app-managed RowVersion token via MySqlConcurrencyTokenGenerator, per CLAUDE.md's documented
+      SQL-Server-native-rowversion-vs-MySQL-app-managed-token divergence), and
+      EmployeeCodeSequenceService.AllocateAsync has its own optimistic retry loop (MaxAttempts=8) plus a
+      separate, differently-bounded retry loop for Simple-mode's EmployeeCodeConfigVersion.NextNumber. A
+      search of Backend/HRMS.Tests finds no EmployeeCode*ProviderAcceptance.cs and no
+      EmployeeCode*ConcurrencyTests.cs file; the only coverage of concurrent/repeated code issuance
+      (EmployeeCodeEmploymentFlowTests.Simple_configuration_creates_version_and_assigns_sequential_codes_to_pending_employees)
+      runs sequentially against the SQLite in-memory provider used by the default test suite. Every other
+      subsystem in this codebase with a per-provider concurrency-sensitive path (Payroll, Attendance, Leave,
+      Separation) has at least one dedicated ConcurrencyTests and/or ProviderAcceptance file.
+    risk: >
+      Per CLAUDE.md, "SQLite passing is not evidence of SQL Server/MySQL behavior" for exactly the class of
+      thing this feature depends on (rowversion/locking/collection-parameter binding). The
+      MySQL-vs-SQL-Server RowVersion-stamping divergence in the two updaters, and the two-sequences-per-rule
+      unique index, have no test that exercises real concurrent writers on either live provider.
+    source: "Backend/HRMS.Infrastructure/Persistence/SqlServerEmployeeCodeSequenceUpdater.cs; MySqlEmployeeCodeSequenceUpdater.cs; Backend/HRMS.Application/Services/EmployeeCodeSequenceService.cs; absence of a matching file under Backend/HRMS.Tests"
+    classification: Open - awaiting decision
+
+  - id: CR-41
+    title: "An assigned Employee Code is never regenerated on any later employment change, even under Rule-Based generation"
+    observation: >
+      EmployeeEmploymentService.CreateChangeAsync gates code assignment on `if (employee.EmployeeCode is
+      null)`, which is only ever true for an employee's first employment record. Every later call to
+      CreateChangeAsync (Promotion, Transfer, DepartmentChange, ManagerChange, GradeChange, LocationChange,
+      etc. - the full EmploymentChangeReason enum) skips AssignPendingEmployeeCodeAsync entirely, so the
+      rule matcher/renderer never re-run. The one existing test that exercises this
+      (Promotion_keeps_the_existing_employee_code) confirms the code is unchanged after a Promotion, but no
+      test exercises a Department/Grade/WorkLocation change specifically under an active Rule-Based
+      configuration whose segments are built from exactly those fields - the case where a user could
+      plausibly expect the code to track the new organizational context.
+    risk: >
+      If Rule-Based segments encode Department/Grade/Location into the code (a common real-world pattern,
+      and directly supported by the segment types), a Department transfer leaves the employee's code
+      permanently reflecting their ORIGINAL department, which may or may not be the intended product
+      behavior - it is certainly a deliberate code-level choice (the null-gate is explicit and commented),
+      but it has not been confirmed as a requirement versus an implementation shortcut.
+    source: "Backend/HRMS.Application/Services/EmployeeEmploymentService.cs (CreateChangeAsync line ~484 'if (employee.EmployeeCode is null)'); Backend/HRMS.Tests/EmployeeCodeEmploymentFlowTests.cs (Promotion_keeps_the_existing_employee_code)"
+    classification: Open - awaiting decision
+
+  - id: CR-42
+    title: "Rule-condition hierarchy validation silently no-ops when the parent field has no condition of its own"
+    observation: >
+      EmployeeCodeConfigurationService.IsValidHierarchyAsync only checks that a child master (Lob,
+      SubDepartment, Section, SubSection, SubFunction) belongs to its parent WHEN a condition for that
+      parent field is also present in the same save request (`!holdingCompanyId.HasValue || x.HoldingCompanyId
+      == holdingCompanyId` - true, i.e. valid, whenever holdingCompanyId is null). A rule can therefore be
+      saved with a SubDepartment (or Section/SubSection/SubFunction/Lob) condition and NO corresponding
+      Department (or SubDepartment/Section/Function/HoldingCompany) condition at all, and the hierarchy
+      check simply never runs for it.
+    risk: >
+      A rule author who adds only a "Sub Department = X" condition, expecting the system to implicitly
+      require "and Department = X's actual parent", instead gets a rule that matches ANY employee assigned
+      to Sub Department X regardless of which Department that Sub Department currently belongs to - which is
+      arguably correct (Sub Department X's own parent link already implies the Department), but is easy to
+      misread as an enforced pairing given the UI always renders the parent field alongside the child.
+    source: "Backend/HRMS.Application/Services/EmployeeCodeConfigurationService.cs (IsValidHierarchyAsync, Parent() helper and the '!xId.HasValue ||' short-circuit in each switch arm)"
+    classification: Open - awaiting decision
+
+  - id: CR-43
+    title: "EmployeeCodeConditionOperator has exactly one implemented value (Equals) across the entity, DTO, validator and UI"
+    observation: >
+      The Operator field is modeled end-to-end (EmployeeCodeRuleCondition.Operator, EmployeeCodeConditionDto/
+      Request.Operator, the rule-builder's Operator <select>), but EmployeeCodeConditionOperator only
+      declares `Equals = 0`, and EmployeeCodeRuleMatcher.Matches returns false immediately for any Operator
+      other than Equals - a branch that can never be exercised through the API or UI since no other value
+      exists to send.
+    risk: >
+      Not a defect (nothing is broken; every condition is implicitly an Equals condition), but it is
+      unused extensibility surface with a dedicated UI control and no test beyond the implicit Equals path -
+      worth confirming whether more operators (NotEquals, In, StartsWith) are planned before more UI/API
+      surface accumulates around a single-value enum.
+    source: "Backend/HRMS.Domain/Enums/EmployeeCodeConditionOperator.cs; Backend/HRMS.Application/EmployeeCodes/EmployeeCodeRuleMatcher.cs (Matches); Frontend/HRMS.Web/src/pages/EmployeeCodeConfigurationPage.tsx (operatorValues, the single <option>Equals</option>)"
+    classification: Open - awaiting decision
+
+  - id: CR-44
+    title: "HRAdmin - the role that performs Initial Employment, where codes are actually generated - cannot view or manage Employee Code Configuration"
+    observation: >
+      SeedData.RolePermissionMap[RoleNames.HRAdmin] grants Employee.View/Create/Edit/Delete,
+      EmploymentHistory.View/Change, Geography.View/Manage and a long list of other domain permissions, but
+      contains NO EmployeeCodeConfiguration.View or EmployeeCodeConfiguration.Manage entry anywhere in its
+      array. Only SuperAdmin and TenantAdmin (both granted via `DomainPermissions.All`) can reach
+      GET/PUT /api/employee-code-configuration or any /rules or /preview route. HRManager, Manager and
+      Employee also have neither permission.
+    risk: >
+      HRAdmin is the seeded role documented as "HR administrator managing employees, departments and
+      designations" and is the role that runs CreateChangeAsync (via EmploymentHistory.Change) - the exact
+      operation that consumes the Employee Code configuration. As currently seeded, an HRAdmin can trigger
+      code generation but cannot view what configuration produced a given code, diagnose a "no rule
+      matched" failure via Preview, or change the prefix/padding/rules without first being escalated to
+      TenantAdmin/SuperAdmin - a narrower role than the one CLAUDE.md's own SeedData describes it as.
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[RoleNames.HRAdmin], RoleDescriptions[RoleNames.HRAdmin]); Backend/HRMS.Domain/Authorization/Permissions.cs (EmployeeCodeConfiguration.View/Manage)"
+    classification: Open - awaiting decision
+
+  - id: CR-45
+    title: "Simple-mode generated codes have no application-level duplicate guard, unlike Rule-Based codes - a collision surfaces as a raw 500, not a handled Conflict"
+    observation: >
+      EmployeeEmploymentService.AssignPendingEmployeeCodeAsync's Rule-Based branch explicitly re-checks
+      `_db.Employees.AnyAsync(e => e.Id != employee.Id && e.EmployeeCode == rendered.Code)` and returns a
+      handled `Conflict("Generated Employee Code is already in use; please retry.")` before assigning. The
+      Simple branch has no equivalent check - it composes `prefix + separator + number` and assigns it to
+      `employee.EmployeeCode` directly once the optimistic NextNumber advance succeeds, trusting that the
+      counter has never produced this exact string before. Employees.(TenantId, EmployeeCode) IS a unique
+      index (EmployeeConfiguration.cs), so if the composed string collides with an existing employee's code
+      (e.g. one entered manually before the tenant switched from Manual to Auto/Simple, seeded/imported
+      data, or a counter that was rewound by a direct database edit), the subsequent SaveChangesAsync inside
+      CreateChangeAsync's open transaction throws an unhandled DbUpdateException instead of returning a
+      Result.Conflict.
+    risk: >
+      An unhandled DbUpdateException surfaces as an unhandled-exception response (500) rather than the 409
+      the rest of this feature returns for every other duplicate-code scenario (Manual duplicate, Rule-Based
+      duplicate) - a materially different, worse failure mode for the exact same class of problem, reachable
+      any time a tenant's Simple counter and its historical EmployeeCode data disagree.
+    source: "Backend/HRMS.Application/Services/EmployeeEmploymentService.cs (AssignPendingEmployeeCodeAsync, compare the Rule-Based branch's explicit AnyAsync duplicate check against the Simple branch's bare ExecuteUpdateAsync+assign); Backend/HRMS.Infrastructure/Persistence/Configurations/EmployeeConfiguration.cs (HasIndex(TenantId, EmployeeCode).IsUnique())"
+    classification: Open - awaiting decision
+
+  - id: CR-46
+    title: "EmployeeCodeRuleRequest.Conditions/Segments default to empty C# lists, but an explicit JSON null in the request body overrides that default and is never null-checked before use"
+    observation: >
+      EmployeeCodeRuleRequest.Conditions and .Segments are declared `= []` (empty list) in C#, which
+      protects a request that simply OMITS the field, but ASP.NET Core's System.Text.Json model binder
+      overwrites an already-initialized property when the request body sends an EXPLICIT JSON null for it.
+      EmployeeCodeConfigurationService.SaveRuleAsync then calls `request.Segments.Count(...)`,
+      `request.Segments.Any(...)`, `request.Conditions.Count`, and iterates `foreach (var c in
+      request.Conditions)` without a null-check anywhere before the first such access.
+    risk: >
+      A request body of `{"segments": null, "conditions": null, ...}` (a plausible client bug, or a
+      deliberately malformed request) would throw an unhandled NullReferenceException (surfaced as a 500)
+      instead of the 400 every other malformed-rule case in this feature produces - the same class of gap
+      already noted for the mismatched padding ceiling (CR-39) and the missing duplicate guard (CR-45): a
+      request shape the validator does not anticipate reaches a raw collection method instead of a handled
+      error path.
+    source: "Backend/HRMS.Application/DTOs/Employees/EmployeeCodeRuleDtos.cs (EmployeeCodeRuleRequest.Conditions/Segments); Backend/HRMS.Application/Services/EmployeeCodeConfigurationService.cs (SaveRuleAsync, every request.Conditions/request.Segments access before the null-list case)"
+    classification: Open - awaiting decision

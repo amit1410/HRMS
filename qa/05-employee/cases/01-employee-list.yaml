@@ -1,0 +1,225 @@
+sheet: Employee_List
+submodule: Employee Directory - List, Search, Filter, Sort
+defaults:
+  role: HR_ADMIN
+  perm: Employee.View
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (Employee.View); Tenant A has at least 15 seeded employees across 2+ departments/designations/statuses."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: EMP-LIST-001
+    func: [F-EMP-001]
+    sc: Default list load returns the first page sorted by employee code ascending
+    t: GET /api/employees with no query params returns page 1 of 20, ordered by employeeCode ascending
+    src: ["EmployeeService.GetAsync (ApplyEffectiveSort default)"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/employees] No query params => [200] items ordered by employeeCode ascending, page=1, pageSize=20"
+    auto: API
+
+  - id: EMP-LIST-002
+    func: [F-EMP-002]
+    sc: Paging bounds - page and pageSize validation
+    t: Page must be >=1 and pageSize must be 1-100; out-of-range values are rejected with 400, not clamped
+    src: ["PagedQueryValidator"]
+    type: Boundary
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[GET /api/employees?page=0] Call => [400] 'Page must be 1 or greater.'"
+      - "[GET /api/employees?pageSize=0] Call => [400] 'Page size must be between 1 and 100.'"
+      - "[GET /api/employees?pageSize=101] Call => [400] 'Page size must be between 1 and 100.'"
+      - "[GET /api/employees?pageSize=100] Call => [200] up to 100 items returned"
+      - "[GET /api/employees] No pageSize => [200] pageSize defaults to 20"
+    auto: API
+
+  - id: EMP-LIST-003
+    func: [F-EMP-003]
+    sc: A page number beyond the last page returns an empty list, not an error
+    t: page=999 on a small dataset returns 200 with an empty items array and the correct totalCount
+    src: ["EmployeeService.GetAsync"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/employees?page=999&pageSize=20] Call => [200] items=[], totalCount reflects the real total"
+    auto: API
+
+  - id: EMP-LIST-004
+    func: [F-EMP-004]
+    sc: Search matches employee code, first name, last name and official email, case-insensitively
+    t: A search term matching any one of the four indexed fields returns that employee, regardless of case
+    src: ["EmployeeService.ApplyEffectiveFilters"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/employees?search=<employeeCode uppercased>] Call => [200] the matching employee is present"
+      - "[GET /api/employees?search=<first name lowercased>] Call => [200] the matching employee is present"
+      - "[GET /api/employees?search=<official email fragment>] Call => [200] the matching employee is present"
+      - "[GET /api/employees?search=zzz-no-such-value] Call => [200] items=[]"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Search_matches_code_name_and_email"]
+
+  - id: EMP-LIST-005
+    func: [F-EMP-005]
+    sc: Search text longer than 100 characters is rejected
+    t: A 101-character search string is a 400 validation error, not silently truncated
+    src: ["PagedQueryValidator.Search MaximumLength(100)"]
+    type: Boundary
+    tags: [Validation]
+    pri: P2
+    steps:
+      - "[GET /api/employees?search=<101 chars>] Call => [400] 'Search text must not exceed 100 characters.'"
+      - "[GET /api/employees?search=<100 chars>] Call => [200] accepted"
+    auto: API
+
+  - id: EMP-LIST-006
+    func: [F-EMP-006]
+    sc: Filter by department, designation, status and reporting manager individually and combined
+    t: Each filter narrows the result set correctly alone and in combination with the others
+    src: ["EmployeeService.ApplyEffectiveFilters"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/employees?departmentId={dept}] Call => [200] only employees currently in that department"
+      - "[GET /api/employees?designationId={desig}] Call => [200] only employees with that designation"
+      - "[GET /api/employees?status=Active] Call => [200] only Active employees"
+      - "[GET /api/employees?reportingManagerId={mgr}] Call => [200] only that manager's direct reports"
+      - "[GET /api/employees?departmentId={dept}&status=Active] Call => [200] intersection of both filters"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Get_filters_by_department_designation_status_and_manager"]
+
+  - id: EMP-LIST-007
+    func: [F-EMP-007]
+    sc: An invalid Status filter value is a 400, not silently ignored
+    t: status=NotARealStatus fails validation instead of returning the unfiltered list
+    src: ["EmployeeQueryValidator (Status.IsInEnum())"]
+    type: Negative
+    tags: [Validation]
+    pri: P2
+    steps:
+      - "[GET /api/employees?status=NotARealStatus] Call => [400] status is not a recognized value"
+    auto: API
+
+  - id: EMP-LIST-008
+    func: [F-EMP-008]
+    sc: Sort by every whitelisted field, both directions; an unlisted field is rejected
+    t: employeeCode/firstName/lastName/email/department/designation/status/dateOfJoining/createdDate all sort correctly; sortBy=notAField is a 400
+    src: ["EmployeeQuery.SortFields", "PagedQueryValidator.SortBy whitelist"]
+    type: Positive
+    tags: [Boundary]
+    pri: P1
+    steps:
+      - "[GET /api/employees?sortBy=lastName&sortDescending=false] Call => [200] ascending by last name"
+      - "[GET /api/employees?sortBy=dateOfJoining&sortDescending=true] Call => [200] descending by date of joining"
+      - "[GET /api/employees?sortBy=notAField] Call => [400] 'Sort field must be one of: ...'"
+    auto: API
+
+  - id: EMP-LIST-009
+    func: [F-EMP-009]
+    sc: Sorting by department/designation/status uses the CURRENT employment-history value when one exists
+    t: An employee whose department changed via Employment History (legacy column not yet synced by a future-dated change) sorts by the history value, not the stale legacy column
+    src: ["EmployeeService.ApplyEffectiveSort"]
+    type: Positive
+    tags: [Integration-Concurrency]
+    pri: P1
+    pre: "Employee EMP-901 has a current Employment History record in Department=Finance while Employees.DepartmentId (legacy) still points at Engineering (simulated by a same-day sync gap)."
+    steps:
+      - "[GET /api/employees?sortBy=department] Call => [200] EMP-901 sorts under Finance, not Engineering"
+    auto: API
+
+  - id: EMP-LIST-010
+    func: [F-EMP-010]
+    sc: List item projection carries joined names and the isCurrentlyEmployed flag
+    t: Each row includes departmentName/designationName (joined, not raw ids) and isCurrentlyEmployed reflecting whether today falls within the current record's window
+    src: ["EmployeeService.GetAsync (EmployeeListItemDto)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/employees] Call => [200] every row has non-null departmentName/designationName when a current record exists, and isCurrentlyEmployed=true for a same-day-effective hire"
+      - "[GET /api/employees] A future-dated hire's row => [200] isCurrentlyEmployed=false (shown as Scheduled by the UI)"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.List_items_carry_the_joined_department_and_designation_names"]
+
+  - id: EMP-LIST-011
+    func: [F-EMP-011]
+    sc: Empty tenant list vs. filtered-to-empty are distinguishable
+    t: The unfiltered list and totalCount are enough for the caller to tell "no employees at all" apart from "filters exclude everyone"
+    src: ["EmployeeService.GetAsync"]
+    type: Positive
+    pri: P3
+    steps:
+      - "[GET /api/employees?status=Terminated] On a tenant with zero Terminated employees => [200] items=[], totalCount=0, but GET /api/employees (no filter) => [200] totalCount > 0"
+    auto: API
+
+  - id: EMP-LIST-012
+    func: [F-EMP-012]
+    sc: The list is scoped to the caller's own tenant
+    t: A Tenant B caller never sees Tenant A's employees, and vice versa, regardless of filters
+    src: ["EmployeeService.GetAsync (tenant-filtered)"]
+    type: Tenant-Isolation
+    pri: P0
+    smoke: true
+    tenant: A+B
+    steps:
+      - "[GET /api/employees] As Tenant B => [200] items contain only Tenant B's own employees, none of Tenant A's"
+    auto: API
+    ex: ["xU:EmployeeServiceTests.Get_returns_only_the_callers_own_employees"]
+
+  - id: EMP-LIST-013
+    func: [F-EMP-012]
+    sc: A Manager-role caller is scoped to self + direct reports only, not the full tenant
+    t: A Manager holding Employee.View (and Attendance.MonthlyViewTeam) sees only themselves and their direct reports in the list, never a second-level report or an unrelated employee
+    src: ["EmployeeAccessScopeService.BuildPredicateAsync"]
+    type: Authorization
+    tags: [Tenant-Isolation]
+    pri: P1
+    role: MANAGER
+    perm: Employee.View
+    pre: "Tenant A: Manager M reports-to-self-chain: M -> direct report D1 -> D1's own report D2. M is signed in."
+    steps:
+      - "[GET /api/employees] As Manager M => [200] items include M and D1, but NOT D2 (a second-level report) and NOT any employee outside M's chain"
+    auto: API
+    cr: [CR-57]
+
+  - id: EMP-LIST-014
+    func: [F-EMP-012]
+    sc: An HRManager (no MonthlyViewTeam) sees the full tenant directory from the same Employee.View permission
+    t: Confirms the scope narrowing is specific to the Manager role's Attendance permission bundle, not a universal Employee.View restriction
+    src: ["EmployeeAccessScopeService.BuildPredicateAsync"]
+    type: Authorization
+    pri: P2
+    role: HR_MANAGER
+    perm: Employee.View
+    steps:
+      - "[GET /api/employees] As HRManager => [200] items include employees across every department/manager, not just HRManager's own reports"
+    auto: API
+    cr: [CR-57]
+
+  - id: EMP-LIST-015
+    func: [F-EMP-004]
+    sc: Search is case-insensitive across mixed-case data
+    t: A lowercase search term matches an employee whose stored name/code uses different casing
+    src: ["EmployeeService.ApplyEffectiveFilters"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/employees?search=<mixed-case fragment of a name>] Call => [200] the employee is found regardless of the casing used"
+    auto: API
+
+  - id: EMP-LIST-016
+    func: [F-EMP-006]
+    sc: Combining all four filters at once returns only employees matching every condition (AND, not OR)
+    t: departmentId + designationId + status + reportingManagerId together narrow to the intersection
+    src: ["EmployeeService.ApplyEffectiveFilters"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[GET /api/employees?departmentId={d}&designationId={g}&status=Active&reportingManagerId={m}] Call => [200] every returned row satisfies all four conditions simultaneously"
+    auto: API

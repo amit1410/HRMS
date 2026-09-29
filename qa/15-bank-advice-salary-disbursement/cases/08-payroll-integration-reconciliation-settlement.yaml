@@ -1,0 +1,151 @@
+sheet: BankAdv_PayrollIntegration_Reconciliation
+submodule: Payroll-Result Integration, Reconciliation & Final-Settlement Scope
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: BANKADV-RECON-001
+    func: [F-BANKADV-067]
+    sc: Missing bank advice is flagged by reconciliation
+    t: A run with persisted payroll results but no active bank advice batch produces a MissingBankAdvice Warning finding
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "RUN1 (Approved) has 2 Calculated payroll results and no BankAdviceBatch at all"
+    role: HRAdmin (custom role holding Payroll.ReconciliationGenerate)
+    perm: Payroll.ReconciliationGenerate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] => [200] Findings include a \"MissingBankAdvice\" entry, Severity=Warning"
+    auto: API
+
+  - id: BANKADV-RECON-002
+    func: [F-BANKADV-068]
+    sc: Amount mismatch is flagged as Critical
+    t: A run whose active bank-advice total disagrees with its own persisted net-pay total produces a Critical BankAdviceAmountMismatch finding
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "RUN1's payroll results sum to NetPay total 50000; RUN1's active bank advice batch has TotalAmount=45000 (understated, e.g. via a forced test-only edit after generation)"
+    role: HRAdmin (custom role holding Payroll.ReconciliationGenerate)
+    perm: Payroll.ReconciliationGenerate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] => [200] Findings include a \"BankAdviceAmountMismatch\" entry, Severity=Critical, Actual=45000 vs Expected=50000"
+    auto: DB-assisted
+
+  - id: BANKADV-RECON-003
+    func: [F-BANKADV-069]
+    sc: Count mismatch is flagged as Warning
+    t: A run whose active bank-advice payment count differs from its own payroll-result count produces a Warning BankAdviceCountMismatch finding
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "RUN1 has 5 Calculated payroll results but its active bank advice batch has only 4 payments (e.g. one added to the run after generation)"
+    role: HRAdmin (custom role holding Payroll.ReconciliationGenerate)
+    perm: Payroll.ReconciliationGenerate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] => [200] Findings include a \"BankAdviceCountMismatch\" entry, Severity=Warning"
+    auto: DB-assisted
+
+  - id: BANKADV-RECON-004
+    func: [F-BANKADV-070]
+    sc: Duplicate payment reference is flagged as Critical
+    t: Two active payments sharing the same PaymentReference across a run's batches produces a Critical DuplicateBankPaymentReference finding
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    pre: "RUN1's active batch has two BankAdvicePayment rows sharing an identical PaymentReference (forced via a direct DB edit for test setup, since normal generation cannot produce this)"
+    role: HRAdmin (custom role holding Payroll.ReconciliationGenerate)
+    perm: Payroll.ReconciliationGenerate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] => [200] Findings include a \"DuplicateBankPaymentReference\" entry, Severity=Critical"
+    auto: DB-assisted
+
+  - id: BANKADV-RECON-005
+    func: [F-BANKADV-071]
+    sc: The Cancelled-payment-status exclusion is dead code
+    t: Since BankAdvicePaymentStatus.Cancelled is never assigned (CR-265), the "PaymentStatus != Cancelled" clause in the count/duplicate-reference queries never actually excludes anything by that specific test
+    src: "PayrollAnalyticsService.AddSourceFindingsAsync (PaymentStatus != BankAdvicePaymentStatus.Cancelled)"
+    type: Contract
+    tags: []
+    pri: P3
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] cross-reference F-BANKADV-056/CR-265 (no method ever sets PaymentStatus=Cancelled) against this query's own filter => the filter is confirmed always-true for that specific exclusion; the correct exclusion actually achieved in practice comes from the surrounding batch-level Status != Cancelled filter"
+    auto: Manual only
+    cr: [CR-265]
+
+  - id: BANKADV-RECON-006
+    func: [F-BANKADV-072]
+    sc: Reconciliation/analytics engine itself is out of scope
+    t: This module tests only the 4 BankAdvice-specific findings, not the general PayrollReconciliation/PayrollVarianceControls/PayrollAnomalyFlags engine
+    src: "Backend/HRMS.Application/Services/PayrollAnalyticsService.cs (full file, out of scope beyond the BankAdvice block)"
+    type: Contract
+    tags: []
+    pri: P3
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] check for a dedicated qa module covering PayrollAnalyticsService's general reconciliation/variance/anomaly surface => none exists yet; this module's 4 reconciliation cases (BANKADV-RECON-001..004) are the full extent of coverage claimed here"
+    auto: Manual only
+
+  - id: BANKADV-RECON-007
+    func: [F-BANKADV-073]
+    sc: CONFIRMED - no final-settlement integration exists
+    t: A full grep of SeparationService.cs for "BankAdvice" confirms zero code-level integration between bank advice and final settlement/separation payouts
+    src: "Backend/HRMS.Application/Services/SeparationService.cs (full grep for BankAdvice - zero matches)"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of Backend/HRMS.Application/Services/SeparationService.cs for \"BankAdvice\" => zero matches; docs/phase-7h-bank-advice-payment-processing.md's own \"Deferred\" section lists \"final settlement\" explicitly"
+    auto: Manual only
+
+  - id: BANKADV-RECON-008
+    func: [F-BANKADV-074]
+    sc: Payroll GL/accounting posting is a separate, unrelated service
+    t: PayrollAccountingController/IPayrollAccountingService has no BankAdvice reference anywhere
+    src: "Backend/HRMS.API/Controllers/PayrollOutputsController.cs (PayrollAccountingController)"
+    type: Contract
+    tags: []
+    pri: P3
+    sev: Low
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of PayrollAccountingController and its service implementation for \"BankAdvice\" => zero matches; the GL journal's own GenerateAsync reads PayrollRun/PayrollResults independently"
+    auto: Manual only

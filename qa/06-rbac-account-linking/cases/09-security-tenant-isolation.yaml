@@ -1,0 +1,258 @@
+sheet: RBAC_Security
+submodule: Self-Service Identity, Privilege Escalation, Tenant Isolation Matrix, CR-53
+defaults:
+  role: TENANT_ADMIN
+  perm: "n/a (authenticated)"
+  tenant: A
+  pre: "Tenant A signed in; roles/permissions per case."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  # ── Self-service identity ──────────────────────────────────────────────────────────────────────────────
+  - id: RBAC-SELF-001
+    func: [F-RBAC-101]
+    sc: /api/auth/me carries the full EmployeeIdentity block
+    t: The response includes Status, Revision, LinkId, Employee summary, EmploymentEligibility and BusinessDate together
+    src: ["AuthService.GetCurrentUserAsync/ResolveEmployeeIdentityAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[GET /api/auth/me] As a linked employee's account => [200] employeeIdentity={status:'Linked', revision, linkId, employee:{id,displayName,employeeCode}, employmentEligibility, businessDate}"
+    auto: API
+
+  - id: RBAC-SELF-002
+    func: [F-RBAC-102]
+    sc: EmploymentEligibility classification - every branch
+    t: NotLinked, RequiresReview, FutureJoining, NoApplicableEmployment, ActiveEmployment and Separated each occur under their respective condition
+    src: ["AuthService.ResolveEmployeeIdentityAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[GET /api/auth/me] Unlinked account => [200] employmentEligibility='NotLinked'"
+      - "[GET /api/auth/me] Orphaned link (linked employee row deleted) => [200] status='Invalid', employmentEligibility='RequiresReview'"
+      - "[GET /api/auth/me] Linked to an employee whose DateOfJoining is in the future => [200] employmentEligibility='FutureJoining'"
+      - "[GET /api/auth/me] Linked to an employee with zero or more than one current EmploymentHistory row => [200] employmentEligibility='NoApplicableEmployment'"
+      - "[GET /api/auth/me] Linked to a normally-employed Active employee => [200] employmentEligibility='ActiveEmployment'"
+      - "[GET /api/auth/me] Linked to a Terminated employee => [200] employmentEligibility='Separated'"
+    auto: API
+
+  - id: RBAC-SELF-003
+    func: [F-RBAC-103, F-RBAC-104]
+    sc: "CR-53: a terminated employee's account is still 'Linked' but 'Separated', and keeps every role permission"
+    t: EmployeeIdentity.Status stays 'Linked' after termination; Roles/Permissions on the same response are completely unaffected
+    src: ["AuthService.ResolveEmployeeIdentityAsync", "AuthService.LoadAuthorizationAsync"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    sev: Critical
+    steps:
+      - "[PUT /api/employees/{employeeId}] Set the linked employee's Status=Terminated via the legacy path (Employee.Edit only, per Module 5 CR-53) => [200]"
+      - "[GET /api/auth/me] As that employee's still-active account (User.IsActive remains true) => [200] employeeIdentity.status='Linked', employmentEligibility='Separated'"
+      - "[GET /api/auth/me] Same response => [200] roles/permissions are IDENTICAL to what they were before termination - no permission was removed"
+    auto: API
+    cr: [CR-53]
+
+  - id: RBAC-SELF-004
+    func: [F-RBAC-105]
+    sc: Unlinked account hides employee-identity-gated navigation
+    t: An unlinked account's nav omits My Profile/Apply Leave/My Attendance and every other requiresEmployeeIdentity item
+    src: ["layout/navigation.ts visibleNavItems"]
+    type: Positive
+    pri: P1
+    auto: UI
+    steps:
+      - "[UI] Sign in as an unlinked account => sidebar has no 'My Profile', 'Apply Leave', 'My Attendance', 'My Payslips', 'My Separation / Resignation' entries"
+
+  - id: RBAC-SELF-005
+    func: [F-RBAC-106]
+    sc: Replace updates /api/auth/me on the very next read
+    t: No caching lag between a Replace and the next current-user/link-state read
+    src: ["AuthService.ResolveEmployeeIdentityAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/account-employee-links/users/{userId}/replace] Replace to a different employee => [200]"
+      - "[GET /api/auth/me] As that user, same still-valid access token, immediately after => [200] employeeIdentity.employee now reflects the NEW employee"
+    auto: API
+
+  - id: RBAC-SELF-006
+    func: [F-RBAC-107]
+    sc: An inactive user is rejected at /api/auth/me before EmployeeIdentity is resolved
+    t: A deactivated account gets 403 with no employeeIdentity payload at all
+    src: ["AuthService.GetCurrentUserAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[GET /api/auth/me] As a User with IsActive=false => [403] This account has been deactivated"
+    auto: API
+
+  - id: RBAC-SELF-007
+    func: [F-RBAC-108]
+    sc: EmployeeIdentityResolver never falls back to email/code matching
+    t: An unlinked account gets a clean NotFound from /api/me/profile, never an accidental match by email or employee code
+    src: ["EmployeeIdentityResolver.ResolveCurrentAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[GET /api/me/profile] As an unlinked account whose email happens to match an EXISTING unlinked employee's email field => [404] The authenticated account is not linked to an Employee - no accidental identity match occurs"
+    auto: API
+
+  - id: RBAC-SELF-008
+    func: [F-RBAC-109]
+    sc: EmployeeIdentityResolver reports Conflict for an orphaned link, not a crash
+    t: A current-link row pointing at a deleted employee is handled gracefully
+    src: ["EmployeeIdentityResolver.ResolveCurrentAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[GET /api/me/profile] As an account whose AccountEmployeeCurrentLinks row's EmployeeId no longer resolves => [409] The account's Employee link requires administrator review"
+    auto: API
+
+  # ── Privilege escalation (additional to those covered in 01/02/05) ────────────────────────────────────
+  - id: RBAC-SEC-001
+    func: [F-RBAC-147]
+    sc: No 'deleted/inactive role' state exists to exploit
+    t: Document that every seeded role id is permanently valid; the only analogous state is an Expired assignment, and the UserRoles row itself is never deleted
+    src: ["SeedData.RoleIds", "RoleResolutionService.GetEffectiveRoleIdsAsync"]
+    type: Contract
+    pri: P3
+    steps:
+      - "[GET /api/role-assignments/roles] Call => [200] all 14 role ids are present and always resolvable - there is no route to delete or deactivate a Role row"
+    auto: Manual only
+
+  - id: RBAC-SEC-002
+    func: [F-RBAC-140, F-RBAC-141]
+    sc: "Consolidated escalation check: SuperHR self-escalates via PageAccess.Manage to gain both RoleManagement.AssignmentManage and AccountEmployeeLink.Manage"
+    t: The same escalation path proven for HRAdmin (RBAC-ROLE-014) also works for SuperHR, the other PageAccess.Manage holder lacking these permissions by default
+    src: ["PageAccessService.UpdateAsync"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    sev: Critical
+    role: SUPER_HR
+    perm: "PageAccess.Manage"
+    steps:
+      - "[GET /api/page-access/roles/{superHrRoleId}] Confirm baseline => [200] excludes RoleManagement.AssignmentManage and AccountEmployeeLink.Manage"
+      - "[PUT /api/page-access/roles/{superHrRoleId}] As SuperHR, add both permissions to its own role => [200]"
+      - "[POST /api/role-assignments/users/{someUserId}] As SuperHR, now assign a role => [200] succeeds where it previously would 403"
+      - "[POST /api/account-employee-links/users/{someUserId}/link] As SuperHR => [200] succeeds"
+    auto: API
+    cr: [CR-66]
+
+  # ── Tenant Isolation matrix (Section O, consolidated) ──────────────────────────────────────────────────
+  - id: RBAC-TENANT-001
+    func: [F-RBAC-160]
+    sc: "Matrix row: Tenant B cannot view Tenant A's role assignments"
+    t: GET /api/role-assignments as Tenant B never returns a Tenant A row
+    src: ["RoleAssignmentService.GetAssignmentsAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    smoke: true
+    tenant: A+B
+    steps:
+      - "[GET /api/role-assignments] As Tenant B => [200] every returned assignment belongs to a Tenant B user; no Tenant A assignment id is ever present"
+    auto: API
+
+  - id: RBAC-TENANT-002
+    func: [F-RBAC-161]
+    sc: "Matrix row: Tenant B CAN see the same shared role catalog Tenant A sees - expected, not a leak"
+    t: The Role list itself is intentionally shared reference data
+    src: ["RoleAssignmentService.GetRolesAsync"]
+    type: Tenant-Isolation
+    pri: P2
+    tenant: A+B
+    steps:
+      - "[GET /api/role-assignments/roles] As Tenant A and as Tenant B => [200]/[200] identical 14-role catalog both times - confirmed as expected sharing, not tested as a defect"
+    auto: API
+
+  - id: RBAC-TENANT-003
+    func: [F-RBAC-162]
+    sc: "Matrix row: Tenant B cannot assign a Tenant A role to a Tenant A user"
+    t: Cross-tenant role assignment is rejected NotFound
+    src: ["RoleAssignmentService.AssignAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: A+B
+    steps:
+      - "[POST /api/role-assignments/users/{tenantAUserId}] As Tenant B => [404] Account not found"
+    auto: API
+
+  - id: RBAC-TENANT-004
+    func: [F-RBAC-163]
+    sc: "Matrix row: Tenant B cannot view Tenant A's Users via the candidate list"
+    t: The role-assignment candidates endpoint is tenant-filtered
+    src: ["RoleAssignmentService.GetCandidatesAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[GET /api/role-assignments/candidates] As Tenant B => [200] no Tenant A user appears among the candidates"
+    auto: API
+
+  - id: RBAC-TENANT-005
+    func: [F-RBAC-164]
+    sc: "Matrix row: Tenant B cannot link a Tenant A account"
+    t: Cross-tenant account linking is rejected NotFound
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: A+B
+    steps:
+      - "[POST /api/account-employee-links/users/{tenantAUserId}/link] As Tenant B => [404] Account not found"
+    auto: API
+
+  - id: RBAC-TENANT-006
+    func: [F-RBAC-165]
+    sc: "Matrix row: Tenant B cannot link a Tenant A employee"
+    t: Cross-tenant employee linking is rejected NotFound
+    src: ["AccountEmployeeLinkService.MutateAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: A+B
+    steps:
+      - "[POST /api/account-employee-links/users/{tenantBUserId}/link] employeeId=<Tenant A employee>, as Tenant B => [404] Employee not found"
+    auto: API
+
+  - id: RBAC-TENANT-007
+    func: [F-RBAC-166]
+    sc: "Matrix row: Tenant B cannot view Tenant A's link history"
+    t: Cross-tenant link-history access is blocked
+    src: ["AccountEmployeeLinkService.GetHistoryAsync"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: A+B
+    steps:
+      - "[GET /api/account-employee-links/users/{tenantAUserId}/history] As Tenant B => [404 or empty] no Tenant A history is ever returned"
+    auto: API
+    cr: [CR-76]
+
+  - id: RBAC-TENANT-008
+    func: [F-RBAC-167]
+    sc: "Matrix row: Tenant B CAN manipulate the shared page-access role catalog Tenant A also uses - the real isolation gap"
+    t: A Page Access change is not tenant-scoped at all, since Roles/RolePermissions are shared
+    src: ["PageAccessService.UpdateAsync"]
+    type: Tenant-Isolation
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    tenant: A+B
+    steps:
+      - "[PUT /api/page-access/roles/{sharedRoleId}] As Tenant B's HRAdmin => [200] succeeds and is visible from Tenant A too - see RBAC-PA-013 for the full before/after comparison"
+    auto: API
+    cr: [CR-75]
+
+  - id: RBAC-TENANT-009
+    func: [F-RBAC-168]
+    sc: "Matrix row: Tenant B cannot resolve a Tenant A employee's identity through preview/candidate endpoints"
+    t: Every employee-facing RBAC query is tenant-filtered
+    src: ["PageAccessService.GetUserPreviewAsync"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    perm: "PageAccess.View"
+    steps:
+      - "[GET /api/page-access/users/{tenantAUserId}/preview] As Tenant B => [200 with empty/none data or 404] no Tenant A role/permission/employee data is exposed"
+    auto: API

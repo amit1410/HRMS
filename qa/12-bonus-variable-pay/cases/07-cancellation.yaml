@@ -1,0 +1,98 @@
+sheet: VPay_Cancellation
+submodule: Award cancellation state-guard matrix and the absence of any maker-checker/self-approval check
+defaults:
+  role: HRADMIN
+  perm: "Payroll.VariablePay.Cancel"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin with Payroll.VariablePay.Cancel granted, unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: VPAY-CAN-001
+    func: [F-VPAY-081]
+    sc: Cancel succeeds unconditionally from Calculated or Submitted
+    t: An award in Calculated or Submitted status is cancelled with no further guard
+    src: ["VariablePayService.CancelAsync -> TransitionAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/cancel] award Status=Calculated, reason='No longer eligible' => [200] Status=Cancelled"
+    auto: API
+
+  - id: VPAY-CAN-002
+    func: [F-VPAY-081]
+    sc: Cancel on Approved is guarded by SettledAmount==0; an already-Cancelled award cannot be re-cancelled
+    t: An Approved award with any settlement recorded cannot be cancelled; Cancelled is not a valid Cancel source (contrast with qa/11-loans-advances CR-188)
+    src: ["VariablePayService.CancelAsync -> TransitionAsync"]
+    type: Boundary
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/settle] Amount=1 (partial) => [200] SettledAmount=1"
+      - "[POST /api/payroll/variable-pay-awards/{id}/cancel] the now-partially-settled Approved award, reason='x' => [409] Invalid variable-pay award lifecycle transition."
+      - "[POST /api/payroll/variable-pay-awards/{cancelledId}/cancel] award Status=Cancelled (repeat), reason='again' => [409] Invalid variable-pay award lifecycle transition."
+    auto: API
+
+  - id: VPAY-CAN-003
+    func: [F-VPAY-082]
+    sc: A Draft-status award is a declared but unreachable Cancel source
+    t: The (Draft,Cancelled) transition exists in the switch, but no code path ever creates a Draft-status award to exercise it
+    src: ["VariablePayService.TransitionAsync (valid-transition switch, Draft->Cancelled case)"]
+    type: Boundary
+    pri: P3
+    tags: [Configuration]
+    cr: [CR-214]
+    steps:
+      - "[Manual/Code] Grep VariablePayService.cs for any code path assigning Status=Draft to a VariablePayAward => zero matches; the (Draft,Cancelled) TransitionAsync case is defensive/unreachable through the API"
+    auto: Manual only
+
+  - id: VPAY-CAN-004
+    func: [F-VPAY-083]
+    sc: Cancel requires a non-blank reason regardless of source state
+    t: A blank reason on Cancel is Invalid even from an otherwise-valid source status
+    src: ["VariablePayService.CancelAsync -> TransitionAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/cancel] award Status=Calculated, reason='' => [400] A reason is required."
+    auto: API
+
+  - id: VPAY-CAN-005
+    func: [F-VPAY-084]
+    sc: A successful cancellation appends a Cancelled history row
+    t: The history row carries the previous status and the supplied reason
+    src: ["VariablePayService.CancelAsync -> TransitionAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{id}/cancel] award Status=Submitted, reason='Plan discontinued' => [200] Status=Cancelled"
+      - "[GET /api/payroll/variable-pay-awards/{id}/history] => [200] latest row EventType=Cancelled, PreviousStatus=Submitted, Reason='Plan discontinued'"
+    auto: API
+
+  - id: VPAY-CAN-006
+    func: [F-VPAY-085]
+    sc: A cross-tenant award id on cancel is NotFound
+    t: Cancelling a Tenant A award while signed in as Tenant B is NotFound, not Forbidden
+    src: ["VariablePayService.cs (TenantId filter)"]
+    type: Tenant-Isolation
+    pri: P0
+    tenant: B
+    tags: [Tenant-Isolation]
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/{tenantAAwardId}/cancel] signed in as Tenant B HRAdmin, reason='x' => [404] Variable-pay award not found."
+    auto: API
+
+  - id: VPAY-CAN-007
+    func: [F-VPAY-086]
+    sc: Cancellation has no maker-checker/self-approval check
+    t: The award's own generator can cancel it themselves with no actor-identity restriction, unlike Loans' Cancel which routes through PayrollApprovalGuard
+    src: ["VariablePayService.TransitionAsync (full method - no ApprovalGuard reference)"]
+    type: Security
+    pri: P1
+    secc: true
+    steps:
+      - "[POST /api/payroll/variable-pay-awards/generate] signed in as UserX => [200] award created, Status=Calculated"
+      - "[POST /api/payroll/variable-pay-awards/{id}/cancel] signed in as the SAME UserX, reason='Self-cancelled' => [200] Status=Cancelled - no maker-checker policy applies"
+    auto: API

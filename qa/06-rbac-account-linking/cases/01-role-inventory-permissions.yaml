@@ -1,0 +1,318 @@
+sheet: RBAC_Roles
+submodule: Role Master / Role Permission Matrix
+defaults:
+  role: TENANT_ADMIN
+  perm: "RoleAssignment.View"
+  tenant: A
+  pre: "Tenant A signed in as TenantAdmin unless stated."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: RBAC-ROLE-001
+    func: [F-RBAC-001, F-RBAC-010]
+    sc: List all 14 seeded roles
+    t: GET roles returns exactly the 14 canonical roles, ordered by name, with no tenant filter applied
+    src: ["RoleAssignmentService.GetRolesAsync"]
+    type: Positive
+    pri: P1
+    smoke: true
+    steps:
+      - "[GET /api/role-assignments/roles] Call as TenantAdmin => [200] returns 14 roles: SuperAdmin, TenantAdmin, HRAdmin, HRManager, Manager, Employee, AccountLinkAdministrator, AccountLinkAuditor, EmployeeRelationshipOfficer, HRBP, TimeManager, IT, Accounts, SuperHR, ordered by Name ascending"
+    auto: API
+
+  - id: RBAC-ROLE-002
+    func: [F-RBAC-002]
+    sc: assignableOnly=true excludes system-managed roles
+    t: The assignableOnly filter removes exactly Employee and Manager from the returned list
+    src: ["RoleAssignmentService.GetRolesAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/role-assignments/roles?assignableOnly=true] Call => [200] returns 12 roles - Employee and Manager are absent, every other role present"
+      - "[GET /api/role-assignments/roles?assignableOnly=false] Call => [200] returns all 14, Employee and Manager included"
+    auto: API
+
+  - id: RBAC-ROLE-003
+    func: [F-RBAC-003, F-RBAC-005]
+    sc: No Role Master create/edit/delete API exists
+    t: Document the absence of true Role Master CRUD - only GET (list) and the permission-matrix PUT exist
+    src: ["RoleAssignmentsController", "PageAccessController"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[POST /api/role-assignments/roles] Call with a new role payload => [404] no such route exists (routing 404, not a validation error)"
+      - "[PUT /api/role-assignments/roles/1] Call attempting to rename a role => [404] no such route exists"
+      - "[DELETE /api/role-assignments/roles/1] Call => [404] no such route exists"
+    auto: API
+    cr: [CR-66]
+
+  - id: RBAC-ROLE-004
+    func: [F-RBAC-006]
+    sc: Nonexistent roleId on the permission matrix
+    t: GET/PUT of an unknown roleId returns 404 Not Found, not 400 or 500
+    src: ["PageAccessService.BuildMatrixAsync", "PageAccessService.UpdateAsync"]
+    type: Negative
+    pri: P1
+    perm: "PageAccess.View"
+    steps:
+      - "[GET /api/page-access/roles/999999] Call => [404] Role not found"
+      - "[PUT /api/page-access/roles/999999] Call with a valid permission list => [404] Role not found"
+    auto: API
+
+  - id: RBAC-ROLE-005
+    func: [F-RBAC-007, F-RBAC-161]
+    sc: Roles are shared, not tenant-scoped
+    t: The same role ids and names are visible from both demo tenants
+    src: ["Role entity (no TenantId column)"]
+    type: Tenant-Isolation
+    pri: P2
+    tenant: A+B
+    steps:
+      - "[GET /api/role-assignments/roles] As Tenant A => [200] HRBP has role id 10"
+      - "[GET /api/role-assignments/roles] As Tenant B => [200] HRBP also has role id 10 - same shared row, not a leak"
+    auto: API
+
+  - id: RBAC-ROLE-006
+    func: [F-RBAC-008, F-RBAC-183]
+    sc: Roles tab client-side search
+    t: Search filters the fetched role list by name or description, case-insensitively
+    src: ["RoleManagementPage RolesView"]
+    type: Positive
+    tags: [Usability]
+    pri: P3
+    auto: UI
+    steps:
+      - "[UI] On the Roles tab, type 'hrbp' in the search box => only the HRBP row remains visible"
+      - "[UI] Clear the search => all 14 roles are shown again"
+
+  - id: RBAC-ROLE-007
+    func: [F-RBAC-012]
+    sc: SuperAdmin/TenantAdmin default permission set
+    t: Both roles hold every domain permission EXCEPT AccountEmployeeLink.*
+    src: ["SeedData.RolePermissionMap[SuperAdmin]/[TenantAdmin]"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "PageAccess.View"
+    steps:
+      - "[GET /api/page-access/roles/{superAdminRoleId}] Call => [200] grantedPermissions includes Employee.Delete, RoleManagement.Manage, PageAccess.Manage, Payroll.RunApprove etc., but excludes AccountEmployeeLink.View/.ViewHistory/.Manage entirely"
+      - "[GET /api/page-access/roles/{tenantAdminRoleId}] Call => [200] identical shape to SuperAdmin's - every domain permission except the three AccountEmployeeLink.*"
+    auto: API
+    ex: ["xU:SeedDataTests.Role_permission_grants_match_the_seed_map"]
+
+  - id: RBAC-ROLE-008
+    func: [F-RBAC-013, F-RBAC-014]
+    sc: HRAdmin's permission shape - broad but no RoleManagement.*
+    t: HRAdmin holds Employee/Attendance/Payroll/Separation/PageAccess permissions but zero RoleManagement.* permissions
+    src: ["SeedData.RolePermissionMap[HRAdmin]"]
+    type: Positive
+    pri: P1
+    perm: "PageAccess.View"
+    steps:
+      - "[GET /api/page-access/roles/{hrAdminRoleId}] Call => [200] grantedPermissions includes PageAccess.View and PageAccess.Manage, but none of Role.View/Role.Manage/RoleAssignment.View/.Manage/.ViewHistory"
+    auto: API
+    cr: [CR-44]
+
+  - id: RBAC-ROLE-009
+    func: [F-RBAC-015]
+    sc: SuperHR's permission shape - can view but not manage assignments
+    t: SuperHR holds RoleManagement.View and .AssignmentView but not .AssignmentManage
+    src: ["SeedData.RolePermissionMap[SuperHR]"]
+    type: Positive
+    pri: P1
+    perm: "PageAccess.View"
+    steps:
+      - "[GET /api/page-access/roles/{superHrRoleId}] Call => [200] grantedPermissions includes RoleManagement.View, RoleManagement.AssignmentView, PageAccess.View, PageAccess.Manage, but NOT RoleManagement.AssignmentManage"
+      - "[POST /api/role-assignments/users/{userId}] As SuperHR, attempt to assign a role => [403] Forbidden - SuperHR lacks RoleAssignment.Manage"
+    auto: API
+    role: SUPER_HR
+
+  - id: RBAC-ROLE-010
+    func: [F-RBAC-011]
+    sc: Full permission matrix shape for one role
+    t: GET matrix returns the role summary, every catalogued page's CanView, and each page's per-action Allowed flag
+    src: ["PageAccessService.BuildMatrixAsync"]
+    type: Positive
+    pri: P1
+    perm: "PageAccess.View"
+    steps:
+      - "[GET /api/page-access/roles/{hrManagerRoleId}] Call => [200] response includes role {id,name,description}, 9 pages each with code/name/moduleCode/route/requiredPermissions/canView, and each page's actions with permission+allowed"
+    auto: API
+
+  - id: RBAC-ROLE-011
+    func: [F-RBAC-016, F-RBAC-017]
+    sc: Grant and revoke a permission via Page Access Management
+    t: PUT with a modified permission set adds new grants, removes dropped ones, and writes matching audit events
+    src: ["PageAccessService.UpdateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    perm: "PageAccess.Manage"
+    role: HR_ADMIN
+    steps:
+      - "[GET /api/page-access/roles/{itRoleId}] Read IT's current grantedPermissions (baseline: User.View, User.Edit, AccountEmployeeLink.View) => [200]"
+      - "[PUT /api/page-access/roles/{itRoleId}] Send permissions = baseline + Employee.View, reason='pilot' => [200] grantedPermissions now includes Employee.View"
+      - "[GET /api/page-access/history?roleId={itRoleId}] Call => [200] a RolePermissionGranted event for Employee.View, actor = the caller, reason='pilot'"
+      - "[PUT /api/page-access/roles/{itRoleId}] Send permissions = baseline (Employee.View removed) => [200] grantedPermissions no longer includes Employee.View"
+      - "[GET /api/page-access/history?roleId={itRoleId}] Call => [200] a RolePermissionRevoked event for Employee.View is now present too"
+    auto: API
+
+  - id: RBAC-ROLE-012
+    func: [F-RBAC-018]
+    sc: Unknown permission string is rejected
+    t: A permission name not in Permissions.All returns 400 before any write
+    src: ["PageAccessService.UpdateAsync"]
+    type: Negative
+    pri: P1
+    perm: "PageAccess.Manage"
+    steps:
+      - "[PUT /api/page-access/roles/{itRoleId}] Send permissions=['Employee.View','NotARealPermission'] => [400] the request contains an unknown permission"
+      - "[GET /api/page-access/roles/{itRoleId}] Re-read => [200] grantedPermissions unchanged from before the rejected call"
+    auto: API
+
+  - id: RBAC-ROLE-013
+    func: [F-RBAC-019]
+    sc: Duplicate permission names in the request are collapsed
+    t: Submitting the same permission twice does not error and does not duplicate the RolePermission row
+    src: ["PageAccessService.UpdateAsync"]
+    type: Boundary
+    pri: P3
+    perm: "PageAccess.Manage"
+    steps:
+      - "[PUT /api/page-access/roles/{itRoleId}] Send permissions=['Employee.View','Employee.View'] => [200] succeeds, grantedPermissions contains Employee.View exactly once"
+    auto: API
+
+  - id: RBAC-ROLE-014
+    func: [F-RBAC-020, F-RBAC-140, F-RBAC-141]
+    sc: "PRIVILEGE ESCALATION: PageAccess.Manage grants full role administration and AccountEmployeeLink.Manage with no carve-out"
+    t: An HRAdmin (holds PageAccess.Manage, no RoleManagement.* or AccountEmployeeLink.*) can grant its own role RoleManagement.AssignmentManage and AccountEmployeeLink.Manage in one PUT call
+    src: ["PageAccessService.UpdateAsync"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    sev: Critical
+    perm: "PageAccess.Manage"
+    role: HR_ADMIN
+    steps:
+      - "[GET /api/page-access/roles/{hrAdminRoleId}] Confirm baseline => [200] grantedPermissions excludes RoleManagement.AssignmentManage and AccountEmployeeLink.Manage"
+      - "[PUT /api/page-access/roles/{hrAdminRoleId}] As HRAdmin, send permissions = baseline + RoleManagement.AssignmentManage + AccountEmployeeLink.Manage, reason='self-service pilot' => [200] both permissions are now granted to HRAdmin's own role"
+      - "[POST /api/role-assignments/users/{someUserId}] As the SAME HRAdmin, assign a role => [200] now succeeds - HRAdmin self-escalated to full role administration"
+      - "[POST /api/account-employee-links/users/{someUserId}/link] As the SAME HRAdmin => [200] now succeeds - HRAdmin bypassed the AccountEmployeeLink carve-out entirely"
+    auto: API
+    cr: [CR-66]
+
+  - id: RBAC-ROLE-015
+    func: [F-RBAC-020]
+    sc: "PRIVILEGE ESCALATION: Page Access Management can edit SuperAdmin's own role"
+    t: A caller holding only PageAccess.Manage can modify SuperAdmin's role's permission set, including revoking permissions from it
+    src: ["PageAccessService.UpdateAsync"]
+    type: Security
+    pri: P0
+    sev: Critical
+    perm: "PageAccess.Manage"
+    role: SUPER_HR
+    steps:
+      - "[GET /api/page-access/roles/{superAdminRoleId}] Confirm baseline => [200] SuperAdmin holds Employee.Delete"
+      - "[PUT /api/page-access/roles/{superAdminRoleId}] As SuperHR (PageAccess.Manage only), send permissions = baseline minus Employee.Delete => [200] succeeds - SuperHR just modified SuperAdmin's own permission set"
+    auto: API
+    cr: [CR-66]
+
+  - id: RBAC-ROLE-016
+    func: [F-RBAC-021]
+    sc: Revoke then re-grant produces two distinct audit events
+    t: The same permission toggled off then on writes a Revoked event followed by a separate Granted event, not one merged row
+    src: ["PageAccessService.UpdateAsync"]
+    type: Positive
+    pri: P2
+    perm: "PageAccess.Manage"
+    steps:
+      - "[PUT /api/page-access/roles/{itRoleId}] Remove Employee.View => [200]"
+      - "[PUT /api/page-access/roles/{itRoleId}] Add Employee.View back => [200]"
+      - "[GET /api/page-access/history?roleId={itRoleId}&eventType=RolePermissionRevoked] Call => [200] one Revoked event for Employee.View"
+      - "[GET /api/page-access/history?roleId={itRoleId}&eventType=RolePermissionGranted] Call => [200] a separate, later Granted event for Employee.View"
+    auto: API
+
+  - id: RBAC-ROLE-017
+    func: [F-RBAC-023, F-RBAC-024]
+    sc: Permission union across two roles is deduplicated
+    t: A user holding two roles that both grant Employee.View sees it once in GET /api/auth/me
+    src: ["AuthService.LoadAuthorizationAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP (grants Employee.View) => [200]"
+      - "[POST /api/role-assignments/users/{userId}] Assign Accounts (also grants Employee.View) => [200]"
+      - "[GET /api/auth/me] As that user => [200] permissions array contains 'Employee.View' exactly once"
+      - "[POST /api/role-assignments/{hrbpAssignmentId}/revoke] Revoke HRBP => [200]"
+      - "[GET /api/auth/me] As that user => [200] permissions still contains 'Employee.View', retained through the Accounts role"
+    auto: API
+
+  - id: RBAC-ROLE-018
+    func: [F-RBAC-025]
+    sc: Stale access token keeps old permissions until refresh
+    t: A permission granted to the caller's role after login is absent from the existing access token's claims but present after POST /api/auth/refresh
+    src: ["AuthService.IssueTokensAsync"]
+    type: Boundary
+    tags: [Security]
+    pri: P1
+    steps:
+      - "[POST /api/auth/login] As an IT-role user, sign in and capture the access token => [200] token's permission claims do not include Employee.Delete"
+      - "[PUT /api/page-access/roles/{itRoleId}] As TenantAdmin, grant IT role Employee.Delete => [200]"
+      - "[DELETE /api/employees/{someId}] Using the ORIGINAL (pre-grant) access token => [403] Forbidden - the token still carries the old claim set"
+      - "[POST /api/auth/refresh] Using the refresh token => [200] a new access token is issued, now including Employee.Delete"
+      - "[DELETE /api/employees/{someId}] Using the NEW access token => [200 or appropriate success] the grant now applies"
+    auto: API
+
+  - id: RBAC-ROLE-019
+    func: [F-RBAC-026]
+    sc: GET /api/auth/me reflects a permission change immediately
+    t: Unlike the JWT claims, the current-user endpoint re-reads roles/permissions fresh on every call
+    src: ["AuthService.GetCurrentUserAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/auth/me] As an IT-role user, before the grant => [200] permissions excludes Employee.Delete"
+      - "[PUT /api/page-access/roles/{itRoleId}] As TenantAdmin, grant IT role Employee.Delete => [200]"
+      - "[GET /api/auth/me] As the SAME IT user, same still-valid access token, immediately after => [200] permissions NOW includes Employee.Delete - no refresh needed for this endpoint"
+    auto: API
+
+  - id: RBAC-ROLE-020
+    func: [F-RBAC-027]
+    sc: Only effective-dated assignments contribute permissions
+    t: A Scheduled (future) or Expired role assignment's permissions are excluded from both the JWT and /api/auth/me
+    src: ["RoleResolutionService.GetEffectiveRoleIdsAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP with EffectiveFrom = tomorrow => [200] Scheduled"
+      - "[GET /api/auth/me] As that user, today => [200] permissions does NOT include Employee.View from this scheduled assignment"
+      - "[POST /api/role-assignments/users/{userId}] Assign Accounts with EffectiveTo = yesterday (via a past-dated revoke or an already-expired window) => [200] Expired"
+      - "[GET /api/auth/me] As that user => [200] permissions does NOT include anything granted only by the expired assignment"
+    auto: API
+    ex: ["xU:RoleResolutionServiceTests.Future_assignment_does_not_resolve_before_its_start_date", "xU:RoleResolutionServiceTests.Expired_assignment_does_not_resolve"]
+
+  - id: RBAC-ROLE-021
+    func: [F-RBAC-022]
+    sc: Permission matrix update runs in a serializable transaction
+    t: Document the isolation level used for the write - functional behavior only, not independently observable via HTTP
+    src: ["PageAccessService.UpdateAsync"]
+    type: Contract
+    pri: P3
+    perm: "PageAccess.Manage"
+    steps:
+      - "[PUT /api/page-access/roles/{itRoleId}] A normal single-caller update => [200] succeeds; isolation level is Serializable per source, exercised indirectly by RBAC-CONC-* concurrency cases"
+    auto: Manual only
+
+  - id: RBAC-ROLE-022
+    func: [F-RBAC-009]
+    sc: Frontend 'System managed' badge matches server-side system-role handling
+    t: The Roles tab flags exactly Employee and Manager as 'System managed'; every other role is 'Manual'
+    src: ["RoleManagementPage RolesView SYSTEM_ROLES"]
+    type: Positive
+    pri: P3
+    auto: UI
+    steps:
+      - "[UI] On the Roles tab, locate the Employee and Manager rows => both show a 'System managed' badge"
+      - "[UI] Locate every other role row (HRBP, IT, Accounts, SuperHR, etc.) => each shows a 'Manual' badge"

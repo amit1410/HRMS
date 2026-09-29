@@ -1,0 +1,125 @@
+sheet: GLAcc_Reversal_Cancellation
+submodule: Reversal, Cancellation & Regeneration
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: GLACC-REV-001
+    func: [F-GLACC-073]
+    sc: No cancel/reversal endpoint exists anywhere
+    t: A full interface and route review confirms there is no way to cancel or reverse a journal through any exposed API
+    src: "Backend/HRMS.Application/Abstractions/IPayrollAccountingService.cs"
+    type: Contract
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] read IPayrollAccountingService.cs's full 17-method interface => no Cancel/Reverse method exists"
+      - "[Manual] grep PayrollOutputsController.cs's PayrollAccountingController for any /cancel or /reverse route => zero matches"
+    auto: Manual only
+    cr: [CR-275]
+
+  - id: GLACC-REV-002
+    func: [F-GLACC-074]
+    sc: A journal in any status permanently blocks regeneration for its source
+    t: A journal stuck in any status (including one whose accounts were later deactivated) can never be regenerated, since there is no cancel path and Generate's active-journal guard is permanent
+    src: "PayrollAccountingService.GenerateAsync, GenerateFinalSettlementAsync (AnyAsync guards)"
+    type: Negative
+    tags: [Boundary]
+    pri: P0
+    sev: High
+    pre: "RUN5 (Approved) has a Generated journal J_STUCK whose only NetPayable-mapped account has since been deactivated, making any future re-approval workflow impossible to fix by regenerating"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN5}/accounting/generate] a second time, attempting to regenerate with corrected mappings => [409] Conflict (An active journal already exists for this payroll run.) - permanently, with no remedy through the API"
+    auto: API
+    cr: [CR-275]
+
+  - id: GLACC-REV-003
+    func: [F-GLACC-075, F-GLACC-076]
+    sc: Reversed history type and BrokenAccountingReversalLinkage are both dead
+    t: Reversed is never assigned anywhere, and the reconciliation finding that depends on a "Reversal"-containing SourceType can never fire against real generated data
+    src: "PayrollAccountingService.cs; PayrollAnalyticsService.AddSourceFindingsAsync"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Low
+    pre: none
+    role: n/a (source review)
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] grep PayrollAccountingService.cs for PayrollJournalHistoryChangeType.Reversed => zero assignments"
+      - "[Manual] grep PayrollAccountingService.AddLine for every SourceType literal it can produce => only \"EmployeeLoan\" and \"FinalSettlement\", never any string containing \"Reversal\""
+      - "[Manual] confirm PayrollAnalyticsService's BrokenAccountingReversalLinkage finding filters on SourceType.Contains(\"Reversal\") => the finding is therefore permanently unreachable for journals this service can generate"
+    auto: Manual only
+    cr: [CR-277]
+
+  - id: GLACC-REV-004
+    func: [F-GLACC-077]
+    sc: Exported status is never reachable
+    t: No journal, however it is manipulated through the lifecycle, can ever reach Status=Exported through any code path
+    src: "PayrollAccountingService.cs (full grep)"
+    type: Negative
+    tags: [Boundary]
+    pri: P1
+    sev: Medium
+    pre: "J14 is Posted"
+    role: HRAdmin (custom role holding Accounting.Export)
+    perm: Payroll.Accounting.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/{J14}/export] => [200] CSV returned"
+      - "[GET /api/payroll/accounting/{J14}] => [200] Status is still 'Posted', NOT 'Exported'"
+    auto: API
+    cr: [CR-276]
+
+  - id: GLACC-REV-005
+    func: [F-GLACC-078]
+    sc: Export has zero side effects
+    t: Calling Export any number of times on the same journal never changes its Status, ApprovedAtUtc/PostedAtUtc, ConcurrencyVersion, or history
+    src: "PayrollAccountingService.ExportAsync"
+    type: Negative
+    tags: [Idempotency]
+    pri: P1
+    sev: Medium
+    pre: "J15 is Posted, ConcurrencyVersion=3, has 2 history rows"
+    role: HRAdmin (custom role holding Accounting.Export)
+    perm: Payroll.Accounting.Export
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[GET /api/payroll/accounting/{J15}/export] called 3 times in a row => [200] each time, byte-identical CSV"
+    auto: DB-assisted
+    db: "Assert Status/ConcurrencyVersion/history row count for J15 are unchanged after all 3 export calls"
+    cr: [CR-276]
+
+  - id: GLACC-REV-006
+    func: [F-GLACC-079]
+    sc: Draft status is never observed
+    t: A newly generated journal is never seen at Status=Draft; it is always immediately Generated
+    src: "PayrollAccountingService.GenerateAsync, GenerateFinalSettlementAsync"
+    type: Negative
+    tags: [Boundary]
+    pri: P2
+    sev: Low
+    pre: "RUN6 (Approved) has one fully-mapped eligible employee"
+    role: HRAdmin (custom role holding Accounting.Generate)
+    perm: Payroll.Accounting.Generate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/runs/{RUN6}/accounting/generate] => [200] Status=='Generated' immediately, never observed at 'Draft'"
+    auto: API
+    cr: [CR-279]

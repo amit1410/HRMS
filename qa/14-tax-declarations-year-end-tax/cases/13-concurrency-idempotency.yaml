@@ -1,0 +1,156 @@
+sheet: TaxDcl_Concurrency_Idempotency
+submodule: Concurrency & Idempotency
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: TAXDCL-CONC-001
+    func: [F-TAXDCL-131]
+    sc: EmployeeTaxDeclaration.ConcurrencyVersion is a real EF concurrency token with 7 catch sites
+    t: Every mutating declaration action catches DbUpdateConcurrencyException and surfaces Conflict
+    src: "TaxDeclarationService.cs (grep for try/catch DbUpdateConcurrencyException - 7 sites: UpdateLineOwnAsync, DeleteLineOwnAsync, SubmitOwnAsync, ReplaceProofOwnAsync, ReviewLineAsync, ReviewProofAsync, TransitionAsync)"
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of TaxDeclarationService.cs for 'catch (DbUpdateConcurrencyException' => 7 distinct catch sites, each returning Result.Conflict rather than propagating"
+    auto: Manual only
+
+  - id: TAXDCL-CONC-002
+    func: [F-TAXDCL-132]
+    sc: YearEndTax entities' ConcurrencyVersion tokens and their 3 catch sites
+    t: TransitionAsync/CloseAsync/UpdatePreviousEmployerAsync all catch DbUpdateConcurrencyException as Conflict
+    src: "YearEndTaxService.cs (grep for try/catch DbUpdateConcurrencyException - 3 sites)"
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: none
+    role: n/a
+    perm: n/a
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[Manual] full grep of YearEndTaxService.cs for 'catch (DbUpdateConcurrencyException' => 3 distinct catch sites (TransitionAsync, CloseAsync, UpdatePreviousEmployerAsync)"
+    auto: Manual only
+
+  - id: TAXDCL-CONC-003
+    func: [F-TAXDCL-133]
+    sc: Concurrent declaration creation for the same employee+cycle is an uncaught race
+    t: The loser of a race past CreateOwnAsync's AnyAsync check fails with an unhandled DbUpdateException, not a graceful Conflict
+    src: "TaxDeclarationService.cs CreateOwnAsync (no try/catch around this SaveChangesAsync)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Two concurrent CreateOwnAsync calls for the identical (employeeId, cycleId), both racing past the AnyAsync pre-check before either commits"
+    role: Employee (EMP1)
+    perm: Payroll.TaxDeclaration.ManageOwn
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/me/tax-declarations?cycleId=<same cycle>] request 1 commits first => [201] created"
+      - "[POST /api/me/tax-declarations?cycleId=<same cycle>] request 2, having already passed its own AnyAsync check before request 1 committed => EXPECTED [409] Conflict; ACTUAL an unhandled DbUpdateException (unique-index violation), a materially different failure mode than the module's own caught-concurrency-exception paths"
+    auto: API
+    cr: [CR-262]
+
+  - id: TAXDCL-CONC-004
+    func: [F-TAXDCL-134]
+    sc: Handoff idempotency is genuinely application-level, backed by the same DB uniqueness the race path relies on
+    t: The PayrollAdjustmentId short-circuit and the caught DbUpdateException are two sides of the same guarantee
+    src: "YearEndTaxService.cs HandoffAdjustmentAsync"
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Adjustment already handed off once"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/adjustments/handoff] AdjustmentId=<already linked> => [200] Success, existing link returned, no duplicate PayrollAdjustment created"
+    auto: API
+
+  - id: TAXDCL-CONC-005
+    func: [F-TAXDCL-135]
+    sc: Recalculation retry is safe and idempotent
+    t: Repeating CalculateAsync on an unchanged data set reproduces the identical employee/adjustment/statement set
+    src: "YearEndTaxService.cs CalculateAsync (destructive-rebuild)"
+    type: Integration-Concurrency
+    tags: [Positive]
+    pri: P1
+    sev: Medium
+    pre: "Run is Status=Calculated, no underlying payroll/declaration/previous-employer data has changed"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Calculate
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/calculate] retry with no data change => [200] EmployeeCount/BlockingIssueCount/TotalTaxDue/TotalExcessTax identical to the prior call's result"
+    auto: API
+
+  - id: TAXDCL-CONC-006
+    func: [F-TAXDCL-136]
+    sc: Retrying Submit/Approve/Close after success fails gracefully, not silently
+    t: A second call to an already-progressed transition returns Conflict, never double-processes
+    src: "YearEndTaxService.cs TransitionAsync, CloseAsync (required-status guard)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Run already Approved"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Approve
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/approve] retry, already Approved => [409] Conflict, 'The year-end tax lifecycle transition is not allowed.'"
+    auto: API
+
+  - id: TAXDCL-CONC-007
+    func: [F-TAXDCL-137]
+    sc: Concurrent previous-employer-input creation is the same uncaught-race shape as CR-262
+    t: Two concurrent adds of the identical (RunId, EmployeeId, EmployerReference) race past the AnyAsync check
+    src: "YearEndTaxService.cs AddPreviousEmployerAsync (no try/catch around this SaveChangesAsync)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Two concurrent AddPreviousEmployerAsync calls for the identical (RunId, EmployeeId, EmployerReference)"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: none
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs/{id}/previous-employer] request 1 commits first => [201] created"
+      - "[POST /api/payroll/year-end-tax/runs/{id}/previous-employer] request 2, having already passed its own AnyAsync check => EXPECTED [409] Conflict; ACTUAL an unhandled DbUpdateException"
+    auto: API
+    cr: [CR-262]
+
+  - id: TAXDCL-CONC-008
+    func: [F-TAXDCL-138]
+    sc: Year-end run date-overlap has no DB-level backstop at all
+    t: The overlap rule is app-level-only; only the exact-TaxYear-duplicate case has a real unique-index backstop
+    src: "YearEndTaxService.cs CreateAsync (overlap AnyAsync, no covering index); YearEndTaxConfiguration.cs (unique index on TenantId+TaxYear only)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P1
+    sev: Medium
+    pre: "Two concurrent CreateAsync calls with distinct TaxYear values (2029 and 2030) but overlapping StartDate/EndDate windows, both racing past the overlap AnyAsync check"
+    role: HRAdmin
+    perm: Payroll.YearEndTax.Manage
+    tenant: "T1 (DEMO01)"
+    data: "Run X: TaxYear=2029, 2029-04-01..2030-03-31; Run Y: TaxYear=2030, 2029-10-01..2030-09-30 (overlapping)"
+    steps:
+      - "[POST /api/payroll/year-end-tax/runs] Run X commits first => [201] created"
+      - "[POST /api/payroll/year-end-tax/runs] Run Y, having already passed its own overlap AnyAsync check before Run X committed => both distinct TaxYear values, so the unique index does NOT prevent this - [201] created despite the overlap, since no DB constraint enforces the date-range rule"
+    auto: API
+    cr: [CR-262]

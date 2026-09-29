@@ -1,0 +1,164 @@
+sheet: PYA_Concurrency_Idempotency
+submodule: Concurrency & Idempotency
+defaults:
+  tenant: "T1 (DEMO01)"
+  reg: true
+
+cases:
+  - id: PYA-CONC-001
+    func: [F-PYA-121]
+    sc: Unique version index guards concurrent generation, DB-enforced not application-enforced
+    t: Two concurrent GenerateReconciliationAsync(post) calls for the same run cannot both persist the same version; exactly one succeeds and the loser may surface an unhandled DbUpdateException rather than a graceful Conflict
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync; PayrollReconciliations unique (TenantId, PayrollRunId, ReconciliationType, Version) index"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "RUN1 (Calculated) has no prior post-payroll reconciliation"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[POST /api/payroll/reconciliation/runs/{RUN1}/post] fired twice concurrently => at least one call succeeds [200]; the DB ends up with exactly 1 or 2 PayrollReconciliations rows for this run+type, NEVER 2 rows sharing the identical Version"
+    auto: DB-assisted
+    db: "Assert PayrollReconciliations.Version values for this run+type are all distinct after the race"
+
+  - id: PYA-CONC-002
+    func: [F-PYA-122]
+    sc: Reconciliation-row count and snapshot-row count stay equal even under a race
+    t: After a concurrent-generation race resolves, the count of PayrollReconciliations rows for the run+type always equals the count of matching PayrollAnalyticsSnapshots rows
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Integration-Concurrency
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 from PYA-CONC-001, race already executed"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[DB] count PayrollReconciliations where PayrollRunId=RUN1 and ReconciliationType=PostPayroll => note the count as N"
+      - "[DB] count PayrollAnalyticsSnapshots where PayrollRunId=RUN1 and SnapshotType=PostPayroll => the count also equals N"
+    auto: DB-assisted
+    db: "Assert reconciliation-row count equals snapshot-row count"
+
+  - id: PYA-CONC-003
+    func: [F-PYA-123]
+    sc: Concurrent acknowledge vs. resolve on the SAME finding never raises a conflict; the later write silently wins
+    t: Two concurrent ActOnFindingAsync calls (acknowledge, resolve) against the identical Open finding both report Succeeded=true - there is no concurrency token on PayrollReconciliationFinding to reject either one
+    src: "PayrollAnalyticsService.ActOnFindingAsync; PayrollReconciliationFinding (no concurrency token declared)"
+    type: Integration-Concurrency
+    tags: [Negative]
+    pri: P0
+    sev: High
+    pre: "FINDING1 is Open"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Acknowledge + Payroll.Reconciliation.Resolve)
+    perm: "Payroll.Reconciliation.Acknowledge, Payroll.Reconciliation.Resolve"
+    tenant: "T1 (DEMO01)"
+    data: "id=FINDING1"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING1}/acknowledge] {} and [POST /api/payroll/reconciliation/findings/{FINDING1}/resolve] {} fired concurrently => BOTH calls return [200] Succeeded=true - neither raises a 409, unlike a properly concurrency-token-guarded row would for the loser"
+    auto: DB-assisted
+    db: "Assert the finding's final Status is one of Acknowledged/Resolved (whichever request's SaveChangesAsync committed last), with no exception thrown by either caller"
+    cr: [CR-290]
+
+  - id: PYA-CONC-004
+    func: [F-PYA-124]
+    sc: Two concurrent acknowledge calls both succeed, terminal state is auditable
+    t: Two simultaneous acknowledge calls against the same Open finding both report Succeeded=true (the terminal-state guard only rejects a call arriving after Resolved/AcceptedException, not after another Acknowledged), leaving one final Acknowledged state
+    src: "PayrollAnalyticsService.ActOnFindingAsync"
+    type: Integration-Concurrency
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "FINDING2 is Open"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Acknowledge)
+    perm: Payroll.Reconciliation.Acknowledge
+    tenant: "T1 (DEMO01)"
+    data: "id=FINDING2, reference='ACK-A' | reference='ACK-B'"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING2}/acknowledge] {reference:'ACK-A'} and {reference:'ACK-B'} fired concurrently => both return [200]; the final row has Status=Acknowledged, AcknowledgedAtUtc and AcknowledgedByUserId both populated from whichever request committed last"
+    auto: DB-assisted
+    db: "Assert final Status=Acknowledged with non-null AcknowledgedAtUtc/AcknowledgedByUserId"
+
+  - id: PYA-CONC-005
+    func: [F-PYA-125]
+    sc: Concurrent control Update and reconciliation Generate for the same tenant do not corrupt either row
+    t: A control Update racing a Generate call for a different concern (the same tenant, unrelated rows) leaves exactly 1 control row and the expected reconciliation row(s), with no cross-contamination
+    src: "PayrollAnalyticsService.UpdateControlAsync, GenerateReconciliationAsync"
+    type: Integration-Concurrency
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "CTRL1 exists (AbsoluteThreshold=10); RUN1 has no prior pre-payroll reconciliation"
+    role: HRAdmin (custom role holding Payroll.Analytics.Configure + Payroll.Reconciliation.Generate)
+    perm: "Payroll.Analytics.Configure, Payroll.Reconciliation.Generate"
+    tenant: "T1 (DEMO01)"
+    data: "id=CTRL1, runId=RUN1"
+    steps:
+      - "[PUT /api/payroll/analytics-controls/{CTRL1-ID}] {..., absoluteThreshold:20} and [POST /api/payroll/reconciliation/runs/{RUN1}/pre] fired concurrently => both succeed [200]"
+      - "[DB] query PayrollVarianceControls and PayrollReconciliations after the race => exactly 1 control row (CTRL1) and exactly 1 reconciliation row for RUN1+PrePayroll"
+    auto: DB-assisted
+    db: "Assert row counts as described; note which control value the race's Generate actually evaluated is intentionally not asserted (documented as non-deterministic)"
+
+  - id: PYA-CONC-006
+    func: [F-PYA-126]
+    sc: Resolving a finding on an OLD version does not mutate a newly-generated version's own findings
+    t: A finding Resolve on version N's finding, racing a version-N+1 regeneration for the same run+type, preserves version N's resolution while version N+1's own findings are generated independently
+    src: "PayrollAnalyticsService.ActOnFindingAsync, GenerateReconciliationAsync"
+    type: Integration-Concurrency
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 has one pre-payroll reconciliation (version 1, FINDING-V1, Open)"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Resolve + Payroll.Reconciliation.Generate)
+    perm: "Payroll.Reconciliation.Resolve, Payroll.Reconciliation.Generate"
+    tenant: "T1 (DEMO01)"
+    data: "id=FINDING-V1, runId=RUN1"
+    steps:
+      - "[POST /api/payroll/reconciliation/findings/{FINDING-V1}/resolve] {note:'fixed in source', reference:'SRC-1'} and [POST /api/payroll/reconciliation/runs/{RUN1}/pre] (regenerate) fired concurrently => both succeed"
+      - "[GET /api/payroll/reconciliation/{RECON-V1}] => [200] its finding shows Status=Resolved, ResolutionReference='SRC-1'"
+      - "[DB] count PayrollReconciliations for RUN1+PrePayroll => 2 (version 1 and version 2), version 2's own findings are freshly-generated Open findings, untouched by the resolve"
+    auto: DB-assisted
+    db: "Assert version 1's resolution persists and version 2's findings are independently Open"
+
+  - id: PYA-CONC-007
+    func: [F-PYA-127]
+    sc: A concurrent GL journal posting and post-payroll reconciliation observe a consistent committed state
+    t: A PayrollJournalBatch insert racing GenerateReconciliationAsync(post) for the same run leaves exactly 1 journal row and a reconciliation reflecting a consistent (not partially-committed) read
+    src: "PayrollAnalyticsService.GenerateReconciliationAsync"
+    type: Integration-Concurrency
+    tags: []
+    pri: P1
+    sev: Medium
+    pre: "RUN1 has no journal batch yet"
+    role: HRAdmin (custom role holding Payroll.Reconciliation.Generate)
+    perm: Payroll.Reconciliation.Generate
+    tenant: "T1 (DEMO01)"
+    data: "runId=RUN1"
+    steps:
+      - "[DB] insert a new PayrollJournalBatch for RUN1 and [POST /api/payroll/reconciliation/runs/{RUN1}/post] fired concurrently => at least one operation succeeds"
+      - "[DB] query PayrollJournalBatches and PayrollReconciliations for RUN1 after the race => exactly 1 journal batch row exists, and the reconciliation row reflects either the pre- or post-journal-insert state consistently (never a torn read mixing the two)"
+    auto: DB-assisted
+    db: "Assert exactly 1 journal batch row and at least 1 reconciliation row for RUN1 after the race"
+
+  - id: PYA-CONC-008
+    func: [F-PYA-123]
+    sc: A concurrency test asserting DbUpdateConcurrencyException is itself unreachable dead code, confirmed structurally
+    t: A structural review of PayrollAnalyticsConcurrencyTests.cs's catch(DbUpdateConcurrencyException) branches around ActOnFindingAsync confirms the exception type can never actually be thrown, since no concurrency token is configured for PayrollReconciliationFinding
+    src: "Backend/HRMS.Tests/PayrollAnalyticsConcurrencyTests.cs; PayrollAnalyticsConfiguration.cs"
+    type: Contract
+    tags: []
+    pri: P2
+    sev: Medium
+    pre: none
+    role: n/a (static source review)
+    perm: "n/a"
+    tenant: "n/a"
+    data: none
+    steps:
+      - "[Manual] read PayrollAnalyticsConcurrencyTests.cs's Concurrent_acknowledgement_and_resolution_leave_an_auditable_terminal_state and Concurrent_acknowledgements_preserve_one_auditable_terminal_state test bodies, and cross-check PayrollAnalyticsConfiguration.cs for any .IsConcurrencyToken() on PayrollReconciliationFinding => confirmed: none exists, so the catch(DbUpdateConcurrencyException) branches in both tests are dead code paths that never execute"
+    auto: Manual only
+    cr: [CR-290]

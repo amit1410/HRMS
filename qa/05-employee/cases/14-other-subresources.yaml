@@ -1,0 +1,184 @@
+sheet: Employee_Subresources
+submodule: Family, Education, Previous Employment, Additional Info, Documents, Audit Log
+defaults:
+  role: HR_ADMIN
+  perm: "Employee.View + Employee.Edit"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin (Employee.View, Employee.Edit); employee EMP-SUB-001 exists."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: EMP-SUB-001
+    func: [F-EMP-161]
+    sc: Family member CRUD with required/optional fields and nominee-percentage boundary
+    t: First/last name and relationship are required; nominee percentage is validated only when IsNominee is set
+    src: ["EmployeeFamilyService", "EmployeeFamilyRequestValidator"]
+    type: Boundary
+    tags: [Validation]
+    pri: P1
+    steps:
+      - "[POST /api/employees/{id}/family] firstName omitted => [400] required"
+      - "[POST /api/employees/{id}/family] relationship omitted => [400] required"
+      - "[POST /api/employees/{id}/family] isNominee=true, nomineePercentage=0 => [400] below the 0.01 minimum"
+      - "[POST /api/employees/{id}/family] isNominee=true, nomineePercentage=100 => [200] accepted (upper boundary)"
+      - "[POST /api/employees/{id}/family] isNominee=false, nomineePercentage omitted => [200] accepted"
+      - "[UI] Open the Family Details tab => the created record is listed and editable"
+    auto: API + UI
+
+  - id: EMP-SUB-002
+    func: [F-EMP-161]
+    sc: Nominee percentages across multiple Family records are never summed or cross-checked
+    t: Two different Family members can each be saved as a 100%-share nominee for the same employee
+    src: ["EmployeeFamilyService.CreateAsync/UpdateAsync (no aggregate check)"]
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    steps:
+      - "[POST /api/employees/{id}/family] Family member A: isNominee=true, nomineePercentage=100 => [200] created"
+      - "[POST /api/employees/{id}/family] Family member B: isNominee=true, nomineePercentage=100 => [200] ALSO created - no error despite the combined total now being 200%"
+    auto: API
+    cr: [CR-60]
+
+  - id: EMP-SUB-003
+    func: [F-EMP-162]
+    sc: Education record CRUD - Qualification required, Institute/University optional, no cross-field rule
+    t: The one required field is enforced; everything else is free-form
+    src: ["EmployeeEducationService", "EmployeeEducationRequestValidator"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/employees/{id}/education] qualification omitted => [400] required"
+      - "[POST /api/employees/{id}/education] qualification='B.Tech', institute/university omitted => [200] accepted"
+      - "[PUT /api/employees/{id}/education/{educationId}] Update the score field => [200] accepted"
+      - "[DELETE /api/employees/{id}/education/{educationId}] Call => [200] removed"
+    auto: API
+
+  - id: EMP-SUB-004
+    func: [F-EMP-163]
+    sc: Previous Employment record CRUD - Company required, tenure dates unvalidated beyond the client's own ordering check
+    t: Company is required; the API itself does not reject an end date before a start date (that check is client-side only)
+    src: ["EmployeePreviousEmploymentService", "EmployeePreviousEmploymentRequestValidator"]
+    type: Boundary
+    pri: P2
+    steps:
+      - "[POST /api/employees/{id}/previous-employment] company omitted => [400] required"
+      - "[POST /api/employees/{id}/previous-employment] company='Acme Corp', designation/location omitted => [200] accepted"
+      - "[UI] Open the Previous Employment tab and enter a tenure end date before the start date => the form blocks submission client-side with an inline error"
+    auto: API + UI
+
+  - id: EMP-SUB-005
+    func: [F-EMP-164]
+    sc: Additional Info is a single upserted row per employee with no validation beyond shape
+    t: GET/PUT round-trips Division/PaPsa/AdditionalEmployeeCode/ContractId with any string value
+    src: ["EmployeeAdditionalInfoService"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[PUT /api/employees/{id}/additional-info] division='Corporate', paPsa='PA-001' => [200] accepted"
+      - "[GET /api/employees/{id}/additional-info] Call => [200] the same values read back"
+      - "[PUT /api/employees/{id}/additional-info] Call again with different values => [200] the SAME row is updated, not a second one created"
+    auto: API
+
+  - id: EMP-SUB-006
+    func: [F-EMP-165]
+    sc: Document upload records metadata via multipart form; delete removes the metadata row
+    t: Uploading a document persists name/category/contentType/uploadedBy; delete is a hard removal
+    src: ["EmployeeDocumentService"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/employees/{id}/documents] Multipart upload with documentName, a file, contentType => [200] created, filePath/contentType/uploadedBy recorded"
+      - "[GET /api/employees/{id}/documents] Call => [200] the new document is listed"
+      - "[DELETE /api/employees/{id}/documents/{documentId}] Call => [200] removed"
+      - "[GET /api/employees/{id}/documents] Call => [200] the document is gone"
+    auto: API
+
+  - id: EMP-SUB-007
+    func: [F-EMP-166]
+    sc: The Audit Log is readable, paged, and records every mutating sub-resource action
+    t: A Contact/Address/Bank/Family/etc. write produces a corresponding, paged, readable Audit Log entry
+    src: ["EmployeeAuditService.GetAsync", "EmployeeSubResourcesController.LogAuditAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/employees/{id}/contact] A change => [200] accepted"
+      - "[GET /api/employees/{id}/audit-log] Call => [200] a new entry exists with module='Contact', a changedBy value, and old/new values for the changed field"
+      - "[GET /api/employees/{id}/audit-log?page=1&pageSize=5] Call on an employee with more than 5 audit entries => [200] paged correctly"
+    auto: API
+
+  - id: EMP-SUB-008
+    func: [F-EMP-167]
+    sc: Family/Education/Previous-Employment/Additional-Info/Documents/Audit-Log endpoints are all tenant-isolated
+    t: A cross-tenant employee id is a 404 on every one of these sub-resources, identically to Contact/Address/Bank/Supervisor
+    src: ["every EmployeeXxxService.EmployeeExistsAsync tenant-filtered gate"]
+    type: Tenant-Isolation
+    pri: P1
+    tenant: A+B
+    steps:
+      - "[GET /api/employees/{Tenant A id}/family] As Tenant B => [404] Not Found"
+      - "[GET /api/employees/{Tenant A id}/education] As Tenant B => [404] Not Found"
+      - "[GET /api/employees/{Tenant A id}/previous-employment] As Tenant B => [404] Not Found"
+      - "[GET /api/employees/{Tenant A id}/additional-info] As Tenant B => [404] Not Found"
+      - "[GET /api/employees/{Tenant A id}/documents] As Tenant B => [404] Not Found"
+      - "[GET /api/employees/{Tenant A id}/audit-log] As Tenant B => [404] Not Found"
+    auto: API
+
+  - id: EMP-SUB-009
+    func: [F-EMP-168]
+    sc: Deleting a nonexistent or wrong-employee sub-resource record id is a 404
+    t: The delete-by-id guard checks BOTH the record id and the employee id together
+    src: ["every EmployeeXxxService.DeleteAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[DELETE /api/employees/{id}/family/{random guid}] Call => [404] Not Found"
+      - "[DELETE /api/employees/{id}/documents/{documentId belonging to a DIFFERENT employee}] Call => [404] Not Found"
+    auto: API
+
+  - id: EMP-SUB-010
+    func: [F-EMP-169]
+    sc: Audit Log paging - an out-of-range page returns an empty page, not an error
+    t: page beyond the last page is a 200 with an empty items array
+    src: ["EmployeeAuditService.GetAsync"]
+    type: Boundary
+    pri: P3
+    steps:
+      - "[GET /api/employees/{id}/audit-log?page=999] Call => [200] items=[]"
+    auto: API
+
+  - id: EMP-SUB-011
+    func: [F-EMP-170]
+    sc: Education, Additional Info, Documents and the Audit Log have zero frontend representation, despite full API support
+    t: No page or component anywhere calls the education/documents/additional-info/audit-log API functions outside the api module itself
+    src: ["EmployeeFormPage.tsx/EmployeeDetailPage.tsx TABS const", "api/employeeSubsections.ts"]
+    type: Negative
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[UI] Open the Employee form/detail page for any employee => the TABS list shows exactly 8 sections (Personal/Contact/Address/Family/Bank/Previous Employment/Employment/Supervisor); no Education, Additional Info, Documents, or Audit Log section is reachable anywhere in the UI"
+    auto: UI
+    cr: [CR-52]
+
+  - id: EMP-SUB-012
+    func: [F-EMP-161]
+    sc: Family Details is fully reachable in the UI (in contrast to Education/Documents/Additional-Info/Audit-Log)
+    t: Confirms Family IS one of the 8 UI-surfaced sub-resources, not a coverage gap
+    src: ["FamilyDetailsForm.tsx"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Open the Family Details tab on an existing employee => the tab is present, loads existing records, and supports add/edit"
+    auto: UI
+
+  - id: EMP-SUB-013
+    func: [F-EMP-163]
+    sc: Previous Employment is fully reachable in the UI (in contrast to Education/Documents/Additional-Info/Audit-Log)
+    t: Confirms Previous Employment IS one of the 8 UI-surfaced sub-resources, not a coverage gap
+    src: ["PreviousEmploymentForm.tsx"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Open the Previous Employment tab on an existing employee => the tab is present, loads existing records, and supports add/edit"
+    auto: UI

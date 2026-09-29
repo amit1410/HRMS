@@ -1,0 +1,242 @@
+# Module 6 QA-risk register. Numbering continues after Module 5's CR-65 (qa/05-employee/clarifications.yaml).
+# Citing a CR id does not mean the behaviour is a confirmed defect - it means the case produces evidence
+# relevant to a product decision that has not been made yet. classification starts 'Open - awaiting decision'.
+#
+# CR-44, CR-53 and CR-57 are carried forward from Module 4 and Module 5 (per the brief's explicit dependency
+# list) because RBAC/Account-Linking test cases exercise their practical impact directly. Each entry below is
+# a short cross-reference, not a restatement - see the cited module's own clarifications.yaml for the full
+# observation/risk/source text. They are re-declared here only so a Module 6 case's `cr:` field resolves
+# against THIS module's own registry (qa/tools/build_test_catalogue.py validates `cr:` per module).
+
+clarifications:
+  - id: CR-44
+    title: "(carried forward from Module 4) HRAdmin performs Initial Employment but holds neither EmployeeCodeConfiguration.View nor .Manage"
+    observation: "See qa/04-employee-code/clarifications.yaml#CR-44 and qa/05-employee/clarifications.yaml#CR-44 for the full observation. Relevant here because Module 6 independently confirms HRAdmin's overall SeedData.RolePermissionMap entry holds EmploymentHistory.Change (which can trigger Initial Employment / Manager-role provisioning) but no EmployeeCodeConfiguration.* permission at all, and separately holds NO RoleManagement.* permission at all (F-RBAC-014) - so an HRAdmin operationally central to both employment changes and RBAC administration (via PageAccess.Manage, CR-66) is nonetheless permission-gapped in a third, unrelated area (Employee Code Configuration)."
+    risk: "No new risk beyond the originating modules' own findings - re-declared so Module 6 cases citing HRAdmin's overall permission shape can reference it."
+    source: "Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[HRAdmin]); qa/04-employee-code/clarifications.yaml (CR-44); qa/05-employee/clarifications.yaml (CR-44)"
+    classification: Open - awaiting decision
+
+  - id: CR-53
+    title: "(carried forward from Module 5) Terminated/Resigned employees keep an active portal login - no Employee or Employment endpoint ever revokes it"
+    observation: "See qa/05-employee/clarifications.yaml#CR-53 for the full observation. Module 6 confirms the RBAC-side consequence directly: User.IsActive is entirely independent of the linked Employee's Status, so (a) the Employee auto-role and any manually-assigned roles remain fully in effect after termination (F-RBAC-058), (b) GET /api/auth/me continues to report EmployeeIdentity.Status='Linked' with EmploymentEligibility='Separated' rather than blocking the read (F-RBAC-103), and (c) Roles/Permissions on that same response are computed with zero reference to EmploymentEligibility (F-RBAC-104) - a terminated employee's account is, from RBAC's point of view, indistinguishable from any other active account holding the same roles."
+    risk: "RBAC provides no independent safety net for CR-53: nothing in Role Assignment, Account-Employee Linking or Page Access Management detects or reacts to EmploymentEligibility='Separated'. The only way to remove access is a manual role revoke or an explicit Unlink, neither of which any workflow triggers automatically on termination."
+    source: "Backend/HRMS.Application/Services/AuthService.cs (ResolveEmployeeIdentityAsync, GetCurrentUserAsync); qa/05-employee/clarifications.yaml (CR-53)"
+    classification: Open - awaiting decision
+
+  - id: CR-57
+    title: "(carried forward from Module 5) The Manager role's Employee.View is silently narrowed to self+direct-reports through a cross-module permission coupling invisible from Permissions.cs alone"
+    observation: "See qa/05-employee/clarifications.yaml#CR-57 for the full observation. Module 6 confirms this narrowing is implemented ENTIRELY OUTSIDE this module's own scope mechanism (RoleScopeResolver/UserRoleAssignmentScope) - it lives in EmployeeAccessScopeService.BuildPredicateAsync (Module 5) and keys off Attendance.Monthly.ViewTeam plus the caller's own linked-employee id, never touching a RoleScopeType/UserRoleAssignmentScope row at all. A role combination such as Manager+HRBP therefore has TWO independent, non-communicating scope mechanisms both in effect simultaneously (F-RBAC-127, F-RBAC-134)."
+    risk: "A tester or future developer reading only this module's RoleScopeResolver would reasonably conclude Manager has no scope narrowing (it holds zero UserRoleAssignmentScope rows) - the actual narrowing is a completely separate, undocumented-from-here code path."
+    source: "Backend/HRMS.Application/Services/EmployeeAccessScopeService.cs; Backend/HRMS.Application/Services/RoleScopeResolver.cs; qa/05-employee/clarifications.yaml (CR-57)"
+    classification: Open - awaiting decision
+
+  - id: CR-66
+    title: "PageAccessService.UpdateAsync (PUT /api/page-access/roles/{roleId}), gated only by PageAccess.Manage, lets a caller grant ANY role ANY permission in Permissions.All - including permissions the caller's own role does not hold, RoleManagement.* itself, and the AccountEmployeeLink.* family SuperAdmin/TenantAdmin are deliberately denied - with no carve-out and no restriction on which role is targeted"
+    observation: >
+      PageAccessService.UpdateAsync validates only that each requested permission name exists in
+      Permissions.All (`allowed.Contains(permission)`); it performs no check that the ACTOR already holds
+      the permission being granted, no check that the target roleId is not the actor's own role or a
+      higher-privilege role such as SuperAdmin/TenantAdmin, and no exclusion of the AccountEmployeeLink.*
+      family (the one permission group RolePermissionMap explicitly carves out of SuperAdmin/TenantAdmin's
+      otherwise-universal grant) or of RoleManagement.* itself. PageAccess.Manage is held by SuperAdmin,
+      TenantAdmin, HRAdmin and SuperHR (SeedData.RolePermissionMap). HRAdmin holds NO RoleManagement.*
+      permission and SuperHR holds only RoleManagement.View/AssignmentView (not AssignmentManage) - both can
+      nonetheless reach full role administration (grant their own role RoleManagement.AssignmentManage, then
+      use it) and full AccountEmployeeLink access (grant their own role AccountEmployeeLink.Manage), entirely
+      through this one endpoint, in a single PUT call each. AuthorizationMatrixTests.Canonical_role_matrix_has_
+      explicit_business_boundaries itself treats `grants.Contains(RoleManagement.Manage) ||
+      grants.Contains(PageAccess.Manage)` as equivalent "role administration" signals, confirming the product's
+      own test suite already recognizes PageAccess.Manage as functionally equal to RoleManagement.Manage for
+      this purpose - it is simply not treated as equally sensitive anywhere permissions are granted or audited.
+    risk: >
+      Any of the four roles holding PageAccess.Manage can single-handedly escalate to full RBAC control and
+      full Account-Employee-Link control, defeating both the RoleManagement.AssignmentManage gate (only
+      SuperAdmin/TenantAdmin hold it by default) and the AccountEmployeeLink.* carve-out (which excludes even
+      SuperAdmin/TenantAdmin) in one authenticated call each. The change IS fully audited
+      (AuthorizationConfigurationEvents records the grant with actor/reason), so the action is traceable
+      after the fact, but nothing prevents or flags it at write time.
+    source: "Backend/HRMS.Application/Services/PageAccessService.cs (UpdateAsync); Backend/HRMS.Infrastructure/Persistence/Seed/SeedData.cs (RolePermissionMap[HRAdmin]/[SuperHR] hold PageAccess.Manage but not RoleManagement.AssignmentManage; RolePermissionMap[SuperAdmin]/[TenantAdmin] explicitly exclude AccountEmployeeLink.*); Backend/HRMS.Tests/AuthorizationMatrixTests.cs (roleAdministration assertion treating the two permissions as equivalent)"
+    classification: Open - awaiting decision
+
+  - id: CR-67
+    title: "The frontend's HRBP/ERO/Time Manager scope-type picker offers a narrower set of dimensions than the backend actually accepts"
+    observation: >
+      RoleManagementPage's SCOPE_TYPES constant lists, per role, a curated subset of RoleScopeType values
+      (e.g. HRBP: HoldingCompany, Lob, Organisation, Department, Location, Grade, Designation, EmployeeType,
+      CostCenter - 9 of 16). RoleAssignmentService.ScopesAllowed instead permits ALL 16 RoleScopeType values
+      for HRBP/EmployeeRelationshipOfficer/TimeManager (`Enum.GetValues<RoleScopeType>()`). SubDepartment,
+      Section, SubSection, Function, SubFunction and Country are backend-legal for all three roles but have
+      no UI path to select them.
+    risk: >
+      An administrator using only the UI can never scope an HRBP/ERO/Time Manager assignment to a
+      SubDepartment, Section, SubSection, Function, SubFunction or Country dimension, even though the API
+      accepts and enforces such a scope perfectly well - a capability gap between what the backend supports
+      and what an admin can actually configure without a direct API call.
+    source: "Frontend/HRMS.Web/src/pages/administration/RoleManagementPage.tsx (SCOPE_TYPES constant); Backend/HRMS.Application/Services/RoleAssignmentService.cs (ScopesAllowed)"
+    classification: Open - awaiting decision
+
+  - id: CR-68
+    title: "RoleAssignmentService has no general self-assignment/self-revocation guard - only SuperHR has an explicit self-assignment rule"
+    observation: >
+      AssignAsync and RevokeAsync perform no `actorId == userId` check outside the one SuperHR-specific
+      branch (`role.Name == RoleNames.SuperHR && actorId == userId -> Forbidden`). A caller holding
+      RoleManagement.AssignmentManage (in the seeded matrix, only SuperAdmin/TenantAdmin) can assign or
+      revoke roles for their OWN account, including non-SuperHR privileged roles, with no special check or
+      audit distinction from acting on someone else's account. AccountEmployeeLinkService, by contrast, has
+      an explicit, unconditional self-link prohibition (`_tenant.UserId == userId -> Forbidden`, F-RBAC-086) -
+      the two sibling services in this module disagree on whether self-service mutation of one's own
+      authorization state deserves a hard block.
+    risk: >
+      In the seeded matrix this is low-impact (only SuperAdmin/TenantAdmin hold AssignmentManage, and they
+      already hold nearly every permission outright), but it becomes materially riskier once CR-66 lets
+      HRAdmin/SuperHR self-grant AssignmentManage - at that point either role could also self-assign
+      additional roles to their own account with no self-assignment guard at all beyond SuperHR's own narrow
+      rule.
+    source: "Backend/HRMS.Application/Services/RoleAssignmentService.cs (AssignAsync/RevokeAsync); Backend/HRMS.Application/Services/AccountEmployeeLinkService.cs (MutateAsync, the unconditional self-link check) for contrast"
+    classification: Open - awaiting decision
+
+  - id: CR-69
+    title: "Unlinking an account does not revoke its previously auto-provisioned Employee role"
+    observation: >
+      EmployeeRoleProvisioningService.EnsureForLinkedEmployeeAsync is called only from the Link and Replace
+      branches of AccountEmployeeLinkService.MutateAsync (where `target is not null`); the Unlink branch's
+      `target` is always null, so no role-provisioning service is invoked at all when unlinking. Nothing else
+      in the codebase removes a System-sourced Employee role assignment once granted (and F-RBAC-036 would
+      block a MANUAL revoke of it even if attempted, since Employee is a system-managed role).
+      RoleAssignmentService.RevokeAsync's explicit rejection of Employee/Manager role revocation means there
+      is, in fact, no supported way to remove this role through Role Management either, once auto-granted.
+    risk: >
+      An account that is unlinked from an employee (for any reason - a data-entry correction, an employee
+      leaving through a path other than Separation, or simple re-organization) keeps every Employee-role
+      permission (self-service Leave/Attendance/Payroll/Separation actions) indefinitely, with no supported
+      UI or API path to remove it short of direct database intervention.
+    source: "Backend/HRMS.Application/Services/AccountEmployeeLinkService.cs (MutateAsync, target-null Unlink branch never calls role provisioning); Backend/HRMS.Application/Services/RoleAssignmentService.cs (AssignAsync/RevokeAsync system-role rejection)"
+    classification: Open - awaiting decision
+
+  - id: CR-70
+    title: "A future-dated employment change naming a manager provisions the Manager role TODAY, not on the change's own effective date"
+    observation: >
+      ManagerRoleProvisioningService.EnsureForManagerEmployeeAsync's "is this employee currently a manager"
+      probe is `x.EffectiveTo == null || x.EffectiveTo >= today` - it has no corresponding lower bound
+      checking `x.EffectiveFrom <= today`. A brand-new EmployeeEmploymentHistory row with a future
+      EffectiveFrom and no EffectiveTo therefore satisfies the probe immediately, and the Manager role is
+      granted the moment the future-dated change is RECORDED, not when it becomes effective.
+    risk: >
+      An employee scheduled to become a manager next quarter is granted the Manager role's permissions
+      (Employee.View narrowed to self+direct-reports, Leave.Approve, Attendance approval actions, etc.)
+      today, months before the reporting relationship is actually in effect - a real, immediately-usable
+      privilege grant tied to a not-yet-true organizational fact.
+    source: "Backend/HRMS.Application/Services/ManagerRoleProvisioningService.cs (EnsureForManagerEmployeeAsync, the isManager probe's missing EffectiveFrom<=today bound)"
+    classification: Open - awaiting decision
+
+  - id: CR-71
+    title: "Manager-role provisioning is permanently additive - no code path ever removes the Manager role once a manager's last direct report is reassigned or their own employment ends"
+    observation: >
+      ManagerRoleProvisioningService's own XML doc comment states this is deliberate: "Role assignment is
+      deliberately additive... never removed here." No other service, background job, or startup routine
+      revokes a Manager role assignment. Combined with F-RBAC-036 (Manager is system-managed and cannot be
+      manually revoked through Role Management either), a former manager's Manager role - and its Module 5
+      CR-57 Employee-module scope-narrowing side effect - is permanent for the life of the account.
+    risk: >
+      A former manager retains Leave.Approve, Attendance.Monthly.ViewTeam/ExceptionView,
+      Attendance.CompOff.ViewTeam/Approve and Separation manager-review permissions indefinitely, with no
+      supported path (UI or API) to remove them once every direct report has moved on, short of a database
+      change. Whether this is an accepted simplification (a lapsed manager approving nothing because they
+      have no current reports left to approve for) or a real over-grant has not been confirmed.
+    source: "Backend/HRMS.Application/Services/ManagerRoleProvisioningService.cs (XML doc comment); Backend/HRMS.Application/Services/RoleAssignmentService.cs (system-role revoke rejection)"
+    classification: Open - awaiting decision
+
+  - id: CR-72
+    title: "Manager-role provisioning fires only at the moment a Position/Employment-History change is recorded through the Employment History endpoint - there is no startup/seed reconciliation, and the LEGACY full-record employee edit path never triggers it at all"
+    observation: >
+      A repo-wide search finds ManagerRoleProvisioningService.EnsureForManagerEmployeeAsync invoked from
+      exactly one call site: EmployeeEmploymentService.CreateChangeAsync (POST
+      /api/employees/{id}/employment-history). EmployeeService.UpdateAsync (PUT /api/employees/{id}, the
+      legacy full-record path that can also set ReportingManagerId directly per Module 5's own dual-write-path
+      findings) never calls it. DatabaseInitializer performs no manager-role backfill/reconciliation pass at
+      startup, so a manager relationship that predates this feature, or one set only through the legacy
+      column, never receives the role automatically.
+    risk: >
+      A manager assigned exclusively through the legacy `PUT /api/employees/{id}` path (setting
+      ReportingManagerId directly, without ever going through the Employment History endpoint) never receives
+      the Manager role - their direct reports exist, but the manager's own account is never granted the
+      permissions the product otherwise treats as automatic for "being a manager."
+    source: "Backend/HRMS.Application/Services/EmployeeEmploymentService.cs (CreateChangeAsync, the sole EnsureForManagerEmployeeAsync call site); Backend/HRMS.Application/Services/EmployeeService.cs (UpdateAsync, no provisioning call); Backend/HRMS.Infrastructure/DatabaseInitializer.cs (no reconciliation pass)"
+    classification: Open - awaiting decision
+
+  - id: CR-73
+    title: "The backend's page catalog (9 pages, ApplicationPageCatalog) and the frontend's own navigation model (layout/navigation.ts NAV_ITEMS, 50+ items) are two independent, disagreeing catalogs - the sidebar is driven by the larger frontend list, not by GET /api/auth/navigation"
+    observation: >
+      GET /api/auth/navigation (PageAccessService.GetNavigationAsync) is built entirely from
+      ApplicationPageCatalog.All, a 9-entry in-code constant covering Dashboard, Employees (List/Detail),
+      Leave Dashboard/Approvals, Attendance Dashboard, Leave Reports, Role Management, Page Access Management
+      and Account-Employee Links. Sidebar.tsx instead renders from layout/navigation.ts's NAV_ITEMS
+      (visibleNavItems/visibleNavGroups), a much larger, independently-maintained list covering every Leave,
+      Attendance, Payroll and Separation screen the product actually has. The two are never reconciled or
+      cross-checked against each other.
+    risk: >
+      GET /api/auth/navigation is either dead/unused API surface, or intended for a consumer this module's
+      research did not find - either way, "the page access catalog" administrators configure through Page
+      Access Management (9 pages) is materially smaller than the set of pages the product's own sidebar
+      actually exposes, so Page Access Management cannot be used to fully audit or restrict real page-level
+      access to most of the application.
+    source: "Backend/HRMS.Application/Authorization/ApplicationPageCatalog.cs; Backend/HRMS.Application/Services/PageAccessService.cs (GetNavigationAsync); Frontend/HRMS.Web/src/layout/navigation.ts (NAV_ITEMS); Frontend/HRMS.Web/src/layout/Sidebar.tsx"
+    classification: Open - awaiting decision
+
+  - id: CR-74
+    title: "'Has manager access' in the Page Access preview reuses Module 5's CR-57 Attendance-permission-based signal rather than any RoleManagement-owned concept of 'is a manager'"
+    observation: >
+      PageAccessService.GetUserPreviewAsync computes `hasManagerAccess` as
+      `permissions.Contains(Attendance.Monthly.ViewTeam) && employeeId is not null` - the exact same
+      cross-module coupling Module 5's CR-57 describes for Employee-module scope narrowing, now surfaced as a
+      user-facing "Manager access" field in an RBAC administration screen.
+    risk: >
+      An administrator reading "Manager access: Yes/No" in the Page Access preview would reasonably assume it
+      reflects the Manager ROLE (RoleNames.Manager) or this module's own scope mechanism; it actually reflects
+      an unrelated Attendance permission plus a linked-employee check, so a role combination that grants
+      Attendance.Monthly.ViewTeam without holding RoleNames.Manager at all (e.g. a custom role built through
+      Page Access Management, or TimeManager if it held that permission) would show "Manager access: Yes" with
+      no Manager role assignment anywhere on the account.
+    source: "Backend/HRMS.Application/Services/PageAccessService.cs (GetUserPreviewAsync); qa/05-employee/clarifications.yaml (CR-57)"
+    classification: Open - awaiting decision
+
+  - id: CR-75
+    title: "Page Access Management edits a SHARED, tenant-agnostic role-permission catalog - a change made from one tenant's session applies to every tenant using that role"
+    observation: >
+      Roles, Permissions and RolePermissions carry no TenantId column (Role.cs, Permission.cs,
+      RolePermission.cs). PageAccessService.UpdateAsync's own queries (`db.Roles`, `db.RolePermissions`) apply
+      no tenant filter - there is none to apply, since roleId alone identifies a globally shared row. A
+      Tenant-A administrator with PageAccess.Manage editing, say, the shared "HRBP" role's permission set is
+      editing the SAME row every other tenant's HRBP role reads from.
+    risk: >
+      In a genuinely multi-tenant deployment, this means no tenant can customize "what HRBP can do" without
+      changing it for every other tenant simultaneously - Page Access Management, despite living behind
+      per-tenant authentication and a per-tenant UI, is not actually a per-tenant configuration surface. This
+      may be an intentional platform-wide-defaults design (mirroring how Roles/Permissions themselves are
+      shared reference data) or an unaddressed multi-tenant customization gap; the seeded two-tenant demo data
+      does not exercise a case where the tenants' expectations for the same role diverge.
+    source: "Backend/HRMS.Domain/Entities/Role.cs, Permission.cs, RolePermission.cs (no TenantId); Backend/HRMS.Application/Services/PageAccessService.cs (UpdateAsync, no tenant-scoped Roles/RolePermissions query anywhere)"
+    classification: Open - awaiting decision
+
+  - id: CR-76
+    title: "AccountEmployeeLinkService.GetHistoryAsync filters link-history events by SubjectUserId only, not also by TenantId - unlike GetAssignmentHistoryAsync's explicit tenant filter on the equivalent Role Assignment history query"
+    observation: >
+      RoleAssignmentService.GetAssignmentHistoryAsync/GetUserHistoryAsync both filter
+      UserRoleAssignmentEvents by `x.TenantId == tenantId` in addition to the assignment/user id.
+      AccountEmployeeLinkService.GetHistoryAsync instead queries
+      `_db.AccountEmployeeLinkEvents.Where(x => x.SubjectUserId == userId)` with no accompanying
+      `x.TenantId == tenantId` clause - the tenant boundary for this read relies entirely on `userId` itself
+      never resolving to a cross-tenant identity (which every OTHER endpoint in this controller enforces via
+      a tenant-filtered `_db.Users`/`_db.Employees` lookup before proceeding), not on an explicit filter
+      inside this specific query.
+    risk: >
+      If `userId` is ever supplied without an upstream tenant-scoped existence check (this query does not
+      itself verify the subject exists in the caller's tenant before reading events), or if a future code path
+      reuses GetHistoryAsync with a userId sourced differently, cross-tenant link-history rows could be
+      returned. The current controller action always requires AccountEmployeeLink.ViewHistory and the userId
+      route parameter is not independently validated as belonging to the caller's tenant before this query
+      runs - a defense-in-depth gap relative to the pattern RoleAssignmentService follows for the equivalent
+      history query, even if no concrete cross-tenant read is proven reachable through today's single call
+      site.
+    source: "Backend/HRMS.Application/Services/AccountEmployeeLinkService.cs (GetHistoryAsync, no TenantId filter); Backend/HRMS.Application/Services/RoleAssignmentService.cs (GetAssignmentHistoryAsync/GetUserHistoryAsync, explicit TenantId filter) for contrast"
+    classification: Open - awaiting decision

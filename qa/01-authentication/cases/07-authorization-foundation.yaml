@@ -1,0 +1,311 @@
+sheet: Authz_Foundation
+submodule: Authorization Foundation
+defaults:
+  role: "See individual case (role/permission holder varies per test)"
+  perm: "See individual case (the permission under test is named in the scenario/title)"
+  tenant: A
+  pre: "QA stack running; Tenant A active with the seeded roles from SeedData.cs."
+  data: "Seeded QA roles and users per test-data-spec.md; specific role/permission grants noted per case."
+  sev: High
+  reg: true
+
+cases:
+  - id: AUTHZ-PERM-001
+    func: [F-AZ-01]
+    sc: Permission-guarded endpoint - holder succeeds
+    t: A role holding the required permission can call the guarded endpoint
+    src: ["HasPermissionAttribute", "AddAuthorization (per-permission policy)"]
+    type: Positive
+    pri: P0
+    smoke: true
+    role: A_HR (HRManager, holds Employee.View)
+    perm: Employee.View
+    steps:
+      - "[GET /api/employees] Sign in as A_HR and call => [200] list returned"
+    auto: API
+    ex: ["xU:AuthorizationMatrixTests.Canonical_role_matrix_has_explicit_business_boundaries"]
+
+  - id: AUTHZ-PERM-002
+    func: [F-AZ-01]
+    sc: Permission-guarded endpoint - non-holder refused
+    t: A role without the required permission is refused with 403
+    src: ["HasPermissionAttribute"]
+    type: Negative
+    tags: [Security]
+    pri: P0
+    sev: Critical
+    role: A_ACCOUNTS (Accounts role, only Employee.View; no Employee.Create)
+    perm: Employee.Create
+    smoke: true
+    steps:
+      - "[POST /api/employees] Sign in as A_ACCOUNTS and attempt to create an employee => [403] 'You do not have permission to perform this action.'"
+    auto: API
+    ex: ["xU:AuthorizationMatrixTests.IT_and_accounts_do_not_receive_leave_or_attendance_business_permissions"]
+
+  - id: AUTHZ-PERM-003
+    func: [F-AZ-01]
+    sc: Two-permission AND requirement
+    t: An endpoint requiring two permissions refuses a caller holding only one
+    src: ["EmployeesController.Create [HasPermission(Employee.Create), HasPermission(EmployeeSensitive.Edit)] (AllowMultiple policies both required)"]
+    type: Negative
+    tags: [Authorization]
+    pri: P1
+    role: A_PARTIAL (holds Employee.Create but not EmployeeSensitive.Edit)
+    perm: "Employee.Create AND EmployeeSensitive.Edit"
+    steps:
+      - "[POST /api/employees] Sign in as A_PARTIAL and attempt to create an employee => [403]"
+      - "Grant EmployeeSensitive.Edit as well => now holds both"
+      - "[POST /api/employees] Retry (after refresh) => [200]/[201]"
+    db: "RolePermissions adjusted for the QA role."
+    auto: API
+    cm: "Confirms multiple [HasPermission] attributes on one action require ALL of them (AuthorizeAttribute AND semantics), distinct from anyOf used by the frontend."
+
+  - id: AUTHZ-PERM-004
+    func: [F-AZ-01]
+    sc: Every permission has a registered policy
+    t: Every constant in Permissions.All resolves to a working authorization policy
+    src: ["AddAuthorization foreach Permissions.All"]
+    type: Contract
+    pri: P1
+    role: N/A (build-time/introspection check)
+    steps:
+      - "Enumerate Permissions.All (281 entries) => list obtained"
+      - "For a sample of 10 permissions with no dedicated test, call one guarded endpoint each as a non-holder => [403] for every one (never 500, never silently 200)"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Every_permission_has_a_registered_authorization_policy"]
+
+  - id: AUTHZ-PERM-005
+    func: [F-AZ-02]
+    sc: Fallback deny by default
+    t: A hypothetical endpoint declaring no [Authorize]/[HasPermission]/[AllowAnonymous] is closed
+    src: ["AuthorizationOptions.FallbackPolicy = DefaultPolicy"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: Anonymous
+    steps:
+      - "Identify (from source review) any controller action lacking every authorization attribute => none should exist outside the documented anonymous list"
+      - "[GET /api/system/info] Confirm SystemController is explicitly [AllowAnonymous] at the class level (not merely undecorated) => class attribute present"
+      - "As a regression guard, call a newly-added or edge-case endpoint with no token => [401], never [200]"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.An_endpoint_that_declares_no_authorization_is_closed_by_default"]
+
+  - id: AUTHZ-PERM-006
+    func: [F-AZ-02]
+    sc: Explicit anonymous surface is exactly the documented set
+    t: Only the documented endpoints are reachable without a token
+    src: ["[AllowAnonymous] usages"]
+    type: Security
+    tags: [Contract]
+    pri: P1
+    role: Anonymous
+    steps:
+      - "[POST /api/auth/login], [POST /api/auth/refresh], [POST /api/auth/set-password], [POST /api/auth/forgot-password*] => all [200]/[4xx business] without a token, never [401]-for-missing-token"
+      - "[GET /api/tenants/current/branding] => [200] without a token"
+      - "[POST /api/platform/auth/login], [POST /api/platform/auth/refresh] => reachable without a token"
+      - "[GET /health], [GET /ready], [GET /api/system/info] => reachable without a token"
+      - "[GET /api/employees] (a representative protected endpoint) with no token => [401], confirming it is NOT on the anonymous list"
+    auto: API
+    ex: ["xU:SystemControllerTests"]
+
+  - id: AUTHZ-PERM-007
+    func: [F-AZ-03]
+    sc: Role administration is not granted to business roles
+    t: Employee and Manager roles hold no RoleManagement permissions
+    src: ["AuthorizationMatrixTests.Employee_and_manager_roles_do_not_receive_role_administration"]
+    type: Security
+    tags: [Authorization]
+    pri: P0
+    role: A_EMP, A_MGR
+    steps:
+      - "[GET /api/role-assignments] As A_EMP => [403]"
+      - "[GET /api/role-assignments] As A_MGR => [403]"
+      - "[POST /api/role-assignments/users/{id}] As either => [403]"
+    auto: API
+    ex: ["xU:AuthorizationMatrixTests.Employee_and_manager_roles_do_not_receive_role_administration"]
+
+  - id: AUTHZ-PERM-008
+    func: [F-AZ-03]
+    sc: IT and Accounts roles are scoped away from business modules
+    t: IT and Accounts do not receive leave or attendance business permissions
+    src: ["AuthorizationMatrixTests.IT_and_accounts_do_not_receive_leave_or_attendance_business_permissions"]
+    type: Security
+    tags: [Authorization]
+    pri: P1
+    role: A_IT, A_ACCOUNTS
+    steps:
+      - "[GET /api/leave-requests] As A_IT => [403]"
+      - "[POST /api/leave-requests] As A_ACCOUNTS => [403]"
+      - "[GET /api/attendance/me/calendar] As A_IT (no employee link expected) => [401]/[403] per identity rules; record actual"
+    auto: API
+    ex: ["xU:AuthorizationMatrixTests.IT_and_accounts_do_not_receive_leave_or_attendance_business_permissions"]
+
+  - id: AUTHZ-PERM-009
+    func: [F-AZ-04]
+    sc: 401 vs 403 semantics
+    t: Missing/invalid authentication yields 401; valid authentication without permission yields 403
+    src: ["JwtBearerEvents.OnChallenge / OnForbidden"]
+    type: Contract
+    tags: [Security]
+    pri: P0
+    role: Anonymous then A_ACCOUNTS
+    steps:
+      - "[GET /api/employees] No token => [401] 'Authentication is required. Supply a valid bearer token.'"
+      - "[POST /api/employees] Valid A_ACCOUNTS token (authenticated, lacks Employee.Create) => [403] 'You do not have permission to perform this action.'"
+    auto: API
+
+  - id: AUTHZ-PERM-010
+    func: [F-AZ-04, F-TEN-11]
+    sc: Host/token mismatch yields 401, not 403
+    t: A workspace mismatch is reported as 401 even though the caller holds the required permission at their own tenant
+    src: ["ShardMismatchAuthorizationResultHandler"]
+    type: Security
+    tags: [Tenant-Isolation]
+    pri: P0
+    sev: Critical
+    role: B_ADMIN (TenantAdmin of B, holds every relevant permission - at B)
+    tenant: A/B
+    steps:
+      - "[GET /api/employees] Sign in as B_ADMIN at Tenant B, present that token at the Tenant A host => [401], not [403] (the permission check never runs)"
+    auto: API
+    ex: ["xU:TokenHostAgreementTests.A_token_is_refused_at_another_organizations_host_on_a_permission_guarded_route", "xU:TokenHostAgreementTests.The_refusal_tells_the_client_to_sign_in_again_and_names_no_organization"]
+
+  - id: AUTHZ-PERM-011
+    func: [F-AZ-04, F-TEN-11]
+    sc: Missing permission at the right host is still 403
+    t: A same-tenant caller without the permission is refused 403, distinct from a tenant mismatch
+    src: ["TokenHostAgreementTests.A_missing_permission_at_the_right_host_is_still_forbidden"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    role: A_ACCOUNTS
+    steps:
+      - "[POST /api/employees] As A_ACCOUNTS at the Tenant A (own) host => [403]"
+    auto: API
+    ex: ["xU:TokenHostAgreementTests.A_missing_permission_at_the_right_host_is_still_forbidden"]
+
+  - id: AUTHZ-PERM-012
+    func: [F-AZ-05]
+    sc: Frontend guard denies without redirect loop
+    t: RequirePermission sends an unauthorized user to /forbidden without looping
+    src: ["RequirePermission.tsx"]
+    type: Positive
+    tags: [Negative]
+    pri: P1
+    role: A_EMP
+    steps:
+      - "Sign in as A_EMP (lacks RoleManagement.AssignmentView) and navigate to /role-management => redirected once to /forbidden; page renders an explanation, not a blank screen or infinite redirect"
+    auto: UI
+    ex: ["V:auth/guards.test.tsx::explains rather than showing a screen full of 403s"]
+
+  - id: AUTHZ-PERM-013
+    func: [F-AZ-05]
+    sc: anyOf permission guard
+    t: A route guarded by anyOf admits a user holding just one of the listed permissions
+    src: ["RequirePermission anyOf prop", "App.tsx leave-management route"]
+    type: Positive
+    pri: P1
+    role: A_EMP (holds Leave.RequestViewOwn only, one of the anyOf set)
+    steps:
+      - "Sign in as A_EMP and navigate to /leave-management => page renders (route guarded by anyOf:[Leave.requestViewOwn, Leave.dashboardViewAll, ...])"
+      - "Sign in as A_NOROLE (holds none of the anyOf set) and navigate to /leave-management => redirected to /forbidden"
+    auto: UI
+    ex: ["V:auth/guards.test.tsx::admits a user who holds any one of several", "V:auth/guards.test.tsx::refuses a user who holds none of them"]
+
+  - id: AUTHZ-PERM-014
+    func: [F-AZ-05]
+    sc: Frontend hiding is not a security boundary
+    t: A navigation item hidden from a role's sidebar is still enforced (or not) purely by the backend permission
+    src: ["Sidebar/navigation.ts vs [HasPermission] on the API"]
+    type: Security
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: A_EMP
+    steps:
+      - "Confirm Role Management does not appear in A_EMP's sidebar => not rendered"
+      - "[GET /api/role-assignments] Call the API directly (bypassing the UI) with A_EMP's token => [403] (backend still enforces it independently of what the UI shows)"
+    sec: "Backend authorization is authoritative; UI visibility is cosmetic only, per project convention."
+    auto: API + UI
+    ex: ["V:layout/Sidebar.test.tsx", "V:layout/navigation.test.ts"]
+
+  - id: AUTHZ-PERM-015
+    func: [F-AZ-05]
+    sc: Direct URL navigation to a protected route while anonymous
+    t: A direct URL to a protected page redirects to login and returns after sign-in
+    src: ["RequireAuth.tsx (state.from)"]
+    type: Positive
+    pri: P1
+    role: Anonymous then A_EMP
+    steps:
+      - "As an anonymous browser, navigate directly to /employees/{id} => redirected to /login with state.from capturing that path"
+      - "Sign in as A_EMP with view rights => redirected to the originally requested /employees/{id}, not to /dashboard"
+      - "As an anonymous browser, navigate to a nonsense path first, then sign in => lands on /dashboard (redirectTarget rejects unsafe/absent 'from')"
+    auto: UI
+    ex: ["V:auth/guards.test.tsx::sends an anonymous visitor to the sign-in screen", "V:pages/LoginPage.test.tsx::redirects away from the form when the session is already good"]
+
+  - id: AUTHZ-PERM-016
+    func: [F-AZ-06]
+    sc: Post-login redirect target safety
+    t: An unsafe 'from' value never becomes the redirect target
+    src: ["LoginPage.redirectTarget"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    role: A_EMP
+    steps:
+      - "Sign in with history state.from.pathname = '//evil.example' (protocol-relative) => redirected to /dashboard, not to the external-looking path"
+      - "Sign in with state.from.pathname = '/login' => redirected to /dashboard (never back to the login page itself)"
+      - "Sign in with state.from.pathname = 'not-a-path' (no leading slash) => redirected to /dashboard"
+      - "Sign in with a legitimate state.from.pathname = '/employees' => redirected to /employees"
+    auto: UI
+
+  - id: AUTHZ-PERM-017
+    func: [F-AZ-07]
+    sc: Un-declared-permission endpoint enforces authorization internally
+    t: comp-off/operations, which carries only [Authorize], still requires an operational view permission
+    src: ["CompOffController.Operations", "CompOffService.BuildOperationalScopeAsync"]
+    type: Authorization
+    tags: [Negative, Positive]
+    pri: P1
+    role: A_EMP (holds only CompOffViewSelf, no team/all/manage) and A_HR (holds CompOffViewAll)
+    steps:
+      - "[GET /api/attendance/comp-off/operations] As A_EMP (self-view only) => record actual status: [403]/[401] expected if the service enforces correctly, or [200] with an empty/self-only result if it does not"
+      - "[GET /api/attendance/comp-off/operations] As A_HR (CompOffViewAll) => [200] with data scoped to A_HR's authorization"
+    sec: "Confirms CR-02: authorization is enforced in the service, not declared on the route."
+    auto: API
+    cr: [CR-02]
+
+  - id: AUTHZ-PERM-018
+    func: [F-AZ-07]
+    sc: Self-service payroll endpoint scope
+    t: A caller with only the general AdjustmentsView permission cannot see another employee's adjustments through the HR list endpoint
+    src: ["PayrollAdjustmentsController.Get", "PayrollAdjustmentService"]
+    type: Authorization
+    tags: [Tenant-Isolation, Security]
+    pri: P0
+    sev: High
+    role: A_EMP (Employee role, holds Payroll.AdjustmentsView per SeedData)
+    steps:
+      - "[GET /api/payroll/adjustments] As A_EMP (an Employee, not HR) => record actual: [200] with results scoped to self only, [200] with all tenant adjustments (defect), or [403] if the service requires a higher permission despite the route attribute"
+      - "[GET /api/payroll/adjustments/{id}] As A_EMP with another employee's adjustment id => [403]/[404] expected; record actual"
+      - "[GET /api/me/payroll-adjustments] As A_EMP => [200] self-scoped list, for comparison"
+    sec: "Confirms CR-03: same permission name may guard both an HR-wide list and a self-service list."
+    auto: API
+    cr: [CR-03]
+
+  - id: AUTHZ-PERM-019
+    func: [F-AZ-01]
+    sc: Permission claim absent entirely
+    t: A token with zero permission claims is refused by every [HasPermission] endpoint
+    src: ["RequireClaim(HrmsClaimTypes.Permission, permission)"]
+    type: Security
+    tags: [Negative]
+    pri: P1
+    role: A_NOROLE
+    steps:
+      - "[POST /api/auth/login] Sign in as A_NOROLE (no roles => permissions=[]) => [200] token with no 'permission' claims at all"
+      - "[GET /api/employees] Call with this token => [403]"
+    auto: API
+    ex: ["xU:AuthEndpointsTests.Me_returns_the_signed_in_user_for_a_token_the_api_issued"]

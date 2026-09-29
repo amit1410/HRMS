@@ -1,0 +1,147 @@
+sheet: Separation_Provider_Scale
+submodule: SQL Server/MySQL provider-parity coverage (rowversion vs app-managed binary(16), lock semantics) and large-data/scale behavior across every Separation-family dashboard and the exit-execution flow
+defaults:
+  role: HRADMIN
+  perm: "Separation.ViewAll"
+  tenant: A
+  pre: "Tenant A signed in as HRAdmin, unless stated. Provider-gated cases report NOT EXECUTED - environment unavailable when HRMS_MYSQL_TEST_CONNECTION/HRMS_SQLSERVER_TEST_CONNECTION are absent, per CLAUDE.md."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: SEP-PRV-001
+    func: [F-SEP-309, F-SEP-310]
+    sc: Provider-acceptance coverage exists per feature area but varies in depth
+    t: Each *ProviderAcceptance.cs class skips silently without its env var; only Foundation, Approval, and the Payroll-SeparationBenefits pair run a full business flow twice against a real throwaway database - the rest are schema/connectivity smoke tests only
+    src: ["SeparationFoundationProviderAcceptance.cs and 8 sibling *ProviderAcceptance.cs files"]
+    type: Contract
+    pri: P2
+    steps:
+      - "[dotnet test --filter FullyQualifiedName~SeparationProviderAcceptance] with HRMS_MYSQL_TEST_CONNECTION/HRMS_SQLSERVER_TEST_CONNECTION unset => [Skip] all classes skip silently - a green run here is NOT evidence of provider parity, per CLAUDE.md"
+      - "[Manual/Code] Inspect SeparationClearanceProviderAcceptance.cs, SeparationSettlementProviderAcceptance.cs, etc. against SeparationFoundationProviderAcceptance.cs, the Approval pair, and PayrollSeparationBenefitsProviderAcceptance => the former assert only entity-type registration and an empty table on fresh migration; only the latter three run a full create-approve-act flow twice"
+    auto: Manual only
+
+  - id: SEP-PRV-002
+    func: [F-SEP-311]
+    sc: Concurrency-token and lock-semantics divergence applies uniformly across every Separation-family entity
+    t: MySQL uses app-managed binary(16) ConcurrencyVersion tokens and SELECT ... FOR UPDATE; SQL Server uses native rowversion and UPDLOCK, HOLDLOCK - both apply consistently to EmployeeSeparations, SeparationClearances, SeparationClearanceTasks, SeparationAssetReturns, SeparationExitInterviews, SeparationGeneratedDocuments, and SeparationSettlementOrchestrations
+    src: ["Backend/HRMS.Infrastructure/Persistence (EF concurrency-token configuration)"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[Manual/Code] Inspect the MySQL and SQL Server EF configuration for each of the 7 listed entities => MySQL configures a binary(16) app-managed token, SQL Server configures native rowversion, on every one - no entity is missing the configuration on either provider"
+    auto: Manual only
+
+  - id: SEP-PRV-003
+    func: [F-SEP-312]
+    sc: The one-active-case-per-employee uniqueness constraint must hold on real SQL Server and MySQL
+    t: Two concurrent self-service creation requests for the same employee, run against a real throwaway database of each provider, produce exactly one successful case
+    src: ["SeparationFoundationProviderAcceptance.cs"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Concurrency, MySQL provider (HRMS_MYSQL_TEST_CONNECTION set)] Two simultaneous [POST /api/separation/me] for the same employee => exactly one [200/201], the other [409] An active separation case already exists for this employee. (or NOT EXECUTED - environment unavailable if the env var is absent)"
+      - "[Concurrency, SQL Server provider (HRMS_SQLSERVER_TEST_CONNECTION set)] identical scenario => identical outcome (or NOT EXECUTED - environment unavailable if the env var is absent)"
+    auto: API
+
+  - id: SEP-PRV-004
+    func: [F-SEP-313]
+    sc: Document number sequence allocation must be race-free on a real provider
+    t: Concurrent document generation of the same type/year against a real database allocates strictly unique, gap-free-or-documented numbers, not merely SQLite's in-memory/file-backed test double
+    src: ["SeparationDocumentProviderAcceptance.cs"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Concurrency, MySQL provider] 10 simultaneous [POST /api/separation/documents/for/{id}/generate] calls for 10 different separations, same DocumentType/year => all 10 DocumentNumbers are unique, no duplicate or skipped number under contention (or NOT EXECUTED - environment unavailable)"
+      - "[Concurrency, SQL Server provider] identical scenario => identical outcome (or NOT EXECUTED - environment unavailable)"
+    auto: API
+
+  - id: SEP-PRV-005
+    func: [F-SEP-314]
+    sc: Gratuity/leave-encashment calculation idempotency holds under concurrent calls on both real providers
+    t: Two simultaneous Calculate calls for the same FinalSettlementId, run twice (once per provider), each produce exactly one GratuityCalculations snapshot
+    src: ["MySqlPayrollSeparationBenefitsIntegrationTests / SqlServerPayrollSeparationBenefitsIntegrationTests"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Concurrency, MySQL provider] Two simultaneous [POST /api/payroll/separation-benefits/{employeeId}/calculate] with the same FinalSettlementId => exactly one GratuityCalculations row persists, the other call returns the same snapshot (or NOT EXECUTED - environment unavailable)"
+      - "[Concurrency, SQL Server provider] identical scenario => identical outcome (or NOT EXECUTED - environment unavailable)"
+    auto: API
+
+  - id: SEP-LGD-001
+    func: [F-SEP-315]
+    sc: Clearance dashboards remain correctly paged and authorization-filtered at 1000 cases / 5000 tasks
+    t: Manager/functional/HR inboxes return correct page slices and totals with no cross-tenant or cross-scope leakage at this scale
+    src: ["SeparationClearanceLargeDataTests.cs"]
+    type: Integration-Concurrency
+    pri: P1
+    steps:
+      - "[Setup] 1000 SeparationClearances / 5000 SeparationClearanceTasks seeded across multiple managers/departments/tenants => precondition established"
+      - "[GET /api/separation/clearance/hr-dashboard?page=20&pageSize=25] => [200] correct 25-row slice, correct TotalCount, zero rows from a foreign tenant"
+    auto: API
+
+  - id: SEP-LGD-002
+    func: [F-SEP-316]
+    sc: Separation-benefits calculations remain correct and tenant-scoped at 100 concurrent employee settlements
+    t: 100 simultaneous gratuity/benefits calculations across different employees each produce a correct, independently-scoped result
+    src: ["SeparationBenefitsLargeDataTests.cs"]
+    type: Integration-Concurrency
+    pri: P1
+    perm: "Payroll.SeparationBenefits.Calculate"
+    steps:
+      - "[Concurrency] 100 simultaneous [POST /api/payroll/separation-benefits/{employeeId}/calculate] calls, distinct employees => [200] all 100 succeed with independently correct GratuityAmount values, no cross-employee data mixing"
+    auto: API
+
+  - id: SEP-LGD-003
+    func: [F-SEP-317]
+    sc: Exit-interview inbox/analytics remain correctly paged and aggregated at 1000 interviews / 10000 responses under a 2-minute ceiling
+    t: The inbox and analytics endpoints complete within the performance ceiling with correct counts at this scale
+    src: ["SeparationExitInterviewLargeDataTests.cs"]
+    type: Integration-Concurrency
+    pri: P2
+    perm: "Separation.HrReview"
+    steps:
+      - "[Setup] 1000 SeparationExitInterviews / 10000 SeparationExitInterviewResponses seeded => precondition established"
+      - "[GET /api/separation/exit-interview/inbox?page=1&pageSize=25] => [200] returns within 2 minutes, correct TotalCount"
+      - "[GET /api/separation/exit-interview/analytics] => [200] aggregate counts match the seeded data exactly, within the same performance ceiling"
+    auto: API
+
+  - id: SEP-LGD-004
+    func: [F-SEP-318]
+    sc: Document dashboard/employee-lookup remain correct at 2000 raw document rows across 1000 separations
+    t: Filtering and paging at this scale returns correct slices with no leakage
+    src: ["SeparationDocumentLargeDataTests.cs"]
+    type: Integration-Concurrency
+    pri: P2
+    steps:
+      - "[Setup] 2000 SeparationGeneratedDocuments across 1000 separations seeded => precondition established"
+      - "[GET /api/separation/documents/dashboard?status=Issued&page=10&pageSize=25] => [200] correct 25-row slice, correct TotalCount"
+    auto: API
+
+  - id: SEP-LGD-005
+    func: [F-SEP-319]
+    sc: Settlement dashboard pages 1000 orchestration projections server-side under a 30-second ceiling
+    t: Page-slice math and TotalCount remain correct at this scale within the performance budget
+    src: ["SeparationSettlementLargeDataTests.cs"]
+    type: Integration-Concurrency
+    pri: P2
+    steps:
+      - "[Setup] 1000 SeparationSettlementOrchestrations seeded across varied statuses => precondition established"
+      - "[GET /api/separation/settlement/dashboard?page=1&pageSize=25] => [200] returns within 30 seconds, correct TotalCount and page slice"
+    auto: API
+
+  - id: SEP-LGD-006
+    func: [F-SEP-320]
+    sc: Exit dashboard and 100 REAL end-to-end exit executions scale correctly across 1000 total separations with exact counts and zero leakage into the other 900
+    t: After executing exit for exactly 100 of 1000 seeded separations, exact counts confirm 100 Closed/100 Terminated/100 deactivated Users/100 Terminated employment-history rows, and the remaining 900 are entirely untouched
+    src: ["SeparationExitLargeDataTests.cs"]
+    type: Integration-Concurrency
+    pri: P1
+    perm: "Separation.Manage"
+    steps:
+      - "[Setup] 1000 separations seeded, all Approved/ReadyForExit with distinct employees; 100 selected for real exit execution => precondition established"
+      - "[POST /api/separation/exit/{id}/execute] x100 (the selected subset) => [200] each Completed"
+      - "[Manual/DB] Count Employees.Status=Terminated => exactly 100; count Users.IsActive=false among linked accounts => exactly 100; count EmployeeEmploymentHistory rows with EmploymentStatus=Terminated for this batch => exactly 100"
+      - "[Manual/DB] Query the untouched 900 separations' Employee.Status/User.IsActive/EmployeeEmploymentHistory => entirely unchanged, zero leakage from the 100 executions"
+    auto: DB-assisted

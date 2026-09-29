@@ -1,0 +1,216 @@
+sheet: RBAC_Scopes
+submodule: Authorization Scope (RoleScopeResolver) and Role Combinations
+defaults:
+  role: TENANT_ADMIN
+  perm: "RoleAssignment.AssignmentManage"
+  tenant: A
+  pre: "Tenant A signed in; roles/permissions per case."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: RBAC-SCOPE-001
+    func: [F-RBAC-123, F-RBAC-126]
+    sc: A single-dimension scope matches the employee's current effective employment snapshot
+    t: An HRBP scoped to Department=Engineering applies to an employee currently in Engineering
+    src: ["RoleScopeResolver.AppliesAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/role-assignments/users/{hrbpUserId}] Assign HRBP with scopes=[{Department, EngineeringId}] => [200]"
+      - "[Manual/DB] Resolve RoleScopeResolver.AppliesAsync(assignment, engineeringEmployeeId, today) => true - matches the scope"
+    auto: DB-assisted
+    ex: ["xU:RoleScopeResolverTests.Department_scope_uses_the_effective_employment_snapshot_for_the_requested_date"]
+
+  - id: RBAC-SCOPE-002
+    func: [F-RBAC-123, F-RBAC-129]
+    sc: A non-matching scope value is rejected
+    t: An employee currently in Finance does not satisfy an HRBP scoped to Department=Engineering
+    src: ["RoleScopeResolver.AppliesAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[Manual/DB] Resolve RoleScopeResolver.AppliesAsync(engineeringScopedAssignment, financeEmployeeId, today) => false"
+    auto: DB-assisted
+    ex: ["xU:RoleScopeResolverTests.Non_matching_department_scope_is_rejected_and_no_scope_is_tenant_wide"]
+
+  - id: RBAC-SCOPE-003
+    func: [F-RBAC-124]
+    sc: Zero scope rows is always tenant-wide
+    t: A role assignment with no UserRoleAssignmentScope rows applies to every employee unconditionally
+    src: ["RoleScopeResolver.AppliesAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/DB] Resolve RoleScopeResolver.AppliesAsync(zeroScopeAssignment, anyEmployeeId, today) => true"
+    auto: DB-assisted
+
+  - id: RBAC-SCOPE-004
+    func: [F-RBAC-125]
+    sc: No current employment record means the scope never applies
+    t: An employee with no effective employment snapshot for the requested date fails EVERY scoped assignment check, regardless of scope contents
+    src: ["RoleScopeResolver.AppliesAsync (resolved.Employment is null -> false)"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[Manual/DB] Resolve RoleScopeResolver.AppliesAsync(anyScopedAssignment, employeeWithNoCurrentHistory, today) => false"
+    auto: DB-assisted
+
+  - id: RBAC-SCOPE-005
+    func: [F-RBAC-126]
+    sc: Multi-dimension scope requires ALL dimensions to match (AND across dimensions)
+    t: A scope of Department=Engineering AND Grade=G3 excludes an employee matching only one of the two
+    src: ["RoleScopeResolver.AppliesAsync (GroupBy ScopeType, .All(...))"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{hrbpUserId}] Assign HRBP with scopes=[{Department, EngineeringId}, {Grade, G3Id}] => [200]"
+      - "[Manual/DB] Employee in Engineering but Grade G2 => AppliesAsync returns false"
+      - "[Manual/DB] Employee in Engineering AND Grade G3 => AppliesAsync returns true"
+    auto: DB-assisted
+
+  - id: RBAC-SCOPE-006
+    func: [F-RBAC-126]
+    sc: Multiple values within one dimension are alternatives (OR)
+    t: A scope with two Department values matches an employee in EITHER department
+    src: ["RoleScopeResolver.AppliesAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{hrbpUserId}] Assign HRBP with scopes=[{Department, EngineeringId}, {Department, FinanceId}] => [200]"
+      - "[Manual/DB] Employee in Finance => AppliesAsync returns true (alternative within the same dimension)"
+    auto: DB-assisted
+    ex: ["xU:RoleScopeResolverTests.Multiple_values_in_one_dimension_are_alternatives"]
+
+  - id: RBAC-SCOPE-007
+    func: [F-RBAC-128]
+    sc: Scope re-evaluates against CURRENT employment, not the assignment's own creation-time snapshot
+    t: An employee who moved out of an HRBP's scoped department yesterday is no longer in scope today, even though the role assignment itself is unchanged
+    src: ["RoleScopeResolver.AppliesAsync"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/employees/{employeeId}/employment-history] Move the employee from Engineering to Finance, effectiveFrom=yesterday => [201]"
+      - "[Manual/DB] Resolve RoleScopeResolver.AppliesAsync(engineeringScopedHrbpAssignment, employeeId, today) => false - the employee's current snapshot is now Finance"
+    auto: DB-assisted
+
+  - id: RBAC-SCOPE-008
+    func: [F-RBAC-127, F-RBAC-134]
+    sc: The Manager role's own scope narrowing is a SEPARATE mechanism from RoleScopeResolver
+    t: A Manager-role assignment carries zero UserRoleAssignmentScope rows even though the Employee module still narrows the Manager's view to self+direct-reports
+    src: ["ManagerRoleProvisioningService (grants with no scope rows)", "EmployeeAccessScopeService.BuildPredicateAsync (Module 5, CR-57)"]
+    type: Contract
+    tags: [Authorization]
+    pri: P1
+    steps:
+      - "[GET /api/role-assignments/users/{managerUserId}] Call => [200] the Manager-role assignment has scopes=[] (tenant-wide by this module's own definition)"
+      - "[GET /api/employees] As that Manager => [200] the result set is nonetheless narrowed to self+direct-reports - CONFIRMING the narrowing comes from EmployeeAccessScopeService's Attendance-permission coupling, not from any UserRoleAssignmentScope row"
+    auto: API
+    cr: [CR-57]
+
+  - id: RBAC-SCOPE-009
+    func: [F-RBAC-130, F-RBAC-131]
+    sc: Tenant-wide roles are authorized for every employee
+    t: HRAdmin/HRManager/SuperHR/Accounts/TenantAdmin, none of which carry scope rows, apply unconditionally
+    src: ["RoleScopeResolver.AppliesAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[Manual/DB] For each of HRAdmin/HRManager/SuperHR/Accounts/TenantAdmin's role assignments (all zero-scope) => AppliesAsync(assignment, anyEmployeeId, today) returns true for every employee in the tenant"
+    auto: DB-assisted
+
+  - id: RBAC-SCOPE-010
+    func: [F-RBAC-132]
+    sc: Role combination - Employee + Manager
+    t: The union of both roles' permissions coexist with no precedence conflict
+    src: ["AuthService.LoadAuthorizationAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/auth/me] As a user holding both Employee (auto-granted) and Manager (auto-granted) roles => [200] permissions includes BOTH Leave.Approve (Manager) and Leave.RequestCreate/RequestViewOwn (Employee)"
+    auto: API
+
+  - id: RBAC-SCOPE-011
+    func: [F-RBAC-133]
+    sc: Role combination - Employee + HRBP
+    t: The Employee role's self-service grants are unaffected by the HRBP role's scope restriction
+    src: ["AuthService.LoadAuthorizationAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP scoped to Department=Finance (the user's OWN department is Engineering) => [200]"
+      - "[GET /api/auth/me] As that user => [200] permissions still includes Leave.RequestCreate/RequestViewOwn (from Employee) - the HRBP scope restriction never narrows the Employee role's own grants"
+    auto: API
+
+  - id: RBAC-SCOPE-012
+    func: [F-RBAC-134]
+    sc: Role combination - Manager + HRBP with two independent scope mechanisms
+    t: A user holding both Manager (CR-57 attendance-keyed scope) and HRBP (explicit dimension scope) is authorized under each role's OWN rule independently - the two are never merged into one predicate
+    src: ["EmployeeAccessScopeService vs RoleScopeResolver"]
+    type: Contract
+    tags: [Authorization]
+    pri: P1
+    steps:
+      - "[GET /api/employees] As a user holding Manager+HRBP(Department=Finance) => [200] the returned set is the union the EMPLOYEE MODULE'S OWN predicate computes (Manager's self+direct-reports OR HRBP's Finance-department scope, per EmployeeAccessScopeService's own branch logic, not a merge performed by RoleScopeResolver itself)"
+    auto: API
+    cr: [CR-57]
+
+  - id: RBAC-SCOPE-013
+    func: [F-RBAC-135]
+    sc: Role combination - HRBP + Time Manager with different scope values
+    t: Each role's scope is evaluated independently against its OWN UserRoleAssignmentScope rows for the same user
+    src: ["RoleScopeResolver.AppliesAsync (invoked once per assignment)"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/role-assignments/users/{userId}] Assign HRBP scoped to Department=Engineering => [200]"
+      - "[POST /api/role-assignments/users/{userId}] Assign TimeManager scoped to Department=Finance => [200]"
+      - "[Manual/DB] Resolve both assignments for an employee in Engineering => HRBP's assignment AppliesAsync=true, TimeManager's assignment AppliesAsync=false - independently evaluated per assignment, not merged"
+    auto: DB-assisted
+
+  - id: RBAC-SCOPE-014
+    func: [F-RBAC-136]
+    sc: Role combination - Accounts + Employee
+    t: Tenant-wide Employee.View from Accounts plus Employee's own self-service actions coexist as a union
+    src: ["AuthService.LoadAuthorizationAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/auth/me] As a user holding Accounts (Employee.View, tenant-wide) plus the auto-granted Employee role => [200] permissions includes Employee.View AND Leave.RequestCreate/Payroll.TaxDeclarationViewOwn etc."
+    auto: API
+
+  - id: RBAC-SCOPE-015
+    func: [F-RBAC-137]
+    sc: Role combination - IT + Employee
+    t: IT's User.View/.Edit/AccountEmployeeLink.View coexist with Employee's self-service grants
+    src: ["AuthService.LoadAuthorizationAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/auth/me] As a user holding IT plus the auto-granted Employee role => [200] permissions includes User.View, User.Edit, AccountEmployeeLink.View (not .Manage), and every Employee-role self-service permission"
+    auto: API
+
+  - id: RBAC-SCOPE-016
+    func: [F-RBAC-138]
+    sc: Role combination - HR Admin + Manager
+    t: HRAdmin's own tenant-wide Employee.View is not narrowed by the co-held Manager role's CR-57 scope coupling
+    src: ["EmployeeAccessScopeService.BuildPredicateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[GET /api/employees] As a user holding both HRAdmin and Manager => [200] the FULL tenant employee list is returned - HRAdmin's direct Employee.View grant takes the tenant-wide branch, unaffected by Manager's own narrower coupling"
+    auto: API
+    cr: [CR-57]
+
+  - id: RBAC-SCOPE-017
+    func: [F-RBAC-139]
+    sc: Self-service identity is unaffected by role combination
+    t: The /api/auth/me EmployeeIdentity block is identical regardless of how many or which roles the account holds
+    src: ["AuthService.ResolveEmployeeIdentityAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[GET /api/auth/me] As a user holding Employee+Manager+HRBP simultaneously => [200] employeeIdentity reflects only the AccountEmployeeCurrentLinks row - identical to what a plain Employee-only account with the same link would report"
+    auto: API

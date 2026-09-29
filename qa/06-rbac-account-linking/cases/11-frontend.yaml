@@ -1,0 +1,231 @@
+sheet: RBAC_Frontend
+submodule: Frontend - Role Management, Page Access Management, Account-Employee Links pages
+defaults:
+  role: TENANT_ADMIN
+  perm: "varies per case"
+  tenant: A
+  pre: "Tenant A signed in; roles/permissions per case."
+  data: "n/a unless stated."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: RBAC-FE-001
+    func: [F-RBAC-169]
+    sc: RoleManagementPage tabs load and filter independently
+    t: Assignments/Roles/History tabs each manage their own data; History is fetched lazily and only with AssignmentViewHistory
+    src: ["RoleManagementPage"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Open Role Management => default tab is Assignments and loads immediately"
+      - "[UI] Switch to the History tab for the first time => triggers the lazy load (one GET per visible assignment's history)"
+      - "[UI] Switch back to Assignments then back to History => no duplicate fetch (history.length > 0 guard)"
+    auto: UI
+    ex: ["V:pages/administration/RoleManagementPage.test.tsx::renders assignments and system-managed Employee behavior", "V:pages/administration/RoleManagementPage.test.tsx::filters assignments and renders the roles tab"]
+
+  - id: RBAC-FE-002
+    func: [F-RBAC-170]
+    sc: AssignDialog hides system roles and conditionally shows the scope fieldset
+    t: Employee/Manager never appear as assignable; the scope fieldset appears only for HRBP/ERO/TimeManager
+    src: ["RoleManagementPage AssignDialog"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Open 'Assign Role' => the Role dropdown does not list Employee or Manager"
+      - "[UI] Select HRBP => the 'Assignment Scope' fieldset appears with a Scope Type dropdown"
+      - "[UI] Select SuperHR => 'Tenant-wide access' notice is shown instead, no scope fieldset"
+    auto: UI
+    ex: ["V:pages/administration/RoleManagementPage.test.tsx::opens assignment flow and does not offer system roles"]
+
+  - id: RBAC-FE-003
+    func: [F-RBAC-171]
+    sc: Assignments tab uses one aggregate server-filtered request
+    t: Changing search/role/status/source filters issues exactly one GET /api/role-assignments call each, never a per-row follow-up
+    src: ["RoleManagementPage loadAssignments"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[UI] Type in the search box and change the Role/Status/Source selects => exactly one network request per change, all server-side filtered; no per-assignment-row request is ever issued"
+    auto: UI
+    ex: ["V:pages/administration/RoleManagementPage.test.tsx::uses the aggregate assignment endpoint with server-side filters and no per-user requests"]
+
+  - id: RBAC-FE-004
+    func: [F-RBAC-182]
+    sc: RevokeDialog defaults and floors the revocation date
+    t: The date input defaults to today and cannot be set before the assignment's own EffectiveFrom
+    src: ["RoleManagementPage RevokeDialog"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Open an assignment's details and click Revoke => the date field defaults to today's date and has min=<the assignment's EffectiveFrom>"
+      - "[UI] Inspect the confirmation dialog before submitting => it shows the role name and employee/user name being revoked"
+    auto: UI
+
+  - id: RBAC-FE-005
+    func: [F-RBAC-183]
+    sc: Roles tab search filters by name or description
+    t: Client-side filtering is case-insensitive across both fields, with an explicit empty state and a clear button
+    src: ["RoleManagementPage RolesView"]
+    type: Positive
+    pri: P3
+    steps:
+      - "[UI] Type 'PEOPLE' (matching HRBP's description text, not its name) in the Roles tab search => the matching role(s) remain visible"
+      - "[UI] Type a nonsense string => 'No roles found.' empty state with a Clear search button"
+    auto: UI
+
+  - id: RBAC-FE-006
+    func: [F-RBAC-172]
+    sc: PageAccessManagementPage read-only for View-only callers
+    t: Every checkbox and the Save button are disabled when the caller lacks PageAccess.Manage
+    src: ["PageAccessManagementPage"]
+    type: Authorization
+    pri: P1
+    role: HR_MANAGER
+    perm: "PageAccess.View (no Manage)"
+    steps:
+      - "[UI] Open Page Access Management as a View-only caller => every page/action checkbox is disabled, 'Save Configuration' button is absent"
+    auto: UI
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::renders the authorized page and loads the role matrix"]
+
+  - id: RBAC-FE-007
+    func: [F-RBAC-173]
+    sc: Toggling a page's View checkbox bulk-toggles its required + action permissions
+    t: One click grants/revokes the page's whole permission set together; Save sends exactly that resulting set
+    src: ["PageAccessManagementPage togglePage"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] On a role with the Employee List page unchecked, click its 'View' checkbox => Create/Edit/Export action checkboxes for that page also become available/checked per the bulk-grant logic"
+      - "[UI] Click 'Save Configuration' => the PUT payload includes exactly Employee.View + Employee.Create + Employee.Edit + Employee.Export together"
+    auto: UI
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::changes roles, toggles actions, and saves the expected permission codes"]
+
+  - id: RBAC-FE-008
+    func: [F-RBAC-174]
+    sc: Direct route visit without PageAccess.View is denied
+    t: Navigating straight to /page-access-management without the permission is blocked by the route guard, not just hidden from nav
+    src: ["RequirePermission on /page-access-management"]
+    type: Authorization
+    pri: P0
+    role: MANAGER
+    perm: "n/a (Manager lacks PageAccess.View)"
+    steps:
+      - "[UI] As Manager, type /page-access-management directly into the address bar => access denied / redirected, page content never renders"
+    auto: UI
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::denies a direct route visit without PageAccess.View"]
+
+  - id: RBAC-FE-009
+    func: [F-RBAC-184]
+    sc: Page Access history tab is paged and filterable
+    t: Filters reset to page 1 on change; pagination controls reflect hasNextPage/hasPreviousPage
+    src: ["PageAccessManagementPage history tab"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Open the History tab, apply a User filter => page resets to 1"
+      - "[UI] Click 'Next page' at the end of results => the Next button is disabled once hasNextPage=false"
+    auto: UI
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::loads paged authorization history with readable permission changes"]
+
+  - id: RBAC-FE-010
+    func: [F-RBAC-185]
+    sc: Preview User Access renders the full effective-access summary
+    t: Effective roles, permission union, tenant-wide count, manager access and accessible pages render together with a recent-changes feed
+    src: ["PageAccessManagementPage preview section"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Search and select a user in 'Preview User Access' => the preview panel shows Effective roles, Permissions, Tenant-wide grants count, Manager access (Yes/No), Accessible pages, and a 'Recent Access Changes' feed"
+    auto: UI
+    ex: ["V:pages/administration/PageAccessManagementPage.test.tsx::previews a selected user with effective roles, permissions, pages, scopes, and manager access"]
+
+  - id: RBAC-FE-011
+    func: [F-RBAC-175]
+    sc: AccountEmployeeLinksPage hides mutation controls without Manage
+    t: A View-only caller sees current-link state read-only, with no Link/Unlink controls
+    src: ["AccountEmployeeLinksPage canManage gate"]
+    type: Authorization
+    pri: P1
+    role: ACCOUNT_LINK_AUDITOR
+    perm: "AccountEmployeeLink.View + AccountEmployeeLink.ViewHistory (no Manage)"
+    steps:
+      - "[UI] Open Account–Employee Links as AccountLinkAuditor => the 'Eligible employees' section (with the Link/Replace/Unlink controls) is entirely absent"
+    auto: UI
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::hides mutation controls without Manage even when View is present"]
+
+  - id: RBAC-FE-012
+    func: [F-RBAC-176]
+    sc: Selecting an account refreshes state and history; reselecting re-fetches
+    t: No stale caching across account switches
+    src: ["AccountEmployeeLinksPage refreshSelected"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Select account A => current link + history for A load"
+      - "[UI] Select account B => current link + history switch to B's data"
+      - "[UI] Re-select account A => a fresh fetch runs and shows A's PERSISTED (possibly changed) current state, not a stale cached copy"
+    auto: UI
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::keeps the account selected, refreshes current state/history, and preserves the linked employee outside candidates", "V:pages/administration/AccountEmployeeLinksPage.test.tsx::reloads with an already-linked account and reselecting it retrieves persisted state"]
+
+  - id: RBAC-FE-013
+    func: [F-RBAC-177]
+    sc: Missing ViewHistory shows an explanatory message, not an empty list
+    t: The page distinguishes 'no permission to see history' from 'history is empty'
+    src: ["AccountEmployeeLinksPage"]
+    type: Positive
+    pri: P1
+    role: ACCOUNT_LINK_ADMIN
+    perm: "AccountEmployeeLink.View + AccountEmployeeLink.Manage (no ViewHistory)"
+    steps:
+      - "[UI] Select an account as a caller lacking ViewHistory => 'History is not available because your account lacks AccountEmployeeLink.ViewHistory.' is shown, and no history network call is made at all"
+    auto: UI
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::does not request history when ViewHistory is absent and explains the permission"]
+
+  - id: RBAC-FE-014
+    func: [F-RBAC-178]
+    sc: A history 403 is rendered as forbidden, not as an empty list
+    t: A server-side 403 on the history call (e.g. a stale claim) is distinguished from a genuinely empty history
+    src: ["AccountEmployeeLinksPage ResourceMessage"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Simulate a 403 response for the history call => 'You do not have permission to view this data.' is shown, distinctly styled/worded from 'No link history recorded.'"
+    auto: UI
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::shows a history 403 as forbidden instead of empty history"]
+
+  - id: RBAC-FE-015
+    func: [F-RBAC-179]
+    sc: A current-link fetch error is distinguished from a legitimate Unlinked result
+    t: Network/API failure reading link state renders an error message, never mistaken for 'no link'
+    src: ["AccountEmployeeLinksPage ResourceMessage"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[UI] Simulate a failed GET for current-link state => an error message renders, NOT 'No current employee link.'"
+    auto: UI
+    ex: ["V:pages/administration/AccountEmployeeLinksPage.test.tsx::distinguishes current-link request errors from an unlinked result"]
+
+  - id: RBAC-FE-016
+    func: [F-RBAC-180, F-RBAC-181]
+    sc: Submit/Unlink are disabled until a reason is entered, and a 409 conflict shows the server's own message
+    t: Client-side convenience mirrors the mandatory-reason server rule; a genuine race is surfaced verbatim
+    src: ["AccountEmployeeLinksPage submit/unlink"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[UI] Select an employee to link but leave Reason blank => 'Link / replace' button is disabled"
+      - "[UI] Enter a reason, submit, but the server responds 409 (a concurrent change elsewhere) => the server's own message text is displayed as the page's status message"
+    auto: UI
+
+  - id: RBAC-FE-017
+    func: [F-RBAC-009, F-RBAC-183]
+    sc: Roles tab distinguishes System managed from Manual roles visually
+    t: The Management Type column badge is consistent across every role row
+    src: ["RoleManagementPage RolesView"]
+    type: Positive
+    pri: P3
+    steps:
+      - "[UI] Scan every row in the Roles tab => Employee and Manager show 'System managed'; all 12 others show 'Manual'"
+    auto: UI

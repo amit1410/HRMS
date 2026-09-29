@@ -1,0 +1,399 @@
+sheet: Masters_Location
+submodule: Country / State / City - Global Reference Data (api/countries, api/states, api/cities)
+defaults:
+  role: HR_ADMIN
+  perm: Geography.Manage
+  tenant: A
+  pre: "Signed in as a user holding the HRAdmin role (Geography.View+Manage). These endpoints are NOT tenant-scoped: the same rows are shared by every tenant."
+  data: "Country/State/City codes and ids as named in each case's steps."
+  sev: Medium
+  reg: true
+
+cases:
+  - id: COUNTRY-001
+    func: [F-MST-20]
+    sc: Valid country creation
+    t: POST /api/countries creates a global country record
+    src: ["CountryService.CreateAsync"]
+    type: Positive
+    pri: P0
+    smoke: true
+    steps:
+      - "[POST /api/countries] Body {code: 'ZZ', name: 'Zetaland', isActive: true} => [201] code=ZZ, name=Zetaland, isActive=true, stateCount=0"
+    auto: API
+
+  - id: COUNTRY-002
+    func: [F-MST-20]
+    sc: Duplicate country code is rejected globally, case-insensitively
+    t: "'zz' collides with the already-created 'ZZ', regardless of which tenant's session created either"
+    src: ["CountryService.FindConflictAsync"]
+    type: Negative
+    pri: P0
+    steps:
+      - "[POST /api/countries] Body {code: 'zz', name: 'Another Zetaland'} => [409] field 'code', 'This code is already in use.'"
+    auto: API
+
+  - id: COUNTRY-003
+    func: [F-MST-20]
+    sc: Duplicate country name is rejected globally
+    t: A distinct code cannot rescue a name collision
+    src: ["CountryService.FindConflictAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/countries] Body {code: 'ZY', name: 'Zetaland'} => [409] field 'name'"
+    auto: API
+
+  - id: COUNTRY-004
+    func: [F-MST-20]
+    sc: Code and Name length boundaries - 10/100 accepted, 11/101 rejected
+    t: Country's limits (10-char code, 100-char name) are tighter than every tenant-owned master's 20-char code
+    src: ["CountryRequestValidator (MaximumLength(10) / MaximumLength(100))"]
+    type: Boundary
+    pri: P1
+    steps:
+      - "[POST /api/countries] Body {code: '1234567890' (10 chars), name: 'Ten Char Code Country'} => [201]"
+      - "[POST /api/countries] Body {code: '12345678901' (11 chars), name: 'Eleven'} => [400] 'Country code must not exceed 10 characters.'"
+      - "[POST /api/countries] Body {code: 'YX', name: <101-char string>} => [400] 'Country name must not exceed 100 characters.'"
+    auto: API
+    cm: "Contrast with CR-33: Country's own FluentValidation validator correctly matches its DB column (100), unlike the generic engine's 200-char Name check for the other 15 kinds."
+
+  - id: COUNTRY-005
+    func: [F-MST-20]
+    sc: Country has no Description field
+    t: The Country entity and CountryRequest carry no Description property at all, unlike every tenant-owned master
+    src: ["Backend/HRMS.Domain/Entities/Country.cs (no Description property)"]
+    type: Contract
+    pri: P3
+    sev: Low
+    steps:
+      - "[POST /api/countries] Body {code: 'YW', name: 'No Description Land', description: 'This field does not exist'} => [201] the response contains no 'description' field at all; the extra JSON property is silently ignored by model binding"
+    auto: API
+
+  - id: COUNTRY-006
+    func: [F-MST-20]
+    sc: Valid country update
+    t: PUT replaces code/name/isActive
+    src: ["CountryService.UpdateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/countries/{Zetaland id}] Body {code: 'ZZ', name: 'Zetaland Renamed', isActive: true} => [200] name updated"
+    auto: API
+
+  - id: COUNTRY-007
+    func: [F-MST-20]
+    sc: Update rejects a code already used by a different country
+    t: Mirrors the create-time uniqueness check
+    src: ["CountryService.FindConflictAsync (excludeId)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[PUT /api/countries/{ZY id}] Body {code: 'ZZ', name: 'ZY Renamed'} => [409] field 'code'"
+    auto: API
+
+  - id: COUNTRY-008
+    func: [F-MST-20]
+    sc: Deleting an unreferenced country is a HARD delete - the row is actually removed, not deactivated
+    t: DELETE on a country with zero states succeeds by removing the row entirely, in contrast to every tenant-owned master's soft-deactivate
+    src: ["CountryService.DeleteAsync (_db.Countries.Remove(country))"]
+    type: Positive
+    tags: [Contract]
+    pri: P0
+    sev: High
+    pre: "Country YW (from COUNTRY-005) has zero states."
+    steps:
+      - "[DELETE /api/countries/{YW id}] Call => [200] 'Country deleted.'"
+      - "[GET /api/countries/{YW id}] Call => [404] (the row is genuinely gone, unlike a deactivated tenant-owned master which still returns 200 with isActive=false)"
+    auto: API
+    cm: "This is the behavior the earlier module clarification about DELETE-vs-soft-deactivate specifically asked to be verified from source rather than assumed: Country/State/City really do hard-delete; every tenant-owned generic/Department/Designation master really does soft-deactivate. Both are intentional, source-confirmed, and documented here - neither is being called a defect."
+
+  - id: COUNTRY-009
+    func: [F-MST-20]
+    sc: Deleting a country that still has states is refused via a caught FK violation, not a pre-check
+    t: The 409 for a referenced country comes from CountryService pre-counting states (not solely relying on the database), and the row is left completely untouched
+    src: ["CountryService.DeleteAsync (stateCount check before Remove; DbUpdateException also caught as a backstop)"]
+    type: Negative
+    pri: P0
+    pre: "Country IN (India) has at least one State."
+    steps:
+      - "[DELETE /api/countries/{India id}] Call => [409] 'This country still has N state(s). Remove them first, or mark the country inactive.'"
+      - "[GET /api/countries/{India id}] Call => [200] the row is unchanged and still present"
+    auto: API
+
+  - id: COUNTRY-010
+    func: [F-MST-20]
+    sc: Repeating a delete after a successful hard delete returns 404, not another success
+    t: Once a country row is actually gone, a second DELETE call cannot find it - unlike the idempotent 200 a tenant-owned master's repeated soft-delete returns (MASTER-DELETE-004)
+    src: ["CountryService.DeleteAsync (country is null)"]
+    type: Negative
+    tags: [Contract]
+    pri: P2
+    pre: "Country YW was already deleted in COUNTRY-008."
+    steps:
+      - "[DELETE /api/countries/{YW id}] Call again => [404] 'Country not found.'"
+    auto: API
+
+  - id: COUNTRY-011
+    func: [F-MST-20]
+    sc: Get by a nonexistent country id returns 404
+    t: Standard not-found behavior
+    src: ["CountryService.GetByIdAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[GET /api/countries/{random GUID}] Call => [404] 'Country not found.'"
+    auto: API
+
+  - id: COUNTRY-012
+    func: [F-MST-20]
+    sc: List paging/sort validation rejects out-of-range input with 400, unlike the generic engine's silent clamp
+    t: CountryQuery inherits PagedQueryValidator, which returns 400 for a bad pageSize/sortBy - the opposite of MASTER-LIST-006/009's clamp-and-ignore behavior for the generic engine
+    src: ["Backend/HRMS.Application/Validators/Common/PagedQueryValidator.cs; CountryQuery.SortFields"]
+    type: Negative
+    tags: [Boundary, Contract]
+    pri: P2
+    steps:
+      - "[GET /api/countries?pageSize=500] Call => [400] 'Page size must be between 1 and 100.'"
+      - "[GET /api/countries?sortBy=notarealfield] Call => [400] 'Sort field must be one of: code, name, isActive, createdDate.'"
+    auto: API
+
+  - id: COUNTRY-013
+    func: [F-MST-23]
+    sc: Countries are visible identically from every tenant
+    t: A country created while signed into Tenant A is immediately visible, unmodified, to Tenant B
+    src: ["Country does not implement ITenantEntity; no EF query filter applies"]
+    type: Tenant-Isolation
+    tags: [Positive]
+    pri: P0
+    sev: High
+    steps:
+      - "[POST /api/countries] As a Tenant A HRAdmin, body {code: 'YX', name: 'Shared Country'} => [201]"
+      - "[GET /api/countries/{YX id}] As a Tenant B HRAdmin (same id) => [200] identical record - not a 404, and not a separate per-tenant copy"
+    auto: API
+
+  - id: COUNTRY-014
+    func: [F-MST-23]
+    sc: An edit made from one tenant's session is visible to every other tenant
+    t: Confirms the shared row is genuinely one row, not eventually-consistent copies
+    src: ["CountryService (no tenant column to partition on)"]
+    type: Tenant-Isolation
+    pri: P1
+    steps:
+      - "[PUT /api/countries/{YX id}] As a Tenant A HRAdmin, body {code: 'YX', name: 'Shared Country Renamed'} => [200]"
+      - "[GET /api/countries/{YX id}] As a Tenant B HRAdmin => [200] name='Shared Country Renamed' immediately"
+    auto: API
+
+  - id: COUNTRY-015
+    func: [F-MST-20, F-MST-32]
+    sc: Country write endpoints require Geography.Manage; read requires only Geography.View
+    t: The same permission pair that gates the unrelated organizational masters also gates Country
+    src: ["[HasPermission(Permissions.Geography.Manage)] on Create/Update/Delete; [HasPermission(Permissions.Geography.View)] at the controller level for GET"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: MANAGER
+    perm: Geography.View (held); Geography.Manage (missing)
+    steps:
+      - "[GET /api/countries] As MANAGER => [200] (View is sufficient to read)"
+      - "[POST /api/countries] As MANAGER, body {code: 'YV', name: 'Should Be Refused'} => [403]"
+    auto: API
+    cr: [CR-34]
+
+  - id: COUNTRY-016
+    func: [F-MST-09, F-MST-20, F-MST-36]
+    sc: The generic engine's read-only block on countries does not extend to the dedicated /api/countries endpoint
+    t: Even though /api/masters/countries rejects every write with 409, the same user can freely create/update/delete through /api/countries directly - the restriction is a generic-engine-only rule, and the frontend simply never calls the dedicated write endpoints
+    src: ["MasterManagementService.WriteAsync/DeleteAsync (countries short-circuit) vs CountriesController/CountryService (no such restriction)"]
+    type: Contract
+    pri: P1
+    steps:
+      - "[POST /api/masters/countries] Body {code: 'YU', name: 'Blocked Route'} => [409]"
+      - "[POST /api/countries] Identical body via the dedicated route, same user => [201] succeeds"
+    auto: API
+    cr: [CR-32]
+
+  - id: STATE-001
+    func: [F-MST-21]
+    sc: Valid state creation under a required Country parent
+    t: POST /api/states with a valid CountryId creates a state and the response includes the country's name
+    src: ["StateService.CreateAsync"]
+    type: Positive
+    pri: P0
+    pre: "Country IN (India) exists and is active."
+    steps:
+      - "[POST /api/states] Body {countryId: '{India id}', code: 'MH', name: 'Maharashtra', isActive: true} => [201] countryId={India id}, countryName='India', cityCount=0"
+    auto: API
+
+  - id: STATE-002
+    func: [F-MST-21]
+    sc: CountryId is required
+    t: Omitting countryId is refused by the request validator before the service runs
+    src: ["StateRequestValidator (NotEmpty on CountryId)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/states] Body {code: 'XX', name: 'No Country'} (countryId omitted) => [400] 'Country is required.'"
+    auto: API
+
+  - id: STATE-003
+    func: [F-MST-21]
+    sc: A nonexistent CountryId is rejected by the service even though it passes the shape validator
+    t: A syntactically valid but non-existent country GUID is refused with a field-level error
+    src: ["StateService.CreateAsync (country is null)"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/states] Body {countryId: '{random GUID}', code: 'YY', name: 'Orphan State'} => [400] field 'countryId', 'The selected country does not exist.'"
+    auto: API
+
+  - id: STATE-004
+    func: [F-MST-21]
+    sc: State code/name are unique within a country, not globally
+    t: "'MH' can exist under India, and a different country may reuse the same code"
+    src: ["StateService.FindConflictAsync (scoped by CountryId)"]
+    type: Positive
+    tags: [Negative]
+    pri: P1
+    pre: "Country ZZ (Zetaland) exists and is active."
+    steps:
+      - "[POST /api/states] Body {countryId: '{India id}', code: 'MH', name: 'Duplicate MH'} => [409] (collides with STATE-001 within India)"
+      - "[POST /api/states] Body {countryId: '{Zetaland id}', code: 'MH', name: 'Zetaland MH'} => [201] the same code is free under a different country"
+    auto: API
+
+  - id: STATE-005
+    func: [F-MST-21]
+    sc: Deleting a state with cities is refused; without cities it hard-deletes
+    t: Mirrors Country's delete semantics one level down
+    src: ["StateService.DeleteAsync"]
+    type: Negative
+    tags: [Positive]
+    pri: P0
+    pre: "Maharashtra (from STATE-001) has zero cities."
+    steps:
+      - "[DELETE /api/states/{Maharashtra id}] Call => [200] 'State deleted.'"
+      - "[GET /api/states/{Maharashtra id}] Call => [404] (row genuinely removed)"
+    auto: API
+
+  - id: STATE-006
+    func: [F-MST-21]
+    sc: States are shared across every tenant, exactly like Country
+    t: A state created from Tenant A's session is visible unchanged from Tenant B
+    src: ["State does not implement ITenantEntity"]
+    type: Tenant-Isolation
+    pri: P1
+    pre: "Country IN exists; state KA (Karnataka) is created under it."
+    steps:
+      - "[POST /api/states] As a Tenant A HRAdmin, body {countryId: '{India id}', code: 'KA', name: 'Karnataka'} => [201]"
+      - "[GET /api/states/{Karnataka id}] As a Tenant B HRAdmin => [200] identical record"
+    auto: API
+
+  - id: STATE-007
+    func: [F-MST-21]
+    sc: State write endpoints require Geography.Manage
+    t: A Geography.View-only role cannot create a state
+    src: ["[HasPermission(Permissions.Geography.Manage)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: MANAGER
+    perm: Geography.View (held); Geography.Manage (missing)
+    steps:
+      - "[POST /api/states] As MANAGER, body {countryId: '{India id}', code: 'TN', name: 'Tamil Nadu'} => [403]"
+    auto: API
+
+  - id: CITY-001
+    func: [F-MST-22]
+    sc: Valid city creation under a required State parent
+    t: POST /api/cities with a valid StateId creates a city and the response includes the state's name
+    src: ["CityService.CreateAsync"]
+    type: Positive
+    pri: P0
+    pre: "State KA (Karnataka) exists and is active."
+    steps:
+      - "[POST /api/cities] Body {stateId: '{Karnataka id}', code: 'BLR', name: 'Bengaluru', isActive: true} => [201] stateId={Karnataka id}, stateName='Karnataka'"
+    auto: API
+
+  - id: CITY-002
+    func: [F-MST-22]
+    sc: StateId is required and must resolve to an existing state
+    t: Mirrors STATE-002/STATE-003 one level down
+    src: ["CityRequestValidator; CityService.CreateAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/cities] Body {code: 'XXX', name: 'No State'} (stateId omitted) => [400] 'State is required.'"
+      - "[POST /api/cities] Body {stateId: '{random GUID}', code: 'YYY', name: 'Orphan City'} => [400] field 'stateId', 'The selected state does not exist.'"
+    auto: API
+
+  - id: CITY-003
+    func: [F-MST-22]
+    sc: City code/name are unique within a state, not globally
+    t: The same city code may be reused under a different state
+    src: ["CityService.FindConflictAsync (scoped by StateId)"]
+    type: Positive
+    tags: [Negative]
+    pri: P1
+    pre: "State MH (Maharashtra-in-Zetaland from STATE-004) exists."
+    steps:
+      - "[POST /api/cities] Body {stateId: '{Karnataka id}', code: 'BLR', name: 'Duplicate BLR'} => [409]"
+      - "[POST /api/cities] Body {stateId: '{Zetaland-MH id}', code: 'BLR', name: 'Different Country Same Code'} => [201]"
+    auto: API
+
+  - id: CITY-004
+    func: [F-MST-22]
+    sc: City delete is a hard delete with no downstream master to check, so it always succeeds once found
+    t: Unlike Country/State, City has no child master, so DeleteAsync never pre-checks a reference count - it removes the row and relies only on a caught DbUpdateException as a backstop
+    src: ["CityService.DeleteAsync (no count check before Remove, only the try/catch)"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    steps:
+      - "[DELETE /api/cities/{Bengaluru id}] Call => [200] 'City deleted.'"
+      - "[GET /api/cities/{Bengaluru id}] Call => [404]"
+    auto: API
+
+  - id: CITY-005
+    func: [F-MST-22]
+    sc: Cities are shared across every tenant
+    t: Mirrors STATE-006/COUNTRY-013 at the city level
+    src: ["City does not implement ITenantEntity"]
+    type: Tenant-Isolation
+    pri: P1
+    pre: "State KA exists; city MYS (Mysuru) is created under it."
+    steps:
+      - "[POST /api/cities] As a Tenant A HRAdmin, body {stateId: '{Karnataka id}', code: 'MYS', name: 'Mysuru'} => [201]"
+      - "[GET /api/cities/{Mysuru id}] As a Tenant B HRAdmin => [200] identical record"
+    auto: API
+
+  - id: CITY-006
+    func: [F-MST-22]
+    sc: City write endpoints require Geography.Manage
+    t: Mirrors STATE-007 at the city level
+    src: ["[HasPermission(Permissions.Geography.Manage)]"]
+    type: Authorization
+    tags: [Negative]
+    pri: P0
+    sev: Critical
+    role: MANAGER
+    perm: Geography.View (held); Geography.Manage (missing)
+    steps:
+      - "[POST /api/cities] As MANAGER, body {stateId: '{Karnataka id}', code: 'MNG', name: 'Mangaluru'} => [403]"
+    auto: API
+
+  - id: CITY-007
+    func: [F-MST-22]
+    sc: Cascading Country -> State -> City filters correctly end to end
+    t: The full chain (a City's stateId, a State's countryId) resolves consistently and a city under one state is never returned when filtering by a different state
+    src: ["StateService.GetAsync (CountryId filter); CityService.GetAsync (StateId filter)"]
+    type: Positive
+    tags: [Contract]
+    pri: P1
+    pre: "State KA (Karnataka, under India) has city Mysuru; state MH-under-Zetaland has no cities."
+    steps:
+      - "[GET /api/states?countryId={India id}] Call => [200] items contains Karnataka, does not contain the Zetaland-scoped MH"
+      - "[GET /api/cities?stateId={Karnataka id}] Call => [200] items contains Mysuru"
+      - "[GET /api/cities?stateId={Zetaland-MH id}] Call => [200] items=[] (no cities under that state)"
+    auto: API
