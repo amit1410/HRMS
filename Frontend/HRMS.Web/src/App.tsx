@@ -25,6 +25,7 @@ import { TenantPasswordRecoverySettingsPage } from './pages/TenantPasswordRecove
 import { isApexHost } from './lib/isApexHost.ts'
 import { isPlatformHost } from './lib/isPlatformHost.ts'
 import { MasterManagementPage } from './pages/masters/MasterManagementPage.tsx'
+import { BankMasterPage } from './pages/masters/BankMasterPage.tsx'
 import { AccountEmployeeLinksPage } from './pages/administration/AccountEmployeeLinksPage.tsx'
 import { RoleManagementPage } from './pages/administration/RoleManagementPage.tsx'
 import { PageAccessManagementPage } from './pages/administration/PageAccessManagementPage.tsx'
@@ -221,6 +222,7 @@ function TenantApplication() {
                   <Route path="payroll/reports" element={<RequirePermission permission={Permissions.payroll.analyticsView}><PayrollReportsPage /></RequirePermission>} />
                   <Route path="payroll/my-adjustments" element={<RequirePermission permission={Permissions.payroll.adjustmentsView}><RequireEmployeeIdentity><MyPayrollAdjustmentsPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="payroll/my-tax-declarations" element={<RequirePermission permission={Permissions.payroll.taxDeclarationViewOwn}><RequireEmployeeIdentity><MyTaxDeclarationsPage /></RequireEmployeeIdentity></RequirePermission>} />
+                  <Route path="masters/banks" element={<RequirePermission permission={Permissions.bankMaster.view}><BankMasterPage /></RequirePermission>} />
                   <Route path="masters/:kind" element={<MasterRouteGuard />} />
                   <Route
                     path="configuration/employee-code"

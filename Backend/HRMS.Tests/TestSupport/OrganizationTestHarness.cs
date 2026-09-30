@@ -1,6 +1,7 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Services;
 using HRMS.Application.EmployeeCodes;
+using HRMS.Application.Validators.Banks;
 using HRMS.Application.Validators.Employees;
 using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Persistence.Seed;
@@ -59,6 +60,20 @@ public sealed class OrganizationTestHarness : IDisposable
 
     public IDesignationService Designations() =>
         new DesignationService(TrackContext(), TenantContext, NullLogger<DesignationService>.Instance);
+
+    public IBankService Banks() =>
+        new BankService(TrackContext(), TenantContext, NullLogger<BankService>.Instance);
+
+    /// <summary>
+    /// The bank import service, sharing a single context with the bank service it drives — the same object
+    /// graph the scoped DI container hands a request, so the import's transaction covers the writes.
+    /// </summary>
+    public IBankImportService BankImports()
+    {
+        var context = TrackContext();
+        var banks = new BankService(context, TenantContext, NullLogger<BankService>.Instance);
+        return new BankImportService(context, banks, TenantContext, new BankRequestValidator());
+    }
 
     public IEmployeeService Employees() =>
         new EmployeeService(TrackContext(), TenantContext, Clock, NullLogger<EmployeeService>.Instance);

@@ -77,6 +77,10 @@ tools/phase3b-browser-state.processes.json
 tools/phase3b-resume-attempt-*/
 tools/phase3b-tls-original-config-*.json
 
+# Scratch/generated output (PDF/PNG builds, manual-guide render artifacts)
+/output/
+/tmp/
+
 # Temporary validation output
 .phase*-obj/
 .phase*-build/

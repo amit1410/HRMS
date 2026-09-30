@@ -323,6 +323,14 @@ export const Permissions = {
     clearanceReopen: 'Separation.Clearance.Reopen',
     clearanceAssetManage: 'Separation.Clearance.AssetManage',
   },
+  bankMaster: {
+    view: 'BankMaster.View',
+    create: 'BankMaster.Create',
+    edit: 'BankMaster.Edit',
+    activate: 'BankMaster.Activate',
+    import: 'BankMaster.Import',
+    export: 'BankMaster.Export',
+  },
 } as const
 
 /** Every permission the system knows about — the counterpart of `Permissions.All` in C#. */

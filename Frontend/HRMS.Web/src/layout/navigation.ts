@@ -60,6 +60,13 @@ export const NAV_ITEMS: readonly NavItem[] = [
     group: 'employee',
   },
   {
+    label: 'Bank Master',
+    to: '/masters/banks',
+    permission: Permissions.bankMaster.view,
+    available: true,
+    group: 'employee',
+  },
+  {
     label: 'Account–Employee Links',
     to: '/administration/account-employee-links',
     permission: Permissions.accountEmployeeLink.view,

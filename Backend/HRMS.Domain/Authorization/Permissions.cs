@@ -347,6 +347,16 @@ public static class Permissions
         public const string ClearanceAssetManage = "Separation.Clearance.AssetManage";
     }
 
+    public static class BankMaster
+    {
+        public const string View = "BankMaster.View";
+        public const string Create = "BankMaster.Create";
+        public const string Edit = "BankMaster.Edit";
+        public const string Activate = "BankMaster.Activate";
+        public const string Import = "BankMaster.Import";
+        public const string Export = "BankMaster.Export";
+    }
+
     /// <summary>Every permission the system knows about. Used by the seeder and SuperAdmin/TenantAdmin grants.</summary>
     public static readonly IReadOnlyList<string> All = new[]
     {
@@ -391,5 +401,6 @@ public static class Permissions
         Attendance.CompOffViewSelf, Attendance.CompOffViewTeam, Attendance.CompOffViewAll, Attendance.CompOffApprove, Attendance.CompOffManage, Attendance.CompOffViewHistory,
         Attendance.DeviceView, Attendance.DeviceManage, Attendance.DeviceMapping, Attendance.DeviceSync, Attendance.DeviceImport, Attendance.DeviceViewHistory
         , Separation.ViewSelf, Separation.ViewTeam, Separation.ViewAll, Separation.CreateSelf, Separation.Initiate, Separation.Submit, Separation.Withdraw, Separation.Review, Separation.Manage, Separation.ViewHistory, Separation.ManagerReview, Separation.HrReview, Separation.ReviseLastWorkingDate, Separation.Approve, Separation.Reject, Separation.NoticeManage, Separation.NoticeWaive, Separation.ReviseApprovedLastWorkingDate, Separation.ClearanceViewSelf, Separation.ClearanceViewTeam, Separation.ClearanceViewAll, Separation.ClearanceConfigure, Separation.ClearanceStart, Separation.ClearanceManageTask, Separation.ClearanceWaive, Separation.ClearanceComplete, Separation.ClearanceReopen, Separation.ClearanceAssetManage
+        , BankMaster.View, BankMaster.Create, BankMaster.Edit, BankMaster.Activate, BankMaster.Import, BankMaster.Export
     };
 }

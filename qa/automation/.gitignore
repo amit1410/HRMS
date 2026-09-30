@@ -3,8 +3,11 @@ __pycache__/
 *.pyc
 .env
 reports/allure-results/
+reports/allure-results-*/
 reports/allure-report/
 test-results/
 .tools/
 .state/
 reports/ci/
+reports/ci-artifacts/
+reports/rerun-console.log

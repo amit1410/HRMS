@@ -395,6 +395,12 @@ public static class SeedData
             [DomainPermissions.Leave.RequestCancelOwn] = 65,
             [DomainPermissions.Leave.BalanceViewOwn] = 66,
             [DomainPermissions.Leave.TypeViewAvailable] = 67,
+            [DomainPermissions.BankMaster.View] = 282,
+            [DomainPermissions.BankMaster.Create] = 283,
+            [DomainPermissions.BankMaster.Edit] = 284,
+            [DomainPermissions.BankMaster.Activate] = 285,
+            [DomainPermissions.BankMaster.Import] = 286,
+            [DomainPermissions.BankMaster.Export] = 287,
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>
@@ -467,6 +473,8 @@ public static class SeedData
             DomainPermissions.Department.Delete,
             DomainPermissions.Designation.View, DomainPermissions.Designation.Create, DomainPermissions.Designation.Edit,
             DomainPermissions.Designation.Delete,
+            DomainPermissions.BankMaster.View, DomainPermissions.BankMaster.Create, DomainPermissions.BankMaster.Edit,
+            DomainPermissions.BankMaster.Activate, DomainPermissions.BankMaster.Import, DomainPermissions.BankMaster.Export,
             DomainPermissions.Leave.DashboardViewAll,
             DomainPermissions.Leave.ReportsView, DomainPermissions.Leave.ReportsExport,
             DomainPermissions.User.View, DomainPermissions.User.Create, DomainPermissions.User.Edit
@@ -494,6 +502,7 @@ public static class SeedData
             DomainPermissions.Geography.View,
             DomainPermissions.EmploymentHistory.View, DomainPermissions.EmploymentHistory.Change,
             DomainPermissions.Department.View, DomainPermissions.Designation.View,
+            DomainPermissions.BankMaster.View,
             DomainPermissions.Attendance.ExceptionView, DomainPermissions.Attendance.ReportView,
             DomainPermissions.Attendance.ReportExport,
             DomainPermissions.Payroll.TaxDeclarationReview, DomainPermissions.Payroll.TaxDeclarationViewAudit, DomainPermissions.Payroll.YearEndTaxView, DomainPermissions.Payroll.YearEndTaxViewHistory,
