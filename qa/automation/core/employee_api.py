@@ -111,3 +111,128 @@ def upsert_supervisor(client: ApiClient, employee_id: str, **fields):
 @allure.step("Get portal account for {employee_id}")
 def get_portal_account(client: ApiClient, employee_id: str):
     return client.get(f"/api/employees/{employee_id}/portal-account")
+
+
+# ── Personal details / sensitive ────────────────────────────────────────────
+
+@allure.step("Update personal details for {employee_id}")
+def update_personal_details(client: ApiClient, employee_id: str, **fields):
+    return client.put(f"/api/employees/{employee_id}/personal-details", json=fields)
+
+
+@allure.step("Get sensitive details for {employee_id}")
+def get_sensitive_details(client: ApiClient, employee_id: str):
+    return client.get(f"/api/employees/{employee_id}/sensitive-details")
+
+
+@allure.step("Update employee (legacy full record) {employee_id}")
+def update_full(client: ApiClient, employee_id: str, **fields):
+    return client.put(f"/api/employees/{employee_id}", json=fields)
+
+
+@allure.step("Export employees")
+def export_employees(client: ApiClient, **query):
+    return client.get("/api/employees/export", params=query)
+
+
+# ── Addresses ───────────────────────────────────────────────────────────────
+
+@allure.step("Delete address {address_id} for {employee_id}")
+def delete_address(client: ApiClient, employee_id: str, address_id: str):
+    return client.delete(f"/api/employees/{employee_id}/addresses/{address_id}")
+
+
+# ── Bank ──────────────────────────────────────────────────────────────────--
+
+@allure.step("Get bank sensitive-details {bank_detail_id} for {employee_id}")
+def get_bank_detail_for_edit(client: ApiClient, employee_id: str, bank_detail_id: str):
+    return client.get(f"/api/employees/{employee_id}/bank-details/{bank_detail_id}/sensitive-details")
+
+
+# ── Supervisor ───────────────────────────────────────────────────────────────
+
+@allure.step("Get supervisor options for {employee_id} (type={supervisor_type})")
+def get_supervisor_options(client: ApiClient, employee_id: str, supervisor_type: str):
+    return client.get(f"/api/employees/{employee_id}/supervisor-options", params={"type": supervisor_type})
+
+
+# ── Family ────────────────────────────────────────────────────────────────--
+
+@allure.step("Get family for {employee_id}")
+def get_family(client: ApiClient, employee_id: str):
+    return client.get(f"/api/employees/{employee_id}/family")
+
+
+@allure.step("Create family member for {employee_id}")
+def create_family(client: ApiClient, employee_id: str, **fields):
+    return client.post(f"/api/employees/{employee_id}/family", json=fields)
+
+
+@allure.step("Delete family member {family_id} for {employee_id}")
+def delete_family(client: ApiClient, employee_id: str, family_id: str):
+    return client.delete(f"/api/employees/{employee_id}/family/{family_id}")
+
+
+# ── Education ────────────────────────────────────────────────────────────────
+
+@allure.step("Get education for {employee_id}")
+def get_education(client: ApiClient, employee_id: str):
+    return client.get(f"/api/employees/{employee_id}/education")
+
+
+@allure.step("Create education for {employee_id}")
+def create_education(client: ApiClient, employee_id: str, **fields):
+    return client.post(f"/api/employees/{employee_id}/education", json=fields)
+
+
+@allure.step("Update education {education_id} for {employee_id}")
+def update_education(client: ApiClient, employee_id: str, education_id: str, **fields):
+    return client.put(f"/api/employees/{employee_id}/education/{education_id}", json=fields)
+
+
+@allure.step("Delete education {education_id} for {employee_id}")
+def delete_education(client: ApiClient, employee_id: str, education_id: str):
+    return client.delete(f"/api/employees/{employee_id}/education/{education_id}")
+
+
+# ── Previous employment ──────────────────────────────────────────────────────
+
+@allure.step("Get previous-employment for {employee_id}")
+def get_previous_employment(client: ApiClient, employee_id: str):
+    return client.get(f"/api/employees/{employee_id}/previous-employment")
+
+
+@allure.step("Create previous-employment for {employee_id}")
+def create_previous_employment(client: ApiClient, employee_id: str, **fields):
+    return client.post(f"/api/employees/{employee_id}/previous-employment", json=fields)
+
+
+# ── Additional info ──────────────────────────────────────────────────────────
+
+@allure.step("Get additional-info for {employee_id}")
+def get_additional_info(client: ApiClient, employee_id: str):
+    return client.get(f"/api/employees/{employee_id}/additional-info")
+
+
+@allure.step("Upsert additional-info for {employee_id}")
+def upsert_additional_info(client: ApiClient, employee_id: str, **fields):
+    return client.put(f"/api/employees/{employee_id}/additional-info", json=fields)
+
+
+# ── Audit log ────────────────────────────────────────────────────────────────
+
+@allure.step("Get audit-log for {employee_id}")
+def get_audit_log(client: ApiClient, employee_id: str, **query):
+    return client.get(f"/api/employees/{employee_id}/audit-log", params=query)
+
+
+# ── Account/employee linking (Module 06 surface reachable from Employee) ──────
+
+@allure.step("Get account-link candidates ({kind})")
+def get_link_candidates(client: ApiClient, kind: str):
+    return client.get(f"/api/account-employee-links/candidates/{kind}")
+
+
+@allure.step("Get account-link state for user {user_id}")
+def get_link_for_user(client: ApiClient, user_id: str):
+    return client.get(f"/api/account-employee-links/users/{user_id}")

@@ -42,6 +42,20 @@ class EmployeesListPage(BasePage):
     def has_row(self, text: str) -> bool:
         return self.row_link(text).count() > 0
 
+    def status_filter_option_values(self) -> list[str]:
+        """The <option> values of the Status toolbar filter, in order (first is usually the 'all' default)."""
+        return self.page.locator(f"{self.STATUS_FILTER} option").evaluate_all(
+            "opts => opts.map(o => o.value)"
+        )
+
+    @allure.step("Filter by status value '{value}'")
+    def filter_status_value(self, value: str) -> "EmployeesListPage":
+        self.page.locator(self.STATUS_FILTER).select_option(value=value)
+        self.page.wait_for_timeout(400)
+        self.page.locator(self.LOADING).wait_for(state="hidden", timeout=15_000)
+        self.page.wait_for_selector(f"{self.TABLE}, {self.EMPTY_STATE_TITLE}", timeout=15_000)
+        return self
+
     def is_empty_state_shown(self) -> bool:
         return self.page.locator(self.EMPTY_STATE_TITLE).count() > 0
 
