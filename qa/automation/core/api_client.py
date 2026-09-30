@@ -85,6 +85,22 @@ class ApiClient:
     def get(self, path: str, params: dict | None = None, headers: dict | None = None, timeout: float = 15):
         return self._send("GET", path, params=params, headers=headers, timeout=timeout)
 
+    @allure.step("POST (multipart) {path}")
+    def post_multipart(self, path: str, files: dict, data: dict | None = None, timeout: float = 30):
+        """POST a multipart/form-data body (file upload). `files` is passed straight to requests
+        (e.g. {"file": ("roster.csv", b"...", "text/csv")}). Content-Type is left to requests so the
+        multipart boundary is set correctly — we only carry the Host + Authorization headers."""
+        url = self._settings.api_url(path)
+        headers = {"Host": self._host}
+        if "Authorization" in self._default_headers:
+            headers["Authorization"] = self._default_headers["Authorization"]
+        started = time.monotonic()
+        response = self._session.post(url, files=files, data=data, headers=headers, timeout=timeout)
+        duration_ms = (time.monotonic() - started) * 1000
+        auth_rate_guard.record(path, "POST", response.status_code)
+        self._record("POST", response.url, headers, {"multipart": list(files)}, response, duration_ms)
+        return response
+
     @allure.step("PUT {path}")
     def put(
         self,

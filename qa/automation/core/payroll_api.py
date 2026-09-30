@@ -109,6 +109,26 @@ def get_salary_structure_history(client: ApiClient, structure_id: str):
     return client.get(f"/api/payroll/salary-structures/{structure_id}/history")
 
 
+@allure.step("Update salary structure {structure_id}")
+def update_salary_structure(client: ApiClient, structure_id: str, **fields):
+    return client.put(f"/api/payroll/salary-structures/{structure_id}", json=fields)
+
+
+@allure.step("Get salary structure {structure_id} effective on {effective_on}")
+def get_salary_structure_effective(client: ApiClient, structure_id: str, effective_on: str):
+    return client.get(f"/api/payroll/salary-structures/{structure_id}", params={"effectiveOn": effective_on})
+
+
+@allure.step("Add component to salary structure {structure_id}")
+def add_salary_structure_component(client: ApiClient, structure_id: str, **fields):
+    return client.post(f"/api/payroll/salary-structures/{structure_id}/components", json=fields)
+
+
+@allure.step("Remove component {component_id} from salary structure {structure_id}")
+def remove_salary_structure_component(client: ApiClient, structure_id: str, component_id: str):
+    return client.delete(f"/api/payroll/salary-structures/{structure_id}/components/{component_id}")
+
+
 # --- Employee Salary Assignment ---
 
 
@@ -143,6 +163,16 @@ def get_employee_salary_assignment_history(client: ApiClient, assignment_id: str
     return client.get(f"/api/payroll/employee-salary-assignments/{assignment_id}/history")
 
 
+@allure.step("Get employee salary assignment {assignment_id}")
+def get_employee_salary_assignment(client: ApiClient, assignment_id: str):
+    return client.get(f"/api/payroll/employee-salary-assignments/{assignment_id}")
+
+
+@allure.step("Update employee salary assignment {assignment_id}")
+def update_employee_salary_assignment(client: ApiClient, assignment_id: str, **fields):
+    return client.put(f"/api/payroll/employee-salary-assignments/{assignment_id}", json=fields)
+
+
 # --- Payroll Periods ---
 
 
@@ -169,6 +199,44 @@ def transition_payroll_period(client: ApiClient, period_id: str, action_name: st
 @allure.step("Get payroll period history {period_id}")
 def get_payroll_period_history(client: ApiClient, period_id: str):
     return client.get(f"/api/payroll/periods/{period_id}/history")
+
+
+@allure.step("Update payroll period {period_id}")
+def update_payroll_period(client: ApiClient, period_id: str, **fields):
+    return client.put(f"/api/payroll/periods/{period_id}", json=fields)
+
+
+@allure.step("Lock payroll period {period_id}")
+def lock_payroll_period(client: ApiClient, period_id: str, reason: str | None = None):
+    return client.post(f"/api/payroll/periods/{period_id}/lock", params={"reason": reason} if reason else None)
+
+
+@allure.step("Unlock payroll period {period_id}")
+def unlock_payroll_period(client: ApiClient, period_id: str, reason: str | None = None):
+    return client.post(f"/api/payroll/periods/{period_id}/unlock", params={"reason": reason} if reason else None)
+
+
+# --- Payroll Operations dashboard / health (read paths) ---
+
+
+@allure.step("Get payroll operations dashboard")
+def get_operations_dashboard(client: ApiClient):
+    return client.get("/api/payroll/dashboard/operations")
+
+
+@allure.step("Get payroll configuration health")
+def get_configuration_health(client: ApiClient):
+    return client.get("/api/payroll/configuration-health")
+
+
+@allure.step("Get payroll production health")
+def get_production_health(client: ApiClient):
+    return client.get("/api/payroll/production-health")
+
+
+@allure.step("Get payroll integrity report")
+def get_integrity(client: ApiClient):
+    return client.get("/api/payroll/integrity")
 
 
 # --- Payroll Runs / Calculation ---
@@ -289,6 +357,21 @@ def approve_input_batch(client: ApiClient, batch_id: str):
 @allure.step("Cancel payroll input batch {batch_id}")
 def cancel_input_batch(client: ApiClient, batch_id: str, reason: str):
     return client.post(f"/api/payroll/input-batches/{batch_id}/cancel", json=reason)
+
+
+@allure.step("Get payroll input batch {batch_id}")
+def get_input_batch(client: ApiClient, batch_id: str):
+    return client.get(f"/api/payroll/input-batches/{batch_id}")
+
+
+@allure.step("Post payroll input batch {batch_id}")
+def post_input_batch(client: ApiClient, batch_id: str):
+    return client.post(f"/api/payroll/input-batches/{batch_id}/post")
+
+
+@allure.step("List payroll input templates")
+def list_input_templates(client: ApiClient, **query):
+    return client.get("/api/payroll/input-templates", params=query or None)
 
 
 # --- Loans (Module 11) — request/approve/disburse lifecycle + register/schedule visibility only;

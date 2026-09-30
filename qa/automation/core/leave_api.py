@@ -111,3 +111,124 @@ def get_approval_detail(client: ApiClient, request_id: str):
 @allure.step("Get my leave balances")
 def get_my_leave_balances(client: ApiClient):
     return client.get("/api/leave-balances/mine")
+
+
+# --- Leave Periods (configuration) ---
+
+
+@allure.step("List leave periods")
+def list_leave_periods(client: ApiClient, **query):
+    return client.get("/api/leave-periods", params=query)
+
+
+@allure.step("Get leave period {period_id}")
+def get_leave_period(client: ApiClient, period_id: str):
+    return client.get(f"/api/leave-periods/{period_id}")
+
+
+@allure.step("Create leave period")
+def create_leave_period(client: ApiClient, **fields):
+    return client.post("/api/leave-periods", json=fields)
+
+
+# --- Leave Policies (configuration read) ---
+
+
+@allure.step("List leave policies")
+def list_leave_policies(client: ApiClient, **query):
+    return client.get("/api/leave-policies", params=query)
+
+
+@allure.step("Get leave policy {policy_id}")
+def get_leave_policy(client: ApiClient, policy_id: str):
+    return client.get(f"/api/leave-policies/{policy_id}")
+
+
+@allure.step("List versions of leave policy {policy_id}")
+def get_policy_versions(client: ApiClient, policy_id: str):
+    return client.get(f"/api/leave-policies/{policy_id}/versions")
+
+
+# --- Leave Calendar / HR Dashboard ---
+
+
+@allure.step("Get leave calendar")
+def get_leave_calendar(client: ApiClient, **query):
+    return client.get("/api/leave-calendar", params=query)
+
+
+@allure.step("Get HR leave dashboard summary")
+def get_hr_dashboard(client: ApiClient, **query):
+    return client.get("/api/leave-dashboard/hr-summary", params=query)
+
+
+# --- Leave Reports ---
+
+
+@allure.step("Get leave report {report}")
+def get_leave_report(client: ApiClient, report: str, **query):
+    return client.get(f"/api/leave-reports/{report}", params=query)
+
+
+@allure.step("Export leave report {report} as CSV")
+def export_leave_report(client: ApiClient, report: str, **query):
+    return client.get(f"/api/leave-reports/{report}/export.csv", params=query)
+
+
+# --- Leave Balance Import (configuration) ---
+
+
+@allure.step("Download leave-balance import template")
+def get_import_template(client: ApiClient):
+    return client.get("/api/leave-balances/import/template")
+
+
+@allure.step("List leave-balance import history")
+def get_import_history(client: ApiClient):
+    return client.get("/api/leave-balances/import/history")
+
+
+@allure.step("Get leave-balance import batch {batch_id}")
+def get_import_batch(client: ApiClient, batch_id: str):
+    return client.get(f"/api/leave-balances/import/{batch_id}")
+
+
+@allure.step("Validate a leave-balance import (JSON body — contract probe only)")
+def validate_import_json(client: ApiClient, body: dict | None = None):
+    """Posts a JSON body to the import/validate endpoint. The real endpoint expects a multipart
+    file upload, so this helper exists only to assert the wrong-content-type contract (415/4xx) —
+    it never uploads a real file and so never creates a persistent import batch."""
+    return client.post("/api/leave-balances/import/validate", json=body or {})
+
+
+# --- Comp-Off (Attendance area, Leave-integrated — Leave_CompOff sheet) ---
+
+
+@allure.step("Get my comp-off balance")
+def get_compoff_balance(client: ApiClient):
+    return client.get("/api/attendance/comp-off/balance")
+
+
+@allure.step("Get my comp-off earnings")
+def get_compoff_earnings(client: ApiClient, **query):
+    return client.get("/api/attendance/comp-off/earnings", params=query)
+
+
+@allure.step("Get my comp-off ledger")
+def get_compoff_ledger(client: ApiClient, **query):
+    return client.get("/api/attendance/comp-off/ledger", params=query)
+
+
+@allure.step("Query comp-off operations (manager/HR)")
+def get_compoff_operations(client: ApiClient, **query):
+    return client.get("/api/attendance/comp-off/operations", params=query)
+
+
+@allure.step("Create a comp-off earning (requires CompOff.Manage)")
+def create_compoff_earning(client: ApiClient, **fields):
+    return client.post("/api/attendance/comp-off/earnings", json=fields)
+
+
+@allure.step("Create a comp-off policy (requires CompOff.Manage)")
+def create_compoff_policy(client: ApiClient, **fields):
+    return client.post("/api/attendance/comp-off/policies", json=fields)

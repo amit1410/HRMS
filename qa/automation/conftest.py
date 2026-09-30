@@ -246,6 +246,77 @@ def created_employee(admin_api_client):
         log.warning("Cleanup: deleting employee %s raised an exception", employee["id"], exc_info=True)
 
 
+@pytest.fixture
+def disposable_shift(admin_api_client):
+    """Creates one disposable, QAAUTO-marked Attendance Shift (Module 08) and deactivates it
+    afterward. Shifts have no delete endpoint (ATT-PATTERN-009 notes the same for patterns), so
+    cleanup deactivates via Update — which needs a *fresh* ConcurrencyToken, re-read from the list
+    right before the PUT (the create response's token is not accepted for the follow-up update).
+    Never touches any Shift this suite did not itself create.
+    """
+    from core.attendance_api import create_shift, get_shifts, update_shift
+    from data.test_data import random_suffix
+
+    code = f"QAAUTO-{random_suffix(6).upper()}"
+    response = create_shift(
+        admin_api_client,
+        shiftCode=code, shiftName=code, startTime="09:00:00", endTime="18:00:00",
+        effectiveFrom="2026-01-01", minimumWorkMinutes=480, fullDayWorkMinutes=480,
+        captureMode="BiometricOnly", allowedAttendanceSources="Biometric",
+    )
+    if response.status_code not in (200, 201):
+        pytest.skip(f"Could not create the disposable Shift this test needs ({response.status_code}): {response.text}")
+    shift = response.json()["data"]
+
+    yield shift
+
+    try:
+        current = next(
+            (s for s in get_shifts(admin_api_client, page=1, pageSize=200).json()["data"]
+             if s["id"] == shift["id"]),
+            None,
+        )
+        if current and current.get("isActive"):
+            update_shift(
+                admin_api_client, shift["id"],
+                shiftCode=current["shiftCode"], shiftName=current["shiftName"],
+                startTime=current["startTime"], endTime=current["endTime"],
+                effectiveFrom=current["effectiveFrom"], minimumWorkMinutes=current["minimumWorkMinutes"],
+                fullDayWorkMinutes=current["fullDayWorkMinutes"], captureMode=current["captureMode"],
+                allowedAttendanceSources=current["allowedAttendanceSources"],
+                isActive=False, concurrencyToken=current["concurrencyToken"],
+            )
+    except Exception:
+        log.warning("Cleanup: deactivating shift %s raised an exception", shift["id"], exc_info=True)
+
+
+@pytest.fixture
+def disposable_device(admin_api_client):
+    """Creates one disposable, QAAUTO-marked Attendance Device (Module 08) and disables it
+    afterward (Disabled is the terminal status — ATT-DEV-006). Never touches any Device this suite
+    did not itself create."""
+    from core.attendance_api import create_device, set_device_status
+    from data.test_data import random_suffix
+
+    sfx = random_suffix(6).upper()
+    code = f"QAAUTO-{sfx}"
+    response = create_device(
+        admin_api_client,
+        code=code, name=code, deviceType="Biometric", vendor="QAAUTO",
+        serialNumber=f"SN-{sfx}", timeZoneId="UTC", connectionMode="Push", credentialReference=None,
+    )
+    if response.status_code not in (200, 201):
+        pytest.skip(f"Could not create the disposable Device this test needs ({response.status_code}): {response.text}")
+    device = response.json()["data"]
+
+    yield device
+
+    try:
+        set_device_status(admin_api_client, device["id"], "disable")
+    except Exception:
+        log.warning("Cleanup: disabling device %s raised an exception", device["id"], exc_info=True)
+
+
 @pytest.fixture(autouse=True)
 def _capture_console_errors(request: pytest.FixtureRequest):
     """Records browser console errors / uncaught page exceptions for UI tests, without forcing a
