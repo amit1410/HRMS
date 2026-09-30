@@ -37,6 +37,12 @@ concurrency:
 
 env:
   PYTHONUNBUFFERED: "1"
+  # The self-hosted runner's antivirus (AVG) injects SSLKEYLOGFILE pointing at a locked
+  # filter-proxy device (\\.\avgMonFltProxy\...). Python 3.14's ssl module opens that path
+  # when pip/requests build an SSL context, which fails with PermissionError and kills every
+  # "Install Python dependencies" step intermittently. Emptying it makes urllib3 skip keylog
+  # setup. Real fix is to stop AV from setting it on the runner; this keeps CI green meanwhile.
+  SSLKEYLOGFILE: ""
 
 jobs:
   collect:
