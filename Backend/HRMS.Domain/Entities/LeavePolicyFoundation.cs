@@ -58,6 +58,22 @@ public sealed class LeavePolicyVersion : BaseEntity, ITenantEntity
     public LeavePolicy? LeavePolicy { get; set; }
     public ICollection<LeavePolicyRule> Rules { get; set; } = new List<LeavePolicyRule>();
     public ICollection<LeavePolicyApplicabilitySet> ApplicabilitySets { get; set; } = new List<LeavePolicyApplicabilitySet>();
+    public ICollection<LeavePolicyVersionAuditEvent> AuditEvents { get; set; } = new List<LeavePolicyVersionAuditEvent>();
+}
+
+/// <summary>Immutable lifecycle history for a leave-policy version.</summary>
+public sealed class LeavePolicyVersionAuditEvent : BaseEntity, ITenantEntity
+{
+    public Guid TenantId { get; set; }
+    public Guid LeavePolicyVersionId { get; set; }
+    public Guid ActorUserId { get; set; }
+    public string Action { get; set; } = string.Empty;
+    public DateTime OccurredAtUtc { get; set; }
+    public string Reason { get; set; } = string.Empty;
+    public int VersionNumber { get; set; }
+    public LeavePolicyVersionStatus PreviousStatus { get; set; }
+    public LeavePolicyVersion? LeavePolicyVersion { get; set; }
+    public User? ActorUser { get; set; }
 }
 
 public sealed class LeavePolicyRule : BaseEntity, ITenantEntity

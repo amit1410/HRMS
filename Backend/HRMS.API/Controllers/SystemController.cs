@@ -1,6 +1,7 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Infrastructure.Persistence;
+using HRMS.Infrastructure.Email;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -30,6 +31,8 @@ public class SystemController : ControllerBase
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHostEnvironment _environment;
     private readonly ILogger<SystemController> _logger;
+    private readonly PasswordRecoveryProviderOptions? _recoveryProviders;
+    private readonly IEmailSender? _emailSender;
 
     /// <summary>
     /// Deliberately no <see cref="HrmsDbContext"/>. This endpoint is reachable at the apex — the address the
@@ -41,12 +44,16 @@ public class SystemController : ControllerBase
         IHrmsCatalogDbContext catalog,
         IServiceScopeFactory scopeFactory,
         IHostEnvironment environment,
-        ILogger<SystemController> logger)
+        ILogger<SystemController> logger,
+        PasswordRecoveryProviderOptions? recoveryProviders = null,
+        IEmailSender? emailSender = null)
     {
         _catalog = catalog;
         _scopeFactory = scopeFactory;
         _environment = environment;
         _logger = logger;
+        _recoveryProviders = recoveryProviders;
+        _emailSender = emailSender;
     }
 
     [HttpGet("info")]
@@ -68,17 +75,25 @@ public class SystemController : ControllerBase
         // Development only from here down.
         var organizations = await ReadCatalogAsync(cancellationToken);
         var breakdown = await CountPerOrganizationAsync(organizations, cancellationToken);
+        var platformUser = await ReadPlatformUserAsync(cancellationToken);
 
         var info = new SystemInfoResponse(
             Application: "HRMS API",
             Phase: CurrentPhase,
             UtcNow: DateTime.UtcNow,
             DatabaseProvider: breakdown.DatabaseProvider,
+            CatalogDatabase: (_catalog as DbContext)?.Database.GetDbConnection().Database,
             RoleCount: breakdown.RoleCount,
             PermissionCount: breakdown.PermissionCount,
             TenantCount: organizations.Count,
             UserCount: breakdown.Summaries.Sum(summary => summary.UserCount),
-            Tenants: breakdown.Summaries);
+            Tenants: breakdown.Summaries,
+            Environment: _environment.EnvironmentName,
+            PasswordRecoveryEmailProvider: _recoveryProviders?.EmailProvider,
+            PasswordRecoveryEmailSender: _emailSender?.GetType().Name,
+            DevelopmentOtpAvailable: _environment.IsDevelopment()
+                && _emailSender is DevelopmentEmailSender,
+            PlatformUser: platformUser);
 
         return Ok(ApiResponse<SystemInfoResponse>.Ok(info, "HRMS API is running and the database is seeded."));
     }
@@ -95,6 +110,22 @@ public class SystemController : ControllerBase
                 new ShardDescriptor(tenant.Id, tenant.TenantCode, tenant.Host, tenant.ShardKey, tenant.Status, tenant.DatabaseProvider),
                 tenant.TenantName))
             .ToListAsync(cancellationToken);
+
+    private async Task<PlatformUserSummary> ReadPlatformUserAsync(CancellationToken cancellationToken)
+    {
+        const string normalizedEmail = "AMIT@ANEVRATECHNOLOGIES.COM";
+        var user = await _catalog.PlatformUsers
+            .AsNoTracking()
+            .Where(candidate => candidate.NormalizedEmail == normalizedEmail)
+            .Select(candidate => new PlatformUserSummary(
+                true,
+                candidate.IsActive,
+                candidate.PasswordHash != null && candidate.PasswordHash != string.Empty,
+                candidate.UserRoles.Any(role => role.PlatformRole != null && role.PlatformRole.Name == "PlatformSuperAdmin")))
+            .SingleOrDefaultAsync(cancellationToken);
+
+        return user ?? new PlatformUserSummary(false, false, false, false);
+    }
 
     /// <summary>
     /// Counts each organization's users in that organization's own database, one scope at a time.
@@ -164,7 +195,8 @@ public class SystemController : ControllerBase
             }
 
             summaries.Add(new TenantSummary(
-                shard.TenantCode, organization.TenantName, shard.Status.ToString(), userCount));
+                shard.TenantId, shard.TenantCode, organization.TenantName, shard.Host, shard.ShardKey,
+                shard.DatabaseProvider.ToString(), shard.Status.ToString(), userCount));
         }
 
         return new PlatformBreakdown(summaries, databaseProvider, roleCount, permissionCount);
@@ -196,10 +228,26 @@ public record SystemInfoResponse(
     string Phase,
     DateTime UtcNow,
     string? DatabaseProvider = null,
+    string? CatalogDatabase = null,
     int? RoleCount = null,
     int? PermissionCount = null,
     int? TenantCount = null,
     int? UserCount = null,
-    IReadOnlyList<TenantSummary>? Tenants = null);
+    IReadOnlyList<TenantSummary>? Tenants = null,
+    string? Environment = null,
+    string? PasswordRecoveryEmailProvider = null,
+    string? PasswordRecoveryEmailSender = null,
+    bool? DevelopmentOtpAvailable = null,
+    PlatformUserSummary? PlatformUser = null);
 
-public record TenantSummary(string TenantCode, string TenantName, string Status, int UserCount);
+public record TenantSummary(
+    Guid TenantId,
+    string TenantCode,
+    string TenantName,
+    string Host,
+    string ShardKey,
+    string DatabaseProvider,
+    string Status,
+    int UserCount);
+
+public record PlatformUserSummary(bool Exists, bool Active, bool PasswordHashPresent, bool PlatformSuperAdminAssigned);

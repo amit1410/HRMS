@@ -8,6 +8,7 @@ using Xunit.Sdk;
 
 namespace HRMS.Tests;
 
+[Collection("MySQL Integration")]
 public sealed class MySqlStatutoryPayrollIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]

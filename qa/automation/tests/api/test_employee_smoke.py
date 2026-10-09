@@ -178,20 +178,20 @@ def test_bank_detail_crud_lifecycle(admin_api_client, created_employee):
 @pytest.mark.regression
 def test_employment_details_round_trip(admin_api_client, created_employee):
     employee_id = created_employee["id"]
-    first_hired = today_iso()
 
+    # Date of joining lives in Personal Details (the single source of truth); it is no longer
+    # part of the Employment (joining/contractual) record.
     upsert_response = upsert_employment(
         admin_api_client, employee_id,
-        firstHiredDate=first_hired, dateOfJoining=first_hired, jobStatus="Confirmed",
+        jobStatus="Confirmed",
     )
     assert upsert_response.status_code == 200, upsert_response.text
 
     get_response = get_employment(admin_api_client, employee_id)
     assert get_response.status_code == 200, get_response.text
     employment = get_response.json()["data"]
-    assert employment["firstHiredDate"] == first_hired
-    assert employment["dateOfJoining"] == first_hired
     assert employment["jobStatus"] == "Confirmed"
+    assert "dateOfJoining" not in employment
 
 
 @allure.story("Reporting manager")

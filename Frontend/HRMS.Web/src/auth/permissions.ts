@@ -331,6 +331,25 @@ export const Permissions = {
     import: 'BankMaster.Import',
     export: 'BankMaster.Export',
   },
+  confirmation: {
+    policyView: 'Confirmation.PolicyView',
+    policyManage: 'Confirmation.PolicyManage',
+    policyPublish: 'Confirmation.PolicyPublish',
+    schedulerView: 'Confirmation.SchedulerView',
+    schedulerManage: 'Confirmation.SchedulerManage',
+    reviewQuestionView: 'Confirmation.ReviewQuestionView',
+    reviewQuestionManage: 'Confirmation.ReviewQuestionManage',
+    ratingScaleView: 'Confirmation.RatingScaleView',
+    ratingScaleManage: 'Confirmation.RatingScaleManage',
+    reviewCaseView: 'Confirmation.ReviewCaseView',
+    reviewCaseManage: 'Confirmation.ReviewCaseManage',
+    reviewManagerSubmit: 'Confirmation.ReviewManagerSubmit',
+    reviewHrbpSubmit: 'Confirmation.ReviewHrbpSubmit',
+    reviewSubmit: 'Confirmation.ReviewSubmit',
+    decide: 'Confirmation.Decide',
+    dashboardView: 'Confirmation.DashboardView',
+    dashboardViewAll: 'Confirmation.DashboardViewAll',
+  },
 } as const
 
 /** Every permission the system knows about — the counterpart of `Permissions.All` in C#. */

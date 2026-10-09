@@ -1,4 +1,5 @@
 const developmentSources = [
+  'http://localhost:5080',
   'http://platform.localhost:5080',
   'http://*.localhost:5080',
   'ws://platform.localhost:5173',

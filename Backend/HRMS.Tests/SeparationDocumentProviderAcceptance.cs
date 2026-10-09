@@ -22,6 +22,7 @@ internal static class SeparationDocumentProviderAcceptance
     }
 }
 
+[Collection("MySQL Integration")]
 public sealed class MySqlSeparationDocumentIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]

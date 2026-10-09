@@ -1,0 +1,120 @@
+sheet: Confirmation_Probation_Scheduler
+submodule: Confirmation & Probation reminder scheduler — per-tenant configuration, recipient resolution (employee/manager/HRBP), claim/dedup/retry and execution log (Phase 9b)
+defaults:
+  role: TENANT_ADMIN
+  perm: "Confirmation.SchedulerManage"
+  tenant: A
+  pre: "Tenant A signed in as TenantAdmin/HRAdmin unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: CONF-SCH-001
+    func: [F-CONF-008]
+    sc: Read the per-tenant scheduler settings (defaults when unconfigured)
+    t: GET /api/confirmation-scheduler/settings returns the settings with an isConfigured flag
+    src: ["ConfirmationSchedulerSettingService.GetAsync"]
+    type: Positive
+    pri: P1
+    perm: "Confirmation.SchedulerView"
+    steps:
+      - "[GET /api/confirmation-scheduler/settings] as TenantAdmin => [200] enabled, frequencyMinutes, defaultTriggerDaysBeforeEnd, recipient toggles, isConfigured"
+    auto: API
+
+  - id: CONF-SCH-002
+    func: [F-CONF-008]
+    sc: Update scheduler settings and read them back
+    t: PUT settings upserts the tenant row; GET reflects the new frequency/trigger window
+    src: ["ConfirmationSchedulerSettingService.UpdateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[PUT /api/confirmation-scheduler/settings] frequencyMinutes=45, defaultTriggerDaysBeforeEnd=15 => [200] isConfigured=true, values echoed"
+      - "[GET /api/confirmation-scheduler/settings] => [200] frequencyMinutes=45"
+    auto: API
+
+  - id: CONF-SCH-003
+    func: [F-CONF-008]
+    sc: Invalid scheduler settings are rejected
+    t: PUT settings with frequencyMinutes<1 returns a validation error
+    src: ["ConfirmationSchedulerSettingService.UpdateAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[PUT /api/confirmation-scheduler/settings] frequencyMinutes=0 => [400/422] validation error on frequencyMinutes"
+    auto: API
+
+  - id: CONF-SCH-004
+    func: [F-CONF-009]
+    sc: Read the reminder execution log
+    t: GET /api/confirmation-scheduler/executions returns a paged, tenant-scoped execution log
+    src: ["ConfirmationSchedulerSettingService.GetExecutionLogAsync"]
+    type: Positive
+    pri: P2
+    perm: "Confirmation.SchedulerView"
+    steps:
+      - "[GET /api/confirmation-scheduler/executions?page=1&pageSize=10] => [200] items[] with employeeId, recipientType, probationEndDate, triggerDate, status, attemptCount"
+    auto: API
+
+  - id: CONF-SCH-005
+    func: [F-CONF-009]
+    sc: A reminder occurrence is raised once per recipient per probation cycle (dedup)
+    t: The worker sends to employee/manager/HRBP once; a second scan in-window does not resend a Sent occurrence
+    src: ["ConfirmationReminderProcessor.ProcessAsync", "ConfirmationReminderNotificationService"]
+    type: Positive
+    pri: P1
+    perm: "n/a"
+    steps:
+      - "Seed an active, unconfirmed employee whose policy-derived probation end is within the trigger window"
+      - "Run the scheduler twice => each enabled recipient has exactly one Sent execution-log row; no duplicate emails"
+    auto: Manual
+
+  - id: CONF-SCH-006
+    func: [F-CONF-009]
+    sc: A failed delivery is retried after backoff, bounded by max attempts
+    t: A delivery failure is recorded Failed with a next-attempt time; it retries after backoff and stops at MaxAttempts
+    src: ["ConfirmationReminderProcessor.ProcessAsync"]
+    type: Negative
+    pri: P2
+    perm: "n/a"
+    steps:
+      - "Force a notification provider failure => row Status=Failed, NextAttemptAtUtc set, AttemptCount incremented"
+      - "Advance past the backoff and allow success => row Status=Sent; after MaxAttempts failures the occurrence is abandoned"
+    auto: Manual
+
+  - id: CONF-SCH-007
+    func: [F-CONF-009]
+    sc: Terminated/confirmed employees and tenant isolation are respected
+    t: Confirmed/inactive employees raise no reminder; a tenant only ever processes its own employees
+    src: ["ConfirmationReminderProcessor.ProcessAsync", "HrmsDbContext query filter"]
+    type: Negative
+    pri: P1
+    perm: "n/a"
+    steps:
+      - "Confirmed (ConfirmationDate set) and inactive employees produce no execution-log rows"
+      - "Tenant A's scan never creates rows for Tenant B employees"
+    auto: Manual
+
+  - id: CONF-SCH-AUTHZ-001
+    func: [F-CONF-007]
+    sc: Unauthenticated access is rejected
+    t: Any confirmation-scheduler endpoint without a bearer token returns 401
+    src: ["ConfirmationSchedulerController"]
+    type: Negative
+    pri: P1
+    perm: "n/a"
+    steps:
+      - "[GET /api/confirmation-scheduler/settings] no token => [401]"
+    auto: API
+
+  - id: CONF-SCH-AUTHZ-002
+    func: [F-CONF-007]
+    sc: Employee without manage permission cannot change settings
+    t: An Employee (lacking Confirmation.SchedulerManage) gets 403 updating scheduler settings
+    src: ["ConfirmationSchedulerController", "HasPermission"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[PUT /api/confirmation-scheduler/settings] as Employee => [403]"
+    auto: API

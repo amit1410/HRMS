@@ -17,7 +17,7 @@ public sealed class AttendancePunchIngestionService(
     private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
     private readonly IAttendanceBusinessTimeZoneProvider _timeZoneProvider = businessTimeZoneProvider ?? new AttendanceBusinessTimeZoneProvider();
 
-    public async Task<Result<AttendancePunchDto>> IngestAsync(AttendancePunchIngestionRequest request, CancellationToken cancellationToken = default)
+    public async Task<Result<AttendancePunchDto>> IngestAsync(AttendancePunchIngestionRequest request, CancellationToken cancellationToken = default, bool deferSaveChanges = false)
     {
         if (tenant.TenantId is not Guid tenantId || tenantId == Guid.Empty)
             return Result<AttendancePunchDto>.Unauthorized("No authenticated tenant.");
@@ -67,6 +67,7 @@ public sealed class AttendancePunchIngestionService(
 
         var item = new AttendancePunch { Id = Guid.NewGuid(), TenantId = tenantId, EmployeeId = request.EmployeeId, PunchAtUtc = request.PunchAtUtc.ToUniversalTime(), BusinessDate = businessDate, Direction = request.Direction, Source = request.Source, ExternalPunchId = string.IsNullOrWhiteSpace(request.ExternalPunchId) ? null : request.ExternalPunchId.Trim(), DeviceId = request.DeviceId?.Trim(), CapturedAtUtc = _clock.GetUtcNow().UtcDateTime, RawReference = request.RawReference };
         db.AttendancePunches.Add(item);
+        if (deferSaveChanges) return Result<AttendancePunchDto>.Success(ToDto(item), "Attendance punch staged for batch persistence.");
         try { await db.SaveChangesAsync(cancellationToken); }
         catch (DbUpdateException) when (!string.IsNullOrWhiteSpace(item.ExternalPunchId))
         {

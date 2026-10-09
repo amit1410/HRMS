@@ -37,6 +37,7 @@ public static class PayrollProductionClosureProviderAcceptance
     }
 }
 
+[Collection("MySQL Integration")]
 public sealed class MySqlPayrollProductionClosureIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]

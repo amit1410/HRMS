@@ -70,6 +70,27 @@ public sealed class SmtpEmailSender(
         return null;
     }
 
+    public Task SendPlatformUsernameReminderAsync(PlatformUsernameReminderMessage message, CancellationToken cancellationToken = default) =>
+        SendPlatformMailAsync(message.RecipientEmail, "Platform administrator username reminder", $"Hello {WebUtility.HtmlEncode(message.DisplayName)},\n\nYour platform administrator username is: {message.Username}\n\nIf you did not request this, you can ignore this email.", cancellationToken);
+
+    public Task SendPlatformPasswordResetAsync(PlatformPasswordResetEmailMessage message, CancellationToken cancellationToken = default) =>
+        SendPlatformMailAsync(message.RecipientEmail, "Reset your platform administrator password", $"Hello {WebUtility.HtmlEncode(message.DisplayName)},\n\nReset your password using this link:\n{message.ResetUrl}\n\nThis link expires at {message.ExpiresAtUtc:O} UTC and can be used once. If you did not request this, you can ignore this email.", cancellationToken);
+
+    public Task SendPlatformPasswordChangedAsync(PlatformPasswordChangedEmailMessage message, CancellationToken cancellationToken = default) =>
+        SendPlatformMailAsync(message.RecipientEmail, "Your platform administrator password was changed", $"Hello {WebUtility.HtmlEncode(message.DisplayName)},\n\nYour platform administrator password was changed at {message.ChangedAtUtc:O} UTC. If you did not make this change, contact support immediately.", cancellationToken);
+
+    private async Task SendPlatformMailAsync(string recipient, string subject, string body, CancellationToken cancellationToken)
+    {
+        var settings = ReadSettings(configuration);
+        if (string.IsNullOrWhiteSpace(settings.Host) || string.IsNullOrWhiteSpace(settings.FromEmail)) throw new InvalidOperationException("Email SMTP configuration is incomplete.");
+        using var mail = new MailMessage { From = new MailAddress(settings.FromEmail, settings.FromName), Subject = subject, Body = body, IsBodyHtml = false };
+        mail.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(
+            $"<html><body><h2>Anevra HRMS</h2><p>{WebUtility.HtmlEncode(body).Replace("\n", "<br>")}</p></body></html>",
+            System.Text.Encoding.UTF8, System.Net.Mime.MediaTypeNames.Text.Html));
+        mail.To.Add(recipient);
+        await SendAsync(settings, mail, cancellationToken);
+    }
+
     private async Task SendAsync(SmtpEmailSettings settings, MailMessage mail, CancellationToken cancellationToken)
     {
         try

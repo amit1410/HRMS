@@ -9,8 +9,12 @@ using HRMS.Application.Common;
 using HRMS.Application.DTOs.Auth;
 using HRMS.Application.DTOs.Leave;
 using HRMS.Domain.Entities;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Enums;
+using HRMS.Application.Services;
+using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Persistence.Catalog;
+using HRMS.Infrastructure.Persistence.Seed;
 using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -26,6 +30,79 @@ namespace HRMS.Tests;
 /// </summary>
 public sealed class MySqlLeaveHttpIntegrationTests
 {
+    [Fact]
+    public async Task Leave_policy_discard_is_authorized_audited_idempotent_and_excludes_discarded_drafts()
+    {
+        var tenantConnection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
+        var catalogConnection = Environment.GetEnvironmentVariable("HRMS_MYSQL_CATALOG_TEST_CONNECTION");
+        if (string.IsNullOrWhiteSpace(tenantConnection) || string.IsNullOrWhiteSpace(catalogConnection))
+            throw SkipException.ForSkip("MySQL Leave discard HTTP test requires both MySQL test connection variables.");
+
+        var fixture = new MySqlLeaveLifecycleIntegrationTests.Fixture(tenantConnection);
+        var discardedVersionId = Guid.NewGuid();
+        try
+        {
+            await fixture.SeedAsync();
+            await using (var setup = fixture.CreateContext(new TestTenantContext(fixture.TenantId, fixture.ManagerUserId)))
+            {
+                var managePermissionId = SeedData.PermissionId(Permissions.Leave.PolicyManage);
+                if (!await setup.Permissions.AnyAsync(x => x.Id == managePermissionId))
+                    setup.Permissions.Add(new Permission { Id = managePermissionId, Name = Permissions.Leave.PolicyManage, Description = "Manage leave policies" });
+                setup.RolePermissions.Add(new RolePermission { RoleId = fixture.RoleId, PermissionId = managePermissionId });
+                setup.LeavePolicyVersions.Add(new LeavePolicyVersion
+                {
+                    Id = discardedVersionId, TenantId = fixture.TenantId, LeavePolicyId = fixture.PolicyId,
+                    VersionNumber = 2, EffectiveFrom = new(2026, 10, 1), EffectiveTo = new(2026, 12, 31),
+                    Status = LeavePolicyVersionStatus.Draft, Priority = 1
+                });
+                await setup.SaveChangesAsync();
+            }
+
+            await AddCatalogTenantAsync(catalogConnection, fixture);
+            using var factory = new MySqlApiFactory(tenantConnection, catalogConnection);
+            using var managerClient = factory.CreateClientFor(fixture.HttpHost);
+            _ = await LoginAsync(managerClient, fixture.ManagerEmail);
+
+            await using var tokenContext = fixture.CreateContext(fixture.ManagerTenant);
+            var version = (await new LeaveConfigurationService(tokenContext, fixture.ManagerTenant)
+                .GetVersionAsync(fixture.PolicyId, discardedVersionId)).Value!;
+            var discardUrl = $"/api/leave-policies/{fixture.PolicyId}/versions/{discardedVersionId}/discard";
+            var body = new LeavePolicyVersionDiscardRequest { ConcurrencyToken = version.ConcurrencyToken, Reason = "Replaced by the published policy." };
+
+            var response = await managerClient.PostAsJsonAsync(discardUrl, body);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var repeated = await managerClient.PostAsJsonAsync(discardUrl, body);
+            Assert.Equal(HttpStatusCode.Conflict, repeated.StatusCode);
+
+            await using (var verify = fixture.CreateContext(fixture.ManagerTenant))
+            {
+                Assert.Equal(LeavePolicyVersionStatus.Discarded, await verify.LeavePolicyVersions.Where(x => x.Id == discardedVersionId).Select(x => x.Status).SingleAsync());
+                Assert.Equal(1, await verify.LeavePolicyVersionAuditEvents.CountAsync(x => x.LeavePolicyVersionId == discardedVersionId));
+            }
+
+            using var employeeClient = factory.CreateClientFor(fixture.HttpHost);
+            _ = await LoginAsync(employeeClient, fixture.EmployeeEmail);
+            Assert.Equal(HttpStatusCode.Forbidden, (await employeeClient.PostAsJsonAsync(discardUrl, body)).StatusCode);
+
+            var missingReason = await managerClient.PostAsJsonAsync(discardUrl, new { concurrencyToken = version.ConcurrencyToken });
+            Assert.Equal(HttpStatusCode.BadRequest, missingReason.StatusCode);
+
+            var beginEdit = await managerClient.PostAsync($"/api/leave-policies/{fixture.PolicyId}/edit", null);
+            Assert.Equal(HttpStatusCode.OK, beginEdit.StatusCode);
+            var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            jsonOptions.Converters.Add(new JsonStringEnumConverter());
+            var editor = await beginEdit.Content.ReadFromJsonAsync<ApiResponse<LeavePolicyEditorDto>>(jsonOptions);
+            Assert.NotNull(editor?.Data?.CurrentVersion);
+            Assert.NotEqual(discardedVersionId, editor!.Data!.CurrentVersion!.Id);
+            Assert.Equal(LeavePolicyVersionStatus.Draft, editor.Data.CurrentVersion.Status);
+        }
+        finally
+        {
+            await RemoveCatalogTenantAsync(catalogConnection, fixture.TenantId);
+            await fixture.CleanupAsync();
+        }
+    }
+
     [Fact]
     public void MySql_test_normalization_round_trips_without_tls_options()
     {

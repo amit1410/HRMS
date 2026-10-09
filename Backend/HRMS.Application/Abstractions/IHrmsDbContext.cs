@@ -116,6 +116,7 @@ public interface IHrmsDbContext
     DbSet<LeavePeriod> LeavePeriods { get; }
     DbSet<LeavePolicy> LeavePolicies { get; }
     DbSet<LeavePolicyVersion> LeavePolicyVersions { get; }
+    DbSet<LeavePolicyVersionAuditEvent> LeavePolicyVersionAuditEvents { get; }
     DbSet<LeavePolicyRule> LeavePolicyRules { get; }
     DbSet<LeavePolicyEligibilityRule> LeavePolicyEligibilityRules { get; }
     DbSet<LeavePolicyEntitlementRule> LeavePolicyEntitlementRules { get; }
@@ -125,6 +126,30 @@ public interface IHrmsDbContext
     DbSet<LeavePolicyClubbingRule> LeavePolicyClubbingRules { get; }
     DbSet<LeavePolicyCancellationRule> LeavePolicyCancellationRules { get; }
     DbSet<LeavePolicyApplicabilitySet> LeavePolicyApplicabilitySets { get; }
+    DbSet<ConfirmationPolicy> ConfirmationPolicies { get; }
+    DbSet<ConfirmationPolicyVersion> ConfirmationPolicyVersions { get; }
+    DbSet<ConfirmationPolicyRule> ConfirmationPolicyRules { get; }
+    DbSet<ConfirmationPolicyApplicabilitySet> ConfirmationPolicyApplicabilitySets { get; }
+    DbSet<ConfirmationReminderDelivery> ConfirmationReminderDeliveries { get; }
+    DbSet<ConfirmationSchedulerSetting> ConfirmationSchedulerSettings { get; }
+    DbSet<ConfirmationRatingScale> ConfirmationRatingScales { get; }
+    DbSet<ConfirmationRatingScaleValue> ConfirmationRatingScaleValues { get; }
+    DbSet<ConfirmationReviewQuestion> ConfirmationReviewQuestions { get; }
+    DbSet<ConfirmationReviewQuestionOption> ConfirmationReviewQuestionOptions { get; }
+    DbSet<ConfirmationReviewQuestionApplicabilitySet> ConfirmationReviewQuestionApplicabilitySets { get; }
+    DbSet<ConfirmationReviewCase> ConfirmationReviewCases { get; }
+    DbSet<ConfirmationReviewCaseQuestion> ConfirmationReviewCaseQuestions { get; }
+    DbSet<ConfirmationReviewCaseQuestionOption> ConfirmationReviewCaseQuestionOptions { get; }
+    DbSet<ConfirmationReviewCaseRatingValue> ConfirmationReviewCaseRatingValues { get; }
+    DbSet<ConfirmationReviewerReview> ConfirmationReviewerReviews { get; }
+    DbSet<ConfirmationReviewResponse> ConfirmationReviewResponses { get; }
+    DbSet<ConfirmationReviewResponseOption> ConfirmationReviewResponseOptions { get; }
+    DbSet<ConfirmationReviewCaseEvent> ConfirmationReviewCaseEvents { get; }
+    DbSet<ConfirmationDecisionRule> ConfirmationDecisionRules { get; }
+    DbSet<ConfirmationDecisionCalculation> ConfirmationDecisionCalculations { get; }
+    DbSet<ConfirmationDecision> ConfirmationDecisions { get; }
+    DbSet<ConfirmationProbationCycle> ConfirmationProbationCycles { get; }
+    DbSet<ConfirmationProbationExtension> ConfirmationProbationExtensions { get; }
     DbSet<EmployeeLeaveBalance> EmployeeLeaveBalances { get; }
     DbSet<LeaveBalanceTransaction> LeaveBalanceTransactions { get; }
     DbSet<LeaveEntitlementGrant> LeaveEntitlementGrants { get; }

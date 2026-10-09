@@ -6,6 +6,7 @@ using Xunit.Sdk;
 
 namespace HRMS.Tests;
 
+[Collection("MySQL Integration")]
 public sealed class MySqlOvertimeIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]

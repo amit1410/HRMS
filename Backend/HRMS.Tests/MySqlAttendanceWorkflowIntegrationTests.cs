@@ -23,10 +23,14 @@ public sealed class MySqlAttendanceWorkflowIntegrationTests
             db.Shifts.Add(shift);
             db.AttendancePunches.Add(new AttendancePunch { Id = Guid.NewGuid(), TenantId = f.TenantId, EmployeeId = f.EmployeeId, PunchAtUtc = Utc(2026, 10, 10, 9), BusinessDate = new(2026, 10, 10), Direction = PunchDirection.In, Source = PunchSource.Biometric, ExternalPunchId = $"mysql-wf-{Guid.NewGuid():N}", CapturedAtUtc = DateTime.UtcNow });
             var userId = Guid.NewGuid();
-            db.Users.Add(new User { Id = userId, TenantId = f.TenantId, Email = $"wf-{userId:N}@example.test", FirstName = "Workflow", LastName = "User", PasswordHash = "test" });
+            var managerUserId = Guid.NewGuid();
+            db.Users.AddRange(
+                new User { Id = userId, TenantId = f.TenantId, Email = $"wf-{userId:N}@example.test", FirstName = "Workflow", LastName = "User", PasswordHash = "test" },
+                new User { Id = managerUserId, TenantId = f.TenantId, Email = $"wf-manager-{managerUserId:N}@example.test", FirstName = "Workflow", LastName = "Manager", PasswordHash = "test" });
             await db.SaveChangesAsync();
             var identity = new StubIdentity(f.TenantId, userId, f.EmployeeId);
             var request = (await Service(db, f, identity, managerId).SubmitRegularizationAsync(new(new(2026, 10, 10), AttendanceRegularizationType.MissingOutPunch, null, Utc(2026, 10, 10, 18), "forgot out"))).Value!;
+            identity.UserId = managerUserId;
             identity.EmployeeId = managerId;
 
             var approved = await Service(db, f, identity, managerId).ApproveRegularizationAsync(request.Id);
@@ -47,9 +51,15 @@ public sealed class MySqlAttendanceWorkflowIntegrationTests
             await using var db = f.CreateContext();
             var managerId = await AddManagerAsync(db, f);
             var shift = AddShift(f.TenantId, "WF-OD"); db.Shifts.Add(shift);
-            var userId = Guid.NewGuid(); db.Users.Add(new User { Id = userId, TenantId = f.TenantId, Email = $"wf-{userId:N}@example.test", FirstName = "Workflow", LastName = "User", PasswordHash = "test" }); await db.SaveChangesAsync();
+            var userId = Guid.NewGuid();
+            var managerUserId = Guid.NewGuid();
+            db.Users.AddRange(
+                new User { Id = userId, TenantId = f.TenantId, Email = $"wf-{userId:N}@example.test", FirstName = "Workflow", LastName = "User", PasswordHash = "test" },
+                new User { Id = managerUserId, TenantId = f.TenantId, Email = $"wf-manager-{managerUserId:N}@example.test", FirstName = "Workflow", LastName = "Manager", PasswordHash = "test" });
+            await db.SaveChangesAsync();
             var identity = new StubIdentity(f.TenantId, userId, f.EmployeeId);
             var request = (await Service(db, f, identity, managerId).SubmitOnDutyAsync(new(new(2026, 10, 11), new(2026, 10, 12), "Client work"))).Value!;
+            identity.UserId = managerUserId;
             identity.EmployeeId = managerId;
 
             var service = Service(db, f, identity, managerId);
@@ -160,8 +170,9 @@ public sealed class MySqlAttendanceWorkflowIntegrationTests
 
     private sealed class StubIdentity(Guid tenantId, Guid userId, Guid employeeId) : IEmployeeIdentityResolver
     {
+        public Guid UserId { get; set; } = userId;
         public Guid EmployeeId { get; set; } = employeeId;
-        public Task<Result<RuntimeEmployeeIdentity>> ResolveCurrentAsync(CancellationToken cancellationToken = default) => Task.FromResult(Result<RuntimeEmployeeIdentity>.Success(new(tenantId, userId, EmployeeId)));
+        public Task<Result<RuntimeEmployeeIdentity>> ResolveCurrentAsync(CancellationToken cancellationToken = default) => Task.FromResult(Result<RuntimeEmployeeIdentity>.Success(new(tenantId, UserId, EmployeeId)));
     }
 
     private sealed class FixedManagerResolver(Guid managerId) : IEmployeeManagerResolver

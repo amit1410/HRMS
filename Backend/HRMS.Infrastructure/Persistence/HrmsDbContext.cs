@@ -123,6 +123,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<LeavePeriod> LeavePeriods => Set<LeavePeriod>();
     public DbSet<LeavePolicy> LeavePolicies => Set<LeavePolicy>();
     public DbSet<LeavePolicyVersion> LeavePolicyVersions => Set<LeavePolicyVersion>();
+    public DbSet<LeavePolicyVersionAuditEvent> LeavePolicyVersionAuditEvents => Set<LeavePolicyVersionAuditEvent>();
     public DbSet<LeavePolicyRule> LeavePolicyRules => Set<LeavePolicyRule>();
     public DbSet<LeavePolicyEligibilityRule> LeavePolicyEligibilityRules => Set<LeavePolicyEligibilityRule>();
     public DbSet<LeavePolicyEntitlementRule> LeavePolicyEntitlementRules => Set<LeavePolicyEntitlementRule>();
@@ -132,6 +133,30 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<LeavePolicyClubbingRule> LeavePolicyClubbingRules => Set<LeavePolicyClubbingRule>();
     public DbSet<LeavePolicyCancellationRule> LeavePolicyCancellationRules => Set<LeavePolicyCancellationRule>();
     public DbSet<LeavePolicyApplicabilitySet> LeavePolicyApplicabilitySets => Set<LeavePolicyApplicabilitySet>();
+    public DbSet<ConfirmationPolicy> ConfirmationPolicies => Set<ConfirmationPolicy>();
+    public DbSet<ConfirmationPolicyVersion> ConfirmationPolicyVersions => Set<ConfirmationPolicyVersion>();
+    public DbSet<ConfirmationPolicyRule> ConfirmationPolicyRules => Set<ConfirmationPolicyRule>();
+    public DbSet<ConfirmationPolicyApplicabilitySet> ConfirmationPolicyApplicabilitySets => Set<ConfirmationPolicyApplicabilitySet>();
+    public DbSet<ConfirmationReminderDelivery> ConfirmationReminderDeliveries => Set<ConfirmationReminderDelivery>();
+    public DbSet<ConfirmationSchedulerSetting> ConfirmationSchedulerSettings => Set<ConfirmationSchedulerSetting>();
+    public DbSet<ConfirmationRatingScale> ConfirmationRatingScales => Set<ConfirmationRatingScale>();
+    public DbSet<ConfirmationRatingScaleValue> ConfirmationRatingScaleValues => Set<ConfirmationRatingScaleValue>();
+    public DbSet<ConfirmationReviewQuestion> ConfirmationReviewQuestions => Set<ConfirmationReviewQuestion>();
+    public DbSet<ConfirmationReviewQuestionOption> ConfirmationReviewQuestionOptions => Set<ConfirmationReviewQuestionOption>();
+    public DbSet<ConfirmationReviewQuestionApplicabilitySet> ConfirmationReviewQuestionApplicabilitySets => Set<ConfirmationReviewQuestionApplicabilitySet>();
+    public DbSet<ConfirmationReviewCase> ConfirmationReviewCases => Set<ConfirmationReviewCase>();
+    public DbSet<ConfirmationReviewCaseQuestion> ConfirmationReviewCaseQuestions => Set<ConfirmationReviewCaseQuestion>();
+    public DbSet<ConfirmationReviewCaseQuestionOption> ConfirmationReviewCaseQuestionOptions => Set<ConfirmationReviewCaseQuestionOption>();
+    public DbSet<ConfirmationReviewCaseRatingValue> ConfirmationReviewCaseRatingValues => Set<ConfirmationReviewCaseRatingValue>();
+    public DbSet<ConfirmationReviewerReview> ConfirmationReviewerReviews => Set<ConfirmationReviewerReview>();
+    public DbSet<ConfirmationReviewResponse> ConfirmationReviewResponses => Set<ConfirmationReviewResponse>();
+    public DbSet<ConfirmationReviewResponseOption> ConfirmationReviewResponseOptions => Set<ConfirmationReviewResponseOption>();
+    public DbSet<ConfirmationReviewCaseEvent> ConfirmationReviewCaseEvents => Set<ConfirmationReviewCaseEvent>();
+    public DbSet<ConfirmationDecisionRule> ConfirmationDecisionRules => Set<ConfirmationDecisionRule>();
+    public DbSet<ConfirmationDecisionCalculation> ConfirmationDecisionCalculations => Set<ConfirmationDecisionCalculation>();
+    public DbSet<ConfirmationDecision> ConfirmationDecisions => Set<ConfirmationDecision>();
+    public DbSet<ConfirmationProbationCycle> ConfirmationProbationCycles => Set<ConfirmationProbationCycle>();
+    public DbSet<ConfirmationProbationExtension> ConfirmationProbationExtensions => Set<ConfirmationProbationExtension>();
     public DbSet<EmployeeLeaveBalance> EmployeeLeaveBalances => Set<EmployeeLeaveBalance>();
     public DbSet<LeaveBalanceTransaction> LeaveBalanceTransactions => Set<LeaveBalanceTransaction>();
     public DbSet<LeaveEntitlementGrant> LeaveEntitlementGrants => Set<LeaveEntitlementGrant>();
@@ -550,6 +575,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<LeavePeriod>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeavePolicy>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeavePolicyVersion>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<LeavePolicyVersionAuditEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeavePolicyRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeavePolicyEligibilityRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeavePolicyEntitlementRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -559,6 +585,10 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<LeavePolicyClubbingRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeavePolicyCancellationRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeavePolicyApplicabilitySet>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationPolicy>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationPolicyVersion>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationPolicyRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationPolicyApplicabilitySet>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeLeaveBalance>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveBalanceTransaction>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<CompOffPolicy>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -571,6 +601,26 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<LeaveRequestDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveRequestEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveReminderDelivery>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReminderDelivery>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationSchedulerSetting>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationRatingScale>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationRatingScaleValue>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReviewQuestion>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReviewQuestionOption>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReviewQuestionApplicabilitySet>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReviewCase>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReviewCaseQuestion>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReviewCaseQuestionOption>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReviewCaseRatingValue>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReviewerReview>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReviewResponse>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReviewResponseOption>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationReviewCaseEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationDecisionRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationDecisionCalculation>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationDecision>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationProbationCycle>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<ConfirmationProbationExtension>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<Holiday>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<WeeklyOffConfiguration>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<WeeklyOffDay>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -762,6 +812,11 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         {
             if (entry.State is EntityState.Modified or EntityState.Deleted)
                 throw new InvalidOperationException("Leave request events are immutable.");
+        }
+        foreach (var entry in ChangeTracker.Entries<LeavePolicyVersionAuditEvent>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new InvalidOperationException("Leave policy version audit events are immutable.");
         }
 
         foreach (var entry in ChangeTracker.Entries<UserRoleAssignmentEvent>())

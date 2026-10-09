@@ -61,6 +61,18 @@ public static class DependencyInjection
         services.AddScoped<IEmployeeDocumentService, EmployeeDocumentService>();
         services.AddScoped<ILeavePolicyFoundationService, LeavePolicyFoundationService>();
         services.AddScoped<ILeavePolicyResolver, LeavePolicyResolver>();
+        services.AddScoped<IConfirmationPolicyResolver, ConfirmationPolicyResolver>();
+        services.AddScoped<IConfirmationPolicyService, ConfirmationPolicyService>();
+        services.AddScoped<IConfirmationReminderNotificationService, ConfirmationReminderNotificationService>();
+        services.AddScoped<IConfirmationReminderProcessor, ConfirmationReminderProcessor>();
+        services.AddScoped<IConfirmationSchedulerSettingService, ConfirmationSchedulerSettingService>();
+        services.AddScoped<IConfirmationRatingScaleService, ConfirmationRatingScaleService>();
+        services.AddScoped<IConfirmationReviewQuestionService, ConfirmationReviewQuestionService>();
+        services.AddScoped<IConfirmationReviewQuestionResolver, ConfirmationReviewQuestionResolver>();
+        services.AddScoped<IConfirmationHrbpResolver, ConfirmationHrbpResolver>();
+        services.AddScoped<IConfirmationReviewCaseService, ConfirmationReviewCaseService>();
+        services.AddScoped<IConfirmationDecisionService, ConfirmationDecisionService>();
+        services.AddScoped<IHrConfirmationDashboardService, HrConfirmationDashboardService>();
         services.AddScoped<ILeavePeriodResolver, LeavePeriodResolver>();
         services.AddScoped<ILeaveBalanceTransactionPoster, LeaveBalanceTransactionPoster>();
         services.AddScoped<ILeaveBalanceReader, LeaveBalanceReader>();

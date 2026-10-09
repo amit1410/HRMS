@@ -1814,6 +1814,1474 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.ToTable("CompOffPolicies", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationDecision", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("AppliedRuleId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<decimal?>("CalculatedOverallRating")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<Guid>("ConfirmationReviewCaseId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("DecidedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("DecisionMakerEmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("DecisionMakerUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("DecisionReason")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("NewCaseStatus")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Outcome")
+                        .HasColumnType("int");
+
+                    b.Property<int>("PreviousCaseStatus")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ProbationCycleKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<int>("ReviewRound")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewCaseId");
+
+                    b.ToTable("ConfirmationDecisions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationDecisionCalculation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("AppliedRuleId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CalculatedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("CalculatedOutcome")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("ConfirmationReviewCaseId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Explanation")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<decimal?>("OverallRating")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<int>("ReviewRound")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewCaseId");
+
+                    b.ToTable("ConfirmationDecisionCalculations", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationDecisionRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationPolicyVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true);
+
+                    b.Property<decimal?>("MaxOverallRating")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<decimal?>("MinOverallRating")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<int>("Outcome")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConfirmationPolicyVersionId", "Priority");
+
+                    b.ToTable("ConfirmationDecisionRules", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationPolicy", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true);
+
+                    b.Property<string>("ModifiedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("ConfirmationPolicies", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationPolicyApplicabilitySet", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationPolicyVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("CostCenterId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("CountryLocationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("DepartmentId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("DesignationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("EmployeeTypeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("FunctionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int?>("Gender")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("GradeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("HoldingCompanyId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("LobId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("OrganisationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SectionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SubDepartmentId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SubFunctionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SubSectionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("WorkLocationId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("CountryLocationId");
+
+                    b.HasIndex("TenantId", "ConfirmationPolicyVersionId");
+
+                    b.HasIndex("TenantId", "CostCenterId");
+
+                    b.HasIndex("TenantId", "DepartmentId");
+
+                    b.HasIndex("TenantId", "DesignationId");
+
+                    b.HasIndex("TenantId", "EmployeeTypeId");
+
+                    b.HasIndex("TenantId", "FunctionId");
+
+                    b.HasIndex("TenantId", "GradeId");
+
+                    b.HasIndex("TenantId", "HoldingCompanyId");
+
+                    b.HasIndex("TenantId", "LobId");
+
+                    b.HasIndex("TenantId", "OrganisationId");
+
+                    b.HasIndex("TenantId", "SectionId");
+
+                    b.HasIndex("TenantId", "SubDepartmentId");
+
+                    b.HasIndex("TenantId", "SubFunctionId");
+
+                    b.HasIndex("TenantId", "SubSectionId");
+
+                    b.HasIndex("TenantId", "WorkLocationId");
+
+                    b.ToTable("ConfirmationPolicyApplicabilitySets", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationPolicyRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ApprovalSequence")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<bool>("AutoConfirmOnApproval")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<decimal?>("ConfirmRatingThreshold")
+                        .HasPrecision(9, 3)
+                        .HasColumnType("decimal(9,3)");
+
+                    b.Property<Guid>("ConfirmationPolicyVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("ConfirmedJobStatus")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("ExtensionDuration")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ExtensionDurationUnit")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MaxExtensions")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("NotConfirmedJobStatus")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<int>("OverallRatingMethod")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<int>("ProbationDuration")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ProbationDurationUnit")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("RequireReviewerComments")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false);
+
+                    b.Property<int>("RequiredApproval")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("TriggerDaysBeforeEnd")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConfirmationPolicyVersionId")
+                        .IsUnique();
+
+                    b.ToTable("ConfirmationPolicyRules", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationPolicyVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationPolicyId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Priority")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ConfirmationPolicyId", "VersionNumber")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "Status", "EffectiveFrom", "EffectiveTo");
+
+                    b.ToTable("ConfirmationPolicyVersions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationProbationCycle", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("BaselineEndDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("ConfirmationPolicyId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationPolicyVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("CurrentEndDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("CycleNumber")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ExtensionCount")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("StartDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeId", "CycleNumber")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "EmployeeId", "Status");
+
+                    b.ToTable("ConfirmationProbationCycles", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationProbationExtension", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationProbationCycleId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationReviewCaseId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("DecisionMakerUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("ExtendedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("ExtensionDuration")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ExtensionDurationUnit")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("NewEndDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime>("PreviousEndDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConfirmationProbationCycleId");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewCaseId");
+
+                    b.ToTable("ConfirmationProbationExtensions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationRatingScale", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true);
+
+                    b.Property<int>("MaxRating")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MinRating")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ModifiedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.ToTable("ConfirmationRatingScales", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationRatingScaleValue", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationRatingScaleId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true);
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("RatingValue")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConfirmationRatingScaleId");
+
+                    b.HasIndex("TenantId", "ConfirmationRatingScaleId", "RatingValue")
+                        .IsUnique()
+                        .HasDatabaseName("IX_ConfirmationRatingScaleValues_TenantId_ConfirmationRatingSc~1");
+
+                    b.ToTable("ConfirmationRatingScaleValues", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReminderDelivery", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("ClaimToken")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ClaimedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("ConfirmationPolicyId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationPolicyVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("DueAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<DateTime?>("LeaseExpiresAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("NextAttemptAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("NotificationType")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("varchar(50)");
+
+                    b.Property<string>("OccurrenceKey")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("varchar(160)");
+
+                    b.Property<DateTime>("ProbationEndDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("ProcessedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("RecipientEmail")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<Guid?>("RecipientEmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("RecipientType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<DateTime?>("SentAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("TriggerDate")
+                        .HasColumnType("date");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "OccurrenceKey")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "RecipientEmployeeId");
+
+                    b.HasIndex("TenantId", "Status");
+
+                    b.HasIndex("TenantId", "EmployeeId", "ProbationEndDate");
+
+                    b.ToTable("ConfirmationReminderDeliveries", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCase", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationPolicyId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationPolicyVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("CycleNumber")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("DecidedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("DecisionMakerUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("DueDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("HrbpReviewerEmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ManagerReviewerEmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("Outcome")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ProbationCycleKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<DateTime>("ProbationEndDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime>("ProbationStartDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("ReviewRound")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ConfirmationPolicyId");
+
+                    b.HasIndex("TenantId", "HrbpReviewerEmployeeId");
+
+                    b.HasIndex("TenantId", "ManagerReviewerEmployeeId");
+
+                    b.HasIndex("TenantId", "Status");
+
+                    b.HasIndex("TenantId", "EmployeeId", "ProbationCycleKey")
+                        .IsUnique();
+
+                    b.ToTable("ConfirmationReviewCases", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCaseEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationReviewCaseId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ConfirmationReviewerReviewId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("Details")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<int>("EventType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewCaseId");
+
+                    b.ToTable("ConfirmationReviewCaseEvents", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCaseQuestion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)");
+
+                    b.Property<Guid>("ConfirmationReviewCaseId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("int");
+
+                    b.Property<string>("HelpText")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<bool>("IsMandatory")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("QuestionText")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<int>("QuestionType")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("RatingMax")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("RatingMin")
+                        .HasColumnType("int");
+
+                    b.Property<string>("RatingScaleCode")
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)");
+
+                    b.Property<string>("RatingScaleName")
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<Guid>("SourceQuestionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SourceRatingScaleId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewCaseId");
+
+                    b.ToTable("ConfirmationReviewCaseQuestions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCaseQuestionOption", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("varchar(60)");
+
+                    b.Property<Guid>("ConfirmationReviewCaseQuestionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewCaseQuestionId");
+
+                    b.ToTable("ConfirmationReviewCaseQuestionOptions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCaseRatingValue", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationReviewCaseQuestionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("varchar(150)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("RatingValue")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewCaseQuestionId");
+
+                    b.ToTable("ConfirmationReviewCaseRatingValues", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewQuestion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("varchar(40)");
+
+                    b.Property<Guid?>("ConfirmationRatingScaleId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("EffectiveFrom")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("EffectiveTo")
+                        .HasColumnType("date");
+
+                    b.Property<string>("HelpText")
+                        .HasMaxLength(1000)
+                        .HasColumnType("varchar(1000)");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("IsMandatory")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<string>("ModifiedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("QuestionText")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)");
+
+                    b.Property<int>("QuestionType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "ConfirmationRatingScaleId");
+
+                    b.ToTable("ConfirmationReviewQuestions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewQuestionApplicabilitySet", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("ConfirmationPolicyId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationReviewQuestionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("CostCenterId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("CountryLocationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("DepartmentId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("DesignationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("EmployeeTypeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("FunctionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int?>("Gender")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("GradeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("HoldingCompanyId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("LobId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid?>("OrganisationId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SectionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SubDepartmentId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SubFunctionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("SubSectionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid?>("WorkLocationId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("CountryLocationId");
+
+                    b.HasIndex("TenantId", "ConfirmationPolicyId");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewQuestionId")
+                        .HasDatabaseName("IX_ConfirmationReviewQuestionApplicabilitySets_TenantId_Confir~1");
+
+                    b.HasIndex("TenantId", "CostCenterId");
+
+                    b.HasIndex("TenantId", "DepartmentId");
+
+                    b.HasIndex("TenantId", "DesignationId");
+
+                    b.HasIndex("TenantId", "EmployeeTypeId");
+
+                    b.HasIndex("TenantId", "FunctionId");
+
+                    b.HasIndex("TenantId", "GradeId");
+
+                    b.HasIndex("TenantId", "HoldingCompanyId");
+
+                    b.HasIndex("TenantId", "LobId");
+
+                    b.HasIndex("TenantId", "OrganisationId");
+
+                    b.HasIndex("TenantId", "SectionId");
+
+                    b.HasIndex("TenantId", "SubDepartmentId");
+
+                    b.HasIndex("TenantId", "SubFunctionId");
+
+                    b.HasIndex("TenantId", "SubSectionId");
+
+                    b.HasIndex("TenantId", "WorkLocationId");
+
+                    b.ToTable("ConfirmationReviewQuestionApplicabilitySets", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewQuestionOption", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("varchar(60)");
+
+                    b.Property<Guid>("ConfirmationReviewQuestionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true);
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewQuestionId");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewQuestionId", "Code")
+                        .IsUnique()
+                        .HasDatabaseName("IX_ConfirmationReviewQuestionOptions_TenantId_ConfirmationRevi~1");
+
+                    b.ToTable("ConfirmationReviewQuestionOptions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewResponse", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<bool?>("BoolValue")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<Guid>("ConfirmationReviewCaseQuestionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationReviewerReviewId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("RatingValue")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("TextValue")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewCaseQuestionId");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewerReviewId");
+
+                    b.ToTable("ConfirmationReviewResponses", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewResponseOption", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationReviewResponseId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("OptionCode")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("varchar(60)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewResponseId");
+
+                    b.ToTable("ConfirmationReviewResponseOptions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewerReview", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<Guid>("ConfirmationReviewCaseId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("OverallComments")
+                        .HasMaxLength(4000)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<int>("ReviewRound")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(1);
+
+                    b.Property<Guid?>("ReviewerEmployeeId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("ReviewerType")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("SubmittedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<string>("SubmittedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ConfirmationReviewCaseId", "ReviewRound", "ReviewerType", "VersionNumber")
+                        .IsUnique();
+
+                    b.ToTable("ConfirmationReviewerReviews", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationSchedulerSetting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<int?>("ClaimLeaseMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("DefaultTriggerDaysBeforeEnd")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<int>("FrequencyMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("LastRunAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("MaxAttempts")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ModifiedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<bool>("NotifyEmployee")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("NotifyHrbp")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("NotifyManager")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<bool>("ResendProcessed")
+                        .HasColumnType("tinyint(1)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId")
+                        .IsUnique();
+
+                    b.ToTable("ConfirmationSchedulerSettings", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.CostCenter", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3184,17 +4652,8 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Property<DateTime>("CreatedDate")
                         .HasColumnType("datetime(6)");
 
-                    b.Property<DateTime>("DateOfJoining")
-                        .HasColumnType("date");
-
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("char(36)");
-
-                    b.Property<DateTime>("FirstHiredDate")
-                        .HasColumnType("date");
-
-                    b.Property<DateTime?>("GroupDateOfJoining")
-                        .HasColumnType("date");
 
                     b.Property<string>("JobStatus")
                         .HasMaxLength(100)
@@ -3218,13 +4677,6 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
 
                     b.Property<int>("NoticeStatus")
                         .HasColumnType("int");
-
-                    b.Property<int?>("ProbationPeriod")
-                        .HasColumnType("int");
-
-                    b.Property<string>("ProbationPeriodUnit")
-                        .HasMaxLength(20)
-                        .HasColumnType("varchar(20)");
 
                     b.Property<Guid?>("ReferredByEmployeeId")
                         .HasColumnType("char(36)");
@@ -6658,6 +8110,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .HasColumnType("char(36)");
 
                     b.Property<DateTime?>("ModifiedDate")
+                        .IsConcurrencyToken()
                         .HasColumnType("datetime(6)");
 
                     b.Property<int>("Priority")
@@ -6680,6 +8133,55 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.HasIndex("TenantId", "Status", "EffectiveFrom", "EffectiveTo");
 
                     b.ToTable("LeavePolicyVersions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyVersionAuditEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("LeavePolicyVersionId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<int>("PreviousStatus")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ActorUserId");
+
+                    b.HasIndex("TenantId", "LeavePolicyVersionId", "OccurredAtUtc", "Id");
+
+                    b.ToTable("LeavePolicyVersionAuditEvents", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveReminderDelivery", b =>
@@ -18194,6 +19696,610 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationDecision", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewCase", "ConfirmationReviewCase")
+                        .WithMany("Decisions")
+                        .HasForeignKey("TenantId", "ConfirmationReviewCaseId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationReviewCase");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationDecisionCalculation", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewCase", "ConfirmationReviewCase")
+                        .WithMany("Calculations")
+                        .HasForeignKey("TenantId", "ConfirmationReviewCaseId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationReviewCase");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationDecisionRule", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationPolicyVersion", "ConfirmationPolicyVersion")
+                        .WithMany("DecisionRules")
+                        .HasForeignKey("TenantId", "ConfirmationPolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationPolicyVersion");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationPolicy", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationPolicyApplicabilitySet", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Country", "CountryLocation")
+                        .WithMany()
+                        .HasForeignKey("CountryLocationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationPolicyVersion", "ConfirmationPolicyVersion")
+                        .WithMany("ApplicabilitySets")
+                        .HasForeignKey("TenantId", "ConfirmationPolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.CostCenter", "CostCenter")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CostCenterId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Department", "Department")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "DepartmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Designation", "Designation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "DesignationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeType", "EmployeeType")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeTypeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Function", "Function")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "FunctionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Grade", "Grade")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "GradeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.HoldingCompany", "HoldingCompany")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "HoldingCompanyId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Lob", "Lob")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LobId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Organisation", "Organisation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "OrganisationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Section", "Section")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SectionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.SubDepartment", "SubDepartment")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubDepartmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.SubFunction", "SubFunction")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubFunctionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.SubSection", "SubSection")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubSectionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.WorkLocation", "WorkLocation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "WorkLocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ConfirmationPolicyVersion");
+
+                    b.Navigation("CostCenter");
+
+                    b.Navigation("CountryLocation");
+
+                    b.Navigation("Department");
+
+                    b.Navigation("Designation");
+
+                    b.Navigation("EmployeeType");
+
+                    b.Navigation("Function");
+
+                    b.Navigation("Grade");
+
+                    b.Navigation("HoldingCompany");
+
+                    b.Navigation("Lob");
+
+                    b.Navigation("Organisation");
+
+                    b.Navigation("Section");
+
+                    b.Navigation("SubDepartment");
+
+                    b.Navigation("SubFunction");
+
+                    b.Navigation("SubSection");
+
+                    b.Navigation("WorkLocation");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationPolicyRule", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationPolicyVersion", "ConfirmationPolicyVersion")
+                        .WithOne("Rule")
+                        .HasForeignKey("HRMS.Domain.Entities.ConfirmationPolicyRule", "TenantId", "ConfirmationPolicyVersionId")
+                        .HasPrincipalKey("HRMS.Domain.Entities.ConfirmationPolicyVersion", "TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationPolicyVersion");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationPolicyVersion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationPolicy", "ConfirmationPolicy")
+                        .WithMany("Versions")
+                        .HasForeignKey("TenantId", "ConfirmationPolicyId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationPolicy");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationProbationCycle", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationProbationExtension", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationProbationCycle", "ConfirmationProbationCycle")
+                        .WithMany("Extensions")
+                        .HasForeignKey("TenantId", "ConfirmationProbationCycleId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationProbationCycle");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationRatingScale", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationRatingScaleValue", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationRatingScale", "ConfirmationRatingScale")
+                        .WithMany("Values")
+                        .HasForeignKey("TenantId", "ConfirmationRatingScaleId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationRatingScale");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReminderDelivery", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "RecipientEmployee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "RecipientEmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("RecipientEmployee");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCase", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationPolicy", "ConfirmationPolicy")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ConfirmationPolicyId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "HrbpReviewer")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "HrbpReviewerEmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "ManagerReviewer")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ManagerReviewerEmployeeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ConfirmationPolicy");
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("HrbpReviewer");
+
+                    b.Navigation("ManagerReviewer");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCaseEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewCase", "ConfirmationReviewCase")
+                        .WithMany("Events")
+                        .HasForeignKey("TenantId", "ConfirmationReviewCaseId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationReviewCase");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCaseQuestion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewCase", "ConfirmationReviewCase")
+                        .WithMany("Questions")
+                        .HasForeignKey("TenantId", "ConfirmationReviewCaseId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationReviewCase");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCaseQuestionOption", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewCaseQuestion", "ConfirmationReviewCaseQuestion")
+                        .WithMany("Options")
+                        .HasForeignKey("TenantId", "ConfirmationReviewCaseQuestionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationReviewCaseQuestion");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCaseRatingValue", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewCaseQuestion", "ConfirmationReviewCaseQuestion")
+                        .WithMany("RatingValues")
+                        .HasForeignKey("TenantId", "ConfirmationReviewCaseQuestionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationReviewCaseQuestion");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewQuestion", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationRatingScale", "ConfirmationRatingScale")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ConfirmationRatingScaleId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ConfirmationRatingScale");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewQuestionApplicabilitySet", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Country", "CountryLocation")
+                        .WithMany()
+                        .HasForeignKey("CountryLocationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationPolicy", "ConfirmationPolicy")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ConfirmationPolicyId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewQuestion", "ConfirmationReviewQuestion")
+                        .WithMany("ApplicabilitySets")
+                        .HasForeignKey("TenantId", "ConfirmationReviewQuestionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.CostCenter", "CostCenter")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "CostCenterId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Department", "Department")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "DepartmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Designation", "Designation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "DesignationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeType", "EmployeeType")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeTypeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Function", "Function")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "FunctionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Grade", "Grade")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "GradeId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.HoldingCompany", "HoldingCompany")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "HoldingCompanyId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Lob", "Lob")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "LobId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Organisation", "Organisation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "OrganisationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.Section", "Section")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SectionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.SubDepartment", "SubDepartment")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubDepartmentId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.SubFunction", "SubFunction")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubFunctionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.SubSection", "SubSection")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "SubSectionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("HRMS.Domain.Entities.WorkLocation", "WorkLocation")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "WorkLocationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ConfirmationPolicy");
+
+                    b.Navigation("ConfirmationReviewQuestion");
+
+                    b.Navigation("CostCenter");
+
+                    b.Navigation("CountryLocation");
+
+                    b.Navigation("Department");
+
+                    b.Navigation("Designation");
+
+                    b.Navigation("EmployeeType");
+
+                    b.Navigation("Function");
+
+                    b.Navigation("Grade");
+
+                    b.Navigation("HoldingCompany");
+
+                    b.Navigation("Lob");
+
+                    b.Navigation("Organisation");
+
+                    b.Navigation("Section");
+
+                    b.Navigation("SubDepartment");
+
+                    b.Navigation("SubFunction");
+
+                    b.Navigation("SubSection");
+
+                    b.Navigation("WorkLocation");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewQuestionOption", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewQuestion", "ConfirmationReviewQuestion")
+                        .WithMany("Options")
+                        .HasForeignKey("TenantId", "ConfirmationReviewQuestionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationReviewQuestion");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewResponse", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewCaseQuestion", "ConfirmationReviewCaseQuestion")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ConfirmationReviewCaseQuestionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewerReview", "ConfirmationReviewerReview")
+                        .WithMany("Responses")
+                        .HasForeignKey("TenantId", "ConfirmationReviewerReviewId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationReviewCaseQuestion");
+
+                    b.Navigation("ConfirmationReviewerReview");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewResponseOption", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewResponse", "ConfirmationReviewResponse")
+                        .WithMany("SelectedOptions")
+                        .HasForeignKey("TenantId", "ConfirmationReviewResponseId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationReviewResponse");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewerReview", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.ConfirmationReviewCase", "ConfirmationReviewCase")
+                        .WithMany("Reviews")
+                        .HasForeignKey("TenantId", "ConfirmationReviewCaseId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ConfirmationReviewCase");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationSchedulerSetting", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.CostCenter", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -20011,6 +22117,27 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                         .IsRequired();
 
                     b.Navigation("LeavePolicy");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyVersionAuditEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.User", "ActorUser")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ActorUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyVersion", "LeavePolicyVersion")
+                        .WithMany("AuditEvents")
+                        .HasForeignKey("TenantId", "LeavePolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ActorUser");
+
+                    b.Navigation("LeavePolicyVersion");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveReminderDelivery", b =>
@@ -23812,6 +25939,67 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.Navigation("LedgerEntries");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationPolicy", b =>
+                {
+                    b.Navigation("Versions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationPolicyVersion", b =>
+                {
+                    b.Navigation("ApplicabilitySets");
+
+                    b.Navigation("DecisionRules");
+
+                    b.Navigation("Rule");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationProbationCycle", b =>
+                {
+                    b.Navigation("Extensions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationRatingScale", b =>
+                {
+                    b.Navigation("Values");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCase", b =>
+                {
+                    b.Navigation("Calculations");
+
+                    b.Navigation("Decisions");
+
+                    b.Navigation("Events");
+
+                    b.Navigation("Questions");
+
+                    b.Navigation("Reviews");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewCaseQuestion", b =>
+                {
+                    b.Navigation("Options");
+
+                    b.Navigation("RatingValues");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewQuestion", b =>
+                {
+                    b.Navigation("ApplicabilitySets");
+
+                    b.Navigation("Options");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewResponse", b =>
+                {
+                    b.Navigation("SelectedOptions");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.ConfirmationReviewerReview", b =>
+                {
+                    b.Navigation("Responses");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.Country", b =>
                 {
                     b.Navigation("States");
@@ -23962,6 +26150,8 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
             modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyVersion", b =>
                 {
                     b.Navigation("ApplicabilitySets");
+
+                    b.Navigation("AuditEvents");
 
                     b.Navigation("Rules");
                 });

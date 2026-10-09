@@ -1,5 +1,6 @@
 using HRMS.Application.Services;
 using HRMS.Application.Common;
+using HRMS.Application.DTOs.Leave;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence;
@@ -10,6 +11,40 @@ namespace HRMS.Tests;
 
 public sealed class LeavePolicyFoundationTests
 {
+    [Fact]
+    public async Task Configuration_sequence_reloads_version_token_between_mutations()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = Guid.NewGuid();
+        var type = Guid.NewGuid();
+        using var context = db.CreateContext(new TestTenantContext(tenant));
+        await AddBaseAsync(context, tenant, Guid.NewGuid(), type);
+        var policy = NewPolicy(tenant, true);
+        var version = Version(tenant, policy, 1, new(2027, 1, 1), null, LeavePolicyVersionStatus.Draft, 100);
+        context.LeavePolicies.Add(policy);
+        context.LeavePolicyVersions.Add(version);
+        await context.SaveChangesAsync();
+
+        var service = new LeaveConfigurationService(context, new TestTenantContext(tenant));
+        var initial = await service.GetVersionAsync(policy.Id, version.Id);
+        var first = await service.SetVersionLeaveTypesAsync(policy.Id, version.Id,
+            new LeaveTypeSelectionRequest { LeaveTypeIds = [type], ConcurrencyToken = initial.Value!.ConcurrencyToken });
+        Assert.Equal(ResultStatus.Success, first.Status);
+
+        var reloaded = await service.GetVersionAsync(policy.Id, version.Id);
+        Assert.NotEqual(initial.Value!.ConcurrencyToken, reloaded.Value!.ConcurrencyToken);
+        var second = await service.SaveEligibilityAsync(policy.Id, version.Id, type,
+            new LeavePolicyEligibilityRuleRequest
+            {
+                EligibilityMode = HRMS.Domain.Enums.EligibilityMode.Immediate,
+                ProbationMode = HRMS.Domain.Enums.ProbationMode.AfterConfirmation,
+                NoticePeriodMode = HRMS.Domain.Enums.NoticePeriodMode.Allowed,
+                ConcurrencyToken = reloaded.Value.ConcurrencyToken
+            });
+
+        Assert.Equal(ResultStatus.Success, second.Status);
+    }
+
     [Fact]
     public async Task Resolver_returns_no_policy_when_no_published_rule_exists()
     {
@@ -323,6 +358,58 @@ public sealed class LeavePolicyFoundationTests
         var policy = NewPolicy(tenant, true); var version = Version(tenant, policy, 1, new(2027, 1, 1), null, LeavePolicyVersionStatus.Draft, 1); context.LeavePolicies.Add(policy); context.LeavePolicyVersions.Add(version);
         context.LeavePolicyApplicabilitySets.Add(new LeavePolicyApplicabilitySet { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyVersionId = version.Id, DepartmentId = otherDepartment });
         await Assert.ThrowsAsync<DbUpdateException>(() => context.SaveChangesAsync());
+    }
+
+    [Fact]
+    public async Task Discard_marks_draft_and_writes_immutable_audit_event()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = Guid.NewGuid(); var actor = Guid.NewGuid();
+        var context = db.CreateContext(new TestTenantContext(tenant, actor));
+        await AddBaseAsync(context, tenant, Guid.NewGuid(), Guid.NewGuid());
+        context.Users.Add(new User { Id = actor, TenantId = tenant, Email = "actor@test.local" });
+        var policy = NewPolicy(tenant, true); var version = Version(tenant, policy, 1, new(2026, 10, 8), null, LeavePolicyVersionStatus.Draft, 1);
+        context.LeavePolicies.Add(policy); context.LeavePolicyVersions.Add(version); await context.SaveChangesAsync();
+        var token = (await new LeaveConfigurationService(context, new TestTenantContext(tenant, actor)).GetVersionAsync(policy.Id, version.Id)).Value!.ConcurrencyToken;
+
+        var result = await new LeaveConfigurationService(context, new TestTenantContext(tenant, actor)).DiscardAsync(policy.Id, version.Id, new() { ConcurrencyToken = token, Reason = "Superseded test draft" });
+
+        Assert.Equal(ResultStatus.Success, result.Status);
+        Assert.Equal(LeavePolicyVersionStatus.Discarded, (await context.LeavePolicyVersions.SingleAsync(x => x.Id == version.Id)).Status);
+        var audit = await context.LeavePolicyVersionAuditEvents.SingleAsync(x => x.LeavePolicyVersionId == version.Id);
+        Assert.Equal(actor, audit.ActorUserId); Assert.Equal("Superseded test draft", audit.Reason); Assert.Equal("Discarded", audit.Action);
+    }
+
+    [Fact]
+    public async Task Discard_rejects_published_and_stale_versions()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var tenant = Guid.NewGuid(); var actor = Guid.NewGuid(); var context = db.CreateContext(new TestTenantContext(tenant, actor));
+        await AddBaseAsync(context, tenant, Guid.NewGuid(), Guid.NewGuid()); context.Users.Add(new User { Id = actor, TenantId = tenant, Email = "actor2@test.local" });
+        var policy = NewPolicy(tenant, true); var published = Version(tenant, policy, 1, new(2026, 1, 1), null, LeavePolicyVersionStatus.Published, 1); var draft = Version(tenant, policy, 2, new(2026, 10, 8), null, LeavePolicyVersionStatus.Draft, 1);
+        context.LeavePolicies.Add(policy); context.LeavePolicyVersions.AddRange(published, draft); await context.SaveChangesAsync();
+        var service = new LeaveConfigurationService(context, new TestTenantContext(tenant, actor));
+        Assert.Equal(ResultStatus.Conflict, (await service.DiscardAsync(policy.Id, published.Id, new() { Reason = "No" })).Status);
+        Assert.Equal(ResultStatus.Conflict, (await service.DiscardAsync(policy.Id, draft.Id, new() { ConcurrencyToken = "stale", Reason = "No" })).Status);
+    }
+
+    [Fact]
+    public async Task Discard_rejects_runtime_dependencies_and_missing_actor()
+    {
+        using var db = new SqliteInMemoryDatabase(); var tenant = Guid.NewGuid(); var actor = Guid.NewGuid(); var employee = Guid.NewGuid(); var type = Guid.NewGuid();
+        var context = db.CreateContext(new TestTenantContext(tenant, actor)); await AddBaseAsync(context, tenant, employee, type);
+        context.Users.Add(new User { Id = actor, TenantId = tenant, Email = "actor3@test.local" }); var policy = NewPolicy(tenant, true); var version = Version(tenant, policy, 1, new(2026, 10, 8), null, LeavePolicyVersionStatus.Draft, 1);
+        context.LeavePolicies.Add(policy); context.LeavePolicyVersions.Add(version); await context.SaveChangesAsync();
+        var period = new LeavePeriod { Id = Guid.NewGuid(), TenantId = tenant, Code = "P", Name = "P", StartDate = new(2026, 1, 1), EndDate = new(2026, 12, 31) };
+        var rule = new LeavePolicyRule { Id = Guid.NewGuid(), TenantId = tenant, LeavePolicyVersionId = version.Id, LeaveTypeId = type };
+        var history = await context.EmployeeEmploymentHistory.SingleAsync(x => x.EmployeeId == employee);
+        context.LeavePeriods.Add(period); context.LeavePolicyRules.Add(rule);
+        context.LeaveRequests.Add(new LeaveRequest { Id = Guid.NewGuid(), TenantId = tenant, EmployeeId = employee, LeaveTypeId = type, LeavePeriodId = period.Id, LeavePolicyVersionId = version.Id, LeavePolicyRuleId = rule.Id, EmployeeEmploymentHistoryId = history.Id, IdempotencyKey = "discard-test", PayloadFingerprint = "x" });
+        await context.SaveChangesAsync();
+        var blocked = await new LeaveConfigurationService(context, new TestTenantContext(tenant, actor)).DiscardAsync(policy.Id, version.Id, new() { ConcurrencyToken = (await new LeaveConfigurationService(context, new TestTenantContext(tenant, actor)).GetVersionAsync(policy.Id, version.Id)).Value!.ConcurrencyToken, Reason = "Has request" });
+        Assert.Equal(ResultStatus.Conflict, blocked.Status);
+        var noActor = await new LeaveConfigurationService(context, new TestTenantContext(tenant)).DiscardAsync(policy.Id, version.Id, new() { Reason = "No actor" });
+        Assert.Equal(ResultStatus.Unauthorized, noActor.Status);
     }
 
     private static LeavePolicy NewPolicy(Guid tenant, bool active) => new() { Id = Guid.NewGuid(), TenantId = tenant, Code = Guid.NewGuid().ToString("N")[..8], Name = "Policy", IsActive = active };

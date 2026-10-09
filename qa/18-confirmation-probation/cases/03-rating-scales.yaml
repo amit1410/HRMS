@@ -1,0 +1,80 @@
+sheet: Confirmation_Rating_Scales
+submodule: Confirmation rating-scale master (Phase 9c-1) — configurable numeric scales and their value labels used by rating review questions
+defaults:
+  role: TENANT_ADMIN
+  perm: "Confirmation.RatingScaleManage"
+  tenant: A
+  pre: "Tenant A signed in as TenantAdmin/HRAdmin unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: CONF-RSCALE-001
+    func: [F-CONF-RSCALE-001]
+    sc: List rating scales with search and isActive filter, paged
+    t: GET /api/confirmation-rating-scales returns a paged, Code-ordered list filterable by search and IsActive
+    src: ["ConfirmationRatingScaleService.GetScalesAsync"]
+    type: Positive
+    pri: P1
+    perm: "Confirmation.RatingScaleView"
+    steps:
+      - "[GET /api/confirmation-rating-scales?isActive=true] Call as TenantAdmin => [200] items are all IsActive=true, paged"
+    auto: API
+
+  - id: CONF-RSCALE-002
+    func: [F-CONF-RSCALE-002]
+    sc: Create a rating scale with ordered values and read it back
+    t: POST a scale (min/max + values) then GET returns the configured values in display order
+    src: ["ConfirmationRatingScaleService.CreateScaleAsync", "ConfirmationRatingScaleService.GetScaleAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/confirmation-rating-scales] unique Code, minRating=1, maxRating=5, values 1..5 => [201] scale + values created"
+      - "[GET /api/confirmation-rating-scales/{id}] => [200] values returned, maxRating=5"
+    auto: API
+
+  - id: CONF-RSCALE-003
+    func: [F-CONF-RSCALE-002]
+    sc: A rating value outside the configured bounds is rejected
+    t: POST a scale whose value lies outside [minRating, maxRating] returns a validation error
+    src: ["ConfirmationRatingScaleService.CreateScaleAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/confirmation-rating-scales] minRating=1, maxRating=5, a value of 99 => [400] validation error on values[*].ratingValue"
+    auto: API
+
+  - id: CONF-RSCALE-004
+    func: [F-CONF-RSCALE-002]
+    sc: Duplicate scale code is rejected
+    t: POST /api/confirmation-rating-scales with an existing Code (case-insensitive) returns a conflict
+    src: ["ConfirmationRatingScaleService.CreateScaleAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/confirmation-rating-scales] Code=PERF5 then Code=perf5 => [409] conflict with field error on code"
+    auto: API
+
+  - id: CONF-RSCALE-005
+    func: [F-CONF-RSCALE-003]
+    sc: Update replaces the value set of a scale
+    t: PUT /api/confirmation-rating-scales/{id} with a new value set atomically replaces the prior values
+    src: ["ConfirmationRatingScaleService.UpdateScaleAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[PUT /api/confirmation-rating-scales/{id}] new min/max + 3 values => [200] scale returns exactly the 3 new values"
+    auto: Manual
+
+  - id: CONF-RSCALE-AUTHZ-001
+    func: [F-CONF-RSCALE-004]
+    sc: Manage permission is required to create a rating scale
+    t: An Employee (lacking Confirmation.RatingScaleManage) gets 403; unauthenticated gets 401
+    src: ["ConfirmationRatingScalesController", "HasPermission"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[GET /api/confirmation-rating-scales] no token => [401]"
+      - "[POST /api/confirmation-rating-scales] as Employee => [403]"
+    auto: API

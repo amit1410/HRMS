@@ -29,7 +29,7 @@ internal static class SeparationFoundationProviderAcceptance
         var managerLinkId = Guid.NewGuid();
         db.AccountEmployeeLinkEvents.Add(new AccountEmployeeLinkEvent { Id = managerLinkId, TenantId = tenantId, SubjectUserId = managerUserId, ActorUserId = managerUserId, Sequence = 1, Operation = "Link", NewLinkId = managerLinkId, AfterEmployeeId = managerId, OccurredAtUtc = DateTime.UtcNow, Reason = "Phase 8B provider acceptance", CorrelationId = managerLinkId.ToString("N") });
         db.AccountEmployeeCurrentLinks.Add(new AccountEmployeeCurrentLink { LinkId = managerLinkId, TenantId = tenantId, UserId = managerUserId, EmployeeId = managerId });
-        db.EmployeeEmployments.Add(new EmployeeEmployment { Id = Guid.NewGuid(), TenantId = tenantId, EmployeeId = employeeId, FirstHiredDate = new(2025, 1, 1), DateOfJoining = new(2025, 1, 1), NoticePeriod = 30, NoticePeriodUnit = "Days" });
+        db.EmployeeEmployments.Add(new EmployeeEmployment { Id = Guid.NewGuid(), TenantId = tenantId, EmployeeId = employeeId, NoticePeriod = 30, NoticePeriodUnit = "Days" });
         db.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory { Id = Guid.NewGuid(), TenantId = tenantId, EmployeeId = employeeId, EffectiveFrom = new(2020, 1, 1), ManagerId = managerId, EmploymentStatus = EmployeeStatus.Active });
         db.EmployeeEmploymentHistory.Add(new EmployeeEmploymentHistory { Id = Guid.NewGuid(), TenantId = tenantId, EmployeeId = managerId, EffectiveFrom = new(2020, 1, 1), EmploymentStatus = EmployeeStatus.Active });
         await db.SaveChangesAsync();
@@ -62,6 +62,7 @@ internal static class SeparationFoundationProviderAcceptance
     }
 }
 
+[Collection("MySQL Integration")]
 public sealed class MySqlSeparationFoundationIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]

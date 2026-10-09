@@ -33,6 +33,16 @@ import { LeaveTypesPage } from './pages/leave/LeaveTypesPage.tsx'
 import { LeavePeriodsPage } from './pages/leave/LeavePeriodsPage.tsx'
 import { LeavePoliciesPage } from './pages/leave/LeavePoliciesPage.tsx'
 import { LeavePolicyEditorPage } from './pages/leave/LeavePolicyEditorPage.tsx'
+import { ConfirmationPoliciesPage } from './pages/confirmation/ConfirmationPoliciesPage.tsx'
+import { ConfirmationPolicyEditorPage } from './pages/confirmation/ConfirmationPolicyEditorPage.tsx'
+import { ConfirmationSchedulerPage } from './pages/confirmation/ConfirmationSchedulerPage.tsx'
+import { RatingScalesPage } from './pages/confirmation/RatingScalesPage.tsx'
+import { RatingScaleEditorPage } from './pages/confirmation/RatingScaleEditorPage.tsx'
+import { ReviewQuestionsPage } from './pages/confirmation/ReviewQuestionsPage.tsx'
+import { ReviewQuestionEditorPage } from './pages/confirmation/ReviewQuestionEditorPage.tsx'
+import { ConfirmationReviewCasesPage } from './pages/confirmation/ConfirmationReviewCasesPage.tsx'
+import { ConfirmationReviewCaseDetailPage } from './pages/confirmation/ConfirmationReviewCaseDetailPage.tsx'
+import { ConfirmationDashboardPage } from './pages/confirmation/ConfirmationDashboardPage.tsx'
 import { LeaveRequestPreviewPage } from './pages/leave/LeaveRequestPreviewPage.tsx'
 import { LeaveWorkingDayCalendarPage } from './pages/leave/LeaveWorkingDayCalendarPage.tsx'
 import { MyLeaveRequestDetailPage, MyLeaveRequestsPage } from './pages/leave/MyLeaveRequestsPage.tsx'
@@ -57,6 +67,7 @@ import { CompOffOperationsPage } from './pages/attendance/CompOffOperationsPage.
 import { AttendanceDevicesPage } from './pages/attendance/AttendanceDevicesPage.tsx'
 import { PlatformTenantsPage } from './pages/platform/PlatformTenantsPage.tsx'
 import { PlatformLoginPage } from './pages/platform/PlatformLoginPage.tsx'
+import { PlatformRecoveryPage } from './pages/platform/PlatformRecoveryPage.tsx'
 import { PlatformAuthProvider, usePlatformAuth } from './auth/PlatformAuthProvider.tsx'
 import { RequirePlatformAuth } from './auth/RequirePlatformAuth.tsx'
 import { SalaryComponentsPage } from './pages/payroll/SalaryComponentsPage.tsx'
@@ -143,7 +154,7 @@ function PlatformApplication() {
 
 function PlatformRoutes() {
   const { status } = usePlatformAuth()
-  return <KeyedErrorBoundary><Routes><Route path="/platform/login" element={<PlatformLoginPage />} /><Route element={<RequirePlatformAuth />}><Route path="/platform/tenants" element={<PlatformTenantsPage />} /><Route path="*" element={<Navigate to={status === 'authenticated' ? '/platform/tenants' : '/platform/login'} replace />} /></Route></Routes></KeyedErrorBoundary>
+  return <KeyedErrorBoundary><Routes><Route path="/platform/login" element={<PlatformLoginPage />} /><Route path="/platform/forgot-username" element={<PlatformRecoveryPage mode="username" />} /><Route path="/platform/forgot-password" element={<PlatformRecoveryPage mode="password" />} /><Route path="/platform/reset-password" element={<PlatformRecoveryPage mode="reset" />} /><Route element={<RequirePlatformAuth />}><Route path="/platform/tenants" element={<PlatformTenantsPage />} /><Route path="*" element={<Navigate to={status === 'authenticated' ? '/platform/tenants' : '/platform/login'} replace />} /></Route></Routes></KeyedErrorBoundary>
 }
 
 function TenantApplication() {
@@ -239,6 +250,18 @@ function TenantApplication() {
                   <Route path="leave-management/periods" element={<RequirePermission permission={Permissions.leave.periodManage}><LeavePeriodsPage /></RequirePermission>} />
                   <Route path="leave-management/policies" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePoliciesPage /></RequirePermission>} />
                   <Route path="leave-management/policies/:policyId" element={<RequirePermission permission={Permissions.leave.policyView}><LeavePolicyEditorPage /></RequirePermission>} />
+                  <Route path="confirmation/policies" element={<RequirePermission permission={Permissions.confirmation.policyView}><ConfirmationPoliciesPage /></RequirePermission>} />
+                  <Route path="confirmation/policies/:policyId" element={<RequirePermission permission={Permissions.confirmation.policyView}><ConfirmationPolicyEditorPage /></RequirePermission>} />
+                  <Route path="confirmation/scheduler" element={<RequirePermission permission={Permissions.confirmation.schedulerView}><ConfirmationSchedulerPage /></RequirePermission>} />
+                  <Route path="confirmation/rating-scales" element={<RequirePermission permission={Permissions.confirmation.ratingScaleView}><RatingScalesPage /></RequirePermission>} />
+                  <Route path="confirmation/rating-scales/new" element={<RequirePermission permission={Permissions.confirmation.ratingScaleManage}><RatingScaleEditorPage /></RequirePermission>} />
+                  <Route path="confirmation/rating-scales/:scaleId" element={<RequirePermission permission={Permissions.confirmation.ratingScaleView}><RatingScaleEditorPage /></RequirePermission>} />
+                  <Route path="confirmation/review-questions" element={<RequirePermission permission={Permissions.confirmation.reviewQuestionView}><ReviewQuestionsPage /></RequirePermission>} />
+                  <Route path="confirmation/review-questions/new" element={<RequirePermission permission={Permissions.confirmation.reviewQuestionManage}><ReviewQuestionEditorPage /></RequirePermission>} />
+                  <Route path="confirmation/review-questions/:questionId" element={<RequirePermission permission={Permissions.confirmation.reviewQuestionView}><ReviewQuestionEditorPage /></RequirePermission>} />
+                  <Route path="confirmation/review-cases" element={<RequirePermission permission={Permissions.confirmation.reviewCaseView}><ConfirmationReviewCasesPage /></RequirePermission>} />
+                  <Route path="confirmation/review-cases/:caseId" element={<RequirePermission permission={Permissions.confirmation.reviewCaseView}><ConfirmationReviewCaseDetailPage /></RequirePermission>} />
+                  <Route path="confirmation/dashboard" element={<RequirePermission permission={Permissions.confirmation.dashboardViewAll}><ConfirmationDashboardPage /></RequirePermission>} />
                   <Route path="leave-management/apply" element={<RequirePermission permission={Permissions.leave.requestCreate}><RequireEmployeeIdentity><LeaveRequestPreviewPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="leave-management/my-requests" element={<RequirePermission permission={Permissions.leave.requestViewOwn}><RequireEmployeeIdentity><MyLeaveRequestsPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="leave-management/my-requests/:requestId" element={<RequirePermission permission={Permissions.leave.requestViewOwn}><RequireEmployeeIdentity><MyLeaveRequestDetailPage /></RequireEmployeeIdentity></RequirePermission>} />

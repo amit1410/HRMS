@@ -653,13 +653,8 @@ export function managerDisplay(record: EmployeeEmploymentHistory): string {
 function EmploymentAccordion({ title, defaultOpen, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) { return <details className="employment-accordion" open={defaultOpen}><summary>{title}</summary><div className="employment-accordion-body">{children}</div></details> }
 
 interface JoiningValues {
-  firstHiredDate: string
-  dateOfJoining: string
-  groupDateOfJoining: string
   confirmationDate: string
   jobStatus: string
-  probationPeriod: string
-  probationPeriodUnit: string
   referredByEmployeeId: string
   noticePeriod: string
   noticePeriodUnit: string
@@ -669,13 +664,8 @@ interface JoiningValues {
 }
 
 const EMPTY_JOINING: JoiningValues = {
-  firstHiredDate: '',
-  dateOfJoining: '',
-  groupDateOfJoining: '',
   confirmationDate: '',
   jobStatus: '',
-  probationPeriod: '',
-  probationPeriodUnit: '',
   referredByEmployeeId: '',
   noticePeriod: '',
   noticePeriodUnit: '',
@@ -686,13 +676,8 @@ const EMPTY_JOINING: JoiningValues = {
 
 function joiningValuesFromEmployment(employment: EmployeeEmployment): JoiningValues {
   return {
-    firstHiredDate: employment.firstHiredDate ?? '',
-    dateOfJoining: employment.dateOfJoining ?? '',
-    groupDateOfJoining: employment.groupDateOfJoining ?? '',
     confirmationDate: employment.confirmationDate ?? '',
     jobStatus: employment.jobStatus ?? '',
-    probationPeriod: employment.probationPeriod?.toString() ?? '',
-    probationPeriodUnit: employment.probationPeriodUnit ?? '',
     referredByEmployeeId: employment.referredByEmployeeId ?? '',
     noticePeriod: employment.noticePeriod?.toString() ?? '',
     noticePeriodUnit: employment.noticePeriodUnit ?? '',
@@ -711,13 +696,8 @@ function joiningRequestFromValues(values: JoiningValues): EmployeeEmploymentRequ
   }
 
   return {
-    firstHiredDate: values.firstHiredDate,
-    dateOfJoining: values.dateOfJoining,
-    groupDateOfJoining: values.groupDateOfJoining || null,
     confirmationDate: values.confirmationDate || null,
     jobStatus: values.jobStatus.trim() || null,
-    probationPeriod: numberOrNull(values.probationPeriod),
-    probationPeriodUnit: values.probationPeriodUnit || null,
     referredByEmployeeId: values.referredByEmployeeId.trim() || null,
     noticePeriod: numberOrNull(values.noticePeriod),
     noticePeriodUnit: values.noticePeriodUnit || null,
@@ -791,41 +771,22 @@ function JoiningEmploymentForm({ employeeId }: EmploymentSectionFormProps) {
       <form onSubmit={saveContractualEmployment} noValidate>
         <fieldset className="form-section">
           <legend>Joining &amp; Contractual Employment</legend>
+          <p className="field-hint">
+            Date of joining is managed in the employee&apos;s Personal Details.
+          </p>
           <div className="form-grid">
-            <TextField
-              id="firstHiredDate"
-              label="First hired date"
-              type="date"
-              value={values.firstHiredDate}
-              onChange={(value) => update('firstHiredDate', value)}
-              required
-              error={fieldError('firstHiredDate')}
-            />
-            <TextField
-              id="dateOfJoining"
-              label="Date of joining"
-              type="date"
-              value={values.dateOfJoining}
-              onChange={(value) => update('dateOfJoining', value)}
-              required
-              error={fieldError('dateOfJoining')}
-            />
-            <TextField
-              id="groupDateOfJoining"
-              label="Group date of joining"
-              type="date"
-              value={values.groupDateOfJoining}
-              onChange={(value) => update('groupDateOfJoining', value)}
-              hint="Optional."
-              error={fieldError('groupDateOfJoining')}
-            />
             <TextField
               id="confirmationDate"
               label="Confirmation date"
               type="date"
               value={values.confirmationDate}
               onChange={(value) => update('confirmationDate', value)}
-              hint="Optional."
+              disabled={employment.data?.confirmationDateIsPolicyManaged ?? false}
+              hint={
+                employment.data?.confirmationDateIsPolicyManaged
+                  ? `Managed by the "${employment.data.confirmationPolicyName ?? 'applicable'}" confirmation policy${employment.data.policyProbationEndDate ? ` (probation ends ${employment.data.policyProbationEndDate}).` : '.'}`
+                  : 'Optional.'
+              }
               error={fieldError('confirmationDate')}
             />
             <TextField
@@ -836,29 +797,6 @@ function JoiningEmploymentForm({ employeeId }: EmploymentSectionFormProps) {
               maxLength={100}
               hint="Optional."
               error={fieldError('jobStatus')}
-            />
-            <TextField
-              id="probationPeriod"
-              label="Probation period"
-              type="number"
-              value={values.probationPeriod}
-              onChange={(value) => update('probationPeriod', value)}
-              min="1"
-              hint="Optional."
-              error={fieldError('probationPeriod')}
-            />
-            <SelectField
-              id="probationPeriodUnit"
-              label="Probation unit"
-              value={values.probationPeriodUnit}
-              onChange={(value) => update('probationPeriodUnit', value)}
-              options={[
-                { value: 'Days', label: 'Days' },
-                { value: 'Months', label: 'Months' },
-                { value: 'Years', label: 'Years' },
-              ]}
-              placeholder="— Select —"
-              error={fieldError('probationPeriodUnit')}
             />
             <TextField
               id="noticePeriod"

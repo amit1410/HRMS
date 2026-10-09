@@ -26,6 +26,29 @@ namespace HRMS.Infrastructure;
 /// </summary>
 public static class DependencyInjection
 {
+    /// <summary>
+    /// Registers only the catalog and password hashing services required by the one-time platform
+    /// administrator bootstrap tool. This deliberately does not validate or register password-recovery,
+    /// email, SMS, tenant, or hosted-worker infrastructure.
+    /// </summary>
+    public static IServiceCollection AddPlatformAdminBootstrapInfrastructure(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddDbContext<HrmsCatalogDbContext>(options =>
+        {
+            var catalogProvider = ConfiguredProvider.ResolveCatalogProvider(configuration);
+            UseCatalogProvider(
+                options,
+                CatalogConnectionString(configuration, catalogProvider),
+                catalogProvider,
+                isDevelopment: false);
+        });
+        services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
+
+        return services;
+    }
+
     public static IServiceCollection AddInfrastructure(
         this IServiceCollection services,
         IConfiguration configuration,
@@ -57,6 +80,14 @@ public static class DependencyInjection
         services.AddSingleton(reminderOptions);
         services.AddSingleton(Options.Create(reminderOptions));
         services.AddHostedService<LeaveApprovalReminderWorker>();
+
+        var confirmationReminderOptions = configuration.GetSection(ConfirmationReminderOptions.SectionName).Get<ConfirmationReminderOptions>()
+            ?? new ConfirmationReminderOptions();
+        if (confirmationReminderOptions.Validate() is { } confirmationReminderProblem)
+            throw new InvalidOperationException(confirmationReminderProblem);
+        services.AddSingleton(confirmationReminderOptions);
+        services.AddSingleton(Options.Create(confirmationReminderOptions));
+        services.AddHostedService<ConfirmationReminderWorker>();
 
         var accrualOptions = configuration.GetSection(LeaveAccrualOptions.SectionName).Get<LeaveAccrualOptions>()
             ?? new LeaveAccrualOptions();
@@ -181,6 +212,7 @@ public static class DependencyInjection
         // Singleton: it creates the scope each organization is provisioned in rather than living in one.
         services.AddSingleton<ITenantProvisioningService, TenantProvisioningService>();
         services.AddScoped<IPlatformTenantService, PlatformTenantService>();
+        services.AddScoped<IPlatformPasswordRecoveryService, PlatformPasswordRecoveryService>();
 
         return services;
     }

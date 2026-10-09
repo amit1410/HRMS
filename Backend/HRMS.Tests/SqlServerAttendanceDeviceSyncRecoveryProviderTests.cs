@@ -10,10 +10,9 @@ public sealed class SqlServerAttendanceDeviceSyncRecoveryProviderTests : IClassF
 
     public SqlServerAttendanceDeviceSyncRecoveryProviderTests(SqlServerIntegrationTestHarness fixture) => this.fixture = fixture;
 
-    [Fact]
+    [SqlServerIntegrationFact]
     public async Task SqlServer_phase6g_attendance_device_sync_recovery_provider_acceptance()
     {
-        if (!fixture.IsConfigured) throw SkipException.ForSkip("Phase 6G SQL Server provider acceptance requires HRMS_SQLSERVER_TEST_CONNECTION.");
         await using var disposable = await fixture.CreateDisposableDatabaseAsync("HRMS_Phase6G_Integration_");
         await using var probe = disposable.CreateContext(new TestTenantContext());
         var applied = await probe.Database.GetAppliedMigrationsAsync();

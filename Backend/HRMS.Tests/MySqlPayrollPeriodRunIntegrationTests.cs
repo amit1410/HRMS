@@ -11,6 +11,7 @@ using Xunit.Sdk;
 
 namespace HRMS.Tests;
 
+[Collection("MySQL Integration")]
 public sealed class MySqlPayrollPeriodRunIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]

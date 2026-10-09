@@ -45,41 +45,64 @@ public sealed class AttendanceDeviceIntegrationService(
         device.LastAttemptedSyncAtUtc = now;
         await db.SaveChangesAsync(cancellationToken);
 
+        var sourceIdentity = $"device:{device.Id:N}:{request.Source.Trim()}";
+        var externalEventIds = request.Punches
+            .Where(x => !string.IsNullOrWhiteSpace(x.ExternalEventId))
+            .Select(x => x.ExternalEventId)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var priorEventIds = externalEventIds.Length == 0
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : (await db.AttendanceDeviceIngestionEvents.AsNoTracking()
+                .Where(x => x.TenantId == tenantId && x.Source == sourceIdentity && externalEventIds.Contains(x.ExternalEventId))
+                .Select(x => x.ExternalEventId)
+                .ToListAsync(cancellationToken))
+                .ToHashSet(StringComparer.Ordinal);
+        var mappingIdentifiers = request.Punches
+            .Where(x => !string.IsNullOrWhiteSpace(x.ExternalEmployeeIdentifier))
+            .Select(x => x.ExternalEmployeeIdentifier)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var batchMappings = mappingIdentifiers.Length == 0
+            ? []
+            : await db.AttendanceDeviceEmployeeMappings.AsNoTracking()
+                .Where(x => x.TenantId == tenantId && x.AttendanceDeviceId == device.Id &&
+                    x.Status == AttendanceDeviceMappingStatus.Active && mappingIdentifiers.Contains(x.ExternalEmployeeIdentifier))
+                .ToListAsync(cancellationToken);
+        var finalizedByDate = new Dictionary<DateOnly, bool>();
+
         var results = new List<AttendanceDeviceItemResult>(request.Punches.Count);
+        var pendingIssues = new List<AttendanceDeviceIngestionEvent>(request.Punches.Count);
         foreach (var input in request.Punches)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var sourceIdentity = $"device:{device.Id:N}:{request.Source.Trim()}";
             if (string.IsNullOrWhiteSpace(input.ExternalEventId) || input.ExternalEventId.Length > 200 ||
                 string.IsNullOrWhiteSpace(input.ExternalEmployeeIdentifier) || input.ExternalEmployeeIdentifier.Length > 200 ||
                 !TimeZoneInfo.TryFindSystemTimeZoneById(device.TimeZoneId, out _) || input.OccurredAt == default)
             {
-                await SaveIssueAsync(new AttendanceDeviceIngestionEvent
+                pendingIssues.Add(new AttendanceDeviceIngestionEvent
                 {
                     Id = Guid.NewGuid(), TenantId = tenantId, AttendanceDeviceId = device.Id, AttendanceDeviceSyncRunId = run.Id,
                     Source = sourceIdentity, ExternalEventId = string.IsNullOrWhiteSpace(input.ExternalEventId) ? Guid.NewGuid().ToString("N") : input.ExternalEventId,
                     ExternalEmployeeIdentifier = input.ExternalEmployeeIdentifier ?? string.Empty, OccurredAtUtc = input.OccurredAt.UtcDateTime,
                     ReceivedAtUtc = now, Direction = input.Direction, Status = AttendanceDeviceIngestionStatus.Rejected,
                     SanitizedError = "Malformed identity, timestamp, or device time-zone configuration."
-                }, cancellationToken);
+                });
                 results.Add(new(input.ExternalEventId ?? string.Empty, AttendanceDeviceIngestionStatus.Rejected, "Malformed event."));
                 continue;
             }
 
-            var prior = await db.AttendanceDeviceIngestionEvents.AsNoTracking().SingleOrDefaultAsync(
-                x => x.TenantId == tenantId && x.Source == sourceIdentity && x.ExternalEventId == input.ExternalEventId, cancellationToken);
-            if (prior is not null)
+            if (priorEventIds.Contains(input.ExternalEventId))
             {
                 results.Add(new(input.ExternalEventId, AttendanceDeviceIngestionStatus.Duplicate, "Event was already durably received."));
                 continue;
             }
 
             var businessCandidate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(input.OccurredAt, _businessTimeZoneProvider.GetTimeZone(tenantId)).DateTime);
-            var mappings = await db.AttendanceDeviceEmployeeMappings.AsNoTracking()
-                .Where(x => x.TenantId == tenantId && x.AttendanceDeviceId == device.Id &&
-                    x.ExternalEmployeeIdentifier == input.ExternalEmployeeIdentifier && x.Status == AttendanceDeviceMappingStatus.Active &&
+            var mappings = batchMappings
+                .Where(x => x.ExternalEmployeeIdentifier == input.ExternalEmployeeIdentifier &&
                     x.EffectiveFrom <= businessCandidate && (x.EffectiveTo == null || x.EffectiveTo >= businessCandidate))
-                .OrderByDescending(x => x.EffectiveFrom).Take(2).ToListAsync(cancellationToken);
+                .OrderByDescending(x => x.EffectiveFrom).Take(2).ToList();
             var ambiguousMapping = mappings.Count > 1;
             var mapping = mappings.Count == 1 ? mappings[0] : null;
 
@@ -96,7 +119,7 @@ public sealed class AttendanceDeviceIntegrationService(
                 state = AttendanceDeviceIngestionStatus.Rejected;
                 error = "Punch direction is unknown; it was retained without creating an authoritative raw punch.";
             }
-            else if (mapping is not null && await IsFinalizedAsync(tenantId, businessCandidate, cancellationToken))
+            else if (mapping is not null && await IsFinalizedCachedAsync(tenantId, businessCandidate, finalizedByDate, cancellationToken))
             {
                 state = AttendanceDeviceIngestionStatus.RequiresPeriodReopen;
                 error = "The Attendance period is finalized; controlled reopen is required before processing this late punch.";
@@ -108,7 +131,7 @@ public sealed class AttendanceDeviceIntegrationService(
                     mapping.EmployeeId, input.OccurredAt.UtcDateTime,
                     input.Direction == AttendanceDevicePunchDirection.In ? PunchDirection.In : PunchDirection.Out,
                     PunchSource.Biometric, externalPunchId, device.Id.ToString("N"),
-                    RawReference: "AttendanceDeviceIngestion"), cancellationToken);
+                    RawReference: "AttendanceDeviceIngestion"), cancellationToken, deferSaveChanges: request.Punches.Count > 1);
                 if (!ingested.Succeeded)
                 {
                     state = AttendanceDeviceIngestionStatus.Rejected;
@@ -120,8 +143,8 @@ public sealed class AttendanceDeviceIntegrationService(
                     if (ingested.Message.StartsWith("Duplicate punch", StringComparison.OrdinalIgnoreCase)) state = AttendanceDeviceIngestionStatus.Duplicate;
                     else
                     {
-                        var processed = await dayProcessor.ProcessAsync(mapping.EmployeeId, ingested.Value.BusinessDate, cancellationToken);
-                        if (!processed.Succeeded)
+                        var processedDay = await dayProcessor.ProcessAsync(mapping.EmployeeId, ingested.Value.BusinessDate, cancellationToken);
+                        if (!processedDay.Succeeded)
                         {
                             state = AttendanceDeviceIngestionStatus.RequiresPeriodReopen;
                             error = "Raw punch is retained; daily Attendance processing requires an operational follow-up.";
@@ -130,13 +153,13 @@ public sealed class AttendanceDeviceIntegrationService(
                 }
             }
 
-            await SaveIssueAsync(new AttendanceDeviceIngestionEvent
+            pendingIssues.Add(new AttendanceDeviceIngestionEvent
             {
                 Id = Guid.NewGuid(), TenantId = tenantId, AttendanceDeviceId = device.Id, AttendanceDeviceSyncRunId = run.Id,
                 EmployeeId = employeeId, AttendancePunchId = punchId, Source = sourceIdentity, ExternalEventId = input.ExternalEventId,
                 ExternalEmployeeIdentifier = input.ExternalEmployeeIdentifier, OccurredAtUtc = input.OccurredAt.UtcDateTime,
                 ReceivedAtUtc = now, Direction = input.Direction, Status = state, SanitizedError = error
-            }, cancellationToken);
+            });
             results.Add(new(input.ExternalEventId, state, error));
         }
 
@@ -146,6 +169,7 @@ public sealed class AttendanceDeviceIntegrationService(
         var rejected = results.Count - accepted - duplicate - unmapped;
         run.ReceivedCount = results.Count; run.AcceptedCount = accepted; run.DuplicateCount = duplicate;
         run.UnmappedCount = unmapped; run.RejectedCount = rejected; run.ErrorCount = rejected;
+        db.AttendanceDeviceIngestionEvents.AddRange(pendingIssues);
         run.CompletedAtUtc = _clock.GetUtcNow().UtcDateTime;
         run.Status = rejected == 0 && unmapped == 0 ? AttendanceDeviceSyncStatus.Succeeded :
             accepted + duplicate + unmapped > 0 ? AttendanceDeviceSyncStatus.PartiallySucceeded : AttendanceDeviceSyncStatus.Failed;
@@ -178,6 +202,14 @@ public sealed class AttendanceDeviceIntegrationService(
     private async Task<bool> IsFinalizedAsync(Guid tenantId, DateOnly date, CancellationToken ct) =>
         await db.AttendancePeriods.AsNoTracking().AnyAsync(x => x.TenantId == tenantId && x.StartDate <= date && x.EndDate >= date && x.Status == AttendancePeriodStatus.Closed, ct);
 
+    private async Task<bool> IsFinalizedCachedAsync(Guid tenantId, DateOnly date, IDictionary<DateOnly, bool> cache, CancellationToken ct)
+    {
+        if (cache.TryGetValue(date, out var value)) return value;
+        value = await IsFinalizedAsync(tenantId, date, ct);
+        cache[date] = value;
+        return value;
+    }
+
     private async Task<bool> IsCurrentLeaseAsync(Guid tenantId, Guid deviceId, Guid leaseToken, CancellationToken ct)
     {
         var now = _clock.GetUtcNow().UtcDateTime;
@@ -186,9 +218,4 @@ public sealed class AttendanceDeviceIntegrationService(
             x.LeaseExpiresAtUtc > now, ct);
     }
 
-    private async Task SaveIssueAsync(AttendanceDeviceIngestionEvent item, CancellationToken ct)
-    {
-        db.AttendanceDeviceIngestionEvents.Add(item);
-        await db.SaveChangesAsync(ct);
-    }
 }

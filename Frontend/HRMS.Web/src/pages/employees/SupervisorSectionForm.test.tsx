@@ -2,6 +2,10 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { SupervisorSectionForm } from './SupervisorSectionForm.tsx'
 
+const { scheduledEffectiveFrom } = vi.hoisted(() => ({
+  scheduledEffectiveFrom: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+}))
+
 vi.mock('../../auth/useAuth.ts', () => ({
   useAuth: () => ({ can: () => true }),
 }))
@@ -24,7 +28,7 @@ vi.mock('../../api/employeeSubsections.ts', () => ({
       employmentType: 'FullTime', employmentStatus: 'Active', changeReason: 'NewJoining',
     },
     {
-      id: 'history-2', employeeId: 'employee-1', effectiveFrom: '2026-10-01', effectiveTo: null,
+      id: 'history-2', employeeId: 'employee-1', effectiveFrom: scheduledEffectiveFrom, effectiveTo: null,
       managerId: 'manager-3', managerEmployeeCode: 'EMP-003', managerFullName: 'Maya Singh',
       employmentType: 'FullTime', employmentStatus: 'Active', changeReason: 'Transfer',
     },

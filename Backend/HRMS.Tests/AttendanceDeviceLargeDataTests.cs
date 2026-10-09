@@ -26,6 +26,7 @@ public sealed class AttendanceDeviceLargeDataTests(ITestOutputHelper output)
     private static readonly int DuplicateReplayCount = SmallScale ? 50 : MediumScale ? 500 : 5_000;
     private static readonly int UnmappedCount = SmallScale ? 50 : MediumScale ? 500 : 5_000;
     private static readonly int UnknownCount = SmallScale ? 50 : MediumScale ? 500 : 5_000;
+    private static readonly int InitialEventCount = MappedValidCount + UnmappedCount + UnknownCount;
     private static readonly int BatchSize = 1_000;
     private static readonly int ReprocessSubset = SmallScale ? 10 : MediumScale ? 50 : 500;
     private static readonly int PageSize = 100;
@@ -80,6 +81,7 @@ public sealed class AttendanceDeviceLargeDataTests(ITestOutputHelper output)
             mappingSeedTimer.Start();
             for (var chunkStart = 0; chunkStart < employeeIds.Length; chunkStart += 2_000)
             {
+                var chunkTimer = Stopwatch.StartNew();
                 var chunk = employeeIds.Skip(chunkStart).Take(2_000).ToArray();
                 seed.Employees.AddRange(chunk.Select((id, offset) => Employee(tenantId, id, chunkStart + offset)));
                 seed.EmployeeEmploymentHistory.AddRange(chunk.Select(id => Employment(tenantId, id)));
@@ -92,6 +94,7 @@ public sealed class AttendanceDeviceLargeDataTests(ITestOutputHelper output)
                 seed.ChangeTracker.DetectChanges();
                 await seed.SaveChangesAsync();
                 seed.ClearChangeTracker();
+                chunkTimer.Stop();
             }
             employeeSeedTimer.Stop();
             mappingSeedTimer.Stop();
@@ -101,7 +104,6 @@ public sealed class AttendanceDeviceLargeDataTests(ITestOutputHelper output)
                 seed.ChangeTracker.AutoDetectChangesEnabled = previousAutoDetectChanges;
             }
         }
-        output.WriteLine("Fixture seed complete");
         prerequisiteTimer.Stop();
         fixtureTimer.Stop();
 
@@ -328,7 +330,7 @@ public sealed class AttendanceDeviceLargeDataTests(ITestOutputHelper output)
         var run = await db.AttendanceDeviceSyncRuns.AsNoTracking().Where(x => x.TenantId == tenantId).OrderByDescending(x => x.StartedAtUtc).FirstAsync();
         Assert.Equal(run.ReceivedCount, run.AcceptedCount + run.DuplicateCount + run.UnmappedCount + run.RejectedCount);
         Assert.Equal(0, await db.AttendanceDeviceSyncRuns.CountAsync(x => x.TenantId == tenantId && x.Status == AttendanceDeviceSyncStatus.Succeeded && x.ErrorCount > x.RejectedCount));
-        output.WriteLine($"Scale={ScaleMode}; Provider=SQLite relational in-memory; Employees={EmployeeCount}; Devices={DeviceCount}; Mappings={EmployeeCount}; InboundEvents={received}; MappedValid={MappedValidCount}; DuplicateReplay={DuplicateReplayCount}; Unmapped={UnmappedCount}; UnknownInvalid={UnknownCount}; BatchSize={BatchSize}; Batches={batches}; Received={received}; Accepted={accepted}; Duplicate={duplicate}; UnmappedResults={unmapped}; Rejected={rejected}; Errors={errors}; ExpectedPunches={MappedValidCount + 1 + ReprocessSubset}; ActualPunches={await db.AttendancePunches.CountAsync(x => x.TenantId == tenantId)}; DuplicatePunches=0; UnmappedCheckpointAdvancement=0; BackwardCheckpointMovement=0; DayProcessorInvocations={dayProcessor.Invocations}; ActualDayProcessorSamples={dayProcessor.RealInvocations}; Fixture={fixtureTimer.Elapsed}; Prerequisites={prerequisiteTimer.Elapsed}; EmployeeSeed={employeeSeedTimer.Elapsed}; MappingSeed={mappingSeedTimer.Elapsed}; EventGeneration={eventGenerationTimer.Elapsed}; InitialIngestion={ingestionTimer.Elapsed}; DuplicateReplayDuration={replayTimer.Elapsed}; IssueFirstPage={issuePageTimer.Elapsed}; IssueFiltered={filteredTimer.Elapsed}; MapReprocess={reprocessTimer.Elapsed}; SyncRunQuery={syncTimer.Elapsed}; TenantIsolation={TimeSpan.Zero}; FinalizedControl={finalizedControlTimer.Elapsed}; ScaleConcurrency={scaleConcurrencyTimer.Elapsed}; Overall={fixtureTimer.Elapsed + ingestionTimer.Elapsed + reprocessTimer.Elapsed}; QueryCaptureCommands={capture.Commands.Count}");
+        output.WriteLine($"Scale={ScaleMode}; Provider=SQLite relational in-memory; Employees={EmployeeCount}; Devices={DeviceCount}; Mappings={EmployeeCount}; InitialEvents={InitialEventCount}; InboundEventsIncludingReplay={received}; MappedValid={MappedValidCount}; DuplicateReplay={DuplicateReplayCount}; Unmapped={UnmappedCount}; UnknownInvalid={UnknownCount}; BatchSize={BatchSize}; Batches={batches}; Received={received}; Accepted={accepted}; Duplicate={duplicate}; UnmappedResults={unmapped}; Rejected={rejected}; Errors={errors}; ExpectedPunches={MappedValidCount + 1 + ReprocessSubset}; ActualPunches={await db.AttendancePunches.CountAsync(x => x.TenantId == tenantId)}; DuplicatePunches=0; UnmappedCheckpointAdvancement=0; BackwardCheckpointMovement=0; DayProcessorInvocations={dayProcessor.Invocations}; ActualDayProcessorSamples={dayProcessor.RealInvocations}; Fixture={fixtureTimer.Elapsed}; Prerequisites={prerequisiteTimer.Elapsed}; EmployeeSeed={employeeSeedTimer.Elapsed}; MappingSeed={mappingSeedTimer.Elapsed}; EventGeneration={eventGenerationTimer.Elapsed}; InitialIngestion={ingestionTimer.Elapsed}; DuplicateReplayDuration={replayTimer.Elapsed}; IssueFirstPage={issuePageTimer.Elapsed}; IssueFiltered={filteredTimer.Elapsed}; MapReprocess={reprocessTimer.Elapsed}; SyncRunQuery={syncTimer.Elapsed}; TenantIsolation={TimeSpan.Zero}; FinalizedControl={finalizedControlTimer.Elapsed}; ScaleConcurrency={scaleConcurrencyTimer.Elapsed}; Overall={fixtureTimer.Elapsed + ingestionTimer.Elapsed + reprocessTimer.Elapsed}; QueryCaptureCommands={capture.Commands.Count}");
     }
 
     private static (AttendanceDeviceOperationsService Operations, AttendanceDeviceIntegrationService Ingestion) CreateServices(

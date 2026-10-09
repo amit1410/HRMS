@@ -73,9 +73,9 @@ public sealed class SeparationDocumentFailureInjectionTests
     private static async Task<(NoticeFixture Fixture, Guid VersionId)> CreateTemplateAsync(HrmsDbContext db, NoticeFixture fixture, string code, bool approval)
     {
         var service = CreateService(db, fixture);
-        var template = await service.CreateTemplateAsync(new() { Code = code, Name = code, DocumentType = SeparationDocumentType.RelievingLetter, RequiresApproval = approval });
+        var template = await service.CreateTemplateAsync(new() { Code = code, Name = code, DocumentType = SeparationDocumentType.RelievingLetter, RequiresApproval = approval, EffectiveFrom = new(2020, 1, 1) });
         Assert.True(template.Succeeded, template.Message);
-        var version = await service.AddVersionAsync(template.Value!.Id, new() { BodyTemplate = "{{Employee.FullName}}|{{Document.Number}}" });
+        var version = await service.AddVersionAsync(template.Value!.Id, new() { BodyTemplate = "{{Employee.FullName}}|{{Document.Number}}", EffectiveFrom = new(2020, 1, 1) });
         Assert.True(version.Succeeded, version.Message);
         var published = await service.PublishVersionAsync(template.Value.Id, version.Value!.Versions.Single().Id, 1);
         Assert.True(published.Succeeded, published.Message);

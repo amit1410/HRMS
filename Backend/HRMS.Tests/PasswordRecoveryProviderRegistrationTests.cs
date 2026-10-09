@@ -1,6 +1,8 @@
 using HRMS.Application.Abstractions;
 using HRMS.Infrastructure;
 using HRMS.Infrastructure.Email;
+using HRMS.Infrastructure.Persistence.Catalog;
+using HRMS.Infrastructure.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -10,6 +12,50 @@ namespace HRMS.Tests;
 
 public sealed class PasswordRecoveryProviderRegistrationTests
 {
+    [Fact]
+    public void Platform_admin_bootstrap_services_initialize_without_smtp_credentials()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Database:CatalogProvider"] = "Sqlite",
+            ["ConnectionStrings:SqliteCatalog"] = "Data Source=:memory:"
+        }).Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddPlatformAdminBootstrapInfrastructure(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        using var scope = provider.CreateScope();
+
+        Assert.Equal("Microsoft.EntityFrameworkCore.Sqlite", scope.ServiceProvider
+            .GetRequiredService<HrmsCatalogDbContext>().Database.ProviderName);
+        Assert.IsType<IdentityPasswordHasher>(scope.ServiceProvider.GetRequiredService<IPasswordHasher>());
+        Assert.Throws<InvalidOperationException>(() => scope.ServiceProvider.GetRequiredService<IEmailSender>());
+    }
+
+    [Fact]
+    public void Normal_infrastructure_still_rejects_missing_smtp_password()
+    {
+        var configuration = Configuration(new Dictionary<string, string?>
+        {
+            ["PasswordRecoveryProviders:EmailProvider"] = "Smtp",
+            ["PasswordRecoveryProviders:SmsProvider"] = "Fake",
+            ["Email:Smtp:Host"] = "smtp.example.test",
+            ["Email:Smtp:Port"] = "587",
+            ["Email:Smtp:Username"] = "user",
+            ["Email:FromEmail"] = "hrms@example.test",
+            ["Email:FromName"] = "HRMS",
+            ["Email:Smtp:EnableSsl"] = "true"
+        });
+        var services = new ServiceCollection();
+        services.AddLogging();
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            services.AddInfrastructure(configuration, ProductionEnvironment()));
+
+        Assert.Equal("Email:Smtp:Password is required for the selected password-recovery provider.", exception.Message);
+    }
+
     [Fact]
     public void Development_defaults_to_fake_providers_and_exposes_development_otp()
     {
@@ -21,6 +67,19 @@ public sealed class PasswordRecoveryProviderRegistrationTests
 
         Assert.IsType<DevelopmentEmailSender>(email);
         Assert.IsType<DevelopmentSmsOtpSender>(sms);
+    }
+
+    [Fact]
+    public void Development_explicit_fake_email_provider_does_not_require_smtp_settings()
+    {
+        using var provider = BuildProvider(new Dictionary<string, string?>
+        {
+            ["Email:Provider"] = "Fake",
+            ["PasswordRecoveryProviders:SmsProvider"] = "Fake"
+        }, isDevelopment: true);
+        using var scope = provider.CreateScope();
+
+        Assert.IsType<DevelopmentEmailSender>(scope.ServiceProvider.GetRequiredService<IEmailSender>());
     }
 
     [Fact]
@@ -55,7 +114,7 @@ public sealed class PasswordRecoveryProviderRegistrationTests
         {
             ["Email:Provider"] = "Smtp",
             ["Email:Smtp:Host"] = "smtp.example.test",
-            ["Email:Smtp:Port"] = "465",
+            ["Email:Smtp:Port"] = "587",
             ["Email:Smtp:Username"] = "user",
             ["Email:Smtp:Password"] = "password",
             ["Email:Smtp:EnableSsl"] = "true",
@@ -68,6 +127,50 @@ public sealed class PasswordRecoveryProviderRegistrationTests
         options.Validate(configuration);
 
         Assert.Equal("Smtp", options.EmailProvider);
+    }
+
+    [Fact]
+    public void Smtp_requires_port_587_and_starttls()
+    {
+        var configuration = Configuration(new Dictionary<string, string?>
+        {
+            ["Email:Provider"] = "Smtp",
+            ["Email:Smtp:Host"] = "smtp.example.test",
+            ["Email:Smtp:Port"] = "465",
+            ["Email:Smtp:Username"] = "user",
+            ["Email:Smtp:Password"] = "password",
+            ["Email:Smtp:EnableSsl"] = "true",
+            ["Email:FromEmail"] = "hrms@example.test",
+            ["Email:FromName"] = "HRMS",
+            ["PasswordRecoveryProviders:SmsProvider"] = "Fake"
+        });
+
+        var options = PasswordRecoveryProviderOptions.Load(configuration, isDevelopment: true);
+        var exception = Assert.Throws<InvalidOperationException>(() => options.Validate(configuration));
+
+        Assert.Equal("Email:Smtp:Port must be 587 for STARTTLS.", exception.Message);
+    }
+
+    [Fact]
+    public void Smtp_rejects_disabled_tls_on_port_587()
+    {
+        var configuration = Configuration(new Dictionary<string, string?>
+        {
+            ["Email:Provider"] = "Smtp",
+            ["Email:Smtp:Host"] = "smtp.example.test",
+            ["Email:Smtp:Port"] = "587",
+            ["Email:Smtp:Username"] = "user",
+            ["Email:Smtp:Password"] = "password",
+            ["Email:Smtp:EnableSsl"] = "false",
+            ["Email:FromEmail"] = "hrms@example.test",
+            ["Email:FromName"] = "HRMS",
+            ["PasswordRecoveryProviders:SmsProvider"] = "Fake"
+        });
+
+        var options = PasswordRecoveryProviderOptions.Load(configuration, isDevelopment: true);
+        var exception = Assert.Throws<InvalidOperationException>(() => options.Validate(configuration));
+
+        Assert.Equal("Email:Smtp:EnableSsl must be true for STARTTLS with certificate validation.", exception.Message);
     }
 
     [Fact]
@@ -122,7 +225,7 @@ public sealed class PasswordRecoveryProviderRegistrationTests
         {
             [prefix + "Email__Provider"] = "Smtp",
             [prefix + "Email__Smtp__Host"] = "smtp.environment.test",
-            [prefix + "Email__Smtp__Port"] = "465",
+            [prefix + "Email__Smtp__Port"] = "587",
             [prefix + "Email__Smtp__Username"] = "environment-user",
             [prefix + "Email__Smtp__Password"] = "environment-password",
             [prefix + "Email__Smtp__EnableSsl"] = "true",

@@ -85,3 +85,17 @@ public sealed class PlatformRefreshTokenConfiguration : IEntityTypeConfiguration
             .HasForeignKey(x => x.PlatformUserId).OnDelete(DeleteBehavior.Cascade);
     }
 }
+
+public sealed class PlatformPasswordResetTokenConfiguration : IEntityTypeConfiguration<PlatformPasswordResetToken>
+{
+    public void Configure(EntityTypeBuilder<PlatformPasswordResetToken> builder)
+    {
+        builder.ToTable("PlatformPasswordResetTokens");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.Id).ValueGeneratedNever();
+        builder.Property(x => x.TokenHash).IsRequired().HasMaxLength(64);
+        builder.HasIndex(x => x.TokenHash).IsUnique();
+        builder.HasIndex(x => new { x.PlatformUserId, x.UsedAtUtc, x.ExpiresAtUtc });
+        builder.HasOne(x => x.PlatformUser).WithMany().HasForeignKey(x => x.PlatformUserId).OnDelete(DeleteBehavior.Cascade);
+    }
+}

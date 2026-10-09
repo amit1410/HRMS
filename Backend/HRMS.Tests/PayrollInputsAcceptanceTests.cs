@@ -141,6 +141,7 @@ public sealed class PayrollInputsAcceptanceTests
     }
 }
 
+[Collection("MySQL Integration")]
 public sealed class MySqlPayrollInputsIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]

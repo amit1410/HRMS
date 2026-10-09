@@ -4,18 +4,19 @@ The API uses standard ASP.NET Core precedence: `appsettings.json`, `appsettings.
 
 ## Local development
 
-Committed JSON contains safe defaults only. Development selects MySQL, SMTP, and Fake SMS; SMTP host/port/sender metadata is non-secret. Run these once from `D:\HRMS`:
+Committed JSON contains safe defaults only. Development keeps `Email:Provider=Fake` and `Database:StartupMode=Disabled`; SMTP host/port/sender metadata is staged but no email is sent. Run these non-secret overrides once from `D:\HRMS` if desired:
 
 ```powershell
 cd D:\HRMS
 dotnet user-secrets set --project .\Backend\HRMS.API\HRMS.API.csproj "Jwt:SecretKey" "<development-jwt-secret-at-least-32-bytes>"
 dotnet user-secrets set --project .\Backend\HRMS.API\HRMS.API.csproj "PlatformJwt:SecretKey" "<development-platform-jwt-secret-at-least-32-bytes>"
-dotnet user-secrets set --project .\Backend\HRMS.API\HRMS.API.csproj "Email:Smtp:Password" "<smtp-password>"
-dotnet user-secrets set --project .\Backend\HRMS.API\HRMS.API.csproj "ConnectionStrings:Catalog" "<mysql-catalog-connection-string>"
-dotnet user-secrets set --project .\Backend\HRMS.API\HRMS.API.csproj "Sharding:MySqlConnectionStringTemplate" "<mysql-tenant-template-with-{shardKey}>"
+dotnet user-secrets set --project .\Backend\HRMS.API\HRMS.API.csproj "Email:Smtp:Host" "smtp.hostinger.com"
+dotnet user-secrets set --project .\Backend\HRMS.API\HRMS.API.csproj "Email:Smtp:Port" "587"
+dotnet user-secrets set --project .\Backend\HRMS.API\HRMS.API.csproj "Email:Smtp:Username" "amit@anevratechnologies.com"
+dotnet user-secrets set --project .\Backend\HRMS.API\HRMS.API.csproj "Email:Smtp:EnableSsl" "true"
 ```
 
-If the local mailbox differs, set `Email:Smtp:Username` once as a User Secret. Fake SMS does not require MSG91 credentials. Normal startup is then:
+Do not put the SMTP password in a command-line argument. Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Set-DevelopmentSmtpPassword.ps1`; it reads without echo, keeps plaintext only in process memory, and writes only to the standard user-secrets store outside the repository. The API can load that value in Development because of the existing `UserSecretsId` (`af221e70-58f4-4c5b-bbf0-034f30422395`). .NET User Secrets are not encrypted at rest; they rely on local-account/file permissions, so use a dedicated Windows account or approved OS secret manager for stronger protection. Fake SMS does not require MSG91 credentials. Normal startup is then:
 
 ```powershell
 cd D:\HRMS\Backend\HRMS.API
@@ -84,7 +85,7 @@ ConnectionStrings__Catalog=<mysql-catalog-connection-string>
 Sharding__MySqlConnectionStringTemplate=<mysql-tenant-template-with-{shardKey}>
 ```
 
-This SMTP adapter uses `System.Net.Mail.SmtpClient` with `EnableSsl=true`; configure port 587 with STARTTLS as the preferred production setting. Port 465 is implicit TLS and is not the preferred pairing for this implementation.
+This SMTP adapter uses `System.Net.Mail.SmtpClient` with `EnableSsl=true`; port 587 negotiates STARTTLS. No certificate-validation callback is installed, so .NET’s default server-certificate and hostname validation remains active. Port 465 is rejected because it is implicit TLS and is not supported by this configuration.
 
 For SQL Server, use `Database__Provider=SqlServer`, provide `ConnectionStrings__Catalog`, and provide `Sharding__SqlServerConnectionStringTemplate` or legacy `Sharding__ConnectionStringTemplate`; `ConnectionStrings__SqlServer` is the shared-tenant fallback. Inactive-provider credentials are not required.
 

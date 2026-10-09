@@ -77,6 +77,34 @@ public sealed class PasswordRecoveryServiceTests
     }
 
     [Fact]
+    public async Task Invalid_expired_and_reused_reset_tokens_are_rejected()
+    {
+        using var harness = await ArrangeAsync();
+        var service = CreateService(harness, new RecordingEmailSender(), new RecordingSmsSender());
+
+        var identified = await service.IdentifyAsync(new ForgotPasswordRequest("employee@example.test"));
+        var sent = await service.SendOtpAsync(new SendRecoveryOtpRequest(identified.Value!.ChallengeId, PasswordRecoveryChannel.Email));
+        var verified = await service.VerifyOtpAsync(new VerifyRecoveryOtpRequest(identified.Value!.ChallengeId, sent.Value!.DevelopmentOtp!));
+
+        var invalid = await service.ResetPasswordAsync(new ResetPasswordRequest("not-a-reset-token", "New-password-123!", "New-password-123!"));
+        Assert.Equal(ResultStatus.Unauthorized, invalid.Status);
+
+        harness.Clock.Now = harness.Clock.Now.AddMinutes(6);
+        var expired = await service.ResetPasswordAsync(new ResetPasswordRequest(verified.Value!.ResetToken, "New-password-123!", "New-password-123!"));
+        Assert.Equal(ResultStatus.Unauthorized, expired.Status);
+
+        harness.Clock.Now = new DateTimeOffset(2026, 3, 4, 9, 7, 8, TimeSpan.Zero);
+        var identifiedAgain = await service.IdentifyAsync(new ForgotPasswordRequest("employee@example.test"));
+        var sentAgain = await service.SendOtpAsync(new SendRecoveryOtpRequest(identifiedAgain.Value!.ChallengeId, PasswordRecoveryChannel.Email));
+        var verifiedAgain = await service.VerifyOtpAsync(new VerifyRecoveryOtpRequest(identifiedAgain.Value!.ChallengeId, sentAgain.Value!.DevelopmentOtp!));
+        var reset = await service.ResetPasswordAsync(new ResetPasswordRequest(verifiedAgain.Value!.ResetToken, "New-password-456!", "New-password-456!"));
+        Assert.True(reset.Succeeded, reset.Message);
+
+        var reused = await service.ResetPasswordAsync(new ResetPasswordRequest(verifiedAgain.Value!.ResetToken, "New-password-789!", "New-password-789!"));
+        Assert.Equal(ResultStatus.Unauthorized, reused.Status);
+    }
+
+    [Fact]
     public async Task SMTP_delivery_failure_returns_generic_service_unavailable_result()
     {
         using var harness = await ArrangeAsync();
@@ -149,6 +177,10 @@ public sealed class PasswordRecoveryServiceTests
             Destination = message.Destination;
             return Task.FromResult<string?>(message.Otp);
         }
+
+        public Task SendPlatformUsernameReminderAsync(PlatformUsernameReminderMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SendPlatformPasswordResetAsync(PlatformPasswordResetEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SendPlatformPasswordChangedAsync(PlatformPasswordChangedEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class FailingEmailSender : IEmailSender
@@ -159,6 +191,10 @@ public sealed class PasswordRecoveryServiceTests
 
         public Task<string?> SendPasswordResetOtpAsync(OtpDeliveryMessage message, CancellationToken cancellationToken = default) =>
             Task.FromException<string?>(new EmailDeliveryException(EmailDeliveryFailureKind.Timeout, "SMTP delivery timed out.", "smtp.example.test", 587, new TimeoutException()));
+
+        public Task SendPlatformUsernameReminderAsync(PlatformUsernameReminderMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SendPlatformPasswordResetAsync(PlatformPasswordResetEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SendPlatformPasswordChangedAsync(PlatformPasswordChangedEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class RecordingSmsSender : ISmsOtpSender

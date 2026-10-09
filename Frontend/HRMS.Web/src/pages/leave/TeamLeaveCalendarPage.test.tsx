@@ -11,7 +11,9 @@ describe('TeamLeaveCalendarPage', () => {
   afterEach(() => stub.restore())
 
   it('loads the visible month and renders authorized events with readable details', async () => {
-    stub.on('get', '/api/leave-calendar', () => ({ data: ok([{ requestId: 'request-1', employeeId: 'employee-1', employeeCode: 'EMP-1', employeeName: 'Nadia Farrell', leaveTypeCode: 'CL', leaveTypeName: 'Casual Leave', startDate: '2026-09-10', endDate: '2026-09-12', chargeableQuantity: 2, status: 'Approved' }]) }))
+    const now = new Date()
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    stub.on('get', '/api/leave-calendar', () => ({ data: ok([{ requestId: 'request-1', employeeId: 'employee-1', employeeCode: 'EMP-1', employeeName: 'Nadia Farrell', leaveTypeCode: 'CL', leaveTypeName: 'Casual Leave', startDate: `${month}-10`, endDate: `${month}-12`, chargeableQuantity: 2, status: 'Approved' }]) }))
     renderAsUser(<TeamLeaveCalendarPage />, { user: makeUser() })
     expect((await screen.findAllByText('Nadia Farrell')).length).toBeGreaterThan(0)
     expect(screen.getAllByText('Casual Leave').length).toBeGreaterThan(0)

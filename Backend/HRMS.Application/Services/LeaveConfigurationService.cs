@@ -176,7 +176,7 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
     public async Task<Result<LeavePolicyEditorDto>> GetEditorAsync(Guid policyId, Guid? versionId, CancellationToken ct = default)
     {
         var policy = await _db.LeavePolicies.Include(x => x.Versions).FirstOrDefaultAsync(x => x.Id == policyId, ct); if (policy is null) return Result<LeavePolicyEditorDto>.NotFound(NotFound);
-        var version = versionId is Guid id ? await _db.LeavePolicyVersions.Include(x => x.Rules).Include(x => x.ApplicabilitySets).FirstOrDefaultAsync(x => x.Id == id && x.LeavePolicyId == policyId, ct) : policy.Versions.OrderByDescending(x => x.VersionNumber).FirstOrDefault();
+        var version = versionId is Guid id ? await _db.LeavePolicyVersions.Include(x => x.Rules).Include(x => x.ApplicabilitySets).FirstOrDefaultAsync(x => x.Id == id && x.LeavePolicyId == policyId, ct) : policy.Versions.Where(x => x.Status is LeavePolicyVersionStatus.Draft or LeavePolicyVersionStatus.Published).OrderByDescending(x => x.VersionNumber).FirstOrDefault();
         var typeRows = version is null ? [] : await _db.LeaveTypes.AsNoTracking().Where(x => version.Rules.Select(r => r.LeaveTypeId).Contains(x.Id)).OrderBy(x => x.Code).ToListAsync(ct);
         return Result<LeavePolicyEditorDto>.Success(new(ToDto(policy), version is null ? null : ToDto(version), typeRows.Select(x => new LeaveTypeSelectionDto(x.Id, x.Code, x.Name, x.IsActive)).ToList(), version?.ApplicabilitySets.Select(ToDto).ToList() ?? []));
     }
@@ -583,6 +583,46 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
         version.Status = LeavePolicyVersionStatus.Retired; version.ModifiedDate = DateTime.UtcNow; await _db.SaveChangesAsync(ct); return Result<LeavePolicyVersionDto>.Success(ToDto(version), "Version retired.");
     }
 
+    public async Task<Result<LeavePolicyVersionDto>> DiscardAsync(Guid policyId, Guid versionId, LeavePolicyVersionDiscardRequest request, CancellationToken ct = default)
+    {
+        if (_tenant.TenantId is not Guid tenantId) return Result<LeavePolicyVersionDto>.Unauthorized(NoTenant);
+        if (_tenant.UserId is not Guid actorUserId) return Result<LeavePolicyVersionDto>.Unauthorized("An authenticated user is required to discard a Draft version.");
+        var reason = request.Reason?.Trim() ?? string.Empty;
+        if (reason.Length is < 1 or > 2000) return Result<LeavePolicyVersionDto>.Invalid("reason", "Reason is required and must not exceed 2000 characters.");
+
+        var version = await VersionAsync(policyId, versionId, ct);
+        if (version is null || version.TenantId != tenantId) return Result<LeavePolicyVersionDto>.NotFound(NotFound);
+        if (version.Status != LeavePolicyVersionStatus.Draft) return Result<LeavePolicyVersionDto>.Conflict("Only Draft versions can be discarded.");
+        if (!TokenMatches(version, request.ConcurrencyToken)) return Conflict<LeavePolicyVersionDto>("Configuration changed by another user. Reload before discarding.");
+
+        var hasRuntimeDependency = await _db.LeaveRequests.AnyAsync(x => x.TenantId == tenantId && x.LeavePolicyVersionId == versionId, ct)
+            || await _db.LeaveBalanceTransactions.AnyAsync(x => x.TenantId == tenantId && x.LeavePolicyVersionId == versionId, ct)
+            || await _db.LeaveAccrualOccurrences.AnyAsync(x => x.TenantId == tenantId && x.LeavePolicyVersionId == versionId, ct)
+            || await _db.LeavePeriodCloseOccurrences.AnyAsync(x => x.TenantId == tenantId && x.LeavePolicyVersionId == versionId, ct);
+        if (hasRuntimeDependency) return Result<LeavePolicyVersionDto>.Conflict("This Draft has runtime dependencies and cannot be discarded.");
+
+        await using var transaction = await _db.BeginTransactionAsync(ct);
+        var now = DateTime.UtcNow;
+        version.Status = LeavePolicyVersionStatus.Discarded;
+        version.ModifiedDate = now;
+        _db.LeavePolicyVersionAuditEvents.Add(new LeavePolicyVersionAuditEvent
+        {
+            Id = Guid.NewGuid(), TenantId = tenantId, LeavePolicyVersionId = version.Id, ActorUserId = actorUserId,
+            Action = "Discarded", OccurredAtUtc = now, Reason = reason, VersionNumber = version.VersionNumber,
+            PreviousStatus = LeavePolicyVersionStatus.Draft
+        });
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Conflict<LeavePolicyVersionDto>("Configuration changed by another user. Reload before discarding.");
+        }
+        return Result<LeavePolicyVersionDto>.Success(ToDto(version), "Draft version discarded.");
+    }
+
     private async Task<List<ValidationError>> ValidateForPublishAsync(LeavePolicyVersion version, bool acknowledgeOverlap = false, CancellationToken ct = default)
     {
         var errors = new List<ValidationError>(); var policy = await PolicyAsync(version.LeavePolicyId, ct);
@@ -779,7 +819,7 @@ public sealed class LeaveConfigurationService : ILeaveConfigurationService
     private static LeaveTypeDto ToDto(LeaveType x) => new(x.Id, x.Code, x.Name, x.Description, x.DefaultUnit, x.IsPaid, x.IsCompOff, x.IsActive, x.CreatedDate, x.ModifiedDate, Token(x));
     private static LeavePeriodDto ToDto(LeavePeriod x) => new(x.Id, x.Code, x.Name, x.StartDate, x.EndDate, x.IsActive, x.CreatedDate, x.ModifiedDate, Token(x));
     private static LeavePolicyDto ToDto(LeavePolicy x, int overlapCount = 0) { var current = x.Versions?.Where(v => v.Status == LeavePolicyVersionStatus.Published).OrderByDescending(v => v.EffectiveFrom).FirstOrDefault(); return new(x.Id, x.Code, x.Name, x.Description, x.IsActive, x.Versions?.Count ?? 0, current?.VersionNumber, x.CreatedDate, x.ModifiedDate, Token(x), overlapCount); }
-    private static LeavePolicyVersionDto ToDto(LeavePolicyVersion x) => new(x.Id, x.VersionNumber, x.EffectiveFrom, x.EffectiveTo, x.Status, x.Priority, x.Rules?.Count(r => r.IsActive) ?? 0, x.ApplicabilitySets?.Count ?? 0, x.CreatedDate, x.CreatedBy, x.ModifiedDate, Token(x), new(x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Published, true));
+    private static LeavePolicyVersionDto ToDto(LeavePolicyVersion x) => new(x.Id, x.VersionNumber, x.EffectiveFrom, x.EffectiveTo, x.Status, x.Priority, x.Rules?.Count(r => r.IsActive) ?? 0, x.ApplicabilitySets?.Count ?? 0, x.CreatedDate, x.CreatedBy, x.ModifiedDate, Token(x), new(x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Draft, x.Status == LeavePolicyVersionStatus.Published, x.Status == LeavePolicyVersionStatus.Draft, true));
     private static LeaveApplicabilityGroupDto ToDto(LeavePolicyApplicabilitySet x) => new(x.Id, x.Gender, x.HoldingCompanyId, x.LobId, x.OrganisationId, x.DepartmentId, x.SubDepartmentId, x.SectionId, x.SubSectionId, x.FunctionId, x.SubFunctionId, x.GradeId, x.DesignationId, x.EmployeeTypeId, x.CountryLocationId, x.WorkLocationId, x.CostCenterId);
     private static LeavePolicyEligibilityRuleDto ToDto(LeavePolicyEligibilityRule x) => new(x.Id, x.LeavePolicyRuleId, x.EligibilityMode, x.MinimumServiceValue, x.MinimumServiceUnit, x.ProbationMode, x.NoticePeriodMode, Token(x));
     private static LeavePolicyEntitlementRuleDto ToDto(LeavePolicyEntitlementRule x) => new(x.Id, x.LeavePolicyRuleId, x.EntitlementMode, x.EntitlementSource, x.EntitlementQuantity, x.AccrualFrequency, x.AccrualTiming, x.ProratePartialPeriod, x.MaximumAccumulation, x.CarryForwardEnabled, x.MaximumCarryForwardQuantity, x.CarryForwardExpiryDays, Token(x));

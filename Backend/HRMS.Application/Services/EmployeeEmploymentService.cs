@@ -31,6 +31,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
     private readonly IEmployeeCodeSequenceService? _codeSequence;
     private readonly TimeProvider _timeProvider;
     private readonly IManagerRoleProvisioningService _managerRoleProvisioning;
+    private readonly IConfirmationPolicyResolver _confirmationResolver;
 
     public EmployeeEmploymentService(
         IHrmsDbContext db,
@@ -40,7 +41,8 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         EmployeeCodeRenderer? codeRenderer = null,
         IEmployeeCodeSequenceService? codeSequence = null,
         TimeProvider? timeProvider = null,
-        IManagerRoleProvisioningService? managerRoleProvisioning = null)
+        IManagerRoleProvisioningService? managerRoleProvisioning = null,
+        IConfirmationPolicyResolver? confirmationResolver = null)
     {
         _db = db;
         _tenantContext = tenantContext;
@@ -51,6 +53,28 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         _timeProvider = timeProvider ?? TimeProvider.System;
         _managerRoleProvisioning = managerRoleProvisioning ??
             new ManagerRoleProvisioningService(db, NullLogger<ManagerRoleProvisioningService>.Instance, _timeProvider);
+        _confirmationResolver = confirmationResolver ?? new ConfirmationPolicyResolver(db, tenantContext: tenantContext);
+    }
+
+    /// <summary>
+    /// Resolves whether an employee's confirmation date is owned by an applicable confirmation policy. Returns
+    /// (isPolicyManaged, probationEndDate, policyName). Falls back to "not managed" whenever no policy resolves
+    /// (including employees with no effective employment history), so existing behaviour is unchanged.
+    /// </summary>
+    private async Task<(bool Managed, DateOnly? ProbationEnd, string? PolicyName, string? Problem)> ResolveConfirmationPolicyAsync(
+        Guid tenantId, Guid employeeId, CancellationToken cancellationToken)
+    {
+        var today = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        var resolution = await _confirmationResolver.ResolveAsync(tenantId, employeeId, today, cancellationToken);
+        if (resolution.Status == ConfirmationPolicyResolutionStatus.NoPolicy)
+            return (false, null, null, null);
+        if (resolution.Status != ConfirmationPolicyResolutionStatus.Resolved)
+            return (false, null, null, resolution.Message);
+        var name = await _db.ConfirmationPolicies.AsNoTracking()
+            .Where(x => x.Id == resolution.ConfirmationPolicyId)
+            .Select(x => x.Name)
+            .FirstOrDefaultAsync(cancellationToken);
+        return (true, resolution.ProbationEndDate, name, null);
     }
 
     // ── Joining Information (EmployeeEmployment — 1:1 with Employee) ──────────
@@ -80,15 +104,19 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             referredByName = refEmp is not null ? $"{refEmp.FirstName} {refEmp.LastName}" : null;
         }
 
+        var (managed, probationEnd, policyName, policyProblem) = await ResolveConfirmationPolicyAsync(
+            _tenantContext.TenantId!.Value, employeeId, cancellationToken);
+        if (policyProblem is not null)
+            return Result<EmployeeEmploymentDto>.Conflict(policyProblem);
+
         var dto = new EmployeeEmploymentDto(
             emp.Id, emp.EmployeeId,
-            emp.FirstHiredDate, emp.DateOfJoining, emp.GroupDateOfJoining,
             emp.ConfirmationDate, emp.JobStatus,
-            emp.ProbationPeriod, emp.ProbationPeriodUnit,
             emp.ReferredByEmployeeId, referredByName,
             emp.NoticePeriod, emp.NoticePeriodUnit,
             emp.NoticeStartDate, emp.NoticeEndDate, emp.NoticeStatus,
-            emp.CreatedDate, emp.ModifiedDate);
+            emp.CreatedDate, emp.ModifiedDate,
+            managed, probationEnd, policyName);
 
         return Result<EmployeeEmploymentDto>.Success(dto);
     }
@@ -105,7 +133,7 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         if (employee is null)
             return Result<EmployeeEmploymentDto>.NotFound(NotFoundMessage);
 
-        var requestValidation = ValidateEmploymentDetailsRequest(request);
+        var requestValidation = ValidateEmploymentDetailsRequest(request, employee.DateOfJoining);
         if (requestValidation is not null)
             return requestValidation;
 
@@ -134,6 +162,15 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         var existing = await _db.EmployeeEmployments
             .FirstOrDefaultAsync(e => e.EmployeeId == employeeId, cancellationToken);
 
+        // When an applicable confirmation policy owns this employee's confirmation, the Confirmation Date is
+        // policy-derived (set by the confirmation workflow), never maintained by hand. Reject a manual change
+        // to it; everything else on the form still saves. Employees with no applicable policy are unaffected.
+        var (managed, probationEnd, policyName, policyProblem) = await ResolveConfirmationPolicyAsync(tenantId, employeeId, cancellationToken);
+        if (policyProblem is not null)
+            return Result<EmployeeEmploymentDto>.Conflict(policyProblem);
+        if (managed && request.ConfirmationDate != existing?.ConfirmationDate)
+            return Result<EmployeeEmploymentDto>.Invalid("confirmationDate", "Confirmation date is managed by the applicable confirmation policy and cannot be edited manually.");
+
         if (existing is null)
         {
             existing = new EmployeeEmployment
@@ -145,13 +182,8 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             _db.EmployeeEmployments.Add(existing);
         }
 
-        existing.FirstHiredDate = request.FirstHiredDate;
-        existing.DateOfJoining = request.DateOfJoining;
-        existing.GroupDateOfJoining = request.GroupDateOfJoining;
         existing.ConfirmationDate = request.ConfirmationDate;
         existing.JobStatus = Normalize(request.JobStatus);
-        existing.ProbationPeriod = request.ProbationPeriod;
-        existing.ProbationPeriodUnit = NormalizePeriodUnit(request.ProbationPeriodUnit);
         existing.ReferredByEmployeeId = request.ReferredByEmployeeId;
         existing.NoticePeriod = request.NoticePeriod;
         existing.NoticePeriodUnit = NormalizePeriodUnit(request.NoticePeriodUnit);
@@ -160,10 +192,8 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         existing.NoticeStatus = request.NoticeStatus;
         existing.ModifiedDate = DateTime.UtcNow;
 
-        // Keep Employee.DateOfJoining and Employee.JobStatus in sync
-        employee.DateOfJoining = request.DateOfJoining;
+        // Date of joining is owned by personal details; employment only mirrors Job status.
         employee.JobStatus = Normalize(request.JobStatus);
-        employee.GroupDateOfJoining = request.GroupDateOfJoining;
         employee.ModifiedDate = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(cancellationToken);
@@ -174,13 +204,12 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
 
         var dto = new EmployeeEmploymentDto(
             existing.Id, existing.EmployeeId,
-            existing.FirstHiredDate, existing.DateOfJoining, existing.GroupDateOfJoining,
             existing.ConfirmationDate, existing.JobStatus,
-            existing.ProbationPeriod, existing.ProbationPeriodUnit,
             existing.ReferredByEmployeeId, referredByName,
             existing.NoticePeriod, existing.NoticePeriodUnit,
             existing.NoticeStartDate, existing.NoticeEndDate, existing.NoticeStatus,
-            existing.CreatedDate, existing.ModifiedDate);
+            existing.CreatedDate, existing.ModifiedDate,
+            managed, probationEnd, policyName);
 
         _logger.LogInformation("Upserted employment record for employee {EmployeeId} in tenant {TenantId}.", employeeId, tenantId);
         return Result<EmployeeEmploymentDto>.Success(dto, existing.CreatedDate == existing.ModifiedDate ? "Employment record created." : "Employment record updated.");
@@ -546,11 +575,6 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
 
         _db.EmployeeEmploymentHistory.Add(newRecord);
 
-        // Provision capability for a linked manager account in the same DbContext transaction.
-        // The account link remains the only employee-to-user mapping; no email or code lookup is used.
-        if (request.ManagerId is Guid managerId)
-            await _managerRoleProvisioning.EnsureForManagerEmployeeAsync(tenantId, managerId, cancellationToken);
-
         // ── Sync denormalized fields on Employee ───────────────────────────────
 
         // Scheduled changes remain history-only until their effective date. Updating these summary fields
@@ -583,6 +607,17 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
                 cancellationToken);
         }
 
+        // Persist the relationship before provisioning. The provisioning service deliberately
+        // evaluates persisted effective-dated history, so querying before this save would not
+        // see the newly-added subordinate record even though it is tracked in this context.
+        await _db.SaveChangesAsync(cancellationToken);
+
+        // Provision capability for a linked manager account in the same transaction. The account
+        // link remains the only employee-to-user mapping; no email or code lookup is used.
+        if (request.ManagerId is Guid managerId)
+            await _managerRoleProvisioning.EnsureForManagerEmployeeAsync(tenantId, managerId, cancellationToken);
+
+        // The provisioning service adds the system-managed assignment to this context.
         await _db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -731,35 +766,13 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private static Result<EmployeeEmploymentDto>? ValidateEmploymentDetailsRequest(
-        EmployeeEmploymentRequest request)
+        EmployeeEmploymentRequest request, DateOnly dateOfJoining)
     {
-        if (request.FirstHiredDate == default)
-            return Result<EmployeeEmploymentDto>.Invalid("firstHiredDate", "First hired date is required.");
-
-        if (request.DateOfJoining == default)
-            return Result<EmployeeEmploymentDto>.Invalid("dateOfJoining", "Date of joining is required.");
-
-        if (request.DateOfJoining < request.FirstHiredDate)
-            return Result<EmployeeEmploymentDto>.Invalid("dateOfJoining", "Date of joining cannot be before the first hired date.");
-
-        if (request.GroupDateOfJoining > request.DateOfJoining)
-            return Result<EmployeeEmploymentDto>.Invalid("groupDateOfJoining", "Group date of joining cannot be after the date of joining.");
-
-        if (request.ConfirmationDate < request.DateOfJoining)
+        if (request.ConfirmationDate < dateOfJoining)
             return Result<EmployeeEmploymentDto>.Invalid("confirmationDate", "Confirmation date cannot be before the date of joining.");
 
         if (Normalize(request.JobStatus)?.Length > 100)
             return Result<EmployeeEmploymentDto>.Invalid("jobStatus", "Job status must not exceed 100 characters.");
-
-        var probationUnit = NormalizePeriodUnit(request.ProbationPeriodUnit);
-        if (request.ProbationPeriod is <= 0)
-            return Result<EmployeeEmploymentDto>.Invalid("probationPeriod", "Probation period must be greater than zero.");
-
-        if (request.ProbationPeriod.HasValue != (probationUnit is not null))
-            return Result<EmployeeEmploymentDto>.Invalid("probationPeriodUnit", "Probation period and unit must be supplied together.");
-
-        if (probationUnit is not null && probationUnit is not ("Days" or "Months" or "Years"))
-            return Result<EmployeeEmploymentDto>.Invalid("probationPeriodUnit", "Probation period unit must be Days, Months, or Years.");
 
         var noticeUnit = NormalizePeriodUnit(request.NoticePeriodUnit);
         if (request.NoticePeriod is <= 0)

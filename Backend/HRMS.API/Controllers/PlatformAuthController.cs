@@ -5,6 +5,7 @@ using HRMS.Application.Common;
 using HRMS.Application.DTOs.PlatformAuth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace HRMS.API.Controllers;
 
@@ -14,7 +15,17 @@ namespace HRMS.API.Controllers;
 public sealed class PlatformAuthController : ControllerBase
 {
     private readonly IPlatformAuthService _service;
-    public PlatformAuthController(IPlatformAuthService service) => _service = service;
+    private readonly IPlatformPasswordRecoveryService _recovery;
+    public PlatformAuthController(IPlatformAuthService service, IPlatformPasswordRecoveryService recovery) { _service = service; _recovery = recovery; }
+
+    [HttpPost("forgot-username"), AllowAnonymous, EnableRateLimiting(RateLimitingPolicies.PasswordRecovery)]
+    public async Task<ActionResult<ApiResponse<PlatformRecoveryResponse>>> ForgotUsername(PlatformForgotUsernameRequest request, CancellationToken ct) => (await _recovery.ForgotUsernameAsync(request, ct)).ToActionResult();
+
+    [HttpPost("forgot-password"), AllowAnonymous, EnableRateLimiting(RateLimitingPolicies.PasswordRecovery)]
+    public async Task<ActionResult<ApiResponse<PlatformRecoveryResponse>>> ForgotPassword(PlatformForgotPasswordRequest request, CancellationToken ct) => (await _recovery.ForgotPasswordAsync(request, ct)).ToActionResult();
+
+    [HttpPost("reset-password"), AllowAnonymous, EnableRateLimiting(RateLimitingPolicies.PasswordRecovery)]
+    public async Task<ActionResult<ApiResponse<PlatformRecoveryResponse>>> ResetPassword(PlatformResetPasswordRequest request, CancellationToken ct) => (await _recovery.ResetPasswordAsync(request, ct)).ToActionResult();
 
     [HttpPost("login")]
     [AllowAnonymous]

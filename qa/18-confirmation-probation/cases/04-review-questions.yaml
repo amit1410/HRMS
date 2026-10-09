@@ -1,0 +1,93 @@
+sheet: Confirmation_Review_Questions
+submodule: Confirmation review-question master (Phase 9c-1) — configurable, per-customer review questions with type, options, applicability and rating-scale reference
+defaults:
+  role: TENANT_ADMIN
+  perm: "Confirmation.ReviewQuestionManage"
+  tenant: A
+  pre: "Tenant A signed in as TenantAdmin/HRAdmin unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: CONF-RQ-001
+    func: [F-CONF-RQ-001]
+    sc: List review questions with search, type and isActive filters, paged
+    t: GET /api/confirmation-review-questions returns a paged list filterable by search, questionType and IsActive
+    src: ["ConfirmationReviewQuestionService.GetQuestionsAsync"]
+    type: Positive
+    pri: P1
+    perm: "Confirmation.ReviewQuestionView"
+    steps:
+      - "[GET /api/confirmation-review-questions?questionType=Rating] => [200] items paged; all of type Rating"
+    auto: API
+
+  - id: CONF-RQ-002
+    func: [F-CONF-RQ-002]
+    sc: Create a Yes/No question and read it back
+    t: POST a YesNo question then GET returns it with questionType=YesNo
+    src: ["ConfirmationReviewQuestionService.CreateQuestionAsync", "ConfirmationReviewQuestionService.GetQuestionAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/confirmation-review-questions] unique Code, questionType=YesNo, isMandatory=true => [201] created"
+      - "[GET /api/confirmation-review-questions/{id}] => [200] questionType=YesNo"
+    auto: API
+
+  - id: CONF-RQ-003
+    func: [F-CONF-RQ-002]
+    sc: A Rating question requires an existing rating scale
+    t: POST a Rating question with no/invalid rating scale is rejected; with a valid scale it is accepted
+    src: ["ConfirmationReviewQuestionService.CreateQuestionAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/confirmation-review-questions] questionType=Rating, no confirmationRatingScaleId => [400] field error on confirmationRatingScaleId"
+      - "[POST /api/confirmation-review-questions] questionType=Rating, valid confirmationRatingScaleId => [201] created"
+    auto: API
+
+  - id: CONF-RQ-004
+    func: [F-CONF-RQ-002]
+    sc: Dropdown/MultiSelect questions require options; other types reject options
+    t: POST a Dropdown with no options is rejected; with options it is accepted; a Text question with options is rejected
+    src: ["ConfirmationReviewQuestionService.CreateQuestionAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/confirmation-review-questions] questionType=Dropdown, no options => [400] field error on options"
+      - "[POST /api/confirmation-review-questions] questionType=Dropdown, 2 options => [201] created"
+    auto: API
+
+  - id: CONF-RQ-005
+    func: [F-CONF-RQ-003]
+    sc: Question applicability may reference a policy and employment dimensions
+    t: POST a question with an applicability row (confirmationPolicyId + department) persists the row
+    src: ["ConfirmationReviewQuestionService.CreateQuestionAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST /api/confirmation-review-questions] applicability=[{confirmationPolicyId, departmentId}] => [201] applicabilitySetCount=1"
+    auto: Manual
+
+  - id: CONF-RQ-006
+    func: [F-CONF-RQ-002]
+    sc: Switching a question type clears stale child rows
+    t: PUT a Dropdown question to Text removes its options
+    src: ["ConfirmationReviewQuestionService.UpdateQuestionAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[PUT /api/confirmation-review-questions/{id}] change type Dropdown->Text => [200] options empty"
+    auto: Manual
+
+  - id: CONF-RQ-AUTHZ-001
+    func: [F-CONF-RQ-004]
+    sc: Manage permission is required to create a review question
+    t: An Employee (lacking Confirmation.ReviewQuestionManage) gets 403; unauthenticated gets 401
+    src: ["ConfirmationReviewQuestionsController", "HasPermission"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[GET /api/confirmation-review-questions] no token => [401]"
+      - "[POST /api/confirmation-review-questions] as Employee => [403]"
+    auto: API

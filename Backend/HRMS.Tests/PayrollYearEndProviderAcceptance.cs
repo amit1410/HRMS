@@ -138,6 +138,7 @@ internal static class PayrollYearEndProviderAcceptance
     }
 }
 
+[Collection("MySQL Integration")]
 public sealed class MySqlPayrollYearEndIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]

@@ -53,7 +53,7 @@ internal sealed class ShardConnectionStringFactory : IShardConnectionStringFacto
     {
         if (shard is null)
         {
-            if (_sqlite || _mySqlTemplate is not null)
+            if ((_sqlite && _sqliteTemplate is null) || _mySqlTemplate is not null)
             {
                 // For null shard (unknown host), return a safe fallback connection string so auth
                 // can return a proper 401 before any database I/O. SQLite or MySQL is safe; SQL Server

@@ -73,6 +73,7 @@ public sealed class MySqlApiFactory : HrmsApiFactory
             ["ConnectionStrings:Catalog"] = _catalogConnection,
             ["Sharding:MySqlConnectionStringTemplate"] = _tenantConnection,
             ["Database:SkipInitialization"] = "true",
+            ["Database:StartupMode"] = "Initialize",
             ["Database:SeedDemoTenants"] = "false",
             ["PasswordRecoveryProviders:EmailProvider"] = "Fake",
             ["PasswordRecoveryProviders:SmsProvider"] = "Fake",

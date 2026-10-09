@@ -208,6 +208,8 @@ public class SystemControllerTests : IClassFixture<HrmsApiFactory>
 
         public DbSet<PlatformRefreshToken> PlatformRefreshTokens => throw new InvalidOperationException(Reason);
 
+        public DbSet<PlatformPasswordResetToken> PlatformPasswordResetTokens => throw new InvalidOperationException(Reason);
+
         public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException(Reason);
     }

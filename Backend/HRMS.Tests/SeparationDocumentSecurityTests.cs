@@ -129,8 +129,8 @@ public sealed class SeparationDocumentSecurityTests
     private static async Task<Guid> CreateTemplateAsync(HrmsDbContext db, NoticeFixture fixture, bool approval, string code)
     {
         var service = Service(db, fixture);
-        var template = await service.CreateTemplateAsync(new() { Code = code, Name = code, DocumentType = SeparationDocumentType.RelievingLetter, RequiresApproval = approval });
-        var version = await service.AddVersionAsync(template.Value!.Id, new() { BodyTemplate = "{{Employee.FullName}}|{{Document.Number}}" });
+        var template = await service.CreateTemplateAsync(new() { Code = code, Name = code, DocumentType = SeparationDocumentType.RelievingLetter, RequiresApproval = approval, EffectiveFrom = new(2020, 1, 1) });
+        var version = await service.AddVersionAsync(template.Value!.Id, new() { BodyTemplate = "{{Employee.FullName}}|{{Document.Number}}", EffectiveFrom = new(2020, 1, 1) });
         await service.PublishVersionAsync(template.Value.Id, version.Value!.Versions.Single().Id, 1);
         return version.Value.Versions.Single().Id;
     }

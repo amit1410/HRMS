@@ -24,6 +24,7 @@ public interface IHrmsCatalogDbContext
     DbSet<PlatformUserRole> PlatformUserRoles { get; }
     DbSet<PlatformRolePermission> PlatformRolePermissions { get; }
     DbSet<PlatformRefreshToken> PlatformRefreshTokens { get; }
+    DbSet<PlatformPasswordResetToken> PlatformPasswordResetTokens { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

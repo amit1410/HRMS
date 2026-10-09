@@ -71,7 +71,7 @@ public interface IAttendanceBusinessTimeZoneProvider
 
 public interface IAttendancePunchIngestionService
 {
-    Task<Result<AttendancePunchDto>> IngestAsync(AttendancePunchIngestionRequest request, CancellationToken cancellationToken = default);
+    Task<Result<AttendancePunchDto>> IngestAsync(AttendancePunchIngestionRequest request, CancellationToken cancellationToken = default, bool deferSaveChanges = false);
 }
 
 public interface IAttendanceDayProcessor

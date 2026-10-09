@@ -6,6 +6,7 @@ using HRMS.Infrastructure.Sharding;
 using HRMS.Tests.TestSupport;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -26,6 +27,18 @@ public class DatabaseInitializerTests : IDisposable
         Path.Combine(Path.GetTempPath(), $"hrms-initializer-catalog-{Guid.NewGuid():N}.db");
 
     [Fact]
+    public void Development_configuration_disables_database_startup_mutation()
+    {
+        var configuration = new ConfigurationBuilder()
+            .SetBasePath(Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../HRMS.API")))
+            .AddJsonFile("appsettings.json")
+            .AddJsonFile("appsettings.Development.json")
+            .Build();
+
+        Assert.Equal("Disabled", configuration["Database:StartupMode"]);
+    }
+
+    [Fact]
     public async Task Skips_initialization_when_the_development_switch_is_enabled()
     {
         using var loggerFactory = LoggerFactory.Create(_ => { });
@@ -42,14 +55,18 @@ public class DatabaseInitializerTests : IDisposable
     }
 
     [Fact]
-    public async Task Rebuilds_a_development_database_that_is_missing_a_table()
+    public async Task Preserves_a_stale_development_database_until_destructive_rebuild_is_explicitly_enabled()
     {
         // A database as an earlier phase left it: complete except for a table the model has since gained.
         await InitializeAsync();
         await ExecuteAsync("DROP TABLE RefreshTokens");
         Assert.DoesNotContain("RefreshTokens", await TableNamesAsync());
 
-        await InitializeAsync();
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => InitializeAsync());
+        Assert.Contains("It was not modified", exception.Message);
+        Assert.DoesNotContain("RefreshTokens", await TableNamesAsync());
+
+        await InitializeAsync(allowSqliteDestructiveRebuild: true);
 
         Assert.Contains("RefreshTokens", await TableNamesAsync());
 
@@ -66,7 +83,7 @@ public class DatabaseInitializerTests : IDisposable
     /// used to work — so staleness is judged per column, not per table.
     /// </summary>
     [Fact]
-    public async Task Rebuilds_a_development_database_that_is_missing_a_column()
+    public async Task Rebuilds_a_stale_development_database_only_with_explicit_opt_in()
     {
         await InitializeAsync();
         await ExecuteAsync("ALTER TABLE Tenants DROP COLUMN Address");
@@ -74,6 +91,9 @@ public class DatabaseInitializerTests : IDisposable
         // Asserting the broken state through a real query rather than through the schema: this exception is
         // exactly what a developer would hit on a database left over from an earlier model.
         await Assert.ThrowsAsync<SqliteException>(TenantAddressesAsync);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => InitializeAsync());
+        await InitializeAsync(allowSqliteDestructiveRebuild: true);
 
         await InitializeAsync();
 
@@ -134,7 +154,7 @@ public class DatabaseInitializerTests : IDisposable
     }
 
     /// <summary>
-    /// The catalog holds the two tables that have to be readable before a tenant database is chosen, and
+    /// The catalog holds only the platform/routing tables that have to be readable before a tenant database is chosen, and
     /// nothing else. Getting this wrong fails open — the catalog quietly grows the tenant tables through
     /// navigation discovery rather than throwing — so it is asserted rather than assumed.
     /// </summary>
@@ -151,6 +171,7 @@ public class DatabaseInitializerTests : IDisposable
 
         Assert.Equal(
             [
+                "PlatformPasswordResetTokens",
                 "PlatformPermissions",
                 "PlatformRefreshTokens",
                 "PlatformRolePermissions",
@@ -181,10 +202,10 @@ public class DatabaseInitializerTests : IDisposable
             db.Model.GetEntityTypes().Select(entityType => entityType.GetTableName()));
     }
 
-    private async Task InitializeAsync(bool seedDemoTenants = true)
+    private async Task InitializeAsync(bool seedDemoTenants = true, bool allowSqliteDestructiveRebuild = false)
     {
-        await using var provider = BuildProvider();
-        await DatabaseInitializer.InitializeAsync(provider, seedDemoTenants);
+        await using var provider = BuildProvider(allowSqliteDestructiveRebuild);
+        await DatabaseInitializer.InitializeAsync(provider, seedDemoTenants, allowSqliteDestructiveRebuild);
     }
 
     private static async Task<List<string>> CatalogTableNamesAsync(HrmsCatalogDbContext catalog)
@@ -194,11 +215,17 @@ public class DatabaseInitializerTests : IDisposable
             .ToListAsync();
     }
 
-    private ServiceProvider BuildProvider()
+    private ServiceProvider BuildProvider(bool allowSqliteDestructiveRebuild = false)
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Database:AllowSqliteDestructiveRebuild"] = allowSqliteDestructiveRebuild.ToString()
+            })
+            .Build());
 
         // Startup runs before any request, so no tenant is resolved — as in the real host.
         services.AddScoped<ITenantContext>(_ => new TestTenantContext());

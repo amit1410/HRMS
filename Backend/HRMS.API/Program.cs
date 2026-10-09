@@ -122,13 +122,32 @@ builder.Services.AddScoped<EmployeeScopeAuthorizationFilter>();
 
     var app = builder.Build();
 
-    // Apply migrations (SQL Server) or create schema (SQLite dev fallback), then seed reference data + demo tenants.
-    // Development-only skip is explicit and default-off so a local API can be inspected without startup writes.
-    await DatabaseInitializer.InitializeIfEnabledAsync(
-        app.Services,
-        app.Environment.IsDevelopment(),
-        app.Configuration.GetValue<bool>("Database:SkipInitialization"),
-        app.Configuration.GetValue<bool>("Database:SeedDemoTenants"));
+    // API startup never owns schema mutation. Catalog and tenant migrations are an explicitly approved
+    // MigrationHost responsibility. Test hosts may still opt into the legacy disposable SQLite initializer
+    // explicitly; ordinary Development/Production startup is validation-only or disabled.
+    var startupMode = app.Configuration["Database:StartupMode"]
+        ?? (app.Environment.IsProduction() ? "Validate" : "Disabled");
+    if (string.Equals(startupMode, "Validate", StringComparison.OrdinalIgnoreCase))
+    {
+        await DatabaseInitializer.ValidateAsync(app.Services);
+    }
+    else if (string.Equals(startupMode, "Disabled", StringComparison.OrdinalIgnoreCase))
+    {
+        Log.Warning("Database startup work is disabled; no schema validation, migration, or seeding was performed.");
+    }
+    else if (string.Equals(startupMode, "Initialize", StringComparison.OrdinalIgnoreCase))
+    {
+        await DatabaseInitializer.InitializeIfEnabledAsync(
+            app.Services,
+            app.Environment.IsDevelopment() || app.Environment.EnvironmentName.Equals("Testing", StringComparison.OrdinalIgnoreCase),
+            app.Configuration.GetValue<bool>("Database:SkipInitialization"),
+            app.Configuration.GetValue<bool>("Database:SeedDemoTenants"),
+            app.Configuration.GetValue<bool>("Database:AllowSqliteDestructiveRebuild"));
+    }
+    else
+    {
+        throw new InvalidOperationException("Database:StartupMode must be 'Disabled', 'Validate', or explicitly configured as 'Initialize'.");
+    }
 
     // Centralized exception handling must sit at the top of the pipeline.
     app.UseMiddleware<ExceptionHandlingMiddleware>();

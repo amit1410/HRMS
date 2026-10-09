@@ -6,6 +6,7 @@ using HRMS.Tests.TestSupport;
 using HRMS.Infrastructure.Security;
 using HRMS.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using MySql.Data.MySqlClient;
 using Xunit.Sdk;
 
 namespace HRMS.Tests;
@@ -511,7 +512,8 @@ public sealed class MySqlLeaveAccrualIntegrationTests
     {
         var connection = Environment.GetEnvironmentVariable("HRMS_MYSQL_TEST_CONNECTION");
         if (string.IsNullOrWhiteSpace(connection)) throw SkipException.ForSkip("MySQL no-proration test not executed: HRMS_MYSQL_TEST_CONNECTION is absent.");
-        var fixture = new MySqlLeaveLifecycleIntegrationTests.Fixture(connection);
+        await using var isolated = await CreateIsolatedDatabaseAsync(connection);
+        var fixture = new MySqlLeaveLifecycleIntegrationTests.Fixture(isolated.ConnectionString);
         try
         {
             await fixture.SeedAsync();
@@ -637,17 +639,17 @@ public sealed class MySqlLeaveAccrualIntegrationTests
             }
             await using (var verification = fixture.CreateContext(fixture.EmployeeTenant))
             {
-                Assert.Equal(10m, await verification.LeaveBalanceTransactions.Where(x => x.TransactionType == LeaveBalanceTransactionType.CarryForward).Select(x => x.Quantity).SingleAsync());
-                Assert.Equal(8m, await verification.LeaveBalanceTransactions.Where(x => x.TransactionType == LeaveBalanceTransactionType.Expiry).Select(x => x.Quantity).SingleAsync());
-                Assert.Equal(10m, await verification.LeaveEntitlementGrants.Where(x => x.SourceType == LeaveBalanceSourceType.CarryForward).Select(x => x.GrantedQuantity).SingleAsync());
-                Assert.Equal(destinationId, await verification.LeaveEntitlementGrants.Where(x => x.SourceType == LeaveBalanceSourceType.CarryForward).Select(x => x.LeavePeriodId).SingleAsync());
+                Assert.Equal(10m, await verification.LeaveBalanceTransactions.Where(x => x.TenantId == fixture.TenantId && x.TransactionType == LeaveBalanceTransactionType.CarryForward).Select(x => x.Quantity).SingleAsync());
+                Assert.Equal(8m, await verification.LeaveBalanceTransactions.Where(x => x.TenantId == fixture.TenantId && x.TransactionType == LeaveBalanceTransactionType.Expiry).Select(x => x.Quantity).SingleAsync());
+                Assert.Equal(10m, await verification.LeaveEntitlementGrants.Where(x => x.TenantId == fixture.TenantId && x.SourceType == LeaveBalanceSourceType.CarryForward).Select(x => x.GrantedQuantity).SingleAsync());
+                Assert.Equal(destinationId, await verification.LeaveEntitlementGrants.Where(x => x.TenantId == fixture.TenantId && x.SourceType == LeaveBalanceSourceType.CarryForward).Select(x => x.LeavePeriodId).SingleAsync());
             }
             await using (var replayContext = fixture.CreateContext(fixture.EmployeeTenant))
             {
                 Assert.Equal(0, (await CreateCloseProcessor(replayContext, fixture).ProcessAsync(fixture.LeavePeriodId, new(2027, 4, 1))).Processed);
-                Assert.Equal(1, await replayContext.LeavePeriodCloseOccurrences.CountAsync());
-                Assert.Equal(1, await replayContext.LeaveBalanceTransactions.CountAsync(x => x.TransactionType == LeaveBalanceTransactionType.CarryForward));
-                Assert.Equal(1, await replayContext.LeaveBalanceTransactions.CountAsync(x => x.TransactionType == LeaveBalanceTransactionType.Expiry));
+                Assert.Equal(1, await replayContext.LeavePeriodCloseOccurrences.CountAsync(x => x.TenantId == fixture.TenantId));
+                Assert.Equal(1, await replayContext.LeaveBalanceTransactions.CountAsync(x => x.TenantId == fixture.TenantId && x.TransactionType == LeaveBalanceTransactionType.CarryForward));
+                Assert.Equal(1, await replayContext.LeaveBalanceTransactions.CountAsync(x => x.TenantId == fixture.TenantId && x.TransactionType == LeaveBalanceTransactionType.Expiry));
             }
         }
         finally { await fixture.CleanupAsync(); }
@@ -847,5 +849,33 @@ public sealed class MySqlLeaveAccrualIntegrationTests
         rule.EntitlementQuantity = 0.25m;
         rule.AccrualFrequency = AccrualFrequency.Daily;
         await setup.SaveChangesAsync();
+    }
+
+    private static async Task<IsolatedDatabase> CreateIsolatedDatabaseAsync(string configured)
+    {
+        var normalized = MySqlApiFactory.NormalizeConnectionString(configured);
+        var name = $"HRMS_LeaveAccrual_{Guid.NewGuid():N}";
+        var admin = new MySqlConnectionStringBuilder(normalized) { Database = string.Empty };
+        var target = new MySqlConnectionStringBuilder(normalized) { Database = name };
+        await using var connection = new MySqlConnection(admin.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"CREATE DATABASE `{name}`;";
+        await command.ExecuteNonQueryAsync();
+        return new IsolatedDatabase(target.ConnectionString, admin.ConnectionString, name);
+    }
+
+    private sealed class IsolatedDatabase(string connectionString, string adminConnectionString, string name) : IAsyncDisposable
+    {
+        public string ConnectionString { get; } = connectionString;
+
+        public async ValueTask DisposeAsync()
+        {
+            await using var connection = new MySqlConnection(adminConnectionString);
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"DROP DATABASE IF EXISTS `{name}`;";
+            await command.ExecuteNonQueryAsync();
+        }
     }
 }

@@ -9,13 +9,8 @@ namespace HRMS.Application.DTOs.Employees;
 public record EmployeeEmploymentDto(
     Guid Id,
     Guid EmployeeId,
-    DateOnly FirstHiredDate,
-    DateOnly DateOfJoining,
-    DateOnly? GroupDateOfJoining,
     DateOnly? ConfirmationDate,
     string? JobStatus,
-    int? ProbationPeriod,
-    string? ProbationPeriodUnit,
     Guid? ReferredByEmployeeId,
     string? ReferredByEmployeeName,
     int? NoticePeriod,
@@ -24,4 +19,10 @@ public record EmployeeEmploymentDto(
     DateOnly? NoticeEndDate,
     NoticePeriodStatus NoticeStatus,
     DateTime CreatedDate,
-    DateTime? ModifiedDate);
+    DateTime? ModifiedDate,
+    // Confirmation & probation policy integration (Phase 9a). When an applicable confirmation policy is
+    // resolved, the probation end is policy-derived and ConfirmationDate becomes read-only in the UI; when
+    // no policy applies these are false/null and the manual ConfirmationDate behaves exactly as before.
+    bool ConfirmationDateIsPolicyManaged = false,
+    DateOnly? PolicyProbationEndDate = null,
+    string? ConfirmationPolicyName = null);

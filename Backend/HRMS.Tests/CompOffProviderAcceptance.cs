@@ -38,6 +38,7 @@ internal static class CompOffProviderAcceptance
     }
 }
 
+[Collection("MySQL Integration")]
 public sealed class MySqlCompOffIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]
@@ -68,10 +69,9 @@ public sealed class SqlServerCompOffIntegrationTests : IClassFixture<SqlServerIn
     private readonly SqlServerIntegrationTestHarness fixture;
     public SqlServerCompOffIntegrationTests(SqlServerIntegrationTestHarness fixture) => this.fixture = fixture;
 
-    [Fact, Trait("Category", "SqlServerIntegration")]
+    [SqlServerIntegrationFact, Trait("Category", "SqlServerIntegration")]
     public async Task SqlServer_comp_off_provider_acceptance()
     {
-        if (!fixture.IsConfigured) throw SkipException.ForSkip("Phase 6D SQL Server operator gate pending: HRMS_SQLSERVER_TEST_CONNECTION is absent.");
         var tenant = new TestTenantContext(Guid.NewGuid());
         await using var db = fixture.CreateContext(tenant);
         await db.Database.MigrateAsync(); await CompOffProviderAcceptance.RunAsync(db, tenant);

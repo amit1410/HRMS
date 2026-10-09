@@ -13,10 +13,7 @@ public class EmployeeEmploymentConfiguration : IEntityTypeConfiguration<Employee
 
         builder.Property(e => e.TenantId).IsRequired();
         builder.Property(e => e.EmployeeId).IsRequired();
-        builder.Property(e => e.FirstHiredDate).IsRequired();
-        builder.Property(e => e.DateOfJoining).IsRequired();
         builder.Property(e => e.JobStatus).HasMaxLength(100);
-        builder.Property(e => e.ProbationPeriodUnit).HasMaxLength(20);
         builder.Property(e => e.NoticePeriodUnit).HasMaxLength(20);
         builder.Property(e => e.NoticeStatus).HasConversion<int>().IsRequired();
 

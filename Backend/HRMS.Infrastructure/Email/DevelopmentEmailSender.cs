@@ -16,4 +16,7 @@ public sealed class DevelopmentEmailSender(ILogger<DevelopmentEmailSender> logge
 
     public Task<string?> SendPasswordResetOtpAsync(OtpDeliveryMessage message, CancellationToken cancellationToken = default) =>
         Task.FromResult<string?>(exposeOtp ? message.Otp : null);
+    public Task SendPlatformUsernameReminderAsync(PlatformUsernameReminderMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task SendPlatformPasswordResetAsync(PlatformPasswordResetEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task SendPlatformPasswordChangedAsync(PlatformPasswordChangedEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
 }

@@ -48,7 +48,12 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
         var db = provider.GetRequiredService<HrmsDbContext>();
         try
         {
-            await SchemaPreparer.PrepareAsync(db, $"'{shard.TenantCode}' tenant", _logger, cancellationToken);
+            await SchemaPreparer.PrepareAsync(
+                db,
+                $"'{shard.TenantCode}' tenant",
+                _logger,
+                provider.GetService<IConfiguration>()?.GetValue<bool>("Database:AllowSqliteDestructiveRebuild") ?? false,
+                cancellationToken);
         }
         catch (MySqlException ex)
         {

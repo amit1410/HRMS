@@ -1,7 +1,7 @@
 namespace HRMS.Domain.Enums;
 
 public enum LeaveUnit { Day = 0, Hour = 1 }
-public enum LeavePolicyVersionStatus { Draft = 0, Published = 1, Retired = 2 }
+public enum LeavePolicyVersionStatus { Draft = 0, Published = 1, Retired = 2, Discarded = 3 }
 public enum EligibilityMode { Immediate = 0, MinimumService = 1 }
 public enum EligibilityServiceUnit { Days = 0, Months = 1 }
 public enum ProbationMode { Allowed = 0, NotAllowed = 1, AfterConfirmation = 2 }

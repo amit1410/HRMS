@@ -42,6 +42,9 @@ coverage/
 hrms-api.env
 
 # Local secret/configuration captures accidentally exported from shell/editor sessions
+Set-MySqlEnv.ps1
+Claude-History/
+litellm_config.yaml
 3e9de5dd-ac6e-11f1-9dbb-aae8d4c2f95.txt
 ALTER USER 'hrmsuser'@'localhost'.txt
 ASPNETCORE_ENVIRONMENT=Production.txt
@@ -50,6 +53,13 @@ SET @user_id = UUID();.txt
 sudo nano etchrms-api.env.txt
 
 # Local runtime artifacts and generated checks
+.claude-nvidia/
+TempInspect/
+VERIFICATION_RESULTS.md
+verification_report.txt
+qa/reports/
+qa/automation/tests/api/reports/
+qa/tools/__pycache__/
 _buildcheck/
 *.out
 *.err

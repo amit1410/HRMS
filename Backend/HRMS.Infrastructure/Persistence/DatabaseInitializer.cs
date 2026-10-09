@@ -25,6 +25,31 @@ namespace HRMS.Infrastructure.Persistence;
 /// </summary>
 public static class DatabaseInitializer
 {
+    public static async Task ValidateAsync(
+        IServiceProvider services,
+        CancellationToken cancellationToken = default)
+    {
+        var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("HRMS.DatabaseInitializer");
+        using var catalogScope = services.CreateScope();
+        var catalog = catalogScope.ServiceProvider.GetRequiredService<HrmsCatalogDbContext>();
+        await SchemaPreparer.ValidateAsync(catalog, "catalog", cancellationToken);
+
+        var organizations = await catalog.Tenants.AsNoTracking()
+            .OrderBy(tenant => tenant.TenantCode)
+            .Select(tenant => new ShardDescriptor(tenant.Id, tenant.TenantCode, tenant.Host, tenant.ShardKey, tenant.Status, tenant.DatabaseProvider))
+            .ToListAsync(cancellationToken);
+
+        foreach (var organization in organizations)
+        {
+            using var scope = services.CreateScope();
+            scope.ServiceProvider.GetRequiredService<IShardContext>().Use(organization);
+            var db = scope.ServiceProvider.GetRequiredService<HrmsDbContext>();
+            await SchemaPreparer.ValidateAsync(db, $"'{organization.TenantCode}' tenant", cancellationToken);
+        }
+
+        logger.LogInformation("Database schema validation completed for catalog and {Count} tenant(s); no writes were performed.", organizations.Count);
+    }
+
     /// <summary>
     /// Runs startup database preparation unless the explicit development-only skip switch is enabled.
     /// The switch is intentionally passed in by the host so production can never skip initialization by
@@ -35,6 +60,7 @@ public static class DatabaseInitializer
         bool isDevelopment,
         bool skipInitialization,
         bool seedDemoTenants,
+        bool allowSqliteDestructiveRebuild = false,
         CancellationToken cancellationToken = default)
     {
         var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("HRMS.DatabaseInitializer");
@@ -47,17 +73,23 @@ public static class DatabaseInitializer
             return;
         }
 
-        await InitializeAsync(services, seedDemoTenants, cancellationToken);
+        await InitializeAsync(services, seedDemoTenants, allowSqliteDestructiveRebuild, cancellationToken);
     }
 
     public static async Task InitializeAsync(
         IServiceProvider services,
         bool seedDemoTenants = false,
+        bool allowSqliteDestructiveRebuild = false,
         CancellationToken cancellationToken = default)
     {
         var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("HRMS.DatabaseInitializer");
 
-        var organizations = await InitializeCatalogAsync(services, logger, seedDemoTenants, cancellationToken);
+        var organizations = await InitializeCatalogAsync(
+            services,
+            logger,
+            seedDemoTenants,
+            allowSqliteDestructiveRebuild,
+            cancellationToken);
 
         var provisioning = services.GetRequiredService<ITenantProvisioningService>();
         var provisioned = 0;
@@ -71,6 +103,9 @@ public static class DatabaseInitializer
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                if (ex is InvalidOperationException && ex.Message.Contains("SQLite", StringComparison.Ordinal))
+                    throw;
+
                 logger.LogError(
                     ex,
                     "Could not provision organization {TenantCode} on shard {ShardKey}. Every other "
@@ -95,12 +130,18 @@ public static class DatabaseInitializer
         IServiceProvider services,
         ILogger logger,
         bool seedDemoTenants,
+        bool allowSqliteDestructiveRebuild,
         CancellationToken cancellationToken)
     {
         using var scope = services.CreateScope();
         var catalog = scope.ServiceProvider.GetRequiredService<HrmsCatalogDbContext>();
 
-        await SchemaPreparer.PrepareAsync(catalog, "catalog", logger, cancellationToken);
+        await SchemaPreparer.PrepareAsync(
+            catalog,
+            "catalog",
+            logger,
+            allowSqliteDestructiveRebuild,
+            cancellationToken);
 
         logger.LogInformation("Seeding catalog organizations and branding.");
         await DatabaseSeeder.SeedCatalogAsync(catalog, seedDemoTenants, cancellationToken);

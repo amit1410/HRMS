@@ -1,0 +1,285 @@
+sheet: Confirmation_Decision_Engine
+submodule: Confirmation approval, decision engine & automatic outcome (Phase 9c-3) — configurable approval requirements and decision rules, a dedicated decision/calculation service over the case snapshot, an authorized final-decision workflow with concurrency protection, and the automatic employee-side effects (confirm / extend probation / not-confirmed / additional review) with full audit.
+defaults:
+  role: TENANT_ADMIN
+  perm: "Confirmation.Decide"
+  tenant: A
+  pre: "Tenant A signed in as TenantAdmin/HRAdmin unless stated. A published 9a confirmation policy with decision rules resolves for the target employee, and the employee has a review case whose required reviews are submitted (status Completed)."
+  data: "An employee with a resolvable published confirmation policy that configures RequiredApproval, an OverallRatingMethod and non-overlapping decision rules; a review case with submitted reviewer reviews carrying Rating answers."
+  sev: High
+  reg: true
+
+cases:
+  # ── Approval configuration ──────────────────────────────────────────────
+  - id: CONF-DE-001
+    func: [F-CONF-DE-001]
+    sc: Approval requirement is read from the policy (Manager / HRBP / both / either)
+    t: A case becomes Completed (decidable) only when the reviews required by the policy's RequiredApproval are submitted — never hard-coded to "both"
+    src: ["ConfirmationReviewCaseService.UpdateCaseStatusAfterSubmitAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "Policy RequiredApproval=Manager: after only the Manager review is submitted, [POST .../decision] => [200]"
+      - "Policy RequiredApproval=ManagerAndHrbp: after only the Manager review, [POST .../decision] => [409] not ready; after HRBP too => [200]"
+    auto: API
+
+  - id: CONF-DE-002
+    func: [F-CONF-DE-001]
+    sc: Approval sequence (Manager then HRBP) is enforced
+    t: When the policy configures Manager-then-HRBP, the HRBP review cannot be submitted before the Manager review
+    src: ["ConfirmationReviewCaseService.SubmitReviewAsync"]
+    type: Negative
+    pri: P2
+    perm: "Confirmation.ReviewHrbpSubmit"
+    steps:
+      - "[POST .../reviews/hrbp/submit] before the manager review => [409]"
+      - "Submit manager, then [POST .../reviews/hrbp/submit] => [200]"
+    auto: Manual
+
+  # ── Decision rules / rating calculation ─────────────────────────────────
+  - id: CONF-DE-003
+    func: [F-CONF-DE-002]
+    sc: Overall rating is computed from the snapshot per the configured method
+    t: The preview reports an overall rating computed from the submitted Rating answers using the policy's OverallRatingMethod (average / minimum), from the case snapshot (not the live master)
+    src: ["ConfirmationDecisionCalculator.CalculateOverallRating", "ConfirmationDecisionService.CalculateAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/confirmation-review-cases/{id}/decision/preview] => [200] overallRating reflects the submitted ratings + method"
+    auto: API
+
+  - id: CONF-DE-004
+    func: [F-CONF-DE-002]
+    sc: Decision rules map the rating to an outcome by priority
+    t: The calculated outcome is the first active rule (ascending priority) whose inclusive range contains the overall rating
+    src: ["ConfirmationDecisionCalculator.Evaluate"]
+    type: Positive
+    pri: P1
+    steps:
+      - "Rating >= Confirm threshold => calculatedOutcome=Confirmed; mid band => ProbationExtended; low band => NotConfirmed"
+    auto: API
+
+  - id: CONF-DE-005
+    func: [F-CONF-DE-002]
+    sc: No matching rule yields a Pending calculation, not a wrong outcome
+    t: When no active rule matches the rating (or there are no Rating answers), the preview returns Pending with an explanation
+    src: ["ConfirmationDecisionCalculator.Evaluate"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST preview] with a rating outside every configured range => [200] calculatedOutcome=Pending, explanation present"
+    auto: Manual
+
+  - id: CONF-DE-006
+    func: [F-CONF-DE-002]
+    sc: Ambiguous (overlapping) active decision rules are rejected at configuration time
+    t: Saving a policy version whose active decision rules have overlapping rating ranges is rejected with a field error
+    src: ["ConfirmationPolicyService.CreateVersionAsync", "ConfirmationDecisionCalculator.FindOverlap"]
+    type: Negative
+    pri: P1
+    perm: "Confirmation.PolicyManage"
+    steps:
+      - "[POST /api/confirmation-policies/{id}/versions] with two active rules [3..5] and [4..6] => [400] decisionRules error"
+    auto: Manual
+
+  - id: CONF-DE-007
+    func: [F-CONF-DE-002]
+    sc: The engine uses the case's snapshotted scale, not the current master
+    t: Editing the master rating scale after a case is created does not change the case's calculated rating
+    src: ["ConfirmationDecisionService.CalculateAsync"]
+    type: Positive
+    pri: P1
+    sev: Critical
+    steps:
+      - "Create case, submit ratings; edit master scale; [POST preview] still scores against the snapshot values"
+    auto: Manual
+
+  # ── Readiness validation ────────────────────────────────────────────────
+  - id: CONF-DE-008
+    func: [F-CONF-DE-003]
+    sc: A decision is blocked until the required reviews are submitted
+    t: Submitting a decision on a case that is not Completed is rejected server-side (not frontend-only)
+    src: ["ConfirmationDecisionService.SubmitDecisionAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST .../decision] { outcome } on an Open/InReview case => [409]"
+    auto: API
+
+  - id: CONF-DE-009
+    func: [F-CONF-DE-003]
+    sc: Required reviewer comments block a decision when missing
+    t: When the policy requires reviewer comments, a decision cannot be submitted until each required review carries comments
+    src: ["ConfirmationDecisionService.BuildEvaluationContextAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "Policy RequireReviewerComments=true, reviews submitted without comments => [POST .../decision] => [400] blocking reason"
+    auto: Manual
+
+  - id: CONF-DE-010
+    func: [F-CONF-DE-004]
+    sc: The submitted outcome must be permitted by the configured rules/workflow
+    t: An outcome that no rule/workflow permits (e.g. Extend when no extension is configured) is rejected — a user cannot bypass configuration by posting a different outcome
+    src: ["ConfirmationDecisionService.SubmitDecisionAsync", "ConfirmationDecisionService.BuildPermittedOutcomes"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST .../decision] { outcome: ProbationExtended } when MaxExtensions=0 => [400]"
+    auto: API
+
+  # ── Outcomes ────────────────────────────────────────────────────────────
+  - id: CONF-DE-011
+    func: [F-CONF-DE-005]
+    sc: Confirm writes the policy-derived confirmation date + job status; DOJ untouched
+    t: A Confirm decision sets EmployeeEmployment.ConfirmationDate and the configured ConfirmedJobStatus, marks the case Decided, and never creates/changes DateOfJoining
+    src: ["ConfirmationDecisionService.ConfirmAsync", "EmployeeEmploymentService"]
+    type: Positive
+    pri: P1
+    sev: Critical
+    steps:
+      - "[POST .../decision] { outcome: Confirmed } => [200] confirmationDate = probation end; jobStatus=Confirmed; case status Decided"
+      - "[GET /api/employees/{id}] DateOfJoining unchanged"
+    auto: API
+
+  - id: CONF-DE-012
+    func: [F-CONF-DE-005]
+    sc: Duplicate confirmation is prevented
+    t: A second decision on an already-decided case is rejected (no second confirmation for the same cycle)
+    src: ["ConfirmationDecisionService.CompareAndSwapToDecidedAsync"]
+    type: Negative
+    pri: P1
+    sev: Critical
+    steps:
+      - "[POST .../decision] => [200]; [POST .../decision] again => [409]"
+    auto: API
+
+  - id: CONF-DE-013
+    func: [F-CONF-DE-006]
+    sc: Extend creates a NEW probation cycle, preserving the previous one
+    t: An Extend decision closes the active cycle, opens a new cycle with a later end date (configured extension), writes extension history, and raises a fresh review case for the new cycle
+    src: ["ConfirmationDecisionService.ExtendAsync", "ConfirmationDateCalculator.ExtendedProbationEndDate"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST .../decision] { outcome: ProbationExtended } => [200] newProbationEndDate = old end + extension; newCycleNumber=2; newCaseId present"
+      - "Previous cycle retained (closed); extension history row created"
+    auto: API
+
+  - id: CONF-DE-014
+    func: [F-CONF-DE-006]
+    sc: Extension beyond the configured maximum is rejected
+    t: Once MaxExtensions is reached for the cycle chain, a further Extend decision is rejected
+    src: ["ConfirmationDecisionService.ExtendAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "With MaxExtensions=1 already used, [POST .../decision] { ProbationExtended } on the new cycle's case => [400]"
+    auto: Manual
+
+  - id: CONF-DE-015
+    func: [F-CONF-DE-006]
+    sc: Extension is 9b-compatible — the resolver reports the new probation end
+    t: After an extension the policy resolver returns the new cycle's end date, so 9b reminder dedup moves to the new cycle and never resends the old one
+    src: ["ConfirmationPolicyResolver.ResolveAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/confirmation-policies/resolve] { employeeId } => probationEndDate = extended end"
+    auto: Manual
+
+  - id: CONF-DE-016
+    func: [F-CONF-DE-007]
+    sc: Not Confirmed sets the configured job status only
+    t: A NotConfirmed decision sets the configured NotConfirmedJobStatus and records audit; it does not change Employee.Status or terminate (separation stays separate)
+    src: ["ConfirmationDecisionService.RejectAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST .../decision] { outcome: NotConfirmed } => [200] jobStatus=Not Confirmed; employee status unchanged"
+    auto: API
+
+  - id: CONF-DE-017
+    func: [F-CONF-DE-008]
+    sc: Additional Review keeps the case active and changes no employee data
+    t: An AdditionalReview decision returns the case to InReview, records the reason, and leaves ConfirmationDate/DateOfJoining untouched
+    src: ["ConfirmationDecisionService.AdditionalReviewAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST .../decision] { outcome: AdditionalReview } => [200] case status InReview; no confirmation date written"
+    auto: API
+
+  # ── Audit ───────────────────────────────────────────────────────────────
+  - id: CONF-DE-018
+    func: [F-CONF-DE-009]
+    sc: Decision calculation and final decision are fully auditable
+    t: Preview records a calculation; a final decision records the outcome, reason, maker, timestamp, calculated rating, rule used and previous/new status; history is never deleted
+    src: ["ConfirmationDecisionService.GetHistoryAsync"]
+    type: Positive
+    pri: P2
+    perm: "Confirmation.ReviewCaseView"
+    steps:
+      - "[GET /api/confirmation-review-cases/{id}/decision/history] => [200] decisions[] + calculations[] (+ extensions[] after an extend)"
+    auto: API
+
+  # ── Authorization ───────────────────────────────────────────────────────
+  - id: CONF-DE-019
+    func: [F-CONF-DE-010]
+    sc: Deciding requires Confirmation.Decide
+    t: The decision preview/submit endpoints require Confirmation.Decide; a reviewer without it is forbidden
+    src: ["ConfirmationDecisionsController"]
+    type: Negative
+    pri: P1
+    perm: "Confirmation.ReviewCaseView"
+    steps:
+      - "[POST .../decision/preview] with only ReviewCaseView => [403]"
+      - "[POST .../decision] with only ReviewManagerSubmit => [403]"
+    auto: API
+
+  - id: CONF-DE-020
+    func: [F-CONF-DE-010]
+    sc: A decider cannot act on an employee outside their access scope
+    t: Deciding a case for an employee outside the caller's org/access scope is forbidden
+    src: ["ConfirmationDecisionService.SubmitDecisionAsync", "EmployeeAccessScopeService.CanAccessEmployeeAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "A manager who is not authorized for the employee => [403] on preview and decision"
+    auto: Manual
+
+  - id: CONF-DE-021
+    func: [F-CONF-DE-010]
+    sc: Decisions are tenant-isolated
+    t: A decision/preview/history for a Tenant A case is not reachable from Tenant B
+    src: ["ConfirmationDecisionService"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST /api/confirmation-review-cases/{A-case}/decision/preview] as Tenant B => [404]"
+    auto: Manual
+
+  - id: CONF-DE-022
+    func: [F-CONF-DE-010]
+    sc: Unauthenticated access is rejected
+    t: Any decision endpoint without a bearer token returns 401
+    src: ["ConfirmationDecisionsController"]
+    type: Negative
+    pri: P1
+    perm: "n/a"
+    steps:
+      - "[POST .../decision/preview] no token => [401]"
+    auto: API
+
+  # ── Concurrency ─────────────────────────────────────────────────────────
+  - id: CONF-DE-023
+    func: [F-CONF-DE-011]
+    sc: Two simultaneous decisions on the same case — only one wins
+    t: When two deciders submit a final decision for the same case/cycle concurrently, exactly one succeeds and the other is rejected (compare-and-swap on the case status)
+    src: ["ConfirmationDecisionService.CompareAndSwapToDecidedAsync"]
+    type: Negative
+    pri: P1
+    sev: Critical
+    steps:
+      - "Fire two [POST .../decision] for the same case at once => exactly one [200], the other [409]"
+    auto: Manual

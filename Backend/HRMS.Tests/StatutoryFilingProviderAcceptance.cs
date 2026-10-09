@@ -115,6 +115,7 @@ internal static class StatutoryFilingProviderAcceptance
     }
 }
 
+[Collection("MySQL Integration")]
 public sealed class MySqlStatutoryFilingIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]

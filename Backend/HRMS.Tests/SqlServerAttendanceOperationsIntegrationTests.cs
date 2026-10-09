@@ -11,13 +11,10 @@ namespace HRMS.Tests;
 
 public sealed class SqlServerAttendanceOperationsIntegrationTests
 {
-    [Fact, Trait("Category", "SqlServerIntegration")]
+    [SqlServerIntegrationFact, Trait("Category", "SqlServerIntegration")]
     public async Task SqlServer_phase6e_attendance_operations_provider_acceptance()
     {
         var harness = new SqlServerIntegrationTestHarness();
-        if (!harness.IsConfigured)
-            throw SkipException.ForSkip($"SQL Server Phase 6E acceptance requires {SqlServerIntegrationTestHarness.RequiredEnvironmentVariable}.");
-
         var fixture = new SqlServerFixture();
         await using var disposable = await harness.CreateDisposableDatabaseAsync("HRMS_Phase6E_AttendanceOps_Test_");
         await using var db = disposable.CreateContext(fixture.ManagerTenant);

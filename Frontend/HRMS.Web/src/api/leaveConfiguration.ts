@@ -85,7 +85,7 @@ export function updateLeavePeriod(id: string, body: LeavePeriodRequest): Promise
   return request(() => api.put<ApiResponse<LeavePeriod>>(`/api/leave-periods/${id}`, body))
 }
 
-export type LeavePolicyVersionStatus = 'Draft' | 'Published' | 'Retired'
+export type LeavePolicyVersionStatus = 'Draft' | 'Published' | 'Retired' | 'Discarded'
 
 export interface LeavePolicy {
   id: string
@@ -118,7 +118,7 @@ export interface LeavePolicyVersion {
   createdBy?: string | null
   modifiedDate?: string | null
   concurrencyToken: string
-  allowedActions: { canEdit: boolean; canValidate: boolean; canPublish: boolean; canRetire: boolean; canCreateVersion: boolean }
+  allowedActions: { canEdit: boolean; canValidate: boolean; canPublish: boolean; canRetire: boolean; canDiscard?: boolean; canCreateVersion: boolean }
 }
 
 export interface LeavePolicyVersionRequest { effectiveFrom: string; effectiveTo?: string | null; priority: number; copyFromVersionId?: string | null }

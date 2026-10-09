@@ -48,4 +48,5 @@ public interface ILeaveConfigurationService
     Task<Result<LeavePolicyCancellationRuleDto?>> SaveCancellationRuleAsync(Guid policyId, Guid versionId, Guid leaveTypeId, LeavePolicyCancellationRuleRequest request, CancellationToken ct = default);
     Task<Result<LeavePolicyVersionDto>> PublishAsync(Guid policyId, Guid versionId, bool acknowledgeOverlap = false, CancellationToken ct = default);
     Task<Result<LeavePolicyVersionDto>> RetireAsync(Guid policyId, Guid versionId, CancellationToken ct = default);
+    Task<Result<LeavePolicyVersionDto>> DiscardAsync(Guid policyId, Guid versionId, LeavePolicyVersionDiscardRequest request, CancellationToken ct = default);
 }

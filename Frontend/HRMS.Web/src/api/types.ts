@@ -931,13 +931,8 @@ export interface EmployeeAdditionalInfoRequest {
 export interface EmployeeEmployment {
   id: string
   employeeId: string
-  firstHiredDate: string
-  dateOfJoining: string
-  groupDateOfJoining?: string | null
   confirmationDate?: string | null
   jobStatus?: string | null
-  probationPeriod?: number | null
-  probationPeriodUnit?: string | null
   referredByEmployeeId?: string | null
   referredByEmployeeName?: string | null
   noticePeriod?: number | null
@@ -947,16 +942,16 @@ export interface EmployeeEmployment {
   noticeStatus: 'NotServing' | 'Active' | 'Completed' | 'Cancelled'
   createdDate: string
   modifiedDate?: string | null
+  // Confirmation & probation policy integration (Phase 9a). When true, the probation end is policy-derived
+  // and the Confirmation Date is read-only in the UI; otherwise the manual field behaves as before.
+  confirmationDateIsPolicyManaged?: boolean
+  policyProbationEndDate?: string | null
+  confirmationPolicyName?: string | null
 }
 
 export interface EmployeeEmploymentRequest {
-  firstHiredDate: string
-  dateOfJoining: string
-  groupDateOfJoining?: string | null
   confirmationDate?: string | null
   jobStatus?: string | null
-  probationPeriod?: number | null
-  probationPeriodUnit?: string | null
   referredByEmployeeId?: string | null
   noticePeriod?: number | null
   noticePeriodUnit?: string | null

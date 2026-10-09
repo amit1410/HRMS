@@ -14,6 +14,7 @@ internal static class SeparationNoticeProviderAcceptance
         => SeparationFoundationProviderAcceptance.RunAsync(db, tenant, provider);
 }
 
+[Collection("MySQL Integration")]
 public sealed class MySqlSeparationNoticeIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]

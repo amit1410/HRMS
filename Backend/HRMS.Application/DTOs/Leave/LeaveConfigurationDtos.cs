@@ -79,6 +79,12 @@ public sealed class LeavePolicyVersionUpdateRequest
     public string? ConcurrencyToken { get; set; }
 }
 
+public sealed class LeavePolicyVersionDiscardRequest
+{
+    public string? ConcurrencyToken { get; set; }
+    public string Reason { get; set; } = string.Empty;
+}
+
 public sealed record LeavePolicyVersionDto(
     Guid Id, int VersionNumber, DateOnly EffectiveFrom, DateOnly? EffectiveTo,
     LeavePolicyVersionStatus Status, int Priority, int LeaveTypeCount, int ApplicabilityGroupCount,
@@ -86,7 +92,7 @@ public sealed record LeavePolicyVersionDto(
     LeavePolicyAllowedActions AllowedActions);
 
 public sealed record LeavePolicyAllowedActions(
-    bool CanEdit, bool CanValidate, bool CanPublish, bool CanRetire, bool CanCreateVersion);
+    bool CanEdit, bool CanValidate, bool CanPublish, bool CanRetire, bool CanDiscard, bool CanCreateVersion);
 
 public sealed record LeaveTypeSelectionDto(Guid Id, string Code, string Name, bool IsActive);
 

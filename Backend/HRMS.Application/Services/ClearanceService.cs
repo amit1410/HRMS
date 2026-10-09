@@ -37,6 +37,7 @@ public sealed class ClearanceService(IHrmsDbContext db, ITenantContext tenant, I
     public async Task<Result<SeparationClearanceDto>> StartAsync(Guid separationId, CancellationToken ct = default)
     {
         if (tenant.TenantId is not Guid tenantId || tenant.UserId is not Guid actor) return Result<SeparationClearanceDto>.Unauthorized("No authenticated tenant and user.");
+        db.ClearChangeTracker();
         var separation = await db.EmployeeSeparations.Include(x => x.Reason).FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == separationId, ct);
         if (separation is null) return Result<SeparationClearanceDto>.NotFound("Separation case not found.");
         if (separation.Status is not EmployeeSeparationStatus.Approved and not EmployeeSeparationStatus.NoticePeriod) return Result<SeparationClearanceDto>.Conflict("Clearance can start only after separation approval.");

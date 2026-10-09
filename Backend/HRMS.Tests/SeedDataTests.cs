@@ -51,6 +51,29 @@ public class SeedDataTests
     }
 
     [Fact]
+    public async Task Seed_reconciles_a_missing_existing_hrbp_confirmation_grant()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        await db.SeedAsync();
+
+        using (var context = db.CreateContext(new TestTenantContext()))
+        {
+            var rolePermission = await context.RolePermissions.SingleAsync(x =>
+                x.RoleId == SeedData.RoleId(RoleNames.HRBP) &&
+                x.PermissionId == SeedData.PermissionId(DomainPermissions.Confirmation.PolicyView));
+            context.RolePermissions.Remove(rolePermission);
+            await context.SaveChangesAsync();
+        }
+
+        await db.SeedAsync();
+
+        using var verify = db.CreateContext(new TestTenantContext());
+        Assert.True(await verify.RolePermissions.AnyAsync(x =>
+            x.RoleId == SeedData.RoleId(RoleNames.HRBP) &&
+            x.PermissionId == SeedData.PermissionId(DomainPermissions.Confirmation.PolicyView)));
+    }
+
+    [Fact]
     public async Task Seed_populates_an_organization_structure_for_each_tenant()
     {
         using var db = new SqliteInMemoryDatabase();

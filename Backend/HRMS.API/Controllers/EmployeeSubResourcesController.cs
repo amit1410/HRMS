@@ -39,6 +39,9 @@ public class EmployeeSubResourcesController : ControllerBase
     private readonly IEmployeeEmploymentService _employmentService;
     private readonly IEmployeeAuditService _auditService;
     private readonly IEmployeeDocumentService _documentService;
+    private readonly IManagerRoleProvisioningService _managerRoleProvisioning;
+    private readonly IHrmsDbContext _db;
+    private readonly ITenantContext _tenantContext;
 
     public EmployeeSubResourcesController(
         IEmployeeContactService contactService,
@@ -51,7 +54,10 @@ public class EmployeeSubResourcesController : ControllerBase
         IEmployeeAdditionalInfoService additionalInfoService,
         IEmployeeEmploymentService employmentService,
         IEmployeeAuditService auditService,
-        IEmployeeDocumentService documentService)
+        IEmployeeDocumentService documentService,
+        IManagerRoleProvisioningService managerRoleProvisioning,
+        IHrmsDbContext db,
+        ITenantContext tenantContext)
     {
         _contactService = contactService;
         _addressService = addressService;
@@ -64,6 +70,9 @@ public class EmployeeSubResourcesController : ControllerBase
         _employmentService = employmentService;
         _auditService = auditService;
         _documentService = documentService;
+        _managerRoleProvisioning = managerRoleProvisioning;
+        _db = db;
+        _tenantContext = tenantContext;
     }
 
     private string ChangedBy => User.FindFirstValue(HrmsClaimTypes.Email) ?? "unknown";
@@ -557,7 +566,7 @@ public class EmployeeSubResourcesController : ControllerBase
     {
         var result = await _employmentService.UpsertEmploymentAsync(id, request, cancellationToken);
         if (result.Succeeded)
-            await LogAuditAsync(id, "Employment", null, "EmployeeEmployment", null, "firstHiredDate", null, result.Value?.FirstHiredDate.ToString("yyyy-MM-dd"), AuditChangeType.Update, cancellationToken);
+            await LogAuditAsync(id, "Employment", null, "EmployeeEmployment", null, "jobStatus", null, result.Value?.JobStatus, AuditChangeType.Update, cancellationToken);
         return result.ToActionResult();
     }
 
@@ -612,6 +621,23 @@ public class EmployeeSubResourcesController : ControllerBase
         if (result.Succeeded)
             await LogAuditAsync(id, "EmploymentHistory", null, "EmployeeEmploymentHistory", result.Value?.Id, "departmentId", null, result.Value?.DepartmentId?.ToString(), AuditChangeType.Create, cancellationToken);
         return result.ToCreatedResult(nameof(GetEmploymentHistory), _ => new { id });
+    }
+
+    /// <summary>Reconciles system-managed Manager access from the persisted reporting relationship.</summary>
+    [HttpPost("employment-history/reconcile-manager-access")]
+    [HasPermission(Permissions.EmploymentHistory.Change)]
+    [ProducesResponseType(typeof(ApiResponse<ManagerAccessReconciliationResult>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<ManagerAccessReconciliationResult>>> ReconcileManagerAccess(
+        Guid id, CancellationToken cancellationToken)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId)
+            return Unauthorized(ApiResponse<ManagerAccessReconciliationResult>.Fail("An authenticated tenant is required."));
+
+        var result = await _managerRoleProvisioning.ReconcileManagerAccessAsync(tenantId, id, cancellationToken);
+        await _db.SaveChangesAsync(cancellationToken);
+        return Ok(ApiResponse<ManagerAccessReconciliationResult>.Ok(result, result.AssignmentCreated
+            ? "Manager access reconciled."
+            : "Manager access is already reconciled or not currently warranted."));
     }
 
     // ── Documents ────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { toApiError } from '../../api/errors.ts'
 import { usePlatformAuth } from '../../auth/PlatformAuthProvider.tsx'
 
@@ -63,7 +63,7 @@ export function PlatformLoginPage() {
               <label htmlFor="platform-password">Password</label>
               <div className="platform-login-input-wrap"><LockIcon /><input id="platform-password" name="password" type={passwordVisible ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /><button className="platform-login-password-toggle" type="button" onClick={() => setPasswordVisible((visible) => !visible)} aria-label={passwordVisible ? 'Hide password' : 'Show password'}>{passwordVisible ? <EyeOffIcon /> : <EyeIcon />}</button></div>
             </div>
-            <button className="platform-login-submit" type="submit"><span>Sign in</span><ArrowIcon /></button>
+            <button className="platform-login-submit" type="submit"><span>Sign in</span><ArrowIcon /></button><p><Link to="/platform/forgot-username">Forgot username?</Link> <span aria-hidden="true">·</span> <Link to="/platform/forgot-password">Forgot password?</Link></p>
           </form>
         </div>
         <p className="platform-login-copyright">© 2026 Anevra Technologies. All rights reserved.</p>

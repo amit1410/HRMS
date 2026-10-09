@@ -6,7 +6,7 @@ namespace HRMS.Tests;
 public sealed class SqlServerPayrollReportsIntegrationTests(SqlServerIntegrationTestHarness fixture)
     : IClassFixture<SqlServerIntegrationTestHarness>
 {
-    [Fact]
+    [SqlServerIntegrationFact]
     [Trait("Category", "SqlServerIntegration")]
     public async Task SqlServer_payroll_reports_provider_acceptance_is_repeatable()
     {

@@ -38,6 +38,7 @@ public class HrmsCatalogDbContext : DbContext, IHrmsCatalogDbContext
     public DbSet<PlatformUserRole> PlatformUserRoles => Set<PlatformUserRole>();
     public DbSet<PlatformRolePermission> PlatformRolePermissions => Set<PlatformRolePermission>();
     public DbSet<PlatformRefreshToken> PlatformRefreshTokens => Set<PlatformRefreshToken>();
+    public DbSet<PlatformPasswordResetToken> PlatformPasswordResetTokens => Set<PlatformPasswordResetToken>();
 
     /// <summary>
     /// Matches <see cref="HrmsDbContext.ConfigureConventions"/>: a timestamp means the same thing in both
@@ -65,6 +66,7 @@ public class HrmsCatalogDbContext : DbContext, IHrmsCatalogDbContext
         modelBuilder.ApplyConfiguration(new PlatformUserRoleConfiguration());
         modelBuilder.ApplyConfiguration(new PlatformRolePermissionConfiguration());
         modelBuilder.ApplyConfiguration(new PlatformRefreshTokenConfiguration());
+        modelBuilder.ApplyConfiguration(new PlatformPasswordResetTokenConfiguration());
 
         // Ordering is load-bearing: an Ignore placed *before* a configuration is silently undone by it, so
         // this has to sit after the two calls above. Tenant.Users is already ignored inside

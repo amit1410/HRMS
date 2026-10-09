@@ -5,4 +5,7 @@ public interface IManagerRoleProvisioningService
 {
     Task EnsureForManagerEmployeeAsync(Guid tenantId, Guid managerEmployeeId, CancellationToken cancellationToken = default);
     Task EnsureForLinkedEmployeeAsync(Guid tenantId, Guid userId, Guid employeeId, CancellationToken cancellationToken = default);
+    Task<ManagerAccessReconciliationResult> ReconcileManagerAccessAsync(Guid tenantId, Guid managerEmployeeId, CancellationToken cancellationToken = default);
 }
+
+public sealed record ManagerAccessReconciliationResult(bool Eligible, bool LinkedUserFound, bool AssignmentPresent, bool AssignmentCreated);

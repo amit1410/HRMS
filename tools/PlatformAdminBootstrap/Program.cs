@@ -57,7 +57,7 @@ try
     services.AddSingleton<IConfiguration>(configuration);
     services.AddSingleton<TimeProvider>(TimeProvider.System);
     services.AddSingleton<IPlatformContext, BootstrapPlatformContext>();
-    services.AddInfrastructure(configuration);
+    services.AddPlatformAdminBootstrapInfrastructure(configuration);
     using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = false });
     using var scope = provider.CreateScope();
     var catalog = scope.ServiceProvider.GetRequiredService<HrmsCatalogDbContext>();
@@ -136,7 +136,9 @@ static void LoadJsonConfiguration(ConfigurationManager configuration, string pat
         if (required) throw new InvalidOperationException($"Required configuration file was not found: {path}.");
         return;
     }
-    using var document = JsonDocument.Parse(File.ReadAllText(path));
+    using var document = JsonDocument.Parse(
+        File.ReadAllText(path),
+        new JsonDocumentOptions { AllowTrailingCommas = true });
     AddJsonValues(configuration, document.RootElement, string.Empty);
 }
 
@@ -219,8 +221,9 @@ static async Task VerifyCatalogIdentityAsync(HrmsCatalogDbContext catalog)
             ? "SELECT DATABASE();"
             : "SELECT DB_NAME();";
         var database = Convert.ToString(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
-        if (!string.Equals(database, "hrms_catalog", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"Catalog database identity mismatch: expected hrms_catalog, received {database}.");
+        var expectedDatabase = Environment.GetEnvironmentVariable("E2E_EXPECTED_CATALOG_DATABASE") ?? "hrms_catalog";
+        if (!string.Equals(database, expectedDatabase, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Catalog database identity mismatch: expected {expectedDatabase}, received {database}.");
     }
     finally
     {
@@ -235,7 +238,9 @@ static async Task VerifyCatalogPrerequisitesAsync(HrmsCatalogDbContext catalog)
         ? new[]
         {
             "20260905181639_InitialMySqlCatalogSchema",
-            "20260906130913_AddPlatformIdentity"
+            "20260906130913_AddPlatformIdentity",
+            "20260908151956_AddTenantLoginIdentifierMode",
+            "20260908163001_AddPasswordRecoverySettings"
         }
         : new[]
         {

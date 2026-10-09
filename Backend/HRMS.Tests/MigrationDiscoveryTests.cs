@@ -21,7 +21,8 @@ public sealed class MigrationDiscoveryTests
                 "20260905142921_AddTenantDatabaseProvider",
                 "20260906130913_AddPlatformIdentity",
                 "20260908151928_AddTenantLoginIdentifierMode",
-                "20260908161315_AddPasswordRecoverySettings"
+                "20260908161315_AddPasswordRecoverySettings",
+                "20261008130000_AddPlatformPasswordRecovery"
             ],
             db.Database.GetMigrations().ToArray());
     }
@@ -39,7 +40,8 @@ public sealed class MigrationDiscoveryTests
                 "20260905181639_InitialMySqlCatalogSchema",
                 "20260906130913_AddPlatformIdentity",
                 "20260908151956_AddTenantLoginIdentifierMode",
-                "20260908163001_AddPasswordRecoverySettings"
+                "20260908163001_AddPasswordRecoverySettings",
+                "20261008130000_AddPlatformPasswordRecovery"
             ],
             db.Database.GetMigrations().ToArray());
     }

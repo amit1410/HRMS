@@ -109,4 +109,7 @@ public sealed class LeavePoliciesController : ControllerBase
 
     [HttpPost("{policyId:guid}/versions/{versionId:guid}/retire"), HasPermission(Permissions.Leave.PolicyPublish)]
     public async Task<ActionResult<ApiResponse<LeavePolicyVersionDto>>> Retire(Guid policyId, Guid versionId, CancellationToken ct) => (await _service.RetireAsync(policyId, versionId, ct)).ToActionResult();
+
+    [HttpPost("{policyId:guid}/versions/{versionId:guid}/discard"), HasPermission(Permissions.Leave.PolicyManage)]
+    public async Task<ActionResult<ApiResponse<LeavePolicyVersionDto>>> Discard(Guid policyId, Guid versionId, [FromBody] LeavePolicyVersionDiscardRequest request, CancellationToken ct) => (await _service.DiscardAsync(policyId, versionId, request, ct)).ToActionResult();
 }

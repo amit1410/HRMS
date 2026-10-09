@@ -71,6 +71,7 @@ public sealed class MySqlAttendanceAdminCorrectionIntegrationTests
             await using var cleanup = fixture.CreateContext(new TestTenantContext(fixture.TenantId));
             await cleanup.AttendanceAdminCorrections.ExecuteDeleteAsync();
             await cleanup.EmployeeAttendanceDays.ExecuteDeleteAsync();
+            await cleanup.PayrollAttendanceSnapshots.ExecuteDeleteAsync();
             await cleanup.AttendancePeriods.ExecuteDeleteAsync();
             await cleanup.ShiftApplicabilityRules.ExecuteDeleteAsync();
             await cleanup.Shifts.ExecuteDeleteAsync();
@@ -187,6 +188,7 @@ public sealed class MySqlAttendanceAdminCorrectionIntegrationTests
             await using var cleanup = fixture.CreateContext(new TestTenantContext(fixture.TenantId));
             await cleanup.EmployeeAttendanceMonthlySummaries.ExecuteDeleteAsync();
             await cleanup.AttendancePeriodEvents.ExecuteDeleteAsync();
+            await cleanup.PayrollAttendanceSnapshots.ExecuteDeleteAsync();
             await cleanup.AttendancePeriods.ExecuteDeleteAsync();
             await cleanup.AttendanceAdminCorrections.ExecuteDeleteAsync();
             await cleanup.EmployeeAttendanceDays.ExecuteDeleteAsync();

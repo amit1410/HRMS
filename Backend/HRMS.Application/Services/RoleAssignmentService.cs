@@ -157,7 +157,10 @@ public sealed class RoleAssignmentService : IRoleAssignmentService
             return Result<IReadOnlyList<RoleAssignmentDto>>.NotFound("Account not found.");
         var assignments = await _db.UserRoles.AsNoTracking().Include(x => x.Role).Include(x => x.Scopes)
             .Where(x => x.TenantId == tenantId && x.UserId == userId).OrderBy(x => x.EffectiveFrom).ToListAsync(ct);
-        return Result<IReadOnlyList<RoleAssignmentDto>>.Success(await Task.WhenAll(assignments.Select(x => MapAsync(x, tenantId, ct))));
+        var items = new List<RoleAssignmentDto>(assignments.Count);
+        foreach (var assignment in assignments)
+            items.Add(await MapAsync(assignment, tenantId, ct));
+        return Result<IReadOnlyList<RoleAssignmentDto>>.Success(items);
     }
 
     public async Task<Result<RoleAssignmentDto>> AssignAsync(Guid userId, RoleAssignmentRequest request, CancellationToken ct = default)

@@ -24,7 +24,7 @@ namespace HRMS.Tests.TestSupport;
 /// ordinary tests are not throttled; the throttling test constructs its own factory with a low limit).
 /// </para>
 /// </summary>
-public class HrmsApiFactory : WebApplicationFactory<global::Program>
+public class HrmsApiFactory : WebApplicationFactory<HRMS.API.Controllers.SystemController>
 {
     protected virtual DatabaseProviderType TestTenantProvider => DatabaseProviderType.SqlServer;
 
@@ -207,7 +207,7 @@ public class HrmsApiFactory : WebApplicationFactory<global::Program>
     {
         // Keep minimal-hosting discovery anchored to the API entry assembly. This is required by the
         // .NET 10 WebApplicationFactory resolver when the test project also contains specialized factories.
-        builder.UseSetting(WebHostDefaults.ApplicationKey, typeof(global::Program).Assembly.GetName().Name!);
+        builder.UseSetting(WebHostDefaults.ApplicationKey, typeof(HRMS.API.Controllers.SystemController).Assembly.GetName().Name!);
         builder.UseSetting("PasswordRecoveryProviders:EmailProvider", "Fake");
         builder.UseSetting("PasswordRecoveryProviders:SmsProvider", "Fake");
         builder.UseEnvironment(Environments.Development);
@@ -240,6 +240,7 @@ public class HrmsApiFactory : WebApplicationFactory<global::Program>
                 // false value prevents an inherited Database__SkipInitialization environment variable from
                 // leaving the isolated catalog without its Tenants table.
                 ["Database:SkipInitialization"] = "false",
+                ["Database:StartupMode"] = "Initialize",
                 ["Database:SeedDemoTenants"] = "true",
                 // Keep external password-recovery transports out of integration tests even when the
                 // process inherits a production environment or provider selection.

@@ -46,6 +46,13 @@ public sealed class PasswordRecoveryProviderOptions
 
             if (!int.TryParse(port, out var parsedPort) || parsedPort is < 1 or > 65535)
                 throw new InvalidOperationException("Email:Smtp:Port must be a valid TCP port.");
+
+            if (parsedPort != 587)
+                throw new InvalidOperationException("Email:Smtp:Port must be 587 for STARTTLS.");
+
+            var enableSsl = Value(configuration, "Email:Smtp:EnableSsl", "Email:EnableSsl");
+            if (!bool.TryParse(enableSsl, out var parsedEnableSsl) || !parsedEnableSsl)
+                throw new InvalidOperationException("Email:Smtp:EnableSsl must be true for STARTTLS with certificate validation.");
         }
 
         if (string.Equals(SmsProvider, "Msg91", StringComparison.OrdinalIgnoreCase))

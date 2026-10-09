@@ -53,10 +53,25 @@ public sealed class LeavePolicyVersionConfiguration : IEntityTypeConfiguration<L
         b.Property(x => x.TenantId).IsRequired(); b.Property(x => x.VersionNumber).IsRequired();
         b.Property(x => x.EffectiveFrom).HasColumnType("date").IsRequired(); b.Property(x => x.EffectiveTo).HasColumnType("date");
         b.Property(x => x.Status).HasConversion<int>().IsRequired(); b.Property(x => x.Priority).IsRequired(); b.Property(x => x.CreatedBy).HasMaxLength(256);
+        b.Property(x => x.ModifiedDate).IsConcurrencyToken();
         b.HasIndex(x => new { x.TenantId, x.LeavePolicyId, x.VersionNumber }).IsUnique();
         b.HasIndex(x => new { x.TenantId, x.Status, x.EffectiveFrom, x.EffectiveTo });
         b.HasAlternateKey(x => new { x.TenantId, x.Id });
         b.HasOne(x => x.LeavePolicy).WithMany(x => x.Versions).HasForeignKey(x => new { x.TenantId, x.LeavePolicyId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class LeavePolicyVersionAuditEventConfiguration : IEntityTypeConfiguration<LeavePolicyVersionAuditEvent>
+{
+    public void Configure(EntityTypeBuilder<LeavePolicyVersionAuditEvent> b)
+    {
+        b.ToTable("LeavePolicyVersionAuditEvents"); b.HasKey(x => x.Id);
+        b.Property(x => x.TenantId).IsRequired(); b.Property(x => x.LeavePolicyVersionId).IsRequired(); b.Property(x => x.ActorUserId).IsRequired();
+        b.Property(x => x.Action).HasMaxLength(80).IsRequired(); b.Property(x => x.OccurredAtUtc).IsRequired();
+        b.Property(x => x.Reason).HasMaxLength(2000).IsRequired(); b.Property(x => x.PreviousStatus).HasConversion<int>().IsRequired();
+        b.HasIndex(x => new { x.TenantId, x.LeavePolicyVersionId, x.OccurredAtUtc, x.Id });
+        b.HasOne(x => x.LeavePolicyVersion).WithMany(x => x.AuditEvents).HasForeignKey(x => new { x.TenantId, x.LeavePolicyVersionId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
+        b.HasOne(x => x.ActorUser).WithMany().HasForeignKey(x => new { x.TenantId, x.ActorUserId }).HasPrincipalKey(x => new { x.TenantId, x.Id }).OnDelete(DeleteBehavior.Restrict);
     }
 }
 

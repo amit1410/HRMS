@@ -357,6 +357,31 @@ public static class Permissions
         public const string Export = "BankMaster.Export";
     }
 
+    public static class Confirmation
+    {
+        public const string PolicyView = "Confirmation.PolicyView";
+        public const string PolicyManage = "Confirmation.PolicyManage";
+        public const string PolicyPublish = "Confirmation.PolicyPublish";
+        // Phase 9b (scheduler configuration + execution log).
+        public const string SchedulerView = "Confirmation.SchedulerView";
+        public const string SchedulerManage = "Confirmation.SchedulerManage";
+        // Phase 9c-1 (review-question & rating-scale masters).
+        public const string ReviewQuestionView = "Confirmation.ReviewQuestionView";
+        public const string ReviewQuestionManage = "Confirmation.ReviewQuestionManage";
+        public const string RatingScaleView = "Confirmation.RatingScaleView";
+        public const string RatingScaleManage = "Confirmation.RatingScaleManage";
+        // Phase 9c-2 (review case + reviewer reviews).
+        public const string ReviewCaseView = "Confirmation.ReviewCaseView";
+        public const string ReviewCaseManage = "Confirmation.ReviewCaseManage";
+        public const string ReviewManagerSubmit = "Confirmation.ReviewManagerSubmit";
+        public const string ReviewHrbpSubmit = "Confirmation.ReviewHrbpSubmit";
+        // Reserved for Phase 9c-3/9c-4 (decision workflow, dashboard).
+        public const string ReviewSubmit = "Confirmation.ReviewSubmit";
+        public const string Decide = "Confirmation.Decide";
+        public const string DashboardView = "Confirmation.DashboardView";
+        public const string DashboardViewAll = "Confirmation.DashboardViewAll";
+    }
+
     /// <summary>Every permission the system knows about. Used by the seeder and SuperAdmin/TenantAdmin grants.</summary>
     public static readonly IReadOnlyList<string> All = new[]
     {
@@ -402,5 +427,8 @@ public static class Permissions
         Attendance.DeviceView, Attendance.DeviceManage, Attendance.DeviceMapping, Attendance.DeviceSync, Attendance.DeviceImport, Attendance.DeviceViewHistory
         , Separation.ViewSelf, Separation.ViewTeam, Separation.ViewAll, Separation.CreateSelf, Separation.Initiate, Separation.Submit, Separation.Withdraw, Separation.Review, Separation.Manage, Separation.ViewHistory, Separation.ManagerReview, Separation.HrReview, Separation.ReviseLastWorkingDate, Separation.Approve, Separation.Reject, Separation.NoticeManage, Separation.NoticeWaive, Separation.ReviseApprovedLastWorkingDate, Separation.ClearanceViewSelf, Separation.ClearanceViewTeam, Separation.ClearanceViewAll, Separation.ClearanceConfigure, Separation.ClearanceStart, Separation.ClearanceManageTask, Separation.ClearanceWaive, Separation.ClearanceComplete, Separation.ClearanceReopen, Separation.ClearanceAssetManage
         , BankMaster.View, BankMaster.Create, BankMaster.Edit, BankMaster.Activate, BankMaster.Import, BankMaster.Export
+        , Confirmation.PolicyView, Confirmation.PolicyManage, Confirmation.PolicyPublish, Confirmation.SchedulerView, Confirmation.SchedulerManage, Confirmation.ReviewSubmit, Confirmation.Decide, Confirmation.DashboardView, Confirmation.DashboardViewAll
+        , Confirmation.ReviewQuestionView, Confirmation.ReviewQuestionManage, Confirmation.RatingScaleView, Confirmation.RatingScaleManage
+        , Confirmation.ReviewCaseView, Confirmation.ReviewCaseManage, Confirmation.ReviewManagerSubmit, Confirmation.ReviewHrbpSubmit
     };
 }

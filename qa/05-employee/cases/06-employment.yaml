@@ -19,24 +19,22 @@ cases:
     pri: P0
     smoke: true
     steps:
-      - "[PUT /api/employees/{id}/employment] firstHiredDate, dateOfJoining, jobStatus, probationPeriod+unit, noticePeriod+unit => [200] created"
-      - "[GET /api/employees/{id}/employment] Call => [200] every submitted field reads back correctly"
+      - "[PUT /api/employees/{id}/employment] jobStatus, confirmationDate, noticePeriod+unit => [200] created (dateOfJoining is NOT accepted here; it is owned by Personal Details)"
+      - "[GET /api/employees/{id}/employment] Call => [200] every submitted field reads back correctly; the payload contains no dateOfJoining"
       - "[PUT /api/employees/{id}/employment] Change jobStatus only => [200] the SAME row is updated"
     auto: API
     ex: ["V:pages/employees/EmploymentSectionForm.test.tsx::loads and independently saves joining and contractual employment details"]
 
   - id: EMP-JOIN-002
     func: [F-EMP-068]
-    sc: Cross-field date rules - joining vs. first-hired, group-joining vs. joining, confirmation vs. joining
-    t: Each of the three date-ordering rules is enforced
-    src: ["EmployeeEmploymentRequestValidator", "EmployeeEmploymentService.ValidateEmploymentDetailsRequest"]
+    sc: Confirmation date must not precede the employee's date of joining (from Personal Details)
+    t: Confirmation date is validated against the authoritative Employee.DateOfJoining
+    src: ["EmployeeEmploymentService.ValidateEmploymentDetailsRequest"]
     type: Boundary
     pri: P1
     steps:
-      - "[PUT /api/employees/{id}/employment] dateOfJoining earlier than firstHiredDate => [400] rejected"
-      - "[PUT /api/employees/{id}/employment] groupDateOfJoining later than dateOfJoining => [400] rejected"
-      - "[PUT /api/employees/{id}/employment] confirmationDate earlier than dateOfJoining => [400] rejected"
-      - "[PUT /api/employees/{id}/employment] All three dates in valid order => [200] accepted"
+      - "[PUT /api/employees/{id}/employment] confirmationDate earlier than the employee's Personal-Details dateOfJoining => [400] rejected"
+      - "[PUT /api/employees/{id}/employment] confirmationDate on/after the date of joining => [200] accepted"
     auto: API
 
   - id: EMP-JOIN-003
@@ -81,18 +79,18 @@ cases:
       - "[PUT /api/employees/{id}/employment] referredByEmployeeId = a Tenant B employee id => [400] rejected"
       - "[PUT /api/employees/{id}/employment] referredByEmployeeId = a valid Active same-tenant employee => [200] accepted"
     auto: API
-    ex: ["xU:EmployeeEmploymentHardeningTests.Joining_details_validate_dates_units_and_referrer_tenant_state"]
+    ex: ["xU:EmployeeEmploymentHardeningTests.Joining_details_validate_notice_and_referrer_tenant_state"]
 
   - id: EMP-JOIN-006
     func: [F-EMP-072]
-    sc: Upserting Employment also syncs Employee.DateOfJoining/JobStatus/GroupDateOfJoining
-    t: A change to the joining/contractual record is reflected on the main Employee record's own columns
+    sc: Upserting Employment mirrors JobStatus onto the Employee record; date of joining is NOT touched
+    t: A change to the joining/contractual record reflects JobStatus on the main Employee record; Employee.DateOfJoining is owned by Personal Details and is unaffected
     src: ["EmployeeEmploymentService.UpsertEmploymentAsync"]
     type: Positive
     pri: P2
     steps:
-      - "[PUT /api/employees/{id}/employment] dateOfJoining and jobStatus changed => [200] accepted"
-      - "[GET /api/employees/{id}] Call => [200] dateOfJoining and jobStatus match the values just submitted through Employment"
+      - "[PUT /api/employees/{id}/employment] jobStatus changed => [200] accepted"
+      - "[GET /api/employees/{id}] Call => [200] jobStatus matches the value just submitted through Employment; dateOfJoining is unchanged from Personal Details"
     auto: API
 
   - id: EMP-JOIN-007

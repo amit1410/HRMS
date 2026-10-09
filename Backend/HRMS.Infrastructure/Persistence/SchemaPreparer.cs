@@ -1,6 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Logging;
 using MySql.EntityFrameworkCore.Extensions;
+using System.Reflection;
 
 namespace HRMS.Infrastructure.Persistence;
 
@@ -16,6 +19,59 @@ namespace HRMS.Infrastructure.Persistence;
 internal static class SchemaPreparer
 {
     /// <summary>
+    /// Performs the same compatibility checks as preparation without creating a database, history table,
+    /// schema object, or seed row. This is the production API startup path and the migration host's validate
+    /// primitive.
+    /// </summary>
+    public static async Task<SchemaValidationResult> ValidateAsync(
+        DbContext db,
+        string label,
+        CancellationToken cancellationToken)
+    {
+        if (!await db.Database.CanConnectAsync(cancellationToken))
+            throw new InvalidOperationException($"The {label} database is unavailable.");
+
+        if (db.Database.IsSqlServer() || db.Database.IsMySql())
+        {
+            var historyRepository = db.GetService<IHistoryRepository>();
+            var historyTable = historyRepository.GetType()
+                .GetProperty("TableName", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+                ?.GetValue(historyRepository) as string
+                ?? "__EFMigrationsHistory";
+            if (!await HasTableAsync(db, historyTable, cancellationToken))
+                throw new InvalidOperationException($"The {label} database is not initialized: migration-history table '{historyTable}' is missing. No changes were made.");
+
+            var known = db.Database.GetMigrations().ToArray();
+            var applied = (await db.Database.GetAppliedMigrationsAsync(cancellationToken)).ToArray();
+            var unexpected = applied.Where((migration, index) => index >= known.Length || !string.Equals(migration, known[index], StringComparison.Ordinal)).ToArray();
+            if (unexpected.Length > 0)
+                throw new InvalidOperationException($"The {label} database has unexpected migration history: {string.Join(", ", unexpected)}.");
+
+            var pending = known.Skip(applied.Length).ToArray();
+            if (pending.Length > 0)
+                throw new InvalidOperationException($"The {label} database has pending required migrations: {string.Join(", ", pending)}. No changes were made.");
+
+            var relationalMissing = await MissingRelationalSchemaAsync(db, cancellationToken);
+            if (relationalMissing.Count > 0)
+                throw new InvalidOperationException($"The {label} database is missing required schema objects ({string.Join(", ", relationalMissing)}). No changes were made.");
+
+            var modelChanges = db.Database.HasPendingModelChanges();
+            if (modelChanges)
+                throw new InvalidOperationException($"The {label} database schema is incompatible with the current model. No changes were made.");
+            return new SchemaValidationResult(label, db.Database.ProviderName ?? "unknown", applied, pending, [], modelChanges);
+        }
+
+        if (!db.Database.IsSqlite())
+            throw new InvalidOperationException($"The {label} database uses unsupported provider '{db.Database.ProviderName}'.");
+
+        var missing = await MissingSchemaAsync(db, cancellationToken);
+        if (missing.Count > 0)
+            throw new InvalidOperationException($"The SQLite {label} database is missing schema objects ({string.Join(", ", missing)}). No changes were made.");
+
+        return new SchemaValidationResult(label, db.Database.ProviderName ?? "unknown", [], [], missing, false);
+    }
+
+    /// <summary>
     /// Prepares <paramref name="db"/>'s schema. <paramref name="label"/> names the database in the log —
     /// with one catalog and one database per organization, "the database" is no longer unambiguous.
     /// </summary>
@@ -23,6 +79,7 @@ internal static class SchemaPreparer
         DbContext db,
         string label,
         ILogger logger,
+        bool allowSqliteDestructiveRebuild,
         CancellationToken cancellationToken)
     {
         if (db.Database.IsSqlServer() || db.Database.IsMySql())
@@ -45,7 +102,7 @@ internal static class SchemaPreparer
         // missing schema and fail at the first read, so rebuild it rather than run half-provisioned.
         if (!await db.Database.EnsureCreatedAsync(cancellationToken))
         {
-            await RebuildIfSchemaIsStaleAsync(db, label, logger, cancellationToken);
+            await RebuildIfSchemaIsStaleAsync(db, label, logger, allowSqliteDestructiveRebuild, cancellationToken);
         }
     }
 
@@ -65,6 +122,7 @@ internal static class SchemaPreparer
         DbContext db,
         string label,
         ILogger logger,
+        bool allowSqliteDestructiveRebuild,
         CancellationToken cancellationToken)
     {
         if (!db.Database.IsSqlite())
@@ -76,6 +134,14 @@ internal static class SchemaPreparer
         if (missing.Count == 0)
         {
             return;
+        }
+
+        if (!allowSqliteDestructiveRebuild)
+        {
+            throw new InvalidOperationException(
+                $"The SQLite {label} database is missing schema objects ({string.Join(", ", missing)}). "
+                + "It was not modified. Apply a migration or replace only a disposable development database; "
+                + "set Database:AllowSqliteDestructiveRebuild to true only for a disposable store.");
         }
 
         logger.LogWarning(
@@ -122,4 +188,48 @@ internal static class SchemaPreparer
 
         return expected.Except(present, StringComparer.OrdinalIgnoreCase).ToList();
     }
+
+    private static async Task<List<string>> MissingRelationalSchemaAsync(DbContext db, CancellationToken cancellationToken)
+    {
+        var expected = db.Model.GetEntityTypes()
+            .Where(entityType => !string.IsNullOrWhiteSpace(entityType.GetTableName()))
+            .SelectMany(entityType => entityType.GetProperties()
+                .Select(property => $"{entityType.GetTableName()}.{property.GetColumnName()}"))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var connection = db.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open) await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = db.Database.IsMySql()
+            ? "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = DATABASE()"
+            : "SELECT t.name, c.name FROM sys.tables t JOIN sys.columns c ON c.object_id = t.object_id";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            present.Add($"{reader.GetString(0)}.{reader.GetString(1)}");
+        return expected.Except(present, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static async Task<bool> HasTableAsync(DbContext db, string table, CancellationToken cancellationToken)
+    {
+        var connection = db.Database.GetDbConnection();
+        if (connection.State != System.Data.ConnectionState.Open) await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = db.Database.IsMySql()
+            ? "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = @table"
+            : "SELECT COUNT(*) FROM sys.tables WHERE name = @table";
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "@table";
+        parameter.Value = table;
+        command.Parameters.Add(parameter);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken)) > 0;
+    }
 }
+
+public sealed record SchemaValidationResult(
+    string Label,
+    string Provider,
+    IReadOnlyList<string> AppliedMigrations,
+    IReadOnlyList<string> PendingMigrations,
+    IReadOnlyList<string> MissingSchemaObjects,
+    bool HasPendingModelChanges);

@@ -163,10 +163,12 @@ public sealed class SeparationService(IHrmsDbContext db, ITenantContext tenant, 
             return Result<EmployeeSeparationDto>.Unauthorized("No authenticated tenant and user.");
         var employment = await db.EmployeeEmployments.FirstOrDefaultAsync(x => x.TenantId == tenantId && x.EmployeeId == row.EmployeeId, ct);
         if (employment is null) return Result<EmployeeSeparationDto>.Conflict("An employment record is required before approval.");
+        var employee = await db.Employees.FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == row.EmployeeId, ct);
+        if (employee is null) return Result<EmployeeSeparationDto>.Conflict("An employee record is required before approval.");
         var approvedLwd = row.ProposedLastWorkingDate;
-        if (approvedLwd < row.RequestDate || approvedLwd < employment.DateOfJoining)
+        if (approvedLwd < row.RequestDate || approvedLwd < employee.DateOfJoining)
             return Result<EmployeeSeparationDto>.Invalid("approvedLastWorkingDate", "Approved last working date is outside the employment interval.");
-        if (await db.Employees.AnyAsync(x => x.TenantId == tenantId && x.Id == row.EmployeeId && x.DateOfLeaving != null && x.DateOfLeaving < approvedLwd, ct))
+        if (employee.DateOfLeaving is DateOnly dol && dol < approvedLwd)
             return Result<EmployeeSeparationDto>.Invalid("approvedLastWorkingDate", "Approved last working date is after the employment end date.");
         var requiredNoticeDays = employment.NoticePeriod;
         if (requiredNoticeDays is not > 0 || !string.Equals(employment.NoticePeriodUnit, "Days", StringComparison.OrdinalIgnoreCase))

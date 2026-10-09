@@ -109,17 +109,15 @@ describe('EmploymentSectionForm', () => {
       data: ok({
         id: 'employment-1',
         employeeId: EMPLOYEE_ID,
-        firstHiredDate: '2020-01-02',
-        dateOfJoining: '2021-02-03',
-        groupDateOfJoining: null,
-        confirmationDate: null,
+        confirmationDate: '2021-08-03',
         jobStatus: 'Probation',
-        probationPeriod: 6,
-        probationPeriodUnit: 'Months',
         referredByEmployeeId: null,
         referredByEmployeeName: null,
         noticePeriod: 30,
         noticePeriodUnit: 'Days',
+        noticeStartDate: null,
+        noticeEndDate: null,
+        noticeStatus: 'NotServing',
         createdDate: '2026-01-05T09:30:00Z',
         modifiedDate: null,
       }),
@@ -128,23 +126,23 @@ describe('EmploymentSectionForm', () => {
 
     renderAsUser(<EmploymentSectionForm employeeId={EMPLOYEE_ID} />)
 
-    await waitFor(() => expect(screen.getByLabelText(/^First hired date/)).toHaveValue('2020-01-02'))
-    expect(screen.getByLabelText(/^Date of joining/)).toHaveValue('2021-02-03')
-    expect(screen.getByLabelText(/^Probation period/)).toHaveValue(6)
+    await waitFor(() => expect(screen.getByLabelText(/^Confirmation date/)).toHaveValue('2021-08-03'))
     expect(screen.getByLabelText(/^Notice period/)).toHaveValue(30)
+    expect(screen.queryByLabelText(/^Date of joining/)).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText(/^Job status/), { target: { value: 'Confirmed' } })
     await userEvent.click(screen.getByRole('button', { name: 'Save Joining Details' }))
 
     await waitFor(() => expect(stub.callsTo('put', EMPLOYMENT_URL)).toHaveLength(1))
     const body = stub.callsTo('put', EMPLOYMENT_URL)[0]!.body as Record<string, unknown>
-    expect(body.firstHiredDate).toBe('2020-01-02')
-    expect(body.dateOfJoining).toBe('2021-02-03')
     expect(body.jobStatus).toBe('Confirmed')
-    expect(body.probationPeriod).toBe(6)
-    expect(body.probationPeriodUnit).toBe('Months')
     expect(body.noticePeriod).toBe(30)
     expect(body.noticePeriodUnit).toBe('Days')
+    expect(body).not.toHaveProperty('dateOfJoining')
+    expect(body).not.toHaveProperty('firstHiredDate')
+    expect(body).not.toHaveProperty('groupDateOfJoining')
+    expect(body).not.toHaveProperty('probationPeriod')
+    expect(body).not.toHaveProperty('probationPeriodUnit')
     expect(await screen.findByText('Joining and contractual employment details saved.')).toBeInTheDocument()
   })
 

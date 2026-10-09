@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { session } from '../../api/session.ts'
@@ -64,7 +64,8 @@ describe('BankMasterPage', () => {
 
     expect(await screen.findByText('State Bank of India')).toBeInTheDocument()
     expect(screen.getByText('SBIN')).toBeInTheDocument()
-    expect(screen.getByText('Public')).toBeInTheDocument()
+    // Scope to the table: "Public" also appears as an option in the bank-type filter.
+    expect(within(screen.getByRole('table')).getByText('Public')).toBeInTheDocument()
   })
 
   it('shows management actions to a user who can create and import', async () => {

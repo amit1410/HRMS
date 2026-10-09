@@ -20,6 +20,7 @@ internal static class SeparationSettlementProviderAcceptance
     }
 }
 
+[Collection("MySQL Integration")]
 public sealed class MySqlSeparationSettlementIntegrationTests
 {
     [Fact, Trait("Category", "MySqlIntegration")]

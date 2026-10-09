@@ -590,28 +590,20 @@ public class EmployeeEmploymentHardeningTests
     }
 
     [Fact]
-    public async Task Joining_details_validate_dates_units_and_referrer_tenant_state()
+    public async Task Joining_details_validate_notice_and_referrer_tenant_state()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();
         var invalid = new EmployeeEmploymentRequest
         {
-            FirstHiredDate = Today,
-            DateOfJoining = Today.AddDays(-1),
-            ProbationPeriod = 6,
-            ProbationPeriodUnit = "Weeks"
+            NoticeStatus = NoticePeriodStatus.Active
         };
 
         var result = await harness.Employment().UpsertEmploymentAsync(Employee, invalid);
 
         Assert.False(result.Succeeded);
-        Assert.Equal("dateOfJoining", result.Errors!.Single().Field);
+        Assert.Equal("noticeStartDate", result.Errors!.Single().Field);
 
-        invalid.DateOfJoining = Today;
-        var unitResult = await harness.Employment().UpsertEmploymentAsync(Employee, invalid);
-        Assert.False(unitResult.Succeeded);
-        Assert.Equal("probationPeriodUnit", unitResult.Errors!.Single().Field);
-
-        invalid.ProbationPeriodUnit = "Months";
+        invalid.NoticeStatus = NoticePeriodStatus.NotServing;
         invalid.ReferredByEmployeeId = Employee;
         var referrerResult = await harness.Employment().UpsertEmploymentAsync(Employee, invalid);
         Assert.False(referrerResult.Succeeded);

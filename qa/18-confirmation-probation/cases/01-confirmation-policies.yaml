@@ -1,0 +1,108 @@
+sheet: Confirmation_Probation_Policies
+submodule: Confirmation & Probation policy master, effective-dated versions, probation configuration, applicability, resolution and employee confirmation status (Phase 9a foundation)
+defaults:
+  role: TENANT_ADMIN
+  perm: "Confirmation.PolicyManage"
+  tenant: A
+  pre: "Tenant A signed in as TenantAdmin/HRAdmin unless stated."
+  data: "n/a unless stated."
+  sev: High
+  reg: true
+
+cases:
+  - id: CONF-POL-001
+    func: [F-CONF-001]
+    sc: List confirmation policies with search and isActive filter, paged
+    t: GET /api/confirmation-policies returns a paged, Code-ordered list filterable by search and IsActive
+    src: ["ConfirmationPolicyService.GetPoliciesAsync"]
+    type: Positive
+    pri: P1
+    perm: "Confirmation.PolicyView"
+    steps:
+      - "[GET /api/confirmation-policies?isActive=true] Call as TenantAdmin => [200] items are all IsActive=true, paged"
+    auto: API
+
+  - id: CONF-POL-002
+    func: [F-CONF-002, F-CONF-003, F-CONF-004]
+    sc: Create a policy, add a draft version with probation config, and publish it
+    t: POST policy -> POST version (probation duration/trigger) -> POST publish makes the version Published
+    src: ["ConfirmationPolicyService.CreatePolicyAsync", "ConfirmationPolicyService.CreateVersionAsync", "ConfirmationPolicyService.PublishVersionAsync"]
+    type: Positive
+    pri: P1
+    perm: "Confirmation.PolicyPublish"
+    steps:
+      - "[POST /api/confirmation-policies] unique Code => [201] policy created"
+      - "[POST /api/confirmation-policies/{id}/versions] probationDuration=6 Months, triggerDaysBeforeEnd=30 => [200] draft version + probation rule"
+      - "[POST /api/confirmation-policies/{id}/versions/{versionId}/publish] => [200] status=Published"
+      - "[GET /api/confirmation-policies/{id}/editor] => [200] probation.probationDuration=6"
+    auto: API
+
+  - id: CONF-POL-003
+    func: [F-CONF-002]
+    sc: Duplicate policy code is rejected
+    t: POST /api/confirmation-policies with an existing Code (case-insensitive) returns a conflict
+    src: ["ConfirmationPolicyService.CreatePolicyAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/confirmation-policies] Code=STD then Code=std => [409] conflict with field error on code"
+    auto: API
+
+  - id: CONF-RES-001
+    func: [F-CONF-005]
+    sc: Resolve the applicable policy for an employee by priority then specificity
+    t: POST /api/confirmation-policies/resolve returns the winning published policy and computed probation end
+    src: ["ConfirmationPolicyResolver.ResolveAsync", "ConfirmationDateCalculator.ProbationEndDate"]
+    type: Positive
+    pri: P1
+    perm: "Confirmation.PolicyView"
+    steps:
+      - "[POST /api/confirmation-policies/resolve] employeeId + effectiveDate => [200] status=Resolved, probationEndDate = DOJ + probation duration"
+    auto: API
+
+  - id: CONF-EMP-001
+    func: [F-CONF-006]
+    sc: Employee confirmation status reports policy-managed state with fallback
+    t: GET /api/confirmation-policies/employees/{id}/status is readable; isPolicyManaged=false when no policy applies
+    src: ["ConfirmationPolicyService.GetEmployeeStatusAsync"]
+    type: Positive
+    pri: P2
+    perm: "Confirmation.PolicyView"
+    steps:
+      - "[GET /api/confirmation-policies/employees/{employeeId}/status] => [200] isPolicyManaged boolean; probationEndDate present only when managed"
+    auto: API
+
+  - id: CONF-EMP-002
+    func: [F-CONF-006]
+    sc: Manual Confirmation Date is rejected when a policy owns it
+    t: Upserting EmployeeEmployment with a changed ConfirmationDate is rejected while a policy applies
+    src: ["EmployeeEmploymentService.UpsertEmploymentAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[PUT /api/employees/{id}/employment] change confirmationDate while a policy applies => [422] validation error on confirmationDate"
+    auto: Manual
+
+  - id: CONF-AUTHZ-001
+    func: [F-CONF-007]
+    sc: Unauthenticated access is rejected
+    t: Any confirmation-policy endpoint without a bearer token returns 401
+    src: ["ConfirmationPoliciesController"]
+    type: Negative
+    pri: P1
+    perm: "n/a"
+    steps:
+      - "[GET /api/confirmation-policies] no token => [401]"
+    auto: API
+
+  - id: CONF-AUTHZ-002
+    func: [F-CONF-007]
+    sc: Employee without manage permission cannot create a policy
+    t: An Employee (lacking Confirmation.PolicyManage) gets 403 creating a policy
+    src: ["ConfirmationPoliciesController", "HasPermission"]
+    type: Negative
+    pri: P1
+    perm: "Confirmation.PolicyManage"
+    steps:
+      - "[POST /api/confirmation-policies] as Employee => [403]"
+    auto: API

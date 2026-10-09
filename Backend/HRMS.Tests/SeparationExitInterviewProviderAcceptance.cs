@@ -23,6 +23,7 @@ internal static class SeparationExitInterviewProviderAcceptance
     }
 }
 
+[Collection("MySQL Integration")]
 public sealed class MySqlSeparationExitInterviewIntegrationTests
 {
     private readonly ITestOutputHelper output;

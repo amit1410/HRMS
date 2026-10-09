@@ -1,0 +1,215 @@
+sheet: Confirmation_Review_Cases
+submodule: Confirmation review case + question resolution + reviewer reviews (Phase 9c-2) — per-employee probation review cases with snapshotted questions and Manager/HRBP reviews. Collection only; no confirm/extend/reject decision.
+defaults:
+  role: TENANT_ADMIN
+  perm: "Confirmation.ReviewCaseManage"
+  tenant: A
+  pre: "Tenant A signed in as TenantAdmin/HRAdmin unless stated. A published 9a confirmation policy resolves for the target employee."
+  data: "An employee with a resolvable published confirmation policy, plus configured 9c-1 review questions."
+  sev: High
+  reg: true
+
+cases:
+  - id: CONF-RC-001
+    func: [F-CONF-RC-001]
+    sc: List review cases, paged and filterable by status
+    t: GET /api/confirmation-review-cases returns a paged list filterable by Status; scoped to employees the caller can access
+    src: ["ConfirmationReviewCaseService.GetCasesAsync"]
+    type: Positive
+    pri: P1
+    perm: "Confirmation.ReviewCaseView"
+    steps:
+      - "[GET /api/confirmation-review-cases?status=Open] => [200] items paged; all Open; only accessible employees"
+    auto: API
+
+  - id: CONF-RC-002
+    func: [F-CONF-RC-002]
+    sc: Initialize a review case for an employee's current probation cycle
+    t: POST creates the case, resolves the applicable 9a policy, computes the probation window and snapshots the applicable questions
+    src: ["ConfirmationReviewCaseService.CreateCaseAsync", "ConfirmationReviewQuestionResolver.ResolveAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/confirmation-review-cases] { employeeId } => [201] case with probationStart/End, dueDate and snapshotted questions"
+      - "[GET /api/confirmation-review-cases/{id}] => [200] questions[] carry text/type/options/ratingValues"
+    auto: API
+
+  - id: CONF-RC-003
+    func: [F-CONF-RC-002]
+    sc: Case creation is idempotent per employee + probation cycle
+    t: Calling create twice for the same employee/cycle returns the existing case, never a duplicate
+    src: ["ConfirmationReviewCaseService.CreateCaseAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "[POST /api/confirmation-review-cases] { employeeId } => [201] case A"
+      - "[POST /api/confirmation-review-cases] { employeeId } again => [200/201] same case id as A"
+    auto: API
+
+  - id: CONF-RC-004
+    func: [F-CONF-RC-002]
+    sc: Creation requires a resolvable published policy
+    t: An employee with no applicable published confirmation policy cannot have a case created
+    src: ["ConfirmationReviewCaseService.CreateCaseAsync", "ConfirmationPolicyResolver.ResolveAsync"]
+    type: Negative
+    pri: P2
+    steps:
+      - "[POST /api/confirmation-review-cases] { employeeId with no policy } => [400] field error on employeeId"
+    auto: API
+
+  - id: CONF-RC-005
+    func: [F-CONF-RC-003]
+    sc: Snapshot is immutable against later master edits (audit-critical)
+    t: After a case is created, editing the master review question does NOT change the case's snapshotted question
+    src: ["ConfirmationReviewCaseService.CreateCaseAsync", "ConfirmationReviewQuestionService.UpdateQuestionAsync"]
+    type: Positive
+    pri: P1
+    sev: Critical
+    steps:
+      - "[POST /api/confirmation-review-cases] => [201] snapshot question text = 'Quality of Work'"
+      - "[PUT /api/confirmation-review-questions/{qid}] change text to 'Technical Quality of Work' => [200]"
+      - "[GET /api/confirmation-review-cases/{id}] => [200] snapshot question text still 'Quality of Work'"
+    auto: Manual
+
+  - id: CONF-RC-006
+    func: [F-CONF-RC-004]
+    sc: Question resolution — generic, scoped and policy-scoped questions
+    t: The resolver includes tenant-wide generic questions, dimension-scoped questions matching the employee, and policy-scoped questions only for the resolved policy
+    src: ["ConfirmationReviewQuestionResolver.ResolveAsync"]
+    type: Positive
+    pri: P1
+    steps:
+      - "Configure a generic question, a department-scoped question (employee's dept) and a policy-scoped question; [POST case] => snapshot includes all three; a question scoped to another dept/policy is excluded"
+    auto: Manual
+
+  - id: CONF-RC-007
+    func: [F-CONF-RC-005]
+    sc: Reviewer form returns snapshot questions and any current draft/submitted review
+    t: GET reviewer-form returns the snapshot questions plus the reviewer's current (non-superseded) review
+    src: ["ConfirmationReviewCaseService.GetReviewerFormAsync"]
+    type: Positive
+    pri: P2
+    perm: "Confirmation.ReviewCaseView"
+    steps:
+      - "[GET /api/confirmation-review-cases/{id}/reviewer-form?reviewerType=ReportingManager] => [200] questions[] + currentReview"
+    auto: API
+
+  - id: CONF-RC-008
+    func: [F-CONF-RC-006]
+    sc: A reviewer can save a draft without answering mandatory questions
+    t: PUT draft persists responses + comments and leaves the review in Draft
+    src: ["ConfirmationReviewCaseService.SaveDraftAsync"]
+    type: Positive
+    pri: P1
+    perm: "Confirmation.ReviewManagerSubmit"
+    steps:
+      - "[PUT /api/confirmation-review-cases/{id}/reviews/manager/draft] partial responses => [200] status=Draft"
+    auto: API
+
+  - id: CONF-RC-009
+    func: [F-CONF-RC-006]
+    sc: Submit enforces mandatory questions
+    t: Submitting without answering a mandatory snapshot question is rejected
+    src: ["ConfirmationReviewCaseService.SubmitReviewAsync"]
+    type: Negative
+    pri: P1
+    perm: "Confirmation.ReviewManagerSubmit"
+    steps:
+      - "[POST /api/confirmation-review-cases/{id}/reviews/manager/submit] missing mandatory answer => [400] field error"
+    auto: API
+
+  - id: CONF-RC-010
+    func: [F-CONF-RC-006]
+    sc: Submit validates responses against the snapshot (rating / dropdown / multiselect)
+    t: A rating outside the snapshot scale, or an option code not in the snapshot, is rejected; valid answers are accepted
+    src: ["ConfirmationReviewCaseService.SubmitReviewAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[POST submit] rating value not in snapshot scale => [400]"
+      - "[POST submit] dropdown/multiselect code not in snapshot options => [400]"
+      - "[POST submit] all answers valid => [200] status=Submitted"
+    auto: API
+
+  - id: CONF-RC-011
+    func: [F-CONF-RC-006]
+    sc: A submitted review is immutable — resubmission supersedes and preserves history
+    t: Resubmitting creates a new version; the prior submitted version is marked Superseded and retained
+    src: ["ConfirmationReviewCaseService.SubmitReviewAsync"]
+    type: Positive
+    pri: P1
+    sev: Critical
+    steps:
+      - "[POST submit] => [200] v1 Submitted"
+      - "[POST submit] again => [200] v2 Submitted; GET case shows v1 Superseded and v2 Submitted"
+    auto: API
+
+  - id: CONF-RC-012
+    func: [F-CONF-RC-007]
+    sc: Manager and HRBP are separate reviews
+    t: Reporting-Manager and HR/HRBP each submit their own review; both are retained on the case
+    src: ["ConfirmationReviewCaseService.SubmitReviewAsync"]
+    type: Positive
+    pri: P2
+    steps:
+      - "[POST .../reviews/manager/submit] => [200]; [POST .../reviews/hrbp/submit] => [200]; GET case shows both"
+    auto: API
+
+  - id: CONF-RC-013
+    func: [F-CONF-RC-008]
+    sc: Review case history is a complete audit trail
+    t: GET history returns CaseCreated, QuestionsSnapshotted, ReviewersResolved, DraftSaved, ReviewSubmitted (+ ReviewSuperseded on resubmit)
+    src: ["ConfirmationReviewCaseService.GetHistoryAsync"]
+    type: Positive
+    pri: P2
+    perm: "Confirmation.ReviewCaseView"
+    steps:
+      - "[GET /api/confirmation-review-cases/{id}/history] => [200] contains CaseCreated and ReviewSubmitted"
+    auto: API
+
+  - id: CONF-RC-014
+    func: [F-CONF-RC-009]
+    sc: Manager-review submission requires its own permission
+    t: Submitting a manager review requires Confirmation.ReviewManagerSubmit; HRBP review requires Confirmation.ReviewHrbpSubmit
+    src: ["ConfirmationReviewCasesController"]
+    type: Negative
+    pri: P1
+    perm: "Confirmation.ReviewCaseView"
+    steps:
+      - "[POST .../reviews/manager/submit] with only ReviewCaseView => [403]"
+      - "[POST .../reviews/hrbp/submit] with only ReviewManagerSubmit => [403]"
+    auto: API
+
+  - id: CONF-RC-015
+    func: [F-CONF-RC-009]
+    sc: A reviewer can only act on cases they are authorized for
+    t: Submitting on a case for an employee outside the caller's access scope is forbidden
+    src: ["ConfirmationReviewCaseService.SubmitReviewAsync", "EmployeeAccessScopeService.CanAccessEmployeeAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "A manager who is not the resolved manager / out of org scope => [403] on reviewer-form and submit"
+    auto: Manual
+
+  - id: CONF-RC-016
+    func: [F-CONF-RC-009]
+    sc: Unauthenticated access is rejected
+    t: Any review-case endpoint without a bearer token returns 401
+    src: ["ConfirmationReviewCasesController"]
+    type: Negative
+    pri: P1
+    perm: "n/a"
+    steps:
+      - "[GET /api/confirmation-review-cases] no token => [401]"
+    auto: API
+
+  - id: CONF-RC-017
+    func: [F-CONF-RC-010]
+    sc: Cases are tenant-isolated
+    t: A case created in Tenant A is not visible or fetchable from Tenant B
+    src: ["ConfirmationReviewCaseService.GetCaseAsync", "ConfirmationReviewCaseService.GetCasesAsync"]
+    type: Negative
+    pri: P1
+    steps:
+      - "[GET /api/confirmation-review-cases/{A-case-id}] as Tenant B => [404]; list as Tenant B excludes it"
+    auto: Manual

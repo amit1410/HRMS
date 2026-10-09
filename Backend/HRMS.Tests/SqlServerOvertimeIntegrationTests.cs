@@ -11,10 +11,9 @@ public sealed class SqlServerOvertimeIntegrationTests : IClassFixture<SqlServerI
 
     public SqlServerOvertimeIntegrationTests(SqlServerIntegrationTestHarness fixture) => this.fixture = fixture;
 
-    [Fact, Trait("Category", "SqlServerIntegration")]
+    [SqlServerIntegrationFact, Trait("Category", "SqlServerIntegration")]
     public async Task SqlServer_overtime_provider_acceptance_preserves_versioned_snapshot_semantics()
     {
-        if (!fixture.IsConfigured) throw SkipException.ForSkip("SQL Server Overtime tests not executed: HRMS_SQLSERVER_TEST_CONNECTION is absent.");
         var tenantContext = new TestTenantContext();
         await using var db = fixture.CreateContext(tenantContext);
         await db.Database.MigrateAsync();
