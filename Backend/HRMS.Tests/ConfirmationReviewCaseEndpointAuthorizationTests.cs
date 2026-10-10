@@ -66,6 +66,38 @@ public sealed class ConfirmationReviewCaseEndpointAuthorizationTests : IClassFix
     }
 
     [Fact]
+    public async Task Decision_preview_requires_decide_permission()
+    {
+        using var client = Client(Permissions.Confirmation.ReviewCaseView);
+        var response = await client.PostAsync($"/api/confirmation-review-cases/{Guid.NewGuid()}/decision/preview", null);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Decision_submit_requires_decide_permission()
+    {
+        using var client = Client(Permissions.Confirmation.ReviewCaseView);
+        var response = await client.PostAsJsonAsync($"/api/confirmation-review-cases/{Guid.NewGuid()}/decision", new { outcome = "Confirmed" });
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Decision_preview_is_reachable_with_decide_permission()
+    {
+        using var client = Client(Permissions.Confirmation.Decide);
+        var response = await client.PostAsync($"/api/confirmation-review-cases/{Guid.NewGuid()}/decision/preview", null);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Decision_submit_is_reachable_with_decide_permission()
+    {
+        using var client = Client(Permissions.Confirmation.Decide);
+        var response = await client.PostAsJsonAsync($"/api/confirmation-review-cases/{Guid.NewGuid()}/decision", new { outcome = "Confirmed" });
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Employee_confirmation_status_requires_policy_view()
     {
         using var client = Client(Permissions.Confirmation.ReviewCaseView);

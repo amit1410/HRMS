@@ -245,6 +245,43 @@ public sealed class ConfirmationDecisionTests
     }
 
     [Fact]
+    public async Task Parallel_approval_allows_hrbp_to_submit_before_manager()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var h = await SeedCaseAsync(db, requiredApproval: ConfirmationApprovalRequirement.ManagerAndHrbp, sequence: ApprovalSequence.Parallel);
+
+        Assert.Equal(ResultStatus.Success, (await SubmitReviewAsync(h, h.CaseId, ConfirmationReviewerType.Hrbp, 5)).Status);
+        Assert.Equal(ResultStatus.Success, (await SubmitReviewAsync(h, h.CaseId, ConfirmationReviewerType.ReportingManager, 5)).Status);
+
+        var decision = await h.Decision.SubmitDecisionAsync(h.CaseId, new(ConfirmationOutcome.Confirmed));
+        Assert.Equal(ResultStatus.Success, decision.Status);
+    }
+
+    [Fact]
+    public async Task Hrbp_only_policy_is_decidable_with_only_an_hrbp_review()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var h = await SeedCaseAsync(db, requiredApproval: ConfirmationApprovalRequirement.Hrbp);
+
+        Assert.Equal(ResultStatus.Success, (await SubmitReviewAsync(h, h.CaseId, ConfirmationReviewerType.Hrbp, 5)).Status);
+        var decision = await h.Decision.SubmitDecisionAsync(h.CaseId, new(ConfirmationOutcome.Confirmed));
+
+        Assert.Equal(ResultStatus.Success, decision.Status);
+    }
+
+    [Fact]
+    public async Task Manager_or_hrbp_policy_is_decidable_after_either_reviewer_submits()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        var h = await SeedCaseAsync(db, requiredApproval: ConfirmationApprovalRequirement.ManagerOrHrbp);
+
+        Assert.Equal(ResultStatus.Success, (await SubmitReviewAsync(h, h.CaseId, ConfirmationReviewerType.ReportingManager, 5)).Status);
+        var decision = await h.Decision.SubmitDecisionAsync(h.CaseId, new(ConfirmationOutcome.Confirmed));
+
+        Assert.Equal(ResultStatus.Success, decision.Status);
+    }
+
+    [Fact]
     public async Task Both_required_blocks_decision_until_both_reviews_submitted()
     {
         using var db = new SqliteInMemoryDatabase();

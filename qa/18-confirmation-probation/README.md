@@ -70,15 +70,35 @@ master edits never change a historical review; the Reporting Manager and HR/HRBP
 9c-2 collects reviews only — it makes **no** confirm/extend/reject decision, no auto-confirmation, and changes
 no `JobStatus` / `ConfirmationDate` / `DateOfJoining`. Those belong to Phase 9c-3.
 
-## Not in 9a / 9c-1 / 9c-2 (follow-ups)
+## Phase 9c-3 (completed in this suite)
+
+Confirmation approval and decision workflow is implemented over the immutable 9c-2 case snapshot:
+
+- Policy-frozen approval requirements: Manager, HRBP, Manager + HRBP, or Manager-or-HRBP.
+- Parallel approval and optional sequential Manager → HRBP ordering; sequential HRBP-first submission is rejected.
+- Approval-aware readiness, decision preview and final decision submission for Confirmed, ProbationExtended,
+  NotConfirmed, and AdditionalReview outcomes, including concurrency protection and audit history.
+- Automatic employee-side effects for terminal outcomes, extension cycle creation/recalculation, and job-status /
+  confirmation-date audit updates.
+- Approval-aware HR confirmation dashboard KPIs and pending-action details, with tenant and employee access scope.
+- `Confirmation.Decide` protects decision preview/submit; `Confirmation.DashboardViewAll` protects the HR summary.
+  Reviewer permissions remain `Confirmation.ReviewManagerSubmit` and `Confirmation.ReviewHrbpSubmit`.
+- Backend coverage includes workflow requirements, authorization HTTP responses, tenant isolation, access scope,
+  decision outcomes, concurrency, and dashboard pending counts. Frontend confirmation tests cover the decision UI.
+
+## Remaining validation gaps
+
+- SQL Server provider execution/translation validation remains outstanding; current targeted workflow/dashboard tests
+  use SQLite in-memory test infrastructure and do not establish SQL Server production readiness.
+- Full end-to-end environment validation (real identity/host tenant resolution, deployed frontend/API, notifications,
+  and browser automation against a provisioned SQL Server database) remains outstanding.
+
+## Other follow-ups
 
 - **9b** — scheduler (BackgroundService) + notifications to Employee / Reporting Manager / HRBP, with a
   claim/dedup delivery+execution log; scheduler-config screen.
-- **9c-3+** — configurable approvals (Manager/HRBP/both) with manual outcome (Confirm/Extend/Reject/Pending),
-  auto-confirmation writing Confirmation Date / Job Status with audit + extension recalculation, and the
-  dashboard. Permissions `Confirmation.ReviewSubmit` / `Decide` / `DashboardView` are seeded, reserved for
-  those sub-phases. (9c-2 — review cases + question resolver + snapshot + reviewer reviews — is now shipped;
-  see above.)
+- **9c-4+** — enhancements beyond the completed 9c-3 workflow, including broader operational automation and
+  deployment-level end-to-end validation.
 
 ## Automation
 

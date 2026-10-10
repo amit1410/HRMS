@@ -106,6 +106,14 @@ public sealed class HrConfirmationDashboardService : IHrConfirmationDashboardSer
                 c.DueDate,
                 c.Status,
                 c.Outcome,
+                _db.ConfirmationPolicyRules
+                    .Where(r => r.TenantId == c.TenantId && r.ConfirmationPolicyVersionId == c.ConfirmationPolicyVersionId)
+                    .Select(r => r.RequiredApproval)
+                    .FirstOrDefault(),
+                _db.ConfirmationPolicyRules
+                    .Where(r => r.TenantId == c.TenantId && r.ConfirmationPolicyVersionId == c.ConfirmationPolicyVersionId)
+                    .Select(r => r.ApprovalSequence)
+                    .FirstOrDefault(),
                 c.ManagerReviewerEmployeeId,
                 c.HrbpReviewerEmployeeId,
                 c.ReviewRound,
@@ -120,11 +128,12 @@ public sealed class HrConfirmationDashboardService : IHrConfirmationDashboardSer
         var upcomingConfirmations = cases.Count(c => c.DueDate >= today && c.Status != ConfirmationReviewCaseStatus.Decided && c.Status != ConfirmationReviewCaseStatus.Cancelled);
         var overdueConfirmations = cases.Count(c => c.DueDate < today && c.Status != ConfirmationReviewCaseStatus.Decided && c.Status != ConfirmationReviewCaseStatus.Cancelled);
 
-        // Pending actions: cases where reviews are not submitted
+        // Pending actions are derived from the frozen approval requirement and the current review round.
+        // A submitted review from an earlier round must not satisfy the active round.
         var pendingManagerActions = 0;
         var pendingHrbpActions = 0;
-        var submittedManagerCaseIds = new List<Guid>();
-        var submittedHrbpCaseIds = new List<Guid>();
+        var submittedManagerCaseIds = new HashSet<Guid>();
+        var submittedHrbpCaseIds = new HashSet<Guid>();
 
         // We need to check review submission status for each case
         var caseIds = cases.Select(c => c.Id).ToList();
@@ -135,12 +144,22 @@ public sealed class HrConfirmationDashboardService : IHrConfirmationDashboardSer
                 .ToListAsync(cancellationToken);
 
             submittedManagerCaseIds = reviews.Where(r => r.ReviewerType == ConfirmationReviewerType.ReportingManager)
-                .Select(r => r.ConfirmationReviewCaseId).Distinct().ToList();
+                .Join(cases, r => r.ConfirmationReviewCaseId, c => c.Id, (r, c) => new { r, c })
+                .Where(x => x.r.ReviewRound == x.c.ReviewRound)
+                .Select(x => x.r.ConfirmationReviewCaseId).ToHashSet();
             submittedHrbpCaseIds = reviews.Where(r => r.ReviewerType == ConfirmationReviewerType.Hrbp)
-                .Select(r => r.ConfirmationReviewCaseId).Distinct().ToList();
+                .Join(cases, r => r.ConfirmationReviewCaseId, c => c.Id, (r, c) => new { r, c })
+                .Where(x => x.r.ReviewRound == x.c.ReviewRound)
+                .Select(x => x.r.ConfirmationReviewCaseId).ToHashSet();
 
-            pendingManagerActions = cases.Count(c => !submittedManagerCaseIds.Contains(c.Id));
-            pendingHrbpActions = cases.Count(c => !submittedHrbpCaseIds.Contains(c.Id));
+            var activeCases = cases.Where(c => c.Status is not ConfirmationReviewCaseStatus.Decided and not ConfirmationReviewCaseStatus.Cancelled);
+            pendingManagerActions = activeCases.Count(c => RequiresManager(c.RequiredApproval)
+                && !submittedManagerCaseIds.Contains(c.Id));
+            pendingHrbpActions = activeCases.Count(c => RequiresHrbp(c.RequiredApproval)
+                && !submittedHrbpCaseIds.Contains(c.Id)
+                && (c.RequiredApproval != ConfirmationApprovalRequirement.ManagerAndHrbp
+                    || submittedManagerCaseIds.Contains(c.Id)
+                    || c.ApprovalSequence == ApprovalSequence.Parallel));
         }
 
         var confirmedEmployees = cases.Count(c => c.Outcome == ConfirmationOutcome.Confirmed);
@@ -209,8 +228,13 @@ public sealed class HrConfirmationDashboardService : IHrConfirmationDashboardSer
         var pendingActions = new List<PendingActionItem>();
         if (caseIds.Any())
         {
-            var pendingManagerCaseIds = cases.Where(c => !submittedManagerCaseIds.Contains(c.Id)).Select(c => c.Id).ToList();
-            var pendingHrbpCaseIds = cases.Where(c => !submittedHrbpCaseIds.Contains(c.Id)).Select(c => c.Id).ToList();
+            var pendingManagerCaseIds = cases.Where(c => c.Status is not ConfirmationReviewCaseStatus.Decided and not ConfirmationReviewCaseStatus.Cancelled
+                && RequiresManager(c.RequiredApproval) && !submittedManagerCaseIds.Contains(c.Id)).Select(c => c.Id).ToList();
+            var pendingHrbpCaseIds = cases.Where(c => c.Status is not ConfirmationReviewCaseStatus.Decided and not ConfirmationReviewCaseStatus.Cancelled
+                && RequiresHrbp(c.RequiredApproval) && !submittedHrbpCaseIds.Contains(c.Id)
+                && (c.RequiredApproval != ConfirmationApprovalRequirement.ManagerAndHrbp
+                    || submittedManagerCaseIds.Contains(c.Id)
+                    || c.ApprovalSequence == ApprovalSequence.Parallel)).Select(c => c.Id).ToList();
 
             // Get pending manager actions
             var pendingManagerCases = cases.Where(c => pendingManagerCaseIds.Contains(c.Id)).ToList();
@@ -268,6 +292,12 @@ public sealed class HrConfirmationDashboardService : IHrConfirmationDashboardSer
         });
     }
 
+    private static bool RequiresManager(ConfirmationApprovalRequirement requirement) =>
+        requirement is ConfirmationApprovalRequirement.Manager or ConfirmationApprovalRequirement.ManagerAndHrbp or ConfirmationApprovalRequirement.ManagerOrHrbp;
+
+    private static bool RequiresHrbp(ConfirmationApprovalRequirement requirement) =>
+        requirement is ConfirmationApprovalRequirement.Hrbp or ConfirmationApprovalRequirement.ManagerAndHrbp or ConfirmationApprovalRequirement.ManagerOrHrbp;
+
     private static string? GetCurrentDepartmentName(IEnumerable<EmployeeEmploymentHistory> history, DateOnly today)
     {
         return history.OrderByDescending(e => e.EffectiveFrom)
@@ -293,6 +323,8 @@ public sealed class HrConfirmationDashboardService : IHrConfirmationDashboardSer
         DateOnly DueDate,
         ConfirmationReviewCaseStatus Status,
         ConfirmationOutcome Outcome,
+        ConfirmationApprovalRequirement RequiredApproval,
+        ApprovalSequence ApprovalSequence,
         Guid? ManagerReviewerEmployeeId,
         Guid? HrbpReviewerEmployeeId,
         int ReviewRound,

@@ -375,7 +375,7 @@ public static class Permissions
         public const string ReviewCaseManage = "Confirmation.ReviewCaseManage";
         public const string ReviewManagerSubmit = "Confirmation.ReviewManagerSubmit";
         public const string ReviewHrbpSubmit = "Confirmation.ReviewHrbpSubmit";
-        // Reserved for Phase 9c-3/9c-4 (decision workflow, dashboard).
+        // Phase 9c-3 decision workflow and dashboard permissions.
         public const string ReviewSubmit = "Confirmation.ReviewSubmit";
         public const string Decide = "Confirmation.Decide";
         public const string DashboardView = "Confirmation.DashboardView";
