@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Confirmation;
+using HRMS.Application.DTOs.Employees;
 using HRMS.Application.Services;
 using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
@@ -60,12 +61,16 @@ public sealed class ConfirmationDecisionTests
         var cycle = await verify.ConfirmationProbationCycles.SingleAsync(c => c.EmployeeId == h.Employee);
         var decisions = await verify.ConfirmationDecisions.Where(d => d.ConfirmationReviewCaseId == h.CaseId).ToListAsync();
         var events = await verify.ConfirmationReviewCaseEvents.Where(e => e.ConfirmationReviewCaseId == h.CaseId).Select(e => e.EventType).ToListAsync();
+        var jobStatusAudits = await verify.EmployeeAuditLogs.Where(a => a.EmployeeId == h.Employee && a.FieldName == "JobStatus").ToListAsync();
         Assert.Equal("Confirmed", employment.JobStatus);
         Assert.Equal(BaselineEnd, employment.ConfirmationDate);
         Assert.Equal("Confirmed", employee.JobStatus);
         Assert.Equal(ConfirmationProbationCycleStatus.Closed, cycle.Status);
         Assert.Equal(ConfirmationReviewCaseStatus.Decided, reviewCase.Status);
         Assert.Single(decisions);
+        var jobStatusAudit = Assert.Single(jobStatusAudits);
+        Assert.Null(jobStatusAudit.OldValue);
+        Assert.Equal("Confirmed", jobStatusAudit.NewValue);
         Assert.Contains(ConfirmationReviewCaseEventType.EmployeeConfirmed, events);
     }
 
@@ -355,8 +360,15 @@ public sealed class ConfirmationDecisionTests
             new ConfirmationPolicyResolver(ctx, tenantContext: tc),
             new ConfirmationReviewQuestionResolver(ctx, tenantContext: tc),
             new FakeHrbpResolver(), new FakeManagerResolver(), access);
-        var decision = new ConfirmationDecisionService(ctx, tc, access, cases);
+        var jobStatus = new JobStatusService(ctx, tc,
+            new ConfirmationAuthorization(), TimeProvider.System);
+        var decision = new ConfirmationDecisionService(ctx, tc, access, cases, jobStatus);
         return (decision, cases);
+    }
+
+    private sealed class ConfirmationAuthorization : ICurrentAuthorizationContext
+    {
+        public bool HasAnyPermission(params string[] requested) => requested.Contains(Permissions.Confirmation.Decide);
     }
 
     private static async Task<Handle> SeedCaseAsync(

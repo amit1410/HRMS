@@ -1,6 +1,7 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.DTOs.Separation;
 using HRMS.Application.Services;
+using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence;
 using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
@@ -15,6 +16,13 @@ public sealed class SeparationExitFailureInjectionTests
     {
         using var database = new SqliteInMemoryDatabase(); var f = await SeparationExitExecutionTests.ReadyFixtureAsync(database); var injector = new TestExitFailureInjector { Employment = true };
         await using (var db = database.CreateContext(new TestTenantContext(f.TenantId, f.HrUserId))) { var result = await Service(db, f, injector).ExecuteAsync(f.SeparationId, new()); Assert.False(result.Succeeded); }
+        await using (var verify = database.CreateIsolatedContext(new TestTenantContext(f.TenantId, f.HrUserId)))
+        {
+            Assert.Equal(EmployeeStatus.Active, await verify.Employees.Where(x => x.Id == f.EmployeeId).Select(x => x.Status).SingleAsync());
+            Assert.Null(await verify.Employees.Where(x => x.Id == f.EmployeeId).Select(x => x.JobStatus).SingleAsync());
+            Assert.Equal(EmployeeStatus.Active, await verify.EmployeeEmploymentHistory.Where(x => x.EmployeeId == f.EmployeeId).Select(x => x.EmploymentStatus).SingleAsync());
+            Assert.Empty(await verify.EmployeeAuditLogs.Where(x => x.EmployeeId == f.EmployeeId && x.FieldName == "JobStatus").ToListAsync());
+        }
         await using var retryDb = database.CreateIsolatedContext(new TestTenantContext(f.TenantId, f.HrUserId)); var retry = await Service(retryDb, f).RetryAsync(f.SeparationId, new("retry")); Assert.True(retry.Succeeded, retry.Message);
     }
 

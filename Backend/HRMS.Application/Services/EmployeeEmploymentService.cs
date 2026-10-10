@@ -3,11 +3,14 @@ using HRMS.Application.Common;
 using HRMS.Application.DTOs.Employees;
 using HRMS.Application.EmployeeCodes;
 using HRMS.Application.Validators.Common;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Data;
 using System.Text.RegularExpressions;
 
 namespace HRMS.Application.Services;
@@ -32,17 +35,21 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
     private readonly TimeProvider _timeProvider;
     private readonly IManagerRoleProvisioningService _managerRoleProvisioning;
     private readonly IConfirmationPolicyResolver _confirmationResolver;
+    private readonly IJobStatusService _jobStatusService;
+    private readonly ICurrentAuthorizationContext? _authorization;
 
     public EmployeeEmploymentService(
         IHrmsDbContext db,
         ITenantContext tenantContext,
+        ICurrentAuthorizationContext authorization,
         ILogger<EmployeeEmploymentService> logger,
         EmployeeCodeRuleMatcher? codeRuleMatcher = null,
         EmployeeCodeRenderer? codeRenderer = null,
         IEmployeeCodeSequenceService? codeSequence = null,
         TimeProvider? timeProvider = null,
         IManagerRoleProvisioningService? managerRoleProvisioning = null,
-        IConfirmationPolicyResolver? confirmationResolver = null)
+        IConfirmationPolicyResolver? confirmationResolver = null,
+        IJobStatusService? jobStatusService = null)
     {
         _db = db;
         _tenantContext = tenantContext;
@@ -51,9 +58,12 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         _codeRenderer = codeRenderer;
         _codeSequence = codeSequence;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _authorization = authorization;
         _managerRoleProvisioning = managerRoleProvisioning ??
             new ManagerRoleProvisioningService(db, NullLogger<ManagerRoleProvisioningService>.Instance, _timeProvider);
         _confirmationResolver = confirmationResolver ?? new ConfirmationPolicyResolver(db, tenantContext: tenantContext);
+        _jobStatusService = jobStatusService ?? new JobStatusService(
+            db, tenantContext, authorization, _timeProvider);
     }
 
     /// <summary>
@@ -127,6 +137,9 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         if (_tenantContext.TenantId is not Guid tenantId)
             return Result<EmployeeEmploymentDto>.Unauthorized(NoTenantMessage);
 
+        if (!HasEmploymentChangePermission())
+            return Result<EmployeeEmploymentDto>.Forbidden("This workflow is not authorized to change employment history.");
+
         var employee = await _db.Employees.FirstOrDefaultAsync(
             e => e.Id == employeeId && e.TenantId == tenantId,
             cancellationToken);
@@ -171,49 +184,109 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         if (managed && request.ConfirmationDate != existing?.ConfirmationDate)
             return Result<EmployeeEmploymentDto>.Invalid("confirmationDate", "Confirmation date is managed by the applicable confirmation policy and cannot be edited manually.");
 
-        if (existing is null)
+        var requestedStatus = Normalize(request.JobStatus);
+        async Task<Result<EmployeeEmploymentDto>> PersistAsync(IDbContextTransaction? transaction, bool ownsTransaction)
         {
-            existing = new EmployeeEmployment
+            try
             {
-                Id = Guid.NewGuid(),
-                TenantId = tenantId,
-                EmployeeId = employeeId
-            };
-            _db.EmployeeEmployments.Add(existing);
+                employee = await _db.Employees.FirstAsync(x => x.Id == employeeId && x.TenantId == tenantId, cancellationToken);
+                existing = await _db.EmployeeEmployments.FirstOrDefaultAsync(x => x.EmployeeId == employeeId, cancellationToken);
+
+                var statusChanged = requestedStatus is not null &&
+                    !string.Equals(Normalize(employee.JobStatus), requestedStatus, StringComparison.OrdinalIgnoreCase);
+                if (statusChanged)
+                {
+                    if (transaction is null)
+                        return Result<EmployeeEmploymentDto>.Unavailable("Employment changes require an active transaction.");
+
+                    var status = await _jobStatusService.ChangeWithinTransactionAsync(
+                        new(employeeId, requestedStatus, JobStatusMutationSource.Employment, "Employment upsert"),
+                        transaction, cancellationToken);
+                    if (!status.Succeeded)
+                        return Result<EmployeeEmploymentDto>.Failure(status.Status, status.Message, status.Errors);
+
+                    existing = await _db.EmployeeEmployments.FirstOrDefaultAsync(x => x.EmployeeId == employeeId, cancellationToken)
+                        ?? _db.EmployeeEmployments.Local.FirstOrDefault(x => x.EmployeeId == employeeId);
+                }
+
+                existing ??= new EmployeeEmployment
+                {
+                    Id = Guid.NewGuid(), TenantId = tenantId, EmployeeId = employeeId
+                };
+                if (!_db.EmployeeEmployments.Local.Contains(existing))
+                    _db.EmployeeEmployments.Add(existing);
+
+                existing.ConfirmationDate = request.ConfirmationDate;
+                // Employee.JobStatus is authoritative. Blank/omitted employment status never clears it.
+                existing.JobStatus = Normalize(employee.JobStatus);
+                existing.ReferredByEmployeeId = request.ReferredByEmployeeId;
+                existing.NoticePeriod = request.NoticePeriod;
+                existing.NoticePeriodUnit = NormalizePeriodUnit(request.NoticePeriodUnit);
+                existing.NoticeStartDate = request.NoticeStartDate;
+                existing.NoticeEndDate = request.NoticeEndDate;
+                existing.NoticeStatus = request.NoticeStatus;
+                existing.ModifiedDate = DateTime.UtcNow;
+                employee.ModifiedDate = DateTime.UtcNow;
+
+                await _db.SaveChangesAsync(cancellationToken);
+                if (ownsTransaction)
+                    await transaction!.CommitAsync(cancellationToken);
+
+                return Result<EmployeeEmploymentDto>.Success(MapEmploymentDto(existing, referredByEmployee, managed, probationEnd, policyName));
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                if (ownsTransaction && transaction is not null)
+                    await transaction.RollbackAsync(cancellationToken);
+                return Result<EmployeeEmploymentDto>.Conflict("Employment was changed concurrently; retry the operation.");
+            }
+            catch (DbUpdateException)
+            {
+                if (ownsTransaction && transaction is not null)
+                    await transaction.RollbackAsync(cancellationToken);
+                return Result<EmployeeEmploymentDto>.Unavailable("Employment could not be saved; retry the operation.");
+            }
         }
 
-        existing.ConfirmationDate = request.ConfirmationDate;
-        existing.JobStatus = Normalize(request.JobStatus);
-        existing.ReferredByEmployeeId = request.ReferredByEmployeeId;
-        existing.NoticePeriod = request.NoticePeriod;
-        existing.NoticePeriodUnit = NormalizePeriodUnit(request.NoticePeriodUnit);
-        existing.NoticeStartDate = request.NoticeStartDate;
-        existing.NoticeEndDate = request.NoticeEndDate;
-        existing.NoticeStatus = request.NoticeStatus;
-        existing.ModifiedDate = DateTime.UtcNow;
+        Result<EmployeeEmploymentDto> persisted;
+        if (_db.CurrentTransaction is not null)
+        {
+            persisted = await PersistAsync(_db.CurrentTransaction, ownsTransaction: false);
+        }
+        else
+        {
+            var strategy = _db.CreateExecutionStrategy();
+            persisted = await strategy.ExecuteAsync(async () =>
+            {
+                await using var transaction = await _db.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+                return await PersistAsync(transaction, ownsTransaction: true);
+            });
+        }
+        if (!persisted.Succeeded)
+            return persisted;
 
-        // Date of joining is owned by personal details; employment only mirrors Job status.
-        employee.JobStatus = Normalize(request.JobStatus);
-        employee.ModifiedDate = DateTime.UtcNow;
-
-        await _db.SaveChangesAsync(cancellationToken);
+        existing = await _db.EmployeeEmployments.AsNoTracking().FirstAsync(x => x.EmployeeId == employeeId, cancellationToken);
 
         var referredByName = referredByEmployee is not null
             ? $"{referredByEmployee.FirstName} {referredByEmployee.LastName}"
             : null;
 
         var dto = new EmployeeEmploymentDto(
-            existing.Id, existing.EmployeeId,
-            existing.ConfirmationDate, existing.JobStatus,
-            existing.ReferredByEmployeeId, referredByName,
-            existing.NoticePeriod, existing.NoticePeriodUnit,
-            existing.NoticeStartDate, existing.NoticeEndDate, existing.NoticeStatus,
-            existing.CreatedDate, existing.ModifiedDate,
-            managed, probationEnd, policyName);
+            existing.Id, existing.EmployeeId, existing.ConfirmationDate, existing.JobStatus,
+            existing.ReferredByEmployeeId, referredByName, existing.NoticePeriod, existing.NoticePeriodUnit,
+            existing.NoticeStartDate, existing.NoticeEndDate, existing.NoticeStatus, existing.CreatedDate,
+            existing.ModifiedDate, managed, probationEnd, policyName);
 
         _logger.LogInformation("Upserted employment record for employee {EmployeeId} in tenant {TenantId}.", employeeId, tenantId);
         return Result<EmployeeEmploymentDto>.Success(dto, existing.CreatedDate == existing.ModifiedDate ? "Employment record created." : "Employment record updated.");
     }
+
+    private static EmployeeEmploymentDto MapEmploymentDto(
+        EmployeeEmployment employment, Employee? referredBy, bool managed, DateOnly? probationEnd, string? policyName) =>
+        new(employment.Id, employment.EmployeeId, employment.ConfirmationDate, employment.JobStatus,
+            employment.ReferredByEmployeeId, referredBy is null ? null : $"{referredBy.FirstName} {referredBy.LastName}",
+            employment.NoticePeriod, employment.NoticePeriodUnit, employment.NoticeStartDate, employment.NoticeEndDate,
+            employment.NoticeStatus, employment.CreatedDate, employment.ModifiedDate, managed, probationEnd, policyName);
 
     // ── Effective-dated Position History ──────────────────────────────────────
 
@@ -279,6 +352,9 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
     {
         if (_tenantContext.TenantId is not Guid tenantId)
             return Result<EmployeeEmploymentHistoryDto>.Unauthorized(NoTenantMessage);
+
+        if (!HasEmploymentChangePermission())
+            return Result<EmployeeEmploymentHistoryDto>.Forbidden("This workflow is not authorized to change employment history.");
 
         var employee = await _db.Employees.FirstOrDefaultAsync(
             e => e.Id == employeeId && e.TenantId == tenantId,
@@ -1173,6 +1249,9 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         string.Join(" ", new[] { employee.FirstName, employee.MiddleName, employee.LastName }
             .Where(part => !string.IsNullOrWhiteSpace(part)));
 
+    private bool HasEmploymentChangePermission() =>
+        _authorization?.HasAnyPermission(Permissions.EmploymentHistory.Change) == true;
+
     private async Task SynchronizeCurrentSupervisorAsync(
         Guid employeeId,
         Guid tenantId,
@@ -1216,4 +1295,5 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         public Employee? Manager { get; set; }
         public PositionChangeReason? PositionChangeReason { get; set; }
     }
+
 }

@@ -1,11 +1,16 @@
 using HRMS.Application.Common;
 using HRMS.Application.Abstractions;
 using HRMS.Application.DTOs.Employees;
+using HRMS.Application.EmployeeCodes;
+using HRMS.Application.Services;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence.Seed;
 using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace HRMS.Tests;
 
@@ -31,6 +36,197 @@ public class EmployeeEmploymentHardeningTests
     private static readonly Guid Country = OrganizationTestHarness.CountryId("IN");
     private static readonly Guid Reason = OrganizationTestHarness.PositionChangeReasonId(Tenant, "NEW_HIRE");
     private static readonly DateOnly Today = new(2026, 3, 4);
+
+    [Theory]
+    [InlineData("view", false)]
+    [InlineData("confirmation", false)]
+    [InlineData("separation", false)]
+    [InlineData("change", true)]
+    public async Task Direct_employment_mutations_require_the_employment_change_permission(
+        string permissionContext, bool authorized)
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Employee);
+        harness.AuthorizationContext.SetPermissions(permissionContext switch
+        {
+            "view" => Permissions.EmploymentHistory.View,
+            "confirmation" => Permissions.Confirmation.Decide,
+            "separation" => Permissions.Separation.Manage,
+            _ => Permissions.EmploymentHistory.Change
+        });
+
+        var history = await harness.Employment().CreateChangeAsync(Employee004, Request(), "EMP-001");
+        var joining = await harness.Employment().UpsertEmploymentAsync(Employee, new EmployeeEmploymentRequest());
+
+        Assert.Equal(authorized, history.Succeeded);
+        Assert.Equal(authorized, joining.Succeeded);
+        if (!authorized)
+        {
+            Assert.Equal(ResultStatus.Forbidden, history.Status);
+            Assert.Equal(ResultStatus.Forbidden, joining.Status);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Omitted_or_blank_status_preserves_authoritative_status_and_repairs_the_mirror(string? requestedStatus)
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Employee);
+        using (var context = harness.CreateContext())
+        {
+            var employee = await context.Employees.SingleAsync(e => e.Id == Employee);
+            employee.JobStatus = "On Probation";
+            context.EmployeeEmployments.Add(new EmployeeEmployment
+            {
+                Id = Guid.NewGuid(), TenantId = Tenant, EmployeeId = Employee, JobStatus = "Stale Mirror"
+            });
+            await context.SaveChangesAsync();
+        }
+
+        var beforeAudits = await AuditCountAsync(harness, Employee);
+        var result = await harness.Employment().UpsertEmploymentAsync(Employee, new EmployeeEmploymentRequest
+        {
+            JobStatus = requestedStatus
+        });
+
+        Assert.True(result.Succeeded, result.Message);
+        using var verify = harness.CreateContext();
+        Assert.Equal("On Probation", await verify.Employees.Where(e => e.Id == Employee).Select(e => e.JobStatus).SingleAsync());
+        Assert.Equal("On Probation", await verify.EmployeeEmployments.Where(e => e.EmployeeId == Employee).Select(e => e.JobStatus).SingleAsync());
+        Assert.Equal(beforeAudits, await AuditCountAsync(harness, Employee));
+    }
+
+    [Fact]
+    public async Task Explicit_status_change_updates_both_columns_and_creates_exactly_one_audit()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Employee);
+        await SetJobStatusAsync(harness, Employee, "On Probation", "On Probation");
+        var beforeAudits = await AuditCountAsync(harness, Employee);
+
+        var result = await harness.Employment().UpsertEmploymentAsync(Employee, new EmployeeEmploymentRequest
+        {
+            JobStatus = "Confirmed"
+        });
+
+        Assert.True(result.Succeeded, result.Message);
+        using var verify = harness.CreateContext();
+        Assert.Equal("Confirmed", await verify.Employees.Where(e => e.Id == Employee).Select(e => e.JobStatus).SingleAsync());
+        Assert.Equal("Confirmed", await verify.EmployeeEmployments.Where(e => e.EmployeeId == Employee).Select(e => e.JobStatus).SingleAsync());
+        Assert.Equal(beforeAudits + 1, await AuditCountAsync(harness, Employee));
+    }
+
+    [Fact]
+    public async Task Noop_status_change_creates_no_new_audit()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Employee);
+        await SetJobStatusAsync(harness, Employee, "On Probation", "On Probation");
+        var beforeAudits = await AuditCountAsync(harness, Employee);
+
+        var result = await harness.Employment().UpsertEmploymentAsync(Employee, new EmployeeEmploymentRequest
+        {
+            JobStatus = " on probation "
+        });
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.Equal(beforeAudits, await AuditCountAsync(harness, Employee));
+    }
+
+    [Fact]
+    public async Task Employment_status_and_fields_and_audit_roll_back_together_when_save_fails()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Employee);
+        await SetJobStatusAsync(harness, Employee, "On Probation", "On Probation");
+        using var context = harness.Database.CreateContext(harness.TenantContext, new FailOnceSaveChangesInterceptor());
+        var service = new EmployeeEmploymentService(
+            context,
+            harness.TenantContext,
+            harness.AuthorizationContext,
+            NullLogger<EmployeeEmploymentService>.Instance,
+            new EmployeeCodeRuleMatcher(),
+            new EmployeeCodeRenderer(),
+            new EmployeeCodeSequenceService(context, harness.TenantContext),
+            harness.Clock,
+            new ManagerRoleProvisioningService(context, NullLogger<ManagerRoleProvisioningService>.Instance, harness.Clock));
+
+        var result = await service.UpsertEmploymentAsync(Employee, new EmployeeEmploymentRequest
+        {
+            JobStatus = "Confirmed",
+            NoticePeriod = 30,
+            NoticePeriodUnit = "Days"
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ResultStatus.ServiceUnavailable, result.Status);
+        using var verify = harness.CreateContext();
+        var employee = await verify.Employees.SingleAsync(e => e.Id == Employee);
+        var employment = await verify.EmployeeEmployments.SingleAsync(e => e.EmployeeId == Employee);
+        Assert.Equal("On Probation", employee.JobStatus);
+        Assert.Equal("On Probation", employment.JobStatus);
+        Assert.Equal(0, await AuditCountAsync(harness, Employee));
+    }
+
+    [Fact]
+    public async Task Direct_service_call_cannot_cross_tenant_boundary()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        harness.ActAs(SeedData.TenantIds.Demo02);
+
+        var history = await harness.Employment().CreateChangeAsync(Employee, Request(), "EMP-001");
+        var joining = await harness.Employment().UpsertEmploymentAsync(Employee, new EmployeeEmploymentRequest
+        {
+            JobStatus = "Confirmed"
+        });
+
+        Assert.Equal(ResultStatus.NotFound, history.Status);
+        Assert.Equal(ResultStatus.NotFound, joining.Status);
+    }
+
+    private static async Task SetJobStatusAsync(OrganizationTestHarness harness, Guid employeeId, string employeeStatus, string mirrorStatus)
+    {
+        using var context = harness.CreateContext();
+        var employee = await context.Employees.SingleAsync(e => e.Id == employeeId);
+        employee.JobStatus = employeeStatus;
+        var employment = await context.EmployeeEmployments.SingleOrDefaultAsync(e => e.EmployeeId == employeeId);
+        if (employment is null)
+        {
+            context.EmployeeEmployments.Add(new EmployeeEmployment
+            {
+                Id = Guid.NewGuid(), TenantId = Tenant, EmployeeId = employeeId, JobStatus = mirrorStatus
+            });
+        }
+        else
+        {
+            employment.JobStatus = mirrorStatus;
+        }
+        await context.SaveChangesAsync();
+    }
+
+    private static async Task<int> AuditCountAsync(OrganizationTestHarness harness, Guid employeeId)
+    {
+        using var context = harness.CreateContext();
+        return await context.EmployeeAuditLogs.CountAsync(a => a.EmployeeId == employeeId && a.FieldName == "JobStatus");
+    }
+
+    private sealed class FailOnceSaveChangesInterceptor : SaveChangesInterceptor
+    {
+        private int _failed;
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(ref _failed, 1) == 0)
+                throw new DbUpdateException("Injected employment persistence failure.");
+            return ValueTask.FromResult(result);
+        }
+    }
 
     [Fact]
     public async Task Invalid_hierarchy_combination_is_rejected()

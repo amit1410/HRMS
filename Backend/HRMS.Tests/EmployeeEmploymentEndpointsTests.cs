@@ -19,6 +19,7 @@ namespace HRMS.Tests;
 /// endpoints with their result-to-status mapping and permission gates. Together with
 /// <see cref="EmployeeEmploymentEndToEndTests"/> (service + raw database) this proves the flow the UI drives.
 /// </summary>
+[Collection("Employment endpoints")]
 public class EmployeeEmploymentEndpointsTests : IClassFixture<HrmsApiFactory>
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -262,4 +263,9 @@ public class EmployeeEmploymentEndpointsTests : IClassFixture<HrmsApiFactory>
         Assert.NotNull(body);
         return body!;
     }
+}
+
+[CollectionDefinition("Employment endpoints", DisableParallelization = true)]
+public sealed class EmploymentEndpointsCollection
+{
 }

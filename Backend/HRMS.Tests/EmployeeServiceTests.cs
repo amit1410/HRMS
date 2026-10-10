@@ -5,6 +5,9 @@ using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence.Seed;
 using HRMS.Tests.TestSupport;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Storage;
+using System.Data.Common;
 
 namespace HRMS.Tests;
 
@@ -121,6 +124,105 @@ public class EmployeeServiceTests
         using var unscoped = harness.CreateUnscopedContext();
         var saved = await unscoped.Employees.IgnoreQueryFilters().SingleAsync(e => e.Id == result.Value.Id);
         Assert.Equal(Demo01, saved.TenantId);
+    }
+
+    [Fact]
+    public async Task Create_without_job_status_keeps_it_null_without_employment_or_status_audit()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+
+        var result = await harness.Employees().CreateAsync(NewRequest(harness));
+
+        Assert.True(result.Succeeded, result.Message);
+        using var unscoped = harness.CreateUnscopedContext();
+        Assert.Null(await unscoped.Employees.IgnoreQueryFilters().Where(e => e.Id == result.Value!.Id).Select(e => e.JobStatus).SingleAsync());
+        Assert.Empty(await unscoped.EmployeeEmployments.IgnoreQueryFilters().Where(e => e.EmployeeId == result.Value.Id).ToListAsync());
+        Assert.Empty(await unscoped.EmployeeAuditLogs.IgnoreQueryFilters().Where(e => e.EmployeeId == result.Value.Id && e.FieldName == "JobStatus").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Create_with_job_status_persists_one_initial_audit_without_employment()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var request = NewRequest(harness);
+        request.JobStatus = "On Probation";
+
+        var result = await harness.Employees().CreateAsync(request);
+
+        Assert.True(result.Succeeded, result.Message);
+        using var unscoped = harness.CreateUnscopedContext();
+        Assert.Equal("On Probation", await unscoped.Employees.IgnoreQueryFilters().Where(e => e.Id == result.Value!.Id).Select(e => e.JobStatus).SingleAsync());
+        Assert.Empty(await unscoped.EmployeeEmployments.IgnoreQueryFilters().Where(e => e.EmployeeId == result.Value.Id).ToListAsync());
+        var audit = Assert.Single(await unscoped.EmployeeAuditLogs.IgnoreQueryFilters().Where(e => e.EmployeeId == result.Value.Id && e.FieldName == "JobStatus").ToListAsync());
+        Assert.Null(audit.OldValue);
+        Assert.Equal("On Probation", audit.NewValue);
+    }
+
+    [Fact]
+    public async Task Create_uses_caller_transaction_without_nesting_or_committing_it()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        using var db = harness.CreateContext();
+        var service = new HRMS.Application.Services.EmployeeService(
+            db, harness.TenantContext, harness.Clock, Microsoft.Extensions.Logging.Abstractions.NullLogger<HRMS.Application.Services.EmployeeService>.Instance);
+        await using var transaction = await db.BeginTransactionAsync();
+
+        var result = await service.CreateAsync(NewRequest(harness));
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.Same(transaction.GetDbTransaction(), db.CurrentTransaction!.GetDbTransaction());
+        await transaction.RollbackAsync();
+        Assert.Null(await harness.CreateUnscopedContext().Employees.IgnoreQueryFilters().SingleOrDefaultAsync(e => e.Id == result.Value!.Id));
+    }
+
+    [Fact]
+    public async Task Create_save_failure_leaves_no_employee_contact_or_audit()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await using var db = harness.Database.CreateIsolatedContext(harness.TenantContext, new FailOnceSaveChangesInterceptor());
+        var service = new HRMS.Application.Services.EmployeeService(
+            db, harness.TenantContext, harness.Clock, Microsoft.Extensions.Logging.Abstractions.NullLogger<HRMS.Application.Services.EmployeeService>.Instance);
+        var request = NewRequest(harness);
+        request.JobStatus = "On Probation";
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => service.CreateAsync(request));
+
+        await using var verify = harness.CreateUnscopedContext();
+        Assert.Empty(await verify.Employees.IgnoreQueryFilters().Where(e => e.EmployeeCode == request.EmployeeCode).ToListAsync());
+        Assert.Empty(await verify.EmployeeAuditLogs.IgnoreQueryFilters().Where(e => e.FieldName == "JobStatus" && e.NewValue == "On Probation").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Create_audit_persistence_failure_leaves_no_employee_or_contact()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await using var db = harness.Database.CreateIsolatedContext(harness.TenantContext, new FailAuditInsertInterceptor());
+        var service = new HRMS.Application.Services.EmployeeService(
+            db, harness.TenantContext, harness.Clock, Microsoft.Extensions.Logging.Abstractions.NullLogger<HRMS.Application.Services.EmployeeService>.Instance);
+        var request = NewRequest(harness);
+        request.JobStatus = "On Probation";
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => service.CreateAsync(request));
+
+        await using var verify = harness.CreateUnscopedContext();
+        Assert.Empty(await verify.Employees.IgnoreQueryFilters().Where(e => e.EmployeeCode == request.EmployeeCode).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Create_commit_failure_is_not_reported_as_a_uniqueness_conflict()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await using var db = harness.Database.CreateIsolatedContext(harness.TenantContext, new FailTransactionCommitInterceptor());
+        var service = new HRMS.Application.Services.EmployeeService(
+            db, harness.TenantContext, harness.Clock, Microsoft.Extensions.Logging.Abstractions.NullLogger<HRMS.Application.Services.EmployeeService>.Instance);
+
+        var exception = await Assert.ThrowsAnyAsync<Exception>(() => service.CreateAsync(NewRequest(harness)));
+        Assert.Equal("EmployeeCreationCommitException", exception.GetType().Name);
+        Assert.Contains("ambiguous", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("duplicate", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("already exists", exception.Message, StringComparison.OrdinalIgnoreCase);
+        var inner = Assert.IsType<DbUpdateException>(exception.InnerException);
+        Assert.Equal("Injected employee transaction commit failure.", inner.Message);
     }
 
     /// <summary>
@@ -579,5 +681,95 @@ public class EmployeeServiceTests
         Assert.True(result.Succeeded);
 
         return id;
+    }
+
+    private sealed class FailOnceSaveChangesInterceptor : SaveChangesInterceptor
+    {
+        private int failed;
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(ref failed, 1) == 0)
+                throw new DbUpdateException("Injected employee SaveChangesAsync failure.");
+
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class FailAuditInsertInterceptor : DbCommandInterceptor
+    {
+        private int failed;
+
+        private void MaybeFail(DbCommand command)
+        {
+            if (command.CommandText.Contains("EmployeeAuditLogs", StringComparison.Ordinal) &&
+                Interlocked.Exchange(ref failed, 1) == 0)
+                throw new DbUpdateException("Injected employee audit persistence failure.");
+        }
+
+        public override InterceptionResult<int> NonQueryExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result)
+        {
+            MaybeFail(command);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            MaybeFail(command);
+            return ValueTask.FromResult(result);
+        }
+
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            MaybeFail(command);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            MaybeFail(command);
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed class FailTransactionCommitInterceptor : DbTransactionInterceptor
+    {
+        private static void Fail() => throw new DbUpdateException("Injected employee transaction commit failure.");
+
+        public override InterceptionResult TransactionCommitting(
+            DbTransaction transaction,
+            TransactionEventData eventData,
+            InterceptionResult result)
+        {
+            Fail();
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult> TransactionCommittingAsync(
+            DbTransaction transaction,
+            TransactionEventData eventData,
+            InterceptionResult result,
+            CancellationToken cancellationToken = default)
+        {
+            Fail();
+            return ValueTask.FromResult(result);
+        }
     }
 }

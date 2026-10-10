@@ -1,16 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
   createEmploymentChange,
-  getEmployment,
   getEmploymentHistory,
-  upsertEmployment,
 } from '../../api/employeeSubsections.ts'
 import { getEmployeeCodeConfiguration } from '../../api/employeeCodeConfiguration.ts'
 import { toApiError, hasFieldErrors, type ApiError } from '../../api/errors.ts'
 import type {
-  EmployeeEmployment,
   EmployeeEmploymentHistory,
-  EmployeeEmploymentRequest,
   EmploymentChangeRequest,
   EmploymentChangeReason,
   EmploymentType,
@@ -623,7 +619,6 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
             </form>
         </Card>
       </div>
-      <JoiningEmploymentForm employeeId={employeeId} />
       <Notice tone="info">Employment history is maintained as an audit trail and cannot be deleted.</Notice>
     </>
   )
@@ -652,225 +647,6 @@ export function managerDisplay(record: EmployeeEmploymentHistory): string {
 }
 function EmploymentAccordion({ title, defaultOpen, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) { return <details className="employment-accordion" open={defaultOpen}><summary>{title}</summary><div className="employment-accordion-body">{children}</div></details> }
 
-interface JoiningValues {
-  confirmationDate: string
-  jobStatus: string
-  referredByEmployeeId: string
-  noticePeriod: string
-  noticePeriodUnit: string
-  noticeStartDate: string
-  noticeEndDate: string
-  noticeStatus: 'NotServing' | 'Active' | 'Completed' | 'Cancelled'
-}
-
-const EMPTY_JOINING: JoiningValues = {
-  confirmationDate: '',
-  jobStatus: '',
-  referredByEmployeeId: '',
-  noticePeriod: '',
-  noticePeriodUnit: '',
-  noticeStartDate: '',
-  noticeEndDate: '',
-  noticeStatus: 'NotServing',
-}
-
-function joiningValuesFromEmployment(employment: EmployeeEmployment): JoiningValues {
-  return {
-    confirmationDate: employment.confirmationDate ?? '',
-    jobStatus: employment.jobStatus ?? '',
-    referredByEmployeeId: employment.referredByEmployeeId ?? '',
-    noticePeriod: employment.noticePeriod?.toString() ?? '',
-    noticePeriodUnit: employment.noticePeriodUnit ?? '',
-    noticeStartDate: employment.noticeStartDate ?? '',
-    noticeEndDate: employment.noticeEndDate ?? '',
-    noticeStatus: employment.noticeStatus ?? 'NotServing',
-  }
-}
-
-function joiningRequestFromValues(values: JoiningValues): EmployeeEmploymentRequest {
-  const numberOrNull = (value: string): number | null => {
-    const trimmed = value.trim()
-    if (!trimmed) return null
-    const parsed = Number(trimmed)
-    return Number.isFinite(parsed) ? parsed : null
-  }
-
-  return {
-    confirmationDate: values.confirmationDate || null,
-    jobStatus: values.jobStatus.trim() || null,
-    referredByEmployeeId: values.referredByEmployeeId.trim() || null,
-    noticePeriod: numberOrNull(values.noticePeriod),
-    noticePeriodUnit: values.noticePeriodUnit || null,
-    noticeStartDate: values.noticeStartDate || null,
-    noticeEndDate: values.noticeEndDate || null,
-    noticeStatus: values.noticeStatus,
-  }
-}
-
-/** Joining and contractual terms are an independent saveable section of the Employee page. */
-function JoiningEmploymentForm({ employeeId }: EmploymentSectionFormProps) {
-  const [values, setValues] = useState<JoiningValues>(EMPTY_JOINING)
-  const [error, setError] = useState<ApiError | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const employment = useApiQuery((signal) => getEmployment(employeeId, signal), [employeeId])
-
-  useEffect(() => {
-    if (employment.data) setValues(joiningValuesFromEmployment(employment.data))
-  }, [employment.data])
-
-  function update<F extends keyof JoiningValues>(field: F, value: JoiningValues[F]): void {
-    setError(null)
-    setValues((current) => ({ ...current, [field]: value }))
-  }
-
-  async function saveContractualEmployment(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault()
-    if (saving) return
-
-    setSaving(true)
-    setError(null)
-    setSuccess(null)
-    try {
-      const saved = await upsertEmployment(employeeId, joiningRequestFromValues(values))
-      setValues(joiningValuesFromEmployment(saved))
-      setSuccess('Joining and contractual employment details saved.')
-      employment.refetch()
-    } catch (caught) {
-      setError(toApiError(caught))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const fieldError = (field: string) => error?.fieldErrors[field]
-  const noEmploymentYet = employment.error?.status === 404
-
-  if (!employment.data && !noEmploymentYet && employment.isLoading) {
-    return (
-      <Card className="form-card">
-        <div className="table-loading">
-          <Spinner label="Loading joining details…" />
-        </div>
-      </Card>
-    )
-  }
-
-  if (!employment.data && !noEmploymentYet && employment.error) {
-    return (
-      <Card className="form-card">
-        <ErrorState error={employment.error} onRetry={employment.refetch} />
-      </Card>
-    )
-  }
-
-  return (
-    <Card className="form-card">
-      {error && !hasFieldErrors(error) && <Notice tone="error">{error.message}</Notice>}
-      {success && <Notice tone="success">{success}</Notice>}
-      <form onSubmit={saveContractualEmployment} noValidate>
-        <fieldset className="form-section">
-          <legend>Joining &amp; Contractual Employment</legend>
-          <p className="field-hint">
-            Date of joining is managed in the employee&apos;s Personal Details.
-          </p>
-          <div className="form-grid">
-            <TextField
-              id="confirmationDate"
-              label="Confirmation date"
-              type="date"
-              value={values.confirmationDate}
-              onChange={(value) => update('confirmationDate', value)}
-              disabled={employment.data?.confirmationDateIsPolicyManaged ?? false}
-              hint={
-                employment.data?.confirmationDateIsPolicyManaged
-                  ? `Managed by the "${employment.data.confirmationPolicyName ?? 'applicable'}" confirmation policy${employment.data.policyProbationEndDate ? ` (probation ends ${employment.data.policyProbationEndDate}).` : '.'}`
-                  : 'Optional.'
-              }
-              error={fieldError('confirmationDate')}
-            />
-            <TextField
-              id="jobStatus"
-              label="Job status"
-              value={values.jobStatus}
-              onChange={(value) => update('jobStatus', value)}
-              maxLength={100}
-              hint="Optional."
-              error={fieldError('jobStatus')}
-            />
-            <TextField
-              id="noticePeriod"
-              label="Notice period"
-              type="number"
-              value={values.noticePeriod}
-              onChange={(value) => update('noticePeriod', value)}
-              min="1"
-              hint="Optional."
-              error={fieldError('noticePeriod')}
-            />
-            <SelectField
-              id="noticePeriodUnit"
-              label="Notice unit"
-              value={values.noticePeriodUnit}
-              onChange={(value) => update('noticePeriodUnit', value)}
-              options={[
-                { value: 'Days', label: 'Days' },
-                { value: 'Months', label: 'Months' },
-              ]}
-              placeholder="— Select —"
-              error={fieldError('noticePeriodUnit')}
-            />
-            <SelectField
-              id="noticeStatus"
-              label="Notice status"
-              value={values.noticeStatus}
-              onChange={(value) => update('noticeStatus', value as JoiningValues['noticeStatus'])}
-              options={[
-                { value: 'NotServing', label: 'Not serving' },
-                { value: 'Active', label: 'Serving notice' },
-                { value: 'Completed', label: 'Completed' },
-                { value: 'Cancelled', label: 'Cancelled' },
-              ]}
-              error={fieldError('noticeStatus')}
-            />
-            <TextField
-              id="noticeStartDate"
-              label="Notice start date"
-              type="date"
-              value={values.noticeStartDate}
-              onChange={(value) => update('noticeStartDate', value)}
-              hint="Required when serving notice."
-              error={fieldError('noticeStartDate')}
-            />
-            <TextField
-              id="noticeEndDate"
-              label="Notice end date / last working day"
-              type="date"
-              value={values.noticeEndDate}
-              onChange={(value) => update('noticeEndDate', value)}
-              hint="Optional for an open-ended active notice period."
-              error={fieldError('noticeEndDate')}
-            />
-            <TextField
-              id="referredByEmployeeId"
-              label="Referred by employee ID"
-              value={values.referredByEmployeeId}
-              onChange={(value) => update('referredByEmployeeId', value)}
-              maxLength={36}
-              hint="Optional employee identifier."
-              error={fieldError('referredByEmployeeId')}
-            />
-          </div>
-        </fieldset>
-        <div className="form-actions">
-          <button type="submit" className="button button-primary" disabled={saving}>
-            {saving ? <Spinner size={14} label="Saving…" /> : 'Save Joining Details'}
-          </button>
-        </div>
-      </form>
-    </Card>
-  )
-}
 
 /** Options with the selected (possibly inactive) reference kept selectable regardless of the active list. */
 function asOptions(options: readonly SelectOption[], selected: string): SelectOption[] {

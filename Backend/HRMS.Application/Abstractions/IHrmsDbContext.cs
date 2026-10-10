@@ -321,6 +321,7 @@ public interface IHrmsDbContext
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);
     Task<IDbContextTransaction> BeginTransactionAsync(IsolationLevel isolationLevel, CancellationToken cancellationToken = default);
+    IExecutionStrategy CreateExecutionStrategy();
     IDbContextTransaction? CurrentTransaction { get; }
     void ClearChangeTracker();
 }

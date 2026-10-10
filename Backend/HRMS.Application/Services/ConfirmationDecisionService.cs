@@ -1,6 +1,7 @@
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Confirmation;
+using HRMS.Application.DTOs.Employees;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -27,6 +28,7 @@ public sealed class ConfirmationDecisionService : IConfirmationDecisionService
     private readonly ITenantContext _tenant;
     private readonly IEmployeeAccessScopeService _accessScope;
     private readonly IConfirmationReviewCaseService _caseService;
+    private readonly IJobStatusService _jobStatusService;
     private readonly TimeProvider _time;
 
     public ConfirmationDecisionService(
@@ -34,12 +36,14 @@ public sealed class ConfirmationDecisionService : IConfirmationDecisionService
         ITenantContext tenant,
         IEmployeeAccessScopeService accessScope,
         IConfirmationReviewCaseService caseService,
+        IJobStatusService jobStatusService,
         TimeProvider? time = null)
     {
         _db = db;
         _tenant = tenant;
         _accessScope = accessScope;
         _caseService = caseService;
+        _jobStatusService = jobStatusService;
         _time = time ?? TimeProvider.System;
     }
 
@@ -170,13 +174,17 @@ public sealed class ConfirmationDecisionService : IConfirmationDecisionService
         if (!await CompareAndSwapToDecidedAsync(reviewCase.Id, ConfirmationOutcome.Confirmed, now, ct))
             return Result<ConfirmationDecisionResultDto>.Conflict("This case has already been decided.");
 
+        var statusResult = await _jobStatusService.ChangeWithinTransactionAsync(
+            new(reviewCase.EmployeeId, jobStatus, JobStatusMutationSource.Confirmation, request.DecisionReason), tx, ct);
+        if (!statusResult.Succeeded)
+            return Result<ConfirmationDecisionResultDto>.Failure(statusResult.Status, statusResult.Message, statusResult.Errors);
+
         // The confirmation workflow is the authorized writer of policy-managed confirmation data (the manual
-        // employment upsert path intentionally rejects such edits); DateOfJoining is never touched.
+        // employment upsert path intentionally rejects such edits); DateOfJoining is never touched. Job Status
+        // fields and their Employee audit row were persisted above through the caller-owned transaction.
         var employment = await GetOrCreateEmploymentAsync(tenantId, reviewCase.EmployeeId, now, ct);
         employment.ConfirmationDate = confirmationDate;
-        employment.JobStatus = jobStatus;
         employment.ModifiedDate = now;
-        employee.JobStatus = jobStatus;
         employee.ModifiedDate = now;
 
         await CloseActiveCycleAsync(reviewCase.EmployeeId, now, ct);
@@ -206,11 +214,14 @@ public sealed class ConfirmationDecisionService : IConfirmationDecisionService
         if (!await CompareAndSwapToDecidedAsync(reviewCase.Id, ConfirmationOutcome.NotConfirmed, now, ct))
             return Result<ConfirmationDecisionResultDto>.Conflict("This case has already been decided.");
 
+        var statusResult = await _jobStatusService.ChangeWithinTransactionAsync(
+            new(reviewCase.EmployeeId, jobStatus, JobStatusMutationSource.Confirmation, request.DecisionReason), tx, ct);
+        if (!statusResult.Succeeded)
+            return Result<ConfirmationDecisionResultDto>.Failure(statusResult.Status, statusResult.Message, statusResult.Errors);
+
         // Reject is a configurable job-status outcome only; Employee.Status / termination stays with Separation.
         var employment = await GetOrCreateEmploymentAsync(tenantId, reviewCase.EmployeeId, now, ct);
-        employment.JobStatus = jobStatus;
         employment.ModifiedDate = now;
-        employee.JobStatus = jobStatus;
         employee.ModifiedDate = now;
 
         await CloseActiveCycleAsync(reviewCase.EmployeeId, now, ct);

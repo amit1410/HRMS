@@ -2,8 +2,11 @@ using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Employees;
 using HRMS.Domain.Entities;
+using HRMS.Domain.Authorization;
 using HRMS.Domain.Enums;
+using System.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 
 namespace HRMS.Application.Services;
@@ -49,19 +52,23 @@ public class EmployeeService : IEmployeeService
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<EmployeeService> _logger;
     private readonly IEmployeeAccessScopeService? _accessScope;
+    private readonly IJobStatusService _jobStatusService;
 
     public EmployeeService(
         IHrmsDbContext db,
         ITenantContext tenantContext,
         TimeProvider timeProvider,
         ILogger<EmployeeService> logger,
-        IEmployeeAccessScopeService? accessScope = null)
+        IEmployeeAccessScopeService? accessScope = null,
+        IJobStatusService? jobStatusService = null)
     {
         _db = db;
         _tenantContext = tenantContext;
         _timeProvider = timeProvider;
         _logger = logger;
         _accessScope = accessScope;
+        _jobStatusService = jobStatusService ?? new JobStatusService(
+            db, tenantContext, new EmployeeCreationAuthorizationContext(), timeProvider);
     }
 
     public async Task<Result<PagedResult<EmployeeListItemDto>>> GetAsync(
@@ -217,7 +224,6 @@ public class EmployeeService : IEmployeeService
             GroupDateOfJoining = request.GroupDateOfJoining,
             DateOfLeaving = request.DateOfLeaving,
             Status = employeeStatus,
-            JobStatus = Normalize(request.JobStatus),
             GroupId = Normalize(request.GroupId),
             DepartmentId = request.DepartmentId,
             DesignationId = request.DesignationId,
@@ -239,19 +245,24 @@ public class EmployeeService : IEmployeeService
             Address = Normalize(request.Address)
         };
 
-        _db.Employees.Add(employee);
-        _db.EmployeeContacts.Add(new EmployeeContact
-        {
-            Id = Guid.NewGuid(),
-            TenantId = tenantId,
-            EmployeeId = employee.Id,
-            OfficialEmail = email,
-            OfficialPhone = employee.Phone
-        });
-
         try
         {
-            await _db.SaveChangesAsync(cancellationToken);
+            await PersistEmployeeCreationAsync(
+                employee,
+                request.JobStatus,
+                addRelatedRows: created => _db.EmployeeContacts.Add(new EmployeeContact
+                {
+                    Id = Guid.NewGuid(),
+                    TenantId = tenantId,
+                    EmployeeId = created.Id,
+                    OfficialEmail = email,
+                    OfficialPhone = created.Phone
+                }),
+                cancellationToken);
+        }
+        catch (EmployeeCreationRejectedException exception)
+        {
+            return Result<EmployeeDto>.Failure(exception.Status, exception.Message, exception.Errors);
         }
         catch (DbUpdateException)
         {
@@ -343,7 +354,6 @@ public class EmployeeService : IEmployeeService
         employee.GroupDateOfJoining = request.GroupDateOfJoining;
         employee.DateOfLeaving = request.DateOfLeaving;
         employee.Status = request.Status;
-        employee.JobStatus = Normalize(request.JobStatus);
         employee.GroupId = Normalize(request.GroupId);
         employee.DepartmentId = request.DepartmentId;
         employee.DesignationId = request.DesignationId;
@@ -1063,6 +1073,12 @@ public class EmployeeService : IEmployeeService
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
     }
 
+    private sealed class EmployeeCreationAuthorizationContext : ICurrentAuthorizationContext
+    {
+        public bool HasAnyPermission(params string[] permissions) =>
+            permissions.Contains(Permissions.Employee.Create, StringComparer.Ordinal);
+    }
+
     /// <summary>
     /// Creates an employee from Personal Details, assigning the employee code and a uniqueness-safe
     /// placeholder email (the real work email is a separate Contact concern). The employee is created with
@@ -1086,22 +1102,175 @@ public class EmployeeService : IEmployeeService
             DateOfJoining = request.DateOfJoining
         };
 
-        ApplyPersonalDetails(employee, request, canEditSensitive: canEditSensitive);
+        ApplyPersonalDetails(employee, request, canEditSensitive: canEditSensitive, applyJobStatus: false);
 
-        _db.Employees.Add(employee);
-        await _db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await PersistEmployeeCreationAsync(employee, request.JobStatus, null, cancellationToken);
+        }
+        catch (EmployeeCreationRejectedException exception)
+        {
+            return Result<EmployeeDto>.Failure(exception.Status, exception.Message, exception.Errors);
+        }
 
         _logger.LogInformation("Created employee {EmployeeId} in tenant {TenantId} from Personal Details.", employee.Id, tenantId);
 
         return await ReloadAsync(employee.Id, "Employee created.", cancellationToken);
     }
 
+    private async Task PersistEmployeeCreationAsync(
+        Employee employeeTemplate,
+        string? requestedJobStatus,
+        Action<Employee>? addRelatedRows,
+        CancellationToken cancellationToken)
+    {
+        var ownsTransaction = _db.CurrentTransaction is null;
+
+        async Task PersistAsync(CancellationToken operationCancellationToken)
+        {
+            if (ownsTransaction)
+                _db.ClearChangeTracker();
+
+            var employee = CloneForCreation(employeeTemplate);
+            var statusResult = await _jobStatusService.InitializeForCreationAsync(
+                employee, requestedJobStatus, cancellationToken: operationCancellationToken);
+            if (!statusResult.Succeeded)
+            {
+                throw new EmployeeCreationRejectedException(statusResult);
+            }
+
+            _db.Employees.Add(employee);
+            addRelatedRows?.Invoke(employee);
+            await _db.SaveChangesAsync(operationCancellationToken);
+        }
+
+        if (ownsTransaction)
+        {
+            var saveCompleted = false;
+            async Task PersistAndMarkAsync(CancellationToken operationCancellationToken)
+            {
+                saveCompleted = false;
+                await PersistAsync(operationCancellationToken);
+                saveCompleted = true;
+            }
+
+            async Task<bool> VerifySucceededAsync(CancellationToken verificationCancellationToken) =>
+                await VerifyEmployeeCreationAsync(
+                    employeeTemplate,
+                    requestedJobStatus,
+                    addRelatedRows is not null,
+                    verificationCancellationToken);
+
+            try
+            {
+                await _db.CreateExecutionStrategy().ExecuteInTransactionAsync(
+                    PersistAndMarkAsync,
+                    VerifySucceededAsync,
+                    IsolationLevel.Serializable,
+                    cancellationToken);
+            }
+            catch (DbUpdateException exception) when (saveCompleted)
+            {
+                // A commit failure can be ambiguous. The execution strategy has already run its
+                // verification callback; if it could not prove success, do not let the outer
+                // uniqueness handler misclassify this as a duplicate create.
+                throw new EmployeeCreationCommitException(exception);
+            }
+        }
+        else
+            await PersistAsync(cancellationToken);
+    }
+
+    private async Task<bool> VerifyEmployeeCreationAsync(
+        Employee expected,
+        string? requestedJobStatus,
+        bool expectsContact,
+        CancellationToken cancellationToken)
+    {
+        var employeeExists = await _db.Employees.IgnoreQueryFilters()
+            .AnyAsync(e => e.Id == expected.Id && e.TenantId == expected.TenantId &&
+                          e.EmployeeCode == expected.EmployeeCode && e.Email == expected.Email,
+                cancellationToken);
+        if (!employeeExists)
+            return false;
+
+        if (expectsContact && await _db.EmployeeContacts.IgnoreQueryFilters()
+                .CountAsync(c => c.EmployeeId == expected.Id && c.TenantId == expected.TenantId, cancellationToken) != 1)
+            return false;
+
+        var normalizedStatus = Normalize(requestedJobStatus);
+        return normalizedStatus is null || await _db.EmployeeAuditLogs.IgnoreQueryFilters()
+            .CountAsync(a => a.EmployeeId == expected.Id && a.TenantId == expected.TenantId &&
+                             a.FieldName == "JobStatus" && a.OldValue == null && a.NewValue == normalizedStatus,
+                cancellationToken) == 1;
+    }
+
+    private static Employee CloneForCreation(Employee source) => new()
+    {
+        Id = source.Id,
+        TenantId = source.TenantId,
+        EmployeeCode = source.EmployeeCode,
+        Salutation = source.Salutation,
+        FirstName = source.FirstName,
+        MiddleName = source.MiddleName,
+        LastName = source.LastName,
+        Email = source.Email,
+        Phone = source.Phone,
+        DateOfBirth = source.DateOfBirth,
+        Gender = source.Gender,
+        BloodGroup = source.BloodGroup,
+        MaritalStatus = source.MaritalStatus,
+        BirthCountry = source.BirthCountry,
+        BirthState = source.BirthState,
+        BirthCity = source.BirthCity,
+        BirthCountryId = source.BirthCountryId,
+        BirthStateId = source.BirthStateId,
+        BirthCityId = source.BirthCityId,
+        Religion = source.Religion,
+        Caste = source.Caste,
+        EmployeeType = source.EmployeeType,
+        DateOfJoining = source.DateOfJoining,
+        GroupDateOfJoining = source.GroupDateOfJoining,
+        DateOfLeaving = source.DateOfLeaving,
+        Status = source.Status,
+        GroupId = source.GroupId,
+        DepartmentId = source.DepartmentId,
+        DesignationId = source.DesignationId,
+        ReportingManagerId = source.ReportingManagerId,
+        AadhaarNumber = source.AadhaarNumber,
+        PanNumber = source.PanNumber,
+        PfNumber = source.PfNumber,
+        UanNumber = source.UanNumber,
+        EsicNumber = source.EsicNumber,
+        MediclaimNumber = source.MediclaimNumber,
+        Gratuity = source.Gratuity,
+        Pension = source.Pension,
+        CostCenterCode = source.CostCenterCode,
+        PayrollLocation = source.PayrollLocation,
+        EsicApplicable = source.EsicApplicable,
+        Citizenship = source.Citizenship,
+        LanguageKnown = source.LanguageKnown,
+        ProfilePictureUrl = source.ProfilePictureUrl,
+        Address = source.Address
+    };
+
+    private sealed class EmployeeCreationRejectedException(Result<string?> result)
+        : Exception(result.Message)
+    {
+        public ResultStatus Status { get; } = result.Status;
+        public IReadOnlyList<ValidationError>? Errors { get; } = result.Errors;
+    }
+
+    private sealed class EmployeeCreationCommitException(Exception inner)
+        : Exception("Employee creation commit failed; the result is ambiguous.", inner);
+
     /// <summary>Applies only the Personal Details fields of a request onto an employee record.</summary>
     private void ApplyPersonalDetails(
         Employee employee,
         EmployeePersonalDetailsRequest request,
         bool preserveSensitive = false,
-        bool canEditSensitive = true)
+        bool canEditSensitive = true,
+        bool applyJobStatus = true)
     {
         employee.Salutation = Normalize(request.Salutation);
         employee.FirstName = request.FirstName.Trim();
@@ -1135,7 +1304,8 @@ public class EmployeeService : IEmployeeService
             employee.PanNumber = OverwriteOrKeep(employee.PanNumber, request.PanNumber, preserveSensitive);
         }
         employee.DateOfJoining = request.DateOfJoining;
-        employee.JobStatus = Normalize(request.JobStatus);
+        if (applyJobStatus)
+            employee.JobStatus = Normalize(request.JobStatus);
     }
 
     /// <summary>

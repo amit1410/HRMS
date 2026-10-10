@@ -65,6 +65,20 @@ public class EmployeePersonalDetailsTests
     }
 
     [Fact]
+    public async Task Create_personal_details_without_job_status_keeps_it_null_without_employment_or_status_audit()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+
+        var result = await harness.Employees().CreatePersonalDetailsAsync(NewRequest());
+
+        Assert.True(result.Succeeded, result.Message);
+        using var unscoped = harness.CreateUnscopedContext();
+        Assert.Null(await unscoped.Employees.IgnoreQueryFilters().Where(e => e.Id == result.Value!.Id).Select(e => e.JobStatus).SingleAsync());
+        Assert.Empty(await unscoped.EmployeeEmployments.IgnoreQueryFilters().Where(e => e.EmployeeId == result.Value.Id).ToListAsync());
+        Assert.Empty(await unscoped.EmployeeAuditLogs.IgnoreQueryFilters().Where(e => e.EmployeeId == result.Value.Id && e.FieldName == "JobStatus").ToListAsync());
+    }
+
+    [Fact]
     public async Task Create_without_sensitive_permission_does_not_persist_sensitive_values_but_authorized_create_does()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();

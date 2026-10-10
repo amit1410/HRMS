@@ -3,6 +3,7 @@ using HRMS.Application.Services;
 using HRMS.Application.EmployeeCodes;
 using HRMS.Application.Validators.Banks;
 using HRMS.Application.Validators.Employees;
+using HRMS.Domain.Authorization;
 using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Persistence.Seed;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -26,7 +27,7 @@ public sealed class OrganizationTestHarness : IDisposable
     private OrganizationTestHarness(SqliteInMemoryDatabase database)
     {
         Database = database;
-        TenantContext = new TestTenantContext();
+        TenantContext = new TestTenantContext(userId: Guid.NewGuid());
         Clock = new FixedClock(new DateTimeOffset(2026, 3, 4, 9, 7, 8, TimeSpan.Zero));
     }
 
@@ -37,6 +38,8 @@ public sealed class OrganizationTestHarness : IDisposable
 
     /// <summary>The clock the services read, stopped at a known instant.</summary>
     public FixedClock Clock { get; }
+
+    public TestAuthorizationContext AuthorizationContext { get; } = new(Permissions.EmploymentHistory.Change);
 
     public static async Task<OrganizationTestHarness> CreateAsync()
     {
@@ -90,6 +93,7 @@ public sealed class OrganizationTestHarness : IDisposable
         return new EmployeeEmploymentService(
             context,
             TenantContext,
+            AuthorizationContext,
             NullLogger<EmployeeEmploymentService>.Instance,
             new EmployeeCodeRuleMatcher(),
             new EmployeeCodeRenderer(),
@@ -209,5 +213,18 @@ public sealed class OrganizationTestHarness : IDisposable
         var context = Database.CreateContext(TenantContext);
         _contexts.Add(context);
         return context;
+    }
+
+    public sealed class TestAuthorizationContext(params string[] permissions) : ICurrentAuthorizationContext
+    {
+        private readonly HashSet<string> _permissions = permissions.ToHashSet(StringComparer.Ordinal);
+
+        public void SetPermissions(params string[] permissions)
+        {
+            _permissions.Clear();
+            _permissions.UnionWith(permissions);
+        }
+
+        public bool HasAnyPermission(params string[] permissions) => permissions.Any(_permissions.Contains);
     }
 }

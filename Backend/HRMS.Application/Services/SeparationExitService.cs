@@ -1,6 +1,8 @@
 using System.Text.Json;
+using System.Data;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
+using HRMS.Application.DTOs.Employees;
 using HRMS.Application.DTOs.Separation;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Entities.Separation;
@@ -17,11 +19,18 @@ public sealed class SeparationExitService : ISeparationExitService
     private readonly TimeProvider clock;
     private readonly ILogger<SeparationExitService> logger;
     private readonly ISeparationExitFailureInjector? failureInjector;
+    private readonly IJobStatusService jobStatusService;
 
     public SeparationExitService(IHrmsDbContext db, ITenantContext tenant, TimeProvider? clock = null, ILogger<SeparationExitService>? logger = null, ISeparationExitFailureInjector? failureInjector = null)
+        : this(db, tenant, new JobStatusService(db, tenant, new SeparationAuthorizationContext(), clock ?? TimeProvider.System), clock, logger, failureInjector)
+    {
+    }
+
+    public SeparationExitService(IHrmsDbContext db, ITenantContext tenant, IJobStatusService jobStatusService, TimeProvider? clock = null, ILogger<SeparationExitService>? logger = null, ISeparationExitFailureInjector? failureInjector = null)
     {
         this.db = db; this.tenant = tenant; this.clock = clock ?? TimeProvider.System;
         this.logger = logger ?? LoggerFactory.Create(_ => { }).CreateLogger<SeparationExitService>(); this.failureInjector = failureInjector;
+        this.jobStatusService = jobStatusService;
     }
 
     public async Task<Result<SeparationExitReadinessDto>> GetReadinessAsync(Guid separationId, CancellationToken ct = default)
@@ -49,12 +58,13 @@ public sealed class SeparationExitService : ISeparationExitService
         if (!evaluation.IsReady) return Result<SeparationExitExecutionDto>.Conflict("Exit execution is blocked.", evaluation.Blockers.Select(x => new ValidationError(x.Code, x.Message)).ToList());
 
         var row = evaluation.Existing ?? new SeparationExitExecution { Id = Guid.NewGuid(), TenantId = tenantId, EmployeeSeparationId = separationId, EmployeeId = evaluation.Separation.EmployeeId };
-        if (evaluation.Existing is null) db.SeparationExitExecutions.Add(row);
-        row.Status = SeparationExitExecutionStatus.InProgress; row.FinalLastWorkingDate = evaluation.Separation.ApprovedLastWorkingDate; row.StartedAtUtc ??= clock.GetUtcNow().UtcDateTime; row.StartedByUserId ??= actorId; row.IdempotencyKey ??= request.IdempotencyKey;
-        row.SnapshotJson ??= JsonSerializer.Serialize(new { evaluation.Separation.EmployeeId, EmployeeCode = evaluation.Separation.Employee?.EmployeeCode, SeparationId = separationId, FinalLastWorkingDate = evaluation.Separation.ApprovedLastWorkingDate, ManagerId = evaluation.Separation.Employee?.ReportingManagerId, Account = evaluation.Account?.UserId, CapturedAtUtc = clock.GetUtcNow().UtcDateTime });
-        row.ConcurrencyVersion++; AddEvent(row, SeparationExitExecutionEventType.ExitExecutionStarted, "Execution", request.Comment); AddSeparationEvent(evaluation.Separation, EmployeeSeparationEventType.ExitExecutionStarted, "Exit execution started."); await db.SaveChangesAsync(ct);
+        await using var transaction = await db.BeginTransactionAsync(IsolationLevel.Serializable, ct);
         try
         {
+            if (evaluation.Existing is null) db.SeparationExitExecutions.Add(row);
+            row.Status = SeparationExitExecutionStatus.InProgress; row.FinalLastWorkingDate = evaluation.Separation.ApprovedLastWorkingDate; row.StartedAtUtc ??= clock.GetUtcNow().UtcDateTime; row.StartedByUserId ??= actorId; row.IdempotencyKey ??= request.IdempotencyKey;
+            row.SnapshotJson ??= JsonSerializer.Serialize(new { evaluation.Separation.EmployeeId, EmployeeCode = evaluation.Separation.Employee?.EmployeeCode, SeparationId = separationId, FinalLastWorkingDate = evaluation.Separation.ApprovedLastWorkingDate, ManagerId = evaluation.Separation.Employee?.ReportingManagerId, Account = evaluation.Account?.UserId, CapturedAtUtc = clock.GetUtcNow().UtcDateTime });
+            row.ConcurrencyVersion++; AddEvent(row, SeparationExitExecutionEventType.ExitExecutionStarted, "Execution", request.Comment); AddSeparationEvent(evaluation.Separation, EmployeeSeparationEventType.ExitExecutionStarted, "Exit execution started."); await db.SaveChangesAsync(ct);
             await ExecuteEmploymentAsync(row, evaluation, ct);
             await ExecuteAccessAsync(row, evaluation, ct);
             await ExecuteSessionsAsync(row, evaluation, ct);
@@ -63,14 +73,22 @@ public sealed class SeparationExitService : ISeparationExitService
             failureInjector?.BeforeFinalClosure();
             row.Status = SeparationExitExecutionStatus.Completed; row.CompletedAtUtc = clock.GetUtcNow().UtcDateTime; row.FailureCode = null; row.FailureMessage = null; evaluation.Separation.Status = EmployeeSeparationStatus.Closed; evaluation.Separation.ConcurrencyVersion++;
             AddEvent(row, SeparationExitExecutionEventType.SeparationClosed, "Closure", "Separation closed."); AddSeparationEvent(evaluation.Separation, EmployeeSeparationEventType.SeparationClosed, "Separation closed after exit execution."); await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
             logger.LogInformation("Separation exit completed. TenantId {TenantId}, SeparationId {SeparationId}, EmployeeId {EmployeeId}, ExecutionId {ExecutionId}, Step {Step}, Result {Result}.", tenantId, separationId, row.EmployeeId, row.Id, "Closure", "Completed");
             return Result<SeparationExitExecutionDto>.Success(ToDto(row));
         }
+        catch (JobStatusChangeRejectedException rejection)
+        {
+            await transaction.RollbackAsync(ct);
+            await transaction.DisposeAsync();
+            return Result<SeparationExitExecutionDto>.Failure(rejection.Status, rejection.Message, rejection.Errors);
+        }
         catch (Exception exception) when (exception is InvalidOperationException or DbUpdateException or DbUpdateConcurrencyException)
         {
-            row.Status = SeparationExitExecutionStatus.Failed; row.FailedAtUtc = clock.GetUtcNow().UtcDateTime; row.FailureCode = FailureCode(exception); row.FailureMessage = SafeFailureMessage(exception);
-            AddEvent(row, SeparationExitExecutionEventType.ExitExecutionFailed, "Execution", row.FailureMessage); AddSeparationEvent(evaluation.Separation, EmployeeSeparationEventType.ExitExecutionFailed, row.FailureMessage); await db.SaveChangesAsync(ct);
-            return Result<SeparationExitExecutionDto>.Unavailable("Exit execution failed and is retryable.");
+            await transaction.RollbackAsync(ct);
+            await transaction.DisposeAsync();
+            await RecordFailureAfterRollbackAsync(separationId, evaluation.Separation.EmployeeId, request, exception, ct);
+            return Result<SeparationExitExecutionDto>.Failure(ResultStatus.ServiceUnavailable, "Exit execution failed and is retryable.");
         }
     }
 
@@ -109,7 +127,14 @@ public sealed class SeparationExitService : ISeparationExitService
     private async Task ExecuteEmploymentAsync(SeparationExitExecution row, Evaluation e, CancellationToken ct)
     {
         if (row.EmploymentExecutedAtUtc is not null) return; failureInjector?.BeforeEmploymentExit();
-        var employee = await db.Employees.SingleAsync(x => x.TenantId == row.TenantId && x.Id == row.EmployeeId, ct); if (employee.Status == EmployeeStatus.Active) { employee.DateOfLeaving = row.FinalLastWorkingDate; employee.Status = EmployeeStatus.Terminated; employee.JobStatus = "Separated"; }
+        var employee = await db.Employees.SingleAsync(x => x.TenantId == row.TenantId && x.Id == row.EmployeeId, ct);
+        if (employee.Status == EmployeeStatus.Active)
+        {
+            var status = await jobStatusService.ChangeWithinTransactionAsync(new(row.EmployeeId, "Separated", JobStatusMutationSource.Separation, "Separation exit execution"), db.CurrentTransaction! , ct);
+            if (!status.Succeeded) throw new JobStatusChangeRejectedException(status.Status, status.Message, status.Errors);
+            employee.DateOfLeaving = row.FinalLastWorkingDate;
+            employee.Status = EmployeeStatus.Terminated;
+        }
         var finalLwd = row.FinalLastWorkingDate ?? throw new InvalidOperationException("Final last working date is required.");
         var current = await db.EmployeeEmploymentHistory.Where(x => x.TenantId == row.TenantId && x.EmployeeId == row.EmployeeId && !x.IsSuperseded && x.EffectiveFrom <= finalLwd && (x.EffectiveTo == null || x.EffectiveTo >= finalLwd)).ToListAsync(ct);
         foreach (var history in current) { history.EffectiveTo = finalLwd; history.EmploymentStatus = EmployeeStatus.Terminated; }
@@ -168,4 +193,36 @@ public sealed class SeparationExitService : ISeparationExitService
 
     private sealed record Evaluation(EmployeeSeparation? Separation, SeparationExitExecution? Existing, AccountEmployeeCurrentLink? Account, List<SeparationExitBlockerDto> Blockers, DateOnly BusinessDate, bool IsReady, Result<SeparationExitReadinessDto>? Result)
     { public static Evaluation Failure(Result<SeparationExitReadinessDto> result) => new(null, null, null, [], DateOnly.MinValue, false, result); }
+
+    private async Task<SeparationExitExecution> RecordFailureAfterRollbackAsync(Guid separationId, Guid employeeId, SeparationExitExecuteRequest request, Exception exception, CancellationToken ct)
+    {
+        db.ClearChangeTracker();
+        var row = await db.SeparationExitExecutions.FirstOrDefaultAsync(x => x.TenantId == tenant.TenantId && x.EmployeeSeparationId == separationId, ct);
+        if (row is null)
+        {
+            row = new SeparationExitExecution { Id = Guid.NewGuid(), TenantId = tenant.TenantId!.Value, EmployeeSeparationId = separationId, EmployeeId = employeeId };
+            db.SeparationExitExecutions.Add(row);
+        }
+        row.Status = SeparationExitExecutionStatus.Failed;
+        row.FailedAtUtc = clock.GetUtcNow().UtcDateTime;
+        row.FailureCode = FailureCode(exception);
+        row.FailureMessage = SafeFailureMessage(exception);
+        row.IdempotencyKey ??= request.IdempotencyKey;
+        AddEvent(row, SeparationExitExecutionEventType.ExitExecutionFailed, "Execution", row.FailureMessage);
+        var separation = await db.EmployeeSeparations.FirstAsync(x => x.TenantId == tenant.TenantId && x.Id == separationId, ct);
+        AddSeparationEvent(separation, EmployeeSeparationEventType.ExitExecutionFailed, row.FailureMessage);
+        await db.SaveChangesAsync(ct);
+        return row;
+    }
+
+    private sealed class SeparationAuthorizationContext : ICurrentAuthorizationContext
+    {
+        public bool HasAnyPermission(params string[] requested) => requested.Contains(HRMS.Domain.Authorization.Permissions.Separation.Manage);
+    }
+
+    private sealed class JobStatusChangeRejectedException(ResultStatus status, string message, IReadOnlyList<ValidationError>? errors) : Exception(message)
+    {
+        public ResultStatus Status { get; } = status;
+        public IReadOnlyList<ValidationError>? Errors { get; } = errors;
+    }
 }

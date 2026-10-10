@@ -15,7 +15,6 @@ import { EmploymentSectionForm } from './EmploymentSectionForm.tsx'
 
 const EMPLOYEE_ID = 'e1000000-0000-0000-0000-000000000001'
 const HISTORY_URL = `/api/employees/${EMPLOYEE_ID}/employment-history`
-const EMPLOYMENT_URL = `/api/employees/${EMPLOYEE_ID}/employment`
 const DEPARTMENT_ID = 'd1000000-0000-0000-0000-000000000001'
 const DESIGNATION_ID = 'g1000000-0000-0000-0000-000000000001'
 
@@ -46,7 +45,6 @@ describe('EmploymentSectionForm', () => {
     session.save({ accessToken: 'access-1', refreshToken: 'refresh-1' })
     stub = installStubAdapter()
     stub.on('get', HISTORY_URL, () => ({ data: ok([]) }))
-    stub.on('get', EMPLOYMENT_URL, () => ({ status: 404, data: fail('No employment record found.') }))
     stubMasters(stub)
   })
 
@@ -104,46 +102,24 @@ describe('EmploymentSectionForm', () => {
     expect(await screen.findByText('Employment change recorded.')).toBeInTheDocument()
   })
 
-  it('loads and independently saves joining and contractual employment details', async () => {
-    stub.on('get', EMPLOYMENT_URL, () => ({
-      data: ok({
-        id: 'employment-1',
-        employeeId: EMPLOYEE_ID,
-        confirmationDate: '2021-08-03',
-        jobStatus: 'Probation',
-        referredByEmployeeId: null,
-        referredByEmployeeName: null,
-        noticePeriod: 30,
-        noticePeriodUnit: 'Days',
-        noticeStartDate: null,
-        noticeEndDate: null,
-        noticeStatus: 'NotServing',
-        createdDate: '2026-01-05T09:30:00Z',
-        modifiedDate: null,
-      }),
-    }))
-    stub.on('put', EMPLOYMENT_URL, (call) => ({ data: ok(call.body as never) }))
-
+  it('leaves contractual, separation and confirmation fields to their modules', async () => {
     renderAsUser(<EmploymentSectionForm employeeId={EMPLOYEE_ID} />)
 
-    await waitFor(() => expect(screen.getByLabelText(/^Confirmation date/)).toHaveValue('2021-08-03'))
-    expect(screen.getByLabelText(/^Notice period/)).toHaveValue(30)
-    expect(screen.queryByLabelText(/^Date of joining/)).not.toBeInTheDocument()
-
-    fireEvent.change(screen.getByLabelText(/^Job status/), { target: { value: 'Confirmed' } })
-    await userEvent.click(screen.getByRole('button', { name: 'Save Joining Details' }))
-
-    await waitFor(() => expect(stub.callsTo('put', EMPLOYMENT_URL)).toHaveLength(1))
-    const body = stub.callsTo('put', EMPLOYMENT_URL)[0]!.body as Record<string, unknown>
-    expect(body.jobStatus).toBe('Confirmed')
-    expect(body.noticePeriod).toBe(30)
-    expect(body.noticePeriodUnit).toBe('Days')
-    expect(body).not.toHaveProperty('dateOfJoining')
-    expect(body).not.toHaveProperty('firstHiredDate')
-    expect(body).not.toHaveProperty('groupDateOfJoining')
-    expect(body).not.toHaveProperty('probationPeriod')
-    expect(body).not.toHaveProperty('probationPeriodUnit')
-    expect(await screen.findByText('Joining and contractual employment details saved.')).toBeInTheDocument()
+    await screen.findByLabelText(/^Effective date/)
+    for (const label of [
+      /^Confirmation date/,
+      /^Job status/,
+      /^Notice period/,
+      /^Notice unit/,
+      /^Notice status/,
+      /^Notice start date/,
+      /^Notice end date/,
+      /^Referred by employee ID/,
+    ]) {
+      expect(screen.queryByLabelText(label)).not.toBeInTheDocument()
+    }
+    expect(screen.queryByText('Joining & Contractual Employment')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save Joining Details' })).not.toBeInTheDocument()
   })
 
   it('clears dependent children when a parent is changed', async () => {

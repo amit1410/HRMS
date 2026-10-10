@@ -28,6 +28,10 @@ public sealed class SeparationExitExecutionTests
         var separation = await verify.EmployeeSeparations.SingleAsync(x => x.Id == fixture.SeparationId);
         Assert.Equal(EmployeeStatus.Terminated, employee.Status);
         Assert.Equal(fixture.FinalLwd, employee.DateOfLeaving);
+        Assert.Equal("Separated", employee.JobStatus);
+        Assert.Equal("Separated", await verify.EmployeeEmployments.Where(x => x.EmployeeId == fixture.EmployeeId).Select(x => x.JobStatus).SingleAsync());
+        Assert.Equal(EmployeeStatus.Terminated, await verify.EmployeeEmploymentHistory.Where(x => x.EmployeeId == fixture.EmployeeId).Select(x => x.EmploymentStatus).SingleAsync());
+        Assert.Single(await verify.EmployeeAuditLogs.Where(x => x.EmployeeId == fixture.EmployeeId && x.FieldName == "JobStatus" && x.Source == "Separation").ToListAsync());
         Assert.Equal(EmployeeSeparationStatus.Closed, separation.Status);
         Assert.Equal(1, await verify.SeparationExitExecutions.CountAsync());
         Assert.Equal(1, await verify.SeparationExitExecutionEvents.CountAsync(x => x.EventType == SeparationExitExecutionEventType.SeparationClosed));

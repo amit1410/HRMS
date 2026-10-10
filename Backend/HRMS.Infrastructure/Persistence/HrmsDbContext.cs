@@ -5,6 +5,7 @@ using HRMS.Domain.Entities.Separation;
 using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence.Conversions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using MySql.EntityFrameworkCore.Extensions;
 using RoleEntity = HRMS.Domain.Entities.Role;
 using System.Data;
@@ -21,6 +22,7 @@ namespace HRMS.Infrastructure.Persistence;
 public class HrmsDbContext : DbContext, IHrmsDbContext
 {
     public bool IsMySql => Database.IsMySql();
+    public IExecutionStrategy CreateExecutionStrategy() => Database.CreateExecutionStrategy();
     /// <summary>
     /// Configurations under this namespace belong to the catalog database and are excluded from this
     /// model. Both contexts live in one assembly, so the split has to be stated somewhere; stating it

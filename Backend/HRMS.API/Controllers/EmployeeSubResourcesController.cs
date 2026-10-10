@@ -565,8 +565,6 @@ public class EmployeeSubResourcesController : ControllerBase
         Guid id, [FromBody] EmployeeEmploymentRequest request, CancellationToken cancellationToken)
     {
         var result = await _employmentService.UpsertEmploymentAsync(id, request, cancellationToken);
-        if (result.Succeeded)
-            await LogAuditAsync(id, "Employment", null, "EmployeeEmployment", null, "jobStatus", null, result.Value?.JobStatus, AuditChangeType.Update, cancellationToken);
         return result.ToActionResult();
     }
 
