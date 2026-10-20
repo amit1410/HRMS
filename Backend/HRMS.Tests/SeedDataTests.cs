@@ -1,6 +1,9 @@
 using HRMS.Domain.Authorization;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
+using HRMS.Application.Common;
+using HRMS.Application.DTOs.Authorization;
+using HRMS.Application.Services;
 using HRMS.Infrastructure.Persistence.Seed;
 using HRMS.Infrastructure.Security;
 using HRMS.Tests.TestSupport;
@@ -8,6 +11,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using System.Collections.Concurrent;
 using DomainPermissions = HRMS.Domain.Authorization.Permissions;
 
@@ -51,7 +55,7 @@ public class SeedDataTests
     }
 
     [Fact]
-    public async Task Seed_reconciles_a_missing_existing_hrbp_confirmation_grant()
+    public async Task Seed_does_not_rewrite_existing_role_permission_configuration()
     {
         using var db = new SqliteInMemoryDatabase();
         await db.SeedAsync();
@@ -68,9 +72,303 @@ public class SeedDataTests
         await db.SeedAsync();
 
         using var verify = db.CreateContext(new TestTenantContext());
-        Assert.True(await verify.RolePermissions.AnyAsync(x =>
+        Assert.False(await verify.RolePermissions.AnyAsync(x =>
             x.RoleId == SeedData.RoleId(RoleNames.HRBP) &&
             x.PermissionId == SeedData.PermissionId(DomainPermissions.Confirmation.PolicyView)));
+    }
+
+    [Fact]
+    public async Task Permission_provisioning_preserves_legacy_id_and_role_assignments_while_adding_missing_names()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        await db.SeedAsync();
+        var tenant = new TestTenantContext(SeedData.TenantIds.Demo01, SeedData.Users[0].Id);
+        int roleId = SeedData.RoleId(RoleNames.TenantAdmin);
+        int grantCount;
+        await using (var arrange = db.CreateContext(tenant))
+        {
+            var scheduler = await arrange.Permissions.SingleAsync(x => x.Name == DomainPermissions.Confirmation.SchedulerView);
+            scheduler.Name = "Legacy.PreviousScheduler";
+            var canonical = await arrange.Permissions.SingleAsync(x => x.Id == 294);
+            canonical.Name = "Confirmation.SchedulerView";
+            var welcome = await arrange.Permissions.SingleAsync(x => x.Name == DomainPermissions.WelcomeInvitation.View);
+            arrange.Permissions.Remove(welcome);
+            await arrange.SaveChangesAsync();
+            grantCount = await arrange.RolePermissions.CountAsync();
+        }
+
+        await using (var context = db.CreateContext(tenant))
+        {
+            var provisioner = new HRMS.Infrastructure.Persistence.PermissionCatalogProvisioner(context);
+            await provisioner.EnsureProvisionedAsync();
+            await provisioner.EnsureProvisionedAsync();
+        }
+
+        await using var verify = db.CreateContext(tenant);
+        Assert.Equal("Confirmation.SchedulerView", (await verify.Permissions.SingleAsync(x => x.Id == 294)).Name);
+        Assert.NotEqual(294, (await verify.Permissions.SingleAsync(x => x.Name == DomainPermissions.Confirmation.DashboardViewAll)).Id);
+        Assert.Equal(grantCount, await verify.RolePermissions.CountAsync());
+        Assert.True(await verify.RolePermissions.AnyAsync(x => x.RoleId == roleId && x.PermissionId == 294));
+        Assert.True(await verify.Permissions.AnyAsync(x => x.Name == DomainPermissions.WelcomeInvitation.View));
+        Assert.True(await verify.RolePermissions.AnyAsync(x => x.RoleId == roleId));
+    }
+
+    [Fact]
+    public async Task Permission_provisioning_reuses_canonical_name_under_legacy_id()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        await db.SeedAsync();
+        var tenant = new TestTenantContext(SeedData.TenantIds.Demo01, SeedData.Users[0].Id);
+        var expectedName = DomainPermissions.Confirmation.DashboardViewAll;
+        var expectedId = SeedData.PermissionId(expectedName);
+        await using (var arrange = db.CreateContext(tenant))
+        {
+            arrange.Permissions.Remove(await arrange.Permissions.SingleAsync(x => x.Id == expectedId));
+            arrange.Permissions.Add(new Permission { Id = 999999, Name = expectedName });
+            await arrange.SaveChangesAsync();
+        }
+
+        await using (var context = db.CreateContext(tenant))
+        {
+            var provisioner = new HRMS.Infrastructure.Persistence.PermissionCatalogProvisioner(context);
+            await provisioner.EnsureProvisionedAsync();
+            Assert.Equal(999999, await context.Permissions.Where(x => x.Name == expectedName).Select(x => x.Id).SingleAsync());
+        }
+    }
+
+    [Fact]
+    public async Task Page_access_grants_permission_by_persisted_id_when_it_differs_from_canonical_id()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        await db.SeedAsync();
+        var tenantContext = new TestTenantContext(SeedData.TenantIds.Demo01, SeedData.Users[0].Id);
+        var roleId = SeedData.RoleId(RoleNames.TenantAdmin);
+        const int persistedPermissionId = 999999;
+        await using (var arrange = db.CreateContext(tenantContext))
+        {
+            arrange.Permissions.Remove(await arrange.Permissions.SingleAsync(x => x.Name == DomainPermissions.WelcomeInvitation.View));
+            arrange.Permissions.Add(new Permission { Id = persistedPermissionId, Name = DomainPermissions.WelcomeInvitation.View });
+            await arrange.SaveChangesAsync();
+        }
+
+        await using var context = db.CreateContext(tenantContext);
+        var service = new PageAccessService(context, tenantContext, new RoleResolutionService(context), TimeProvider.System,
+            permissionCatalogProvisioner: new HRMS.Infrastructure.Persistence.PermissionCatalogProvisioner(context));
+        var result = await service.UpdateAsync(roleId, new([DomainPermissions.WelcomeInvitation.View], "Legacy id regression"));
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.True(await context.RolePermissions.AnyAsync(x => x.RoleId == roleId && x.PermissionId == persistedPermissionId));
+        Assert.False(await context.RolePermissions.AnyAsync(x => x.RoleId == roleId && x.PermissionId == SeedData.PermissionId(DomainPermissions.WelcomeInvitation.View)));
+    }
+
+    [Fact]
+    public async Task Permission_provisioning_preserves_existing_rows_even_when_canonical_ids_are_occupied()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        await db.SeedAsync();
+        var tenant = new TestTenantContext(SeedData.TenantIds.Demo01, SeedData.Users[0].Id);
+        await using (var arrange = db.CreateContext(tenant))
+        {
+            (await arrange.Permissions.SingleAsync(x => x.Name == DomainPermissions.Confirmation.SchedulerView)).Name = "Legacy.PreviousScheduler";
+            var first = await arrange.Permissions.SingleAsync(x => x.Id == 294);
+            first.Name = "Confirmation.SchedulerView";
+            arrange.Permissions.Remove(await arrange.Permissions.SingleAsync(x => x.Name == DomainPermissions.WelcomeInvitation.Send));
+            await arrange.SaveChangesAsync();
+        }
+
+        await using (var context = db.CreateContext(tenant))
+        {
+            var beforeGrants = await context.RolePermissions.AsNoTracking().OrderBy(x => x.RoleId).ThenBy(x => x.PermissionId)
+                .Select(x => new { x.RoleId, x.PermissionId }).ToListAsync();
+            await new HRMS.Infrastructure.Persistence.PermissionCatalogProvisioner(context).EnsureProvisionedAsync();
+            Assert.Equal("Confirmation.SchedulerView", await context.Permissions.Where(x => x.Id == 294).Select(x => x.Name).SingleAsync());
+            Assert.True(await context.Permissions.AnyAsync(x => x.Name == DomainPermissions.Confirmation.DashboardViewAll));
+            Assert.True(await context.Permissions.AnyAsync(x => x.Name == DomainPermissions.WelcomeInvitation.Send));
+            Assert.Equal(beforeGrants, await context.RolePermissions.AsNoTracking().OrderBy(x => x.RoleId).ThenBy(x => x.PermissionId)
+                .Select(x => new { x.RoleId, x.PermissionId }).ToListAsync());
+        }
+    }
+
+    [Fact]
+    public async Task Permission_provisioning_inserts_missing_rows_and_is_idempotent()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        await using var context = db.CreateContext(new TestTenantContext());
+        context.Database.EnsureCreated();
+        var provisioner = new HRMS.Infrastructure.Persistence.PermissionCatalogProvisioner(context);
+
+        await provisioner.EnsureProvisionedAsync();
+        var count = await context.Permissions.CountAsync();
+        await provisioner.EnsureProvisionedAsync();
+
+        Assert.Equal(DomainPermissions.All.Count, count);
+        Assert.Equal(count, await context.Permissions.CountAsync());
+        Assert.Equal(DomainPermissions.All.Count, await context.Permissions.Select(x => x.Name).Distinct().CountAsync());
+    }
+
+    [Fact]
+    public async Task Approved_reconciliation_restores_a_missing_new_permission_and_is_audited()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        await db.SeedAsync();
+        var tenantContext = new TestTenantContext(SeedData.TenantIds.Demo01, SeedData.Users[0].Id);
+
+        await using (var arrange = db.CreateContext(new TestTenantContext()))
+        {
+            var grant = await arrange.RolePermissions.SingleAsync(x =>
+                x.RoleId == SeedData.RoleId(RoleNames.TenantAdmin) &&
+                x.PermissionId == SeedData.PermissionId(DomainPermissions.WelcomeInvitation.View));
+            arrange.RolePermissions.Remove(grant);
+            await arrange.SaveChangesAsync();
+        }
+
+        await using (var context = db.CreateContext(tenantContext))
+        {
+            var service = new PageAccessService(context, tenantContext, new RoleResolutionService(context), TimeProvider.System);
+            var result = await service.ReconcileApprovedDefaultsAsync(
+                SeedData.RoleId(RoleNames.TenantAdmin),
+                new PageAccessReconciliationRequest([DomainPermissions.WelcomeInvitation.View], "Provision new communication permission"));
+
+            Assert.True(result.Succeeded, result.Message);
+            Assert.Contains(DomainPermissions.WelcomeInvitation.View, result.Value!.GrantedPermissions);
+            Assert.Single(await context.AuthorizationConfigurationEvents.Where(x =>
+                x.RoleId == SeedData.RoleId(RoleNames.TenantAdmin) &&
+                x.PermissionCode == DomainPermissions.WelcomeInvitation.View &&
+                x.Action == "Reconciled").ToListAsync());
+        }
+    }
+
+    [Fact]
+    public async Task Approved_reconciliation_is_idempotent_when_permission_is_already_granted()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        await db.SeedAsync();
+        var tenantContext = new TestTenantContext(SeedData.TenantIds.Demo01, SeedData.Users[0].Id);
+
+        await using var context = db.CreateContext(tenantContext);
+        var service = new PageAccessService(context, tenantContext, new RoleResolutionService(context), TimeProvider.System);
+
+        var first = await service.ReconcileApprovedDefaultsAsync(
+            SeedData.RoleId(RoleNames.TenantAdmin), new([DomainPermissions.WelcomeInvitation.View]));
+        var second = await service.ReconcileApprovedDefaultsAsync(
+            SeedData.RoleId(RoleNames.TenantAdmin), new([DomainPermissions.WelcomeInvitation.View]));
+
+        Assert.True(first.Succeeded, first.Message);
+        Assert.True(second.Succeeded, second.Message);
+        Assert.Contains(DomainPermissions.WelcomeInvitation.View, second.Value!.GrantedPermissions);
+        Assert.Empty(await context.AuthorizationConfigurationEvents.Where(x =>
+            x.RoleId == SeedData.RoleId(RoleNames.TenantAdmin) &&
+            x.PermissionCode == DomainPermissions.WelcomeInvitation.View &&
+            x.Action == "Reconciled").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Approved_reconciliation_preserves_explicit_revocations_and_custom_roles()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        await db.SeedAsync();
+        var tenantContext = new TestTenantContext(SeedData.TenantIds.Demo01, SeedData.Users[0].Id);
+        var customRoleId = 990001;
+
+        await using (var arrange = db.CreateContext(new TestTenantContext()))
+        {
+            var permissionId = SeedData.PermissionId(DomainPermissions.WelcomeInvitation.View);
+            arrange.RolePermissions.Remove(await arrange.RolePermissions.SingleAsync(x => x.RoleId == SeedData.RoleId(RoleNames.TenantAdmin) && x.PermissionId == permissionId));
+            arrange.Roles.Add(new Role { Id = customRoleId, Name = "Custom Welcome Role" });
+            arrange.AuthorizationConfigurationEvents.Add(new AuthorizationConfigurationEvent
+            {
+                Id = Guid.NewGuid(), TenantId = SeedData.TenantIds.Demo01,
+                EventType = AuthorizationConfigurationEventType.RolePermissionRevoked,
+                EntityType = nameof(RolePermission), RoleId = SeedData.RoleId(RoleNames.TenantAdmin), PermissionId = permissionId,
+                PermissionCode = DomainPermissions.WelcomeInvitation.View, Action = "Revoked", ActorUserId = SeedData.Users[0].Id,
+                OccurredAtUtc = DateTime.UtcNow
+            });
+            await arrange.SaveChangesAsync();
+        }
+
+        await using var context = db.CreateContext(tenantContext);
+        var service = new PageAccessService(context, tenantContext, new RoleResolutionService(context), TimeProvider.System);
+        var revoked = await service.ReconcileApprovedDefaultsAsync(SeedData.RoleId(RoleNames.TenantAdmin), new([DomainPermissions.WelcomeInvitation.View]));
+        Assert.True(revoked.Succeeded);
+        Assert.DoesNotContain(DomainPermissions.WelcomeInvitation.View, revoked.Value!.GrantedPermissions);
+
+        var custom = await service.ReconcileApprovedDefaultsAsync(customRoleId, new([DomainPermissions.WelcomeInvitation.View]));
+        Assert.Equal(ResultStatus.ValidationFailed, custom.Status);
+        Assert.False(await context.RolePermissions.AnyAsync(x => x.RoleId == customRoleId));
+    }
+
+    [Fact]
+    public async Task Explicit_page_access_regrant_is_not_silently_reversed_by_later_reconciliation()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        await db.SeedAsync();
+        var tenantContext = new TestTenantContext(SeedData.TenantIds.Demo01, SeedData.Users[0].Id);
+        var roleId = SeedData.RoleId(RoleNames.TenantAdmin);
+        var permissionId = SeedData.PermissionId(DomainPermissions.WelcomeInvitation.View);
+
+        await using (var arrange = db.CreateContext(new TestTenantContext()))
+        {
+            arrange.RolePermissions.Remove(await arrange.RolePermissions.SingleAsync(x => x.RoleId == roleId && x.PermissionId == permissionId));
+            arrange.AuthorizationConfigurationEvents.Add(new AuthorizationConfigurationEvent
+            {
+                Id = Guid.NewGuid(), TenantId = tenantContext.TenantId!.Value, EventType = AuthorizationConfigurationEventType.RolePermissionRevoked,
+                EntityType = nameof(RolePermission), RoleId = roleId, PermissionId = permissionId,
+                PermissionCode = DomainPermissions.WelcomeInvitation.View, Action = "Revoked",
+                ActorUserId = tenantContext.UserId!.Value, OccurredAtUtc = DateTime.UtcNow
+            });
+            await arrange.SaveChangesAsync();
+        }
+
+        await using var context = db.CreateContext(tenantContext);
+        var service = new PageAccessService(context, tenantContext, new RoleResolutionService(context), TimeProvider.System);
+
+        var explicitRegrant = await service.UpdateAsync(roleId, new([DomainPermissions.WelcomeInvitation.View], "Approved re-grant"));
+        Assert.True(explicitRegrant.Succeeded, explicitRegrant.Message);
+        Assert.Contains(DomainPermissions.WelcomeInvitation.View, explicitRegrant.Value!.GrantedPermissions);
+
+        var reconciled = await service.ReconcileApprovedDefaultsAsync(roleId, new([DomainPermissions.WelcomeInvitation.View]));
+        Assert.True(reconciled.Succeeded, reconciled.Message);
+        Assert.Contains(DomainPermissions.WelcomeInvitation.View, reconciled.Value!.GrantedPermissions);
+        Assert.Empty(await context.AuthorizationConfigurationEvents.Where(x => x.RoleId == roleId && x.Action == "Reconciled").ToListAsync());
+    }
+
+    [Fact]
+    public async Task Approved_reconciliation_rolls_back_permission_and_audit_event_when_save_fails()
+    {
+        using var db = new SqliteInMemoryDatabase();
+        await db.SeedAsync();
+        var tenantContext = new TestTenantContext(SeedData.TenantIds.Demo01, SeedData.Users[0].Id);
+        var roleId = SeedData.RoleId(RoleNames.TenantAdmin);
+        var permissionId = SeedData.PermissionId(DomainPermissions.WelcomeInvitation.View);
+
+        await using (var arrange = db.CreateContext(new TestTenantContext()))
+        {
+            arrange.RolePermissions.Remove(await arrange.RolePermissions.SingleAsync(x => x.RoleId == roleId && x.PermissionId == permissionId));
+            await arrange.SaveChangesAsync();
+        }
+
+        await using (var failing = db.CreateContext(tenantContext, new ThrowOnAddedReconciliationSave()))
+        {
+            var service = new PageAccessService(failing, tenantContext, new RoleResolutionService(failing), TimeProvider.System);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.ReconcileApprovedDefaultsAsync(roleId, new([DomainPermissions.WelcomeInvitation.View])));
+        }
+
+        await using var verify = db.CreateContext(tenantContext);
+        Assert.False(await verify.RolePermissions.AnyAsync(x => x.RoleId == roleId && x.PermissionId == permissionId));
+        Assert.Empty(await verify.AuthorizationConfigurationEvents.Where(x => x.RoleId == roleId && x.PermissionId == permissionId && x.Action == "Reconciled").ToListAsync());
+    }
+
+    private sealed class ThrowOnAddedReconciliationSave : SaveChangesInterceptor
+    {
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (eventData.Context?.ChangeTracker.Entries<AuthorizationConfigurationEvent>().Any(x => x.State == EntityState.Added && x.Entity.Action == "Reconciled") == true)
+                throw new InvalidOperationException("Synthetic authorization audit failure.");
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
     }
 
     [Fact]

@@ -8,6 +8,7 @@ public interface IPageAccessService
     Task<Result<IReadOnlyList<PageAccessRoleDto>>> GetRolesAsync(CancellationToken cancellationToken = default);
     Task<Result<PageAccessMatrixDto>> GetMatrixAsync(int roleId, CancellationToken cancellationToken = default);
     Task<Result<PageAccessMatrixDto>> UpdateAsync(int roleId, PageAccessUpdateRequest request, CancellationToken cancellationToken = default);
+    Task<Result<PageAccessMatrixDto>> ReconcileApprovedDefaultsAsync(int roleId, PageAccessReconciliationRequest request, CancellationToken cancellationToken = default);
     Task<Result<IReadOnlyList<NavigationItemDto>>> GetNavigationAsync(CancellationToken cancellationToken = default);
     Task<Result<UserAccessPreviewDto>> GetUserPreviewAsync(Guid userId, CancellationToken cancellationToken = default);
     Task<Result<IReadOnlyList<AccessPreviewUserDto>>> SearchUsersAsync(string? search, CancellationToken cancellationToken = default);

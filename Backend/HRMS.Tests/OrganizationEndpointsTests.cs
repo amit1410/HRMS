@@ -158,7 +158,10 @@ public class OrganizationEndpointsTests : IClassFixture<HrmsApiFactory>
             DateOfJoining = new DateOnly(2023, 8, 1),
             Status = EmployeeStatus.Active,
             DepartmentId = OrganizationTestHarness.DepartmentId(Demo02, "OPS"),
-            DesignationId = OrganizationTestHarness.DesignationId(Demo02, "OPSM")
+            DesignationId = OrganizationTestHarness.DesignationId(Demo02, "OPSM"),
+            JobStatus = "Probation",
+            AadhaarNumber = "111122223333",
+            PanNumber = "ABCDE1234F"
         };
 
         var created = await demo02.PostAsJsonAsync("/api/employees", body);
@@ -262,7 +265,10 @@ public class OrganizationEndpointsTests : IClassFixture<HrmsApiFactory>
             DateOfJoining = default,
             Status = EmployeeStatus.Active,
             DepartmentId = Guid.Empty,
-            DesignationId = Guid.Empty
+            DesignationId = Guid.Empty,
+            JobStatus = "Probation",
+            AadhaarNumber = "111122223333",
+            PanNumber = "ABCDE1234F"
         });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -274,6 +280,28 @@ public class OrganizationEndpointsTests : IClassFixture<HrmsApiFactory>
         Assert.Contains("dateOfJoining", fields);
         Assert.Contains("departmentId", fields);
         Assert.Contains("designationId", fields);
+    }
+
+    [Theory]
+    [InlineData("jobStatus")]
+    [InlineData("aadhaarNumber")]
+    [InlineData("panNumber")]
+    public async Task Employee_create_rejects_missing_mandatory_personal_field_at_http_boundary(string field)
+    {
+        using var client = Demo01Client();
+        var request = NewEmployee($"EMP-{Guid.NewGuid():N}"[..12]);
+        if (field == "jobStatus")
+            request.JobStatus = null;
+        else if (field == "aadhaarNumber")
+            request.AadhaarNumber = null;
+        else
+            request.PanNumber = null;
+
+        var response = await client.PostAsJsonAsync("/api/employees", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var fields = (await ReadAsync<EmployeeDto>(response)).Errors!.Select(e => e.Field);
+        Assert.Contains(field, fields);
     }
 
     /// <summary>
@@ -488,6 +516,9 @@ public class OrganizationEndpointsTests : IClassFixture<HrmsApiFactory>
         Status = EmployeeStatus.Active,
         DepartmentId = OrganizationTestHarness.DepartmentId(Demo01, "ENG"),
         DesignationId = OrganizationTestHarness.DesignationId(Demo01, "SE"),
+        JobStatus = "Probation",
+        AadhaarNumber = "111122223333",
+        PanNumber = "ABCDE1234F",
         Address = "4 Test Row"
     };
 

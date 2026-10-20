@@ -21,6 +21,9 @@ public sealed class PageAccessController(IPageAccessService service) : Controlle
     [HttpPut("roles/{roleId:int}"), HasPermission(Permissions.PageAccess.Manage)]
     public async Task<ActionResult<ApiResponse<PageAccessMatrixDto>>> Update(int roleId, PageAccessUpdateRequest request, CancellationToken ct) => (await service.UpdateAsync(roleId, request, ct)).ToActionResult();
 
+    [HttpPost("roles/{roleId:int}/reconcile-approved-defaults"), HasPermission(Permissions.PageAccess.Manage)]
+    public async Task<ActionResult<ApiResponse<PageAccessMatrixDto>>> ReconcileApprovedDefaults(int roleId, PageAccessReconciliationRequest request, CancellationToken ct) => (await service.ReconcileApprovedDefaultsAsync(roleId, request, ct)).ToActionResult();
+
     [HttpGet("users/{userId:guid}/preview"), HasPermission(Permissions.PageAccess.View)]
     public async Task<ActionResult<ApiResponse<UserAccessPreviewDto>>> UserPreview(Guid userId, CancellationToken ct) => (await service.GetUserPreviewAsync(userId, ct)).ToActionResult();
 

@@ -42,6 +42,7 @@ public static class DependencyInjection
         services.AddScoped<ILeaveAuthorizationService, LeaveAuthorizationService>();
         services.AddScoped<IAttendanceAuthorizationService, AttendanceAuthorizationService>();
         services.AddScoped<IEmployeePortalAccountService, EmployeePortalAccountService>();
+        services.AddScoped<IWelcomeInvitationService, WelcomeInvitationService>();
         services.AddScoped<IEmployeeCodeConfigurationService, EmployeeCodeConfigurationService>();
         services.AddScoped<IEmployeeCodeSequenceService, EmployeeCodeSequenceService>();
         services.AddSingleton<EmployeeCodes.EmployeeCodeRuleMatcher>();

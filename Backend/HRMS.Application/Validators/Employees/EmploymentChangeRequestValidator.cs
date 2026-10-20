@@ -29,9 +29,6 @@ public class EmploymentChangeRequestValidator : AbstractValidator<EmploymentChan
         RuleFor(x => x.DesignationId)
             .NotEmpty().WithMessage("Designation is required.");
 
-        RuleFor(x => x.PositionChangeReasonId)
-            .NotEmpty().WithMessage("Change reason is required.");
-
         RuleFor(x => x.ChangeReason)
             .IsInEnum().WithMessage("Change reason is invalid.")
             .NotEqual(EmploymentChangeReason.Unspecified).WithMessage("Change reason is required.");

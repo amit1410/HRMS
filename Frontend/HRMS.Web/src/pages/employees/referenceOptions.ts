@@ -16,7 +16,6 @@ import {
   listGrades,
   listEmployeeTypes,
   listWorkLocations,
-  listCostCenters,
   listPositionChangeReasons,
 } from '../../api/masterData.ts'
 import { MAX_PAGE_SIZE } from '../../api/types.ts'
@@ -310,17 +309,6 @@ export async function loadWorkLocationOptions(
   signal?: AbortSignal,
 ): Promise<ReferenceOptions> {
   const items = await listWorkLocations({ ...(activeOnly ? { isActive: true } : {}) }, signal)
-  return {
-    options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
-    total: items.length,
-  }
-}
-
-export async function loadCostCenterOptions(
-  { activeOnly = false }: LoadOptions = {},
-  signal?: AbortSignal,
-): Promise<ReferenceOptions> {
-  const items = await listCostCenters({ ...(activeOnly ? { isActive: true } : {}) }, signal)
   return {
     options: items.map((item) => ({ value: item.id, label: masterLabel(item) })),
     total: items.length,

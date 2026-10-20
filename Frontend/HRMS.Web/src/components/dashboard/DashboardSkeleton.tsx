@@ -1,0 +1,1 @@
+export function DashboardSkeleton({ count = 3 }: { count?: number }) { return <div className="dashboard-skeleton" role="status" aria-label="Loading dashboard">{Array.from({ length: count }, (_, index) => <span key={index} />)}</div> }

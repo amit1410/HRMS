@@ -1,3 +1,4 @@
+using HRMS.API;
 using HRMS.API.Common;
 using HRMS.API.Filters;
 using HRMS.API.Middleware;
@@ -9,6 +10,7 @@ using HRMS.Infrastructure;
 using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Persistence.Catalog;
 using HRMS.Infrastructure.Security;
+using HRMS.Infrastructure.Email;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.OpenApi;
 using Serilog;
@@ -122,6 +124,15 @@ builder.Services.AddScoped<EmployeeScopeAuthorizationFilter>();
 
     var app = builder.Build();
 
+    // Log effective runtime configuration and the resolved DI implementation. This is startup-only and
+    // intentionally excludes all SMTP settings and credentials.
+    StartupEmailDiagnostics.LogEmailConfiguration(
+        app.Environment,
+        app.Configuration,
+        app.Services.GetRequiredService<PasswordRecoveryProviderOptions>(),
+        app.Services.GetRequiredService<IEmailSender>(),
+        app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("StartupEmailDiagnostics"));
+
     // API startup never owns schema mutation. Catalog and tenant migrations are an explicitly approved
     // MigrationHost responsibility. Test hosts may still opt into the legacy disposable SQLite initializer
     // explicitly; ordinary Development/Production startup is validation-only or disabled.
@@ -151,6 +162,26 @@ builder.Services.AddScoped<EmployeeScopeAuthorizationFilter>();
 
     // Centralized exception handling must sit at the top of the pipeline.
     app.UseMiddleware<ExceptionHandlingMiddleware>();
+
+    // The temporary catalog diagnostic is never cacheable, including authorization failures.
+    app.Use(async (context, next) =>
+    {
+        var isCatalogDiagnostic = string.Equals(
+            context.Request.Path.Value,
+            PlatformRequestRoutingMiddleware.CatalogDiagnosticPath,
+            StringComparison.OrdinalIgnoreCase);
+        if (isCatalogDiagnostic)
+        {
+            context.Response.OnStarting(() =>
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                context.Response.Headers.Pragma = "no-cache";
+                return Task.CompletedTask;
+            });
+        }
+
+        await next();
+    });
 
     // Forwarded headers before anything that reads the scheme, the host or the client address — which now
     // means before request logging, before HTTPS redirection, and above all before host resolution picks a

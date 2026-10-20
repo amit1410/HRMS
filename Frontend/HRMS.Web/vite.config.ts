@@ -31,6 +31,9 @@ export default defineConfig(({ mode }) => {
   },
   test: {
     environment: 'jsdom',
+    // The suite is jsdom- and interaction-heavy. Unbounded worker fan-out starves the
+    // event loop and makes otherwise passing user-event flows exceed Vitest's 5s timeout.
+    maxWorkers: 2,
     environmentOptions: {
       jsdom: {
         url: 'http://demo01.localhost:5173',

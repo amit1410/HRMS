@@ -71,12 +71,17 @@ public sealed class EmployeePortalAccountService : IEmployeePortalAccountService
         Guid employeeId,
         CreatePortalAccountRequest request,
         CancellationToken cancellationToken = default) =>
-        CreateOrResendAsync(employeeId, request.LoginEmail, false, cancellationToken);
+        CreateOrResendAsync(employeeId, request.LoginEmail, false, null, cancellationToken);
 
     public Task<Result<CreatePortalAccountResponse>> ResendAsync(
         Guid employeeId,
         CancellationToken cancellationToken = default) =>
-        CreateOrResendAsync(employeeId, null, true, cancellationToken);
+        CreateOrResendAsync(employeeId, null, true, null, cancellationToken);
+
+    /// <summary>Processes a claimed welcome outbox row. The token exists only in this call stack.</summary>
+    public Task<Result<CreatePortalAccountResponse>> ProcessWelcomeInvitationAsync(
+        Guid employeeId, Guid requestedByUserId, bool resend, CancellationToken cancellationToken = default) =>
+        CreateOrResendAsync(employeeId, null, resend, requestedByUserId, cancellationToken);
 
     public async Task<Result<PortalAccountDto>> RevokeAsync(Guid employeeId, CancellationToken cancellationToken = default)
     {
@@ -131,9 +136,9 @@ public sealed class EmployeePortalAccountService : IEmployeePortalAccountService
         return Result<bool>.Success(true, "Your password has been set. You can now sign in.");
     }
 
-    private async Task<Result<CreatePortalAccountResponse>> CreateOrResendAsync(Guid employeeId, string? requestedEmail, bool resend, CancellationToken cancellationToken)
+    private async Task<Result<CreatePortalAccountResponse>> CreateOrResendAsync(Guid employeeId, string? requestedEmail, bool resend, Guid? requestedByUserId, CancellationToken cancellationToken)
     {
-        if (_tenant.TenantId is not Guid tenantId || _tenant.UserId is not Guid actorId)
+        if (_tenant.TenantId is not Guid tenantId || (requestedByUserId ?? _tenant.UserId) is not Guid actorId)
             return Result<CreatePortalAccountResponse>.Unauthorized("No authenticated tenant.");
         var employee = await _db.Employees.SingleOrDefaultAsync(x => x.Id == employeeId, cancellationToken);
         if (employee is null)

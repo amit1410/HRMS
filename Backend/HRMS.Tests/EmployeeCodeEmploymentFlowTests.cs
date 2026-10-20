@@ -10,6 +10,7 @@ namespace HRMS.Tests;
 
 public sealed class EmployeeCodeEmploymentFlowTests
 {
+    private static int fixtureSequence;
     private static readonly Guid Tenant = SeedData.TenantIds.Demo01;
     private static readonly DateOnly Today = new(2026, 3, 4);
     private static readonly Guid Holding = OrganizationTestHarness.HoldingCompanyId(Tenant, "HC01");
@@ -491,6 +492,7 @@ public sealed class EmployeeCodeEmploymentFlowTests
 
     private static async Task<Guid> CreatePendingEmployeeAsync(OrganizationTestHarness harness, string firstName)
     {
+        var sequence = Interlocked.Increment(ref fixtureSequence);
         var result = await harness.Employees().CreatePersonalDetailsAsync(new EmployeePersonalDetailsRequest
         {
             FirstName = firstName,
@@ -498,7 +500,10 @@ public sealed class EmployeeCodeEmploymentFlowTests
             DateOfJoining = Today,
             Gender = Gender.Male,
             BloodGroup = BloodGroup.OPositive,
-            MaritalStatus = MaritalStatus.Single
+            MaritalStatus = MaritalStatus.Single,
+            JobStatus = "On Probation",
+            AadhaarNumber = $"900000000{sequence % 1000:D3}",
+            PanNumber = $"TESTA{sequence % 10000:D4}Z"
         });
         Assert.True(result.Succeeded, result.Message);
         return result.Value!.Id;

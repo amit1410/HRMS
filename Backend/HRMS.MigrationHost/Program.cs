@@ -18,6 +18,12 @@ return await MigrationHost.RunAsync(args);
 
 internal static class MigrationHost
 {
+    private const string ApiUserSecretsId = "af221e70-58f4-4c5b-bbf0-034f30422395";
+    internal static readonly IReadOnlySet<string> TenantOnlyApprovedMigrations = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "20261013132338_AddWelcomeInvitationCenter",
+        "20261013133934_AddWelcomeInvitationOutboxProcessing"
+    };
     public static async Task<int> RunAsync(string[] args)
     {
         try
@@ -51,13 +57,16 @@ internal static class MigrationHost
     }
 
     internal static IConfiguration BuildConfiguration(string[] args)
+        => BuildConfiguration(args, null);
+
+    internal static IConfiguration BuildConfiguration(string[] args, Action<IConfigurationBuilder>? addDevelopmentSecrets)
     {
         var builder = Host.CreateApplicationBuilder(args);
-        AddRepositoryConfiguration(builder);
+        AddRepositoryConfiguration(builder, addDevelopmentSecrets);
         return builder.Configuration;
     }
 
-    private static void AddRepositoryConfiguration(HostApplicationBuilder builder)
+    private static void AddRepositoryConfiguration(HostApplicationBuilder builder, Action<IConfigurationBuilder>? addDevelopmentSecrets = null)
     {
         var sources = builder.Configuration.Sources;
         var environmentVariablesIndex = sources
@@ -68,7 +77,21 @@ internal static class MigrationHost
         sources.Insert(0, new JsonConfigurationSource { Path = repositoryBase, Optional = true, ReloadOnChange = false });
 
         var environmentFile = Path.Combine(Environment.CurrentDirectory, "Backend", "HRMS.API", $"appsettings.{builder.Environment.EnvironmentName}.json");
-        sources.Insert(environmentVariablesIndex + 1, new JsonConfigurationSource { Path = environmentFile, Optional = true, ReloadOnChange = false });
+        sources.Insert(environmentVariablesIndex, new JsonConfigurationSource { Path = environmentFile, Optional = true, ReloadOnChange = false });
+        if (builder.Environment.IsDevelopment())
+        {
+            if (addDevelopmentSecrets is null)
+                builder.Configuration.AddUserSecrets(ApiUserSecretsId);
+            else
+                addDevelopmentSecrets(builder.Configuration);
+            var userSecretsIndex = sources.Count - 1;
+            var configurationSource = sources[userSecretsIndex];
+            sources.RemoveAt(userSecretsIndex);
+            environmentVariablesIndex = sources
+                .Select((source, index) => (source, index))
+                .First(x => x.source.GetType().Name.Contains("EnvironmentVariablesConfigurationSource", StringComparison.Ordinal)).index;
+            sources.Insert(environmentVariablesIndex, configurationSource);
+        }
     }
 
     private static async Task<int> ValidateAsync(IConfiguration config, Arguments args)
@@ -89,6 +112,12 @@ internal static class MigrationHost
     {
         if (!args.Confirm || !args.BackupVerified || !args.RestoreReady)
             throw new InvalidOperationException("Migrate requires --confirm, --backup-verified, and --restore-ready.");
+
+        if (args.TenantOnly)
+        {
+            await MigrateTenantOnlyAsync(config, args);
+            return 0;
+        }
 
         var target = await OpenTargetAsync(config, args);
         await using (target.Catalog)
@@ -117,6 +146,59 @@ internal static class MigrationHost
             Console.WriteLine("MIGRATE OK: approved migration chains applied; no seeders were invoked.");
         }
         return 0;
+    }
+
+    private static async Task MigrateTenantOnlyAsync(IConfiguration config, Arguments args)
+    {
+        if (ParseProvider(args.Provider) != DatabaseProviderType.MySql)
+            throw new InvalidOperationException("--tenant-only is restricted to the MySql tenant provider.");
+        if (!TenantOnlyApprovedMigrations.SetEquals(args.ApprovedMigrations))
+            throw new InvalidOperationException("--tenant-only requires exactly the two approved tenant migration IDs via --approved-migrations.");
+        if (string.IsNullOrWhiteSpace(args.Database))
+            throw new InvalidOperationException("--tenant-only requires --database with the expected physical tenant database name.");
+        var tenantOnlyAllowlist = config.GetSection("MigrationHost:AllowedTenants").Get<string[]>() ?? [];
+        if (!tenantOnlyAllowlist.Contains($"{args.TenantCode}:{args.TenantId}:{args.ShardKey}:{args.Database}", StringComparer.Ordinal))
+            throw new InvalidOperationException("Tenant-only target is not in MigrationHost:AllowedTenants (expected TenantCode:TenantId:ShardKey:Database).");
+
+        var target = await OpenTargetAsync(config, args);
+        await using (target.Catalog)
+        await using (target.Tenant)
+        {
+            await CheckIdentityAsync(target, args);
+            CheckTenantDatabase(target.Tenant, args.Database);
+            var pending = await PendingAsync(target.Tenant, args.CancellationToken);
+            CheckApproved(pending, TenantOnlyApprovedMigrations, "tenant");
+            await ValidateCompleteTenantHistoryAsync(target.Tenant, args.CancellationToken);
+            Console.WriteLine($"BEFORE: tenant pending={pending.Count}; catalog migration history was not queried.");
+
+            // Only the read-only catalog identity lookup is used in this branch. No catalog lock,
+            // migration-history query, report, executor, or MigrateAsync call is reachable.
+            await using var tenantLock = await MigrationLock.AcquireAsync(target.Tenant, $"tenant-{args.TenantId}", args.CancellationToken);
+            await CheckIdentityAsync(target, args);
+            CheckTenantDatabase(target.Tenant, args.Database);
+            var lockedPending = await PendingAsync(target.Tenant, args.CancellationToken);
+            CheckApproved(lockedPending, TenantOnlyApprovedMigrations, "tenant");
+            await ValidateCompleteTenantHistoryAsync(target.Tenant, args.CancellationToken);
+            await TenantOnlyMigrationExecutor.ExecuteAsync(target.Tenant, lockedPending, TenantOnlyApprovedMigrations, args.CancellationToken);
+            await ReportAsync($"tenant {args.TenantCode} after", target.Tenant, args.CancellationToken);
+            Console.WriteLine("TENANT-ONLY MIGRATE OK: approved MySQL tenant migrations applied; catalog schema and history were not accessed for migration.");
+        }
+    }
+
+    private static void CheckTenantDatabase(HrmsDbContext tenant, string expectedDatabase)
+    {
+        var actual = tenant.Database.GetDbConnection().Database;
+        if (!string.Equals(actual, expectedDatabase, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Tenant physical database mismatch. Expected '{expectedDatabase}', connected to '{actual}'.");
+    }
+
+    private static async Task ValidateCompleteTenantHistoryAsync(HrmsDbContext tenant, CancellationToken token)
+    {
+        var known = tenant.Database.GetMigrations().ToArray();
+        var applied = (await tenant.Database.GetAppliedMigrationsAsync(token)).ToArray();
+        for (var i = 0; i < applied.Length; i++)
+            if (i >= known.Length || !string.Equals(applied[i], known[i], StringComparison.Ordinal))
+                throw new InvalidOperationException($"tenant has unexpected migration history at '{applied[i]}'.");
     }
 
     private static async Task<int> CatalogPreflightAsync(IConfiguration config, Arguments args)
@@ -322,7 +404,7 @@ internal static class MigrationHost
     }
 
     private static DatabaseProviderType ParseProvider(string value) => Enum.TryParse<DatabaseProviderType>(value, true, out var provider) ? provider : throw new ArgumentException($"Unsupported provider '{value}'.");
-    private static void PrintUsage() => Console.WriteLine("hrms-migration-host validate|migrate --catalog NAME --tenant-id GUID --tenant-code CODE --shard KEY --provider MySql|SqlServer [--approved-migrations ID,...]\n  migrate additionally requires --confirm --backup-verified --restore-ready\n  hrms-migration-host catalog-preflight|catalog-migrate --catalog NAME --provider MySql|SqlServer --environment ENV --approved-migrations ID,...\n  catalog-migrate additionally requires --confirm --backup-verified --backup-encrypted --retention-approved --restore-ready --isolated-restore-tested --approval APPROVAL-ID\n  verify-release --publish-dir DIR");
+    private static void PrintUsage() => Console.WriteLine("hrms-migration-host validate|migrate --catalog NAME --tenant-id GUID --tenant-code CODE --shard KEY --provider MySql|SqlServer [--approved-migrations ID,...]\n  migrate additionally requires --confirm --backup-verified --restore-ready\n  migrate --tenant-only additionally requires --database NAME and exactly the two approved WEB1 tenant migration IDs; MySql only\n  hrms-migration-host catalog-preflight|catalog-migrate --catalog NAME --provider MySql|SqlServer --environment ENV --approved-migrations ID,...\n  catalog-migrate additionally requires --confirm --backup-verified --backup-encrypted --retention-approved --restore-ready --isolated-restore-tested --approval APPROVAL-ID\n  verify-release --publish-dir DIR");
 
     private sealed record Target(HrmsCatalogDbContext Catalog, HrmsDbContext Tenant, DatabaseProviderType Provider);
 }
@@ -352,10 +434,21 @@ internal sealed class Arguments
     public string Command { get; private init; } = "help";
     public string Catalog => Required("catalog"); public Guid TenantId => Guid.Parse(Required("tenant-id")); public string TenantCode => Required("tenant-code"); public string ShardKey => Required("shard"); public string Provider => Required("provider"); public string Environment => Get("environment") ?? ""; public string? Approval => Get("approval"); public string? PublishDirectory => Get("publish-dir");
     public bool Confirm => Has("confirm"); public bool BackupVerified => Has("backup-verified"); public bool BackupEncrypted => Has("backup-encrypted"); public bool RetentionApproved => Has("retention-approved"); public bool RestoreReady => Has("restore-ready"); public bool IsolatedRestoreTested => Has("isolated-restore-tested");
+    public bool TenantOnly => Has("tenant-only"); public string? Database => Get("database");
     public IReadOnlySet<string> ApprovedMigrations => new HashSet<string>((Get("approved-migrations") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), StringComparer.Ordinal);
     public CancellationToken CancellationToken => CancellationToken.None;
-    public static Arguments Parse(string[] args) { var result = new Arguments { Command = args.FirstOrDefault()?.ToLowerInvariant() ?? "help" }; for (var i = 1; i < args.Length; i++) { var key = args[i].TrimStart('-'); if (key is "confirm" or "backup-verified" or "restore-ready") result._values[key] = "true"; else if (i + 1 < args.Length) result._values[key] = args[++i]; } return result; }
+    public static Arguments Parse(string[] args) { var result = new Arguments { Command = args.FirstOrDefault()?.ToLowerInvariant() ?? "help" }; for (var i = 1; i < args.Length; i++) { var key = args[i].TrimStart('-'); if (key is "confirm" or "backup-verified" or "restore-ready" or "tenant-only") result._values[key] = "true"; else if (i + 1 < args.Length) result._values[key] = args[++i]; } return result; }
     private string Required(string key) => Get(key) ?? throw new ArgumentException($"--{key} is required."); private string? Get(string key) => _values.TryGetValue(key, out var value) ? value : null; private bool Has(string key) => _values.ContainsKey(key);
+}
+
+internal static class TenantOnlyMigrationExecutor
+{
+    public static Task ExecuteAsync(HrmsDbContext tenant, IReadOnlyCollection<string> pending, IReadOnlySet<string> approved, CancellationToken token)
+    {
+        var unexpected = pending.Where(id => !approved.Contains(id)).ToArray();
+        if (unexpected.Length != 0) throw new InvalidOperationException($"tenant has unapproved pending migrations: {string.Join(", ", unexpected)}.");
+        return pending.Count == 0 ? Task.CompletedTask : tenant.Database.MigrateAsync(token);
+    }
 }
 
 internal static class MigrationLock

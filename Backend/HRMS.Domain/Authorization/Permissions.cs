@@ -66,6 +66,15 @@ public static class Permissions
         public const string Delete = "User.Delete";
     }
 
+    public static class WelcomeInvitation
+    {
+        public const string View = "WelcomeInvitation.View";
+        public const string Send = "WelcomeInvitation.Send";
+        public const string Resend = "WelcomeInvitation.Resend";
+        public const string Retry = "WelcomeInvitation.Retry";
+        public const string ViewHistory = "WelcomeInvitation.ViewHistory";
+    }
+
     public static class AccountEmployeeLink
     {
         public const string View = "AccountEmployeeLink.View";
@@ -393,6 +402,7 @@ public static class Permissions
         Department.View, Department.Create, Department.Edit, Department.Delete,
         Designation.View, Designation.Create, Designation.Edit, Designation.Delete,
         User.View, User.Create, User.Edit, User.Delete,
+        WelcomeInvitation.View, WelcomeInvitation.Send, WelcomeInvitation.Resend, WelcomeInvitation.Retry, WelcomeInvitation.ViewHistory,
         AccountEmployeeLink.View, AccountEmployeeLink.ViewHistory, AccountEmployeeLink.Manage,
         RoleManagement.View, RoleManagement.Manage, RoleManagement.AssignmentView,
         RoleManagement.AssignmentManage, RoleManagement.AssignmentViewHistory,

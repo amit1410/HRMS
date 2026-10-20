@@ -386,6 +386,91 @@ public class EmployeeEmploymentHardeningTests
     }
 
     [Fact]
+    public async Task Resolver_ignores_missing_legacy_manager_values_when_effective_manager_exists()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Manager002);
+        await AddEmploymentRecordAsync(harness, Employee004, Today, null, Manager002);
+
+        var result = await harness.Managers().ResolveAsync(Employee004, Today);
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.Equal(EmployeeManagerResolutionStatus.Resolved, result.Value!.Status);
+        Assert.Equal(Manager002, result.Value.ManagerId);
+    }
+
+    [Fact]
+    public async Task Resolver_preserves_non_null_legacy_reporting_manager_conflicts()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Manager002);
+        await SetLegacyManagerAsync(harness, Employee004, Manager003);
+        await AddEmploymentRecordAsync(harness, Employee004, Today, null, Manager002);
+
+        var result = await harness.Managers().ResolveAsync(Employee004, Today);
+
+        Assert.Equal(EmployeeManagerResolutionStatus.LegacyConflict, result.Value!.Status);
+        Assert.Equal(Manager002, result.Value.ManagerId);
+    }
+
+    [Fact]
+    public async Task Resolver_treats_missing_supervisor_l1_as_compatibility_data_not_a_conflict()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Manager002);
+        await AddEmploymentRecordAsync(harness, Employee004, Today, null, Manager002);
+        await using (var context = harness.CreateContext())
+        {
+            context.EmployeeSupervisors.Add(new EmployeeSupervisor
+            {
+                Id = Guid.NewGuid(), TenantId = Tenant, EmployeeId = Employee004
+            });
+            await context.SaveChangesAsync();
+        }
+
+        var result = await harness.Managers().ResolveAsync(Employee004, Today);
+
+        Assert.Equal(EmployeeManagerResolutionStatus.Resolved, result.Value!.Status);
+    }
+
+    [Fact]
+    public async Task Resolver_preserves_non_null_supervisor_l1_conflicts()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await SeedActiveEmploymentAsync(harness, Manager002);
+        await AddEmploymentRecordAsync(harness, Employee004, Today, null, Manager002);
+        await using (var context = harness.CreateContext())
+        {
+            context.EmployeeSupervisors.Add(new EmployeeSupervisor
+            {
+                Id = Guid.NewGuid(), TenantId = Tenant, EmployeeId = Employee004, L1ManagerId = Manager003
+            });
+            await context.SaveChangesAsync();
+        }
+
+        var result = await harness.Managers().ResolveAsync(Employee004, Today);
+
+        Assert.Equal(EmployeeManagerResolutionStatus.LegacyConflict, result.Value!.Status);
+        Assert.Equal(Manager002, result.Value.ManagerId);
+    }
+
+    [Fact]
+    public async Task Resolver_uses_history_only_for_past_dates_even_when_current_legacy_manager_is_outdated()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var historicalDate = Today.AddDays(-1);
+        await SeedActiveEmploymentAsync(harness, Manager002, Today.AddDays(-30));
+        await SetLegacyManagerAsync(harness, Employee004, Manager003);
+        await AddEmploymentRecordAsync(harness, Employee004, historicalDate, null, Manager002);
+
+        var result = await harness.Managers().ResolveAsync(Employee004, historicalDate);
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.Equal(EmployeeManagerResolutionStatus.Resolved, result.Value!.Status);
+        Assert.Equal(Manager002, result.Value.ManagerId);
+    }
+
+    [Fact]
     public async Task Manager_change_is_persisted_and_normal_changes_inherit_the_manager()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();

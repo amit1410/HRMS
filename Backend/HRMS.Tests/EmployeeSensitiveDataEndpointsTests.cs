@@ -96,6 +96,7 @@ public class EmployeeSensitiveDataEndpointsTests : IClassFixture<HrmsApiFactory>
         Gender = Gender.Other,
         MaritalStatus = MaritalStatus.Single,
         DateOfJoining = new DateOnly(2025, 1, 1),
+        JobStatus = "Probation",
         AadhaarNumber = "111122223333",
         PanNumber = "ABCDE1234F",
         PfNumber = "PF-TEST-0001",

@@ -70,8 +70,8 @@ public static class DatabaseSeeder
         ArgumentNullException.ThrowIfNull(tenant);
 
         await SeedPermissionsAsync(db, ct);
-        await SeedRolesAsync(db, ct);
-        await SeedRolePermissionsAsync(db, ct);
+        var newlyCreatedRoleIds = await SeedRolesAsync(db, ct);
+        await SeedRolePermissionsAsync(db, newlyCreatedRoleIds, ct);
         await SeedTenantAsync(db, tenant, ct);
         await SeedUsersAsync(db, passwordHasher, tenant.Id, ct);
         await SeedUserRolesAsync(db, tenant.Id, ct);
@@ -767,12 +767,42 @@ public static class DatabaseSeeder
             tenantId, managerEmployeeIds.Count, linked.Count, additions.Count);
     }
 
-    private static async Task SeedPermissionsAsync(HrmsDbContext db, CancellationToken ct)
+    public static async Task EnsurePermissionsAsync(IHrmsDbContext db, CancellationToken ct = default)
     {
-        var existing = await db.Permissions.Select(p => p.Name).ToListAsync(ct);
-        var existingSet = new HashSet<string>(existing, StringComparer.Ordinal);
+        var canonical = SeedData.Permissions;
+        var registryConflicts = canonical
+            .GroupBy(p => p.Id).Where(g => g.Select(p => p.Name).Distinct(StringComparer.Ordinal).Count() > 1)
+            .SelectMany(g => g.Select(p => $"ID {p.Id} = {p.Name}"))
+            .Concat(canonical.GroupBy(p => p.Name, StringComparer.Ordinal)
+                .Where(g => g.Select(p => p.Id).Distinct().Count() > 1)
+                .SelectMany(g => g.Select(p => $"{p.Name} = ID {p.Id}")))
+            .Distinct(StringComparer.Ordinal).ToList();
+        if (registryConflicts.Count > 0)
+            throw new HRMS.Application.Common.PermissionCatalogCollisionException(
+                $"Canonical permission registry contains inconsistent mappings: {string.Join("; ", registryConflicts)}. Correct the application registry before provisioning.");
 
-        var toAdd = SeedData.Permissions.Where(p => !existingSet.Contains(p.Name)).ToList();
+        var existing = await db.Permissions.Select(p => new { p.Id, p.Name }).ToListAsync(ct);
+        var duplicateNames = existing.GroupBy(p => p.Name, StringComparer.Ordinal).Where(g => g.Count() > 1).Select(g => g.Key).ToArray();
+        if (duplicateNames.Length > 0)
+            throw new HRMS.Application.Common.PermissionCatalogCollisionException(
+                $"Permission catalog contains duplicate names: {string.Join(", ", duplicateNames)}.");
+
+        var existingSet = existing.Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
+        var usedIds = existing.Select(p => p.Id).ToHashSet();
+        var nextId = 1;
+        var toAdd = new List<Permission>();
+        foreach (var permission in canonical.Where(p => !existingSet.Contains(p.Name)))
+        {
+            var id = permission.Id;
+            if (usedIds.Contains(id))
+            {
+                while (usedIds.Contains(nextId)) nextId = nextId == int.MaxValue ? 1 : nextId + 1;
+                id = nextId;
+                nextId = nextId == int.MaxValue ? 1 : nextId + 1;
+            }
+            usedIds.Add(id);
+            toAdd.Add(new Permission { Id = id, Name = permission.Name, Description = permission.Description });
+        }
         if (toAdd.Count > 0)
         {
             db.Permissions.AddRange(toAdd);
@@ -780,7 +810,9 @@ public static class DatabaseSeeder
         }
     }
 
-    private static async Task SeedRolesAsync(HrmsDbContext db, CancellationToken ct)
+    private static Task SeedPermissionsAsync(HrmsDbContext db, CancellationToken ct) => EnsurePermissionsAsync(db, ct);
+
+    private static async Task<HashSet<int>> SeedRolesAsync(HrmsDbContext db, CancellationToken ct)
     {
         var existing = await db.Roles.Select(r => r.Name).ToListAsync(ct);
         var existingSet = new HashSet<string>(existing, StringComparer.Ordinal);
@@ -791,10 +823,22 @@ public static class DatabaseSeeder
             db.Roles.AddRange(toAdd);
             await db.SaveChangesAsync(ct);
         }
+
+        return toAdd.Select(role => role.Id).ToHashSet();
     }
 
-    private static async Task SeedRolePermissionsAsync(HrmsDbContext db, CancellationToken ct)
+    private static async Task SeedRolePermissionsAsync(HrmsDbContext db, IReadOnlySet<int> newlyCreatedRoleIds, CancellationToken ct)
     {
+        // Existing role rows are deliberately immutable here. A missing grant may be an intentional
+        // Page Access change, and startup has neither an approved actor nor enough context to decide.
+        // Existing tenants are reconciled through the separately authorized Page Access operation.
+        if (newlyCreatedRoleIds.Count == 0)
+            return;
+
+        var permissionIds = await db.Permissions
+            .Select(permission => new { permission.Name, permission.Id })
+            .ToDictionaryAsync(permission => permission.Name, permission => permission.Id, StringComparer.Ordinal, ct);
+
         var existing = await db.RolePermissions
             .Select(rp => new { rp.RoleId, rp.PermissionId })
             .ToListAsync(ct);
@@ -806,9 +850,12 @@ public static class DatabaseSeeder
             if (roleName is RoleNames.AccountLinkAdministrator or RoleNames.AccountLinkAuditor)
                 continue; // Special link roles are provisioned by a separately authorized operator.
             var roleId = SeedData.RoleId(roleName);
+            if (!newlyCreatedRoleIds.Contains(roleId))
+                continue;
             foreach (var permissionName in permissionNames)
             {
-                var permissionId = SeedData.PermissionId(permissionName);
+                if (!permissionIds.TryGetValue(permissionName, out var permissionId))
+                    continue;
                 if (existingSet.Add((roleId, permissionId)))
                 {
                     toAdd.Add(new RolePermission { RoleId = roleId, PermissionId = permissionId });

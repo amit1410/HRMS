@@ -16,6 +16,7 @@ using MySql.EntityFrameworkCore.Extensions;
 using HRMS.Infrastructure.Reminders;
 using HRMS.Infrastructure.Accrual;
 using HRMS.Infrastructure.Attendance;
+using HRMS.Infrastructure.Communication;
 
 namespace HRMS.Infrastructure;
 
@@ -52,13 +53,18 @@ public static class DependencyInjection
     public static IServiceCollection AddInfrastructure(
         this IServiceCollection services,
         IConfiguration configuration,
-        IHostEnvironment? hostEnvironment = null)
+        IHostEnvironment? hostEnvironment = null,
+        bool includeDeliveryInfrastructure = true)
     {
         // A host supplies the real environment. The Development fallback keeps the infrastructure
         // registration usable by lightweight tests that call this extension without a Generic Host.
-        var providerOptions = PasswordRecoveryProviderOptions.Load(configuration, hostEnvironment?.IsDevelopment() ?? true);
-        providerOptions.Validate(configuration);
-        services.AddSingleton(providerOptions);
+        PasswordRecoveryProviderOptions? providerOptions = null;
+        if (includeDeliveryInfrastructure)
+        {
+            providerOptions = PasswordRecoveryProviderOptions.Load(configuration, hostEnvironment?.IsDevelopment() ?? true);
+            providerOptions.Validate(configuration);
+            services.AddSingleton(providerOptions);
+        }
 
         // Bound and validated here rather than through ValidateOnStart, which would pull the hosting
         // abstractions into the persistence layer. Eager is also strictly earlier: a template missing its
@@ -102,6 +108,11 @@ public static class DependencyInjection
         services.AddSingleton(attendanceDeviceWorkerOptions);
         services.AddSingleton(Options.Create(attendanceDeviceWorkerOptions));
         services.AddHostedService<AttendanceDevicePullWorker>();
+
+        var welcomeOptions = configuration.GetSection(WelcomeInvitationOptions.SectionName).Get<WelcomeInvitationOptions>() ?? new WelcomeInvitationOptions();
+        services.AddSingleton(welcomeOptions);
+        services.AddHostedService<WelcomeInvitationWorker>();
+        services.AddScoped<IWelcomeInvitationProcessor, WelcomeInvitationProcessor>();
 
         services.AddMemoryCache();
         services.AddScoped<IShardContext, ShardContext>();
@@ -158,6 +169,7 @@ public static class DependencyInjection
         // Application services depend on the abstractions; each resolves to the same scoped instance as its
         // context, so a request's changes are tracked and saved together.
         services.AddScoped<IHrmsDbContext>(sp => sp.GetRequiredService<HrmsDbContext>());
+        services.AddScoped<IPermissionCatalogProvisioner, PermissionCatalogProvisioner>();
         services.AddScoped<IHrmsCatalogDbContext>(sp => sp.GetRequiredService<HrmsCatalogDbContext>());
         services.AddScoped<IEmployeeSerializationLock>(sp =>
         {
@@ -191,23 +203,26 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, IdentityPasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
         services.TryAddScoped<IPlatformContext, NullPlatformContext>();
-        services.AddSingleton<IEmailSender>(serviceProvider =>
-            string.Equals(providerOptions.EmailProvider, "Fake", StringComparison.OrdinalIgnoreCase)
-                ? new DevelopmentEmailSender(
-                    serviceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DevelopmentEmailSender>>(),
-                    hostEnvironment?.IsDevelopment() ?? true)
-                : new SmtpEmailSender(
-                    configuration,
-                    serviceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SmtpEmailSender>>()));
-        services.AddHttpClient<Msg91SmsOtpSender>(client =>
+        if (includeDeliveryInfrastructure)
         {
-            client.BaseAddress = new Uri(configuration["Msg91:BaseUrl"] ?? "https://control.msg91.com/api/v5/");
-            client.Timeout = TimeSpan.FromSeconds(10);
-        });
-        services.AddSingleton<ISmsOtpSender>(serviceProvider =>
-            string.Equals(providerOptions.SmsProvider, "Fake", StringComparison.OrdinalIgnoreCase)
-                ? new DevelopmentSmsOtpSender(hostEnvironment?.IsDevelopment() ?? true)
-                : serviceProvider.GetRequiredService<Msg91SmsOtpSender>());
+            services.AddSingleton<IEmailSender>(serviceProvider =>
+                string.Equals(providerOptions!.EmailProvider, "Fake", StringComparison.OrdinalIgnoreCase)
+                    ? new DevelopmentEmailSender(
+                        serviceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<DevelopmentEmailSender>>(),
+                        hostEnvironment?.IsDevelopment() ?? true)
+                    : new SmtpEmailSender(
+                        configuration,
+                        serviceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<SmtpEmailSender>>()));
+            services.AddHttpClient<Msg91SmsOtpSender>(client =>
+            {
+                client.BaseAddress = new Uri(configuration["Msg91:BaseUrl"] ?? "https://control.msg91.com/api/v5/");
+                client.Timeout = TimeSpan.FromSeconds(10);
+            });
+            services.AddSingleton<ISmsOtpSender>(serviceProvider =>
+                string.Equals(providerOptions!.SmsProvider, "Fake", StringComparison.OrdinalIgnoreCase)
+                    ? new DevelopmentSmsOtpSender(hostEnvironment?.IsDevelopment() ?? true)
+                    : serviceProvider.GetRequiredService<Msg91SmsOtpSender>());
+        }
 
         // Singleton: it creates the scope each organization is provisioned in rather than living in one.
         services.AddSingleton<ITenantProvisioningService, TenantProvisioningService>();
@@ -316,8 +331,5 @@ public static class DependencyInjection
     private static string CatalogConnectionString(
         IConfiguration configuration,
         ConfiguredProvider.CatalogProviderKind provider) =>
-        provider is ConfiguredProvider.CatalogProviderKind.Sqlite
-            ? configuration.GetConnectionString("SqliteCatalog") ?? "Data Source=hrms_catalog_dev.db"
-            : configuration.GetConnectionString("Catalog")
-                ?? throw new InvalidOperationException("Connection string 'Catalog' is not configured.");
+        ConfiguredProvider.ResolveCatalogConnectionString(configuration, provider);
 }

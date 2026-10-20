@@ -24,6 +24,7 @@
     <ProjectReference Include="..\HRMS.API\HRMS.API.csproj" />
     <ProjectReference Include="..\HRMS.Infrastructure\HRMS.Infrastructure.csproj" />
     <ProjectReference Include="..\HRMS.MigrationHost\HRMS.MigrationHost.csproj" />
+    <ProjectReference Include="..\HRMS.WelcomeInvitationOperator\HRMS.WelcomeInvitationOperator.csproj" />
   </ItemGroup>
 
 </Project>

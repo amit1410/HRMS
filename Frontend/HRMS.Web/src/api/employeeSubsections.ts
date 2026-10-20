@@ -282,11 +282,12 @@ export function upsertSupervisor(
 export function getSupervisorOptions(
   employeeId: string,
   type: SupervisorType,
+  params: { search?: string; page?: number; pageSize?: number } = {},
   signal?: AbortSignal,
-): Promise<SupervisorOption[]> {
-  return request<SupervisorOption[]>(() =>
-    api.get<ApiResponse<SupervisorOption[]>>(`/api/employees/${employeeId}/supervisor-options`, {
-      params: { type },
+): Promise<PagedResult<SupervisorOption>> {
+  return request<PagedResult<SupervisorOption>>(() =>
+    api.get<ApiResponse<PagedResult<SupervisorOption>>>(`/api/employees/${employeeId}/supervisor-options`, {
+      params: { type, ...params },
       signal,
     }),
   )

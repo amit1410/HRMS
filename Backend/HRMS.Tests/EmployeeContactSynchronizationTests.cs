@@ -34,7 +34,10 @@ public class EmployeeContactSynchronizationTests
         {
             FirstName = "New",
             LastName = "Contact",
-            DateOfJoining = new DateOnly(2026, 8, 31)
+            DateOfJoining = new DateOnly(2026, 8, 31),
+            JobStatus = "Probation",
+            AadhaarNumber = "111122223333",
+            PanNumber = "ABCDE1234F"
         });
         Assert.True(createdEmployee.Succeeded);
         var employeeId = createdEmployee.Value!.Id;
@@ -160,6 +163,9 @@ public class EmployeeContactSynchronizationTests
         Email = email,
         Phone = phone,
         DateOfJoining = new DateOnly(2026, 8, 31),
-        Status = EmployeeStatus.Active
+        Status = EmployeeStatus.Active,
+        JobStatus = "Probation",
+        AadhaarNumber = "111122223333",
+        PanNumber = "ABCDE1234F"
     };
 }

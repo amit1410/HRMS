@@ -8,10 +8,15 @@ public sealed class DevelopmentEmailSender(ILogger<DevelopmentEmailSender> logge
     public Task SendLeaveNotificationAsync(LeaveNotificationEmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task SendWelcomeInviteAsync(WelcomeEmailMessage message, CancellationToken cancellationToken = default)
     {
-        logger.LogInformation(
-            "Development welcome invite prepared for {RecipientEmail} in tenant {TenantName}; invite URL is available only in the immediate Development response.",
-            message.RecipientEmail, message.TenantName);
-        return Task.CompletedTask;
+        logger.LogWarning(
+            "Welcome invitation delivery is disabled because the Development email provider does not send mail. Tenant {TenantName}.",
+            message.TenantName);
+        throw new EmailDeliveryException(
+            EmailDeliveryFailureKind.Server,
+            "Welcome invitation delivery is disabled for the Development email provider.",
+            null,
+            0,
+            new InvalidOperationException("Development email provider does not deliver welcome invitations."));
     }
 
     public Task<string?> SendPasswordResetOtpAsync(OtpDeliveryMessage message, CancellationToken cancellationToken = default) =>

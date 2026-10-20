@@ -1,3 +1,4 @@
+using System.Text;
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Employees;
 using HRMS.Domain.Entities;
@@ -46,6 +47,47 @@ public class EmployeeEmploymentEndToEndTests
     private static readonly Guid ReasonDept = OrganizationTestHarness.PositionChangeReasonId(Demo01, "DEPT_CHG");
     private static readonly Guid ReasonLoc = OrganizationTestHarness.PositionChangeReasonId(Demo01, "LOC_CHG");
     private static readonly Guid ReasonRetire = OrganizationTestHarness.PositionChangeReasonId(Demo01, "RETIRE");
+
+    [Fact]
+    public async Task A_change_without_position_change_reason_is_accepted_and_persisted_as_null()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var request = NewHireRequest();
+        request.PositionChangeReasonId = null;
+
+        var result = await harness.Employment().CreateChangeAsync(EmployeeId, request, "EMP-001");
+
+        Assert.True(result.Succeeded, result.Message);
+        Assert.Null(result.Value!.PositionChangeReasonId);
+        Assert.Null(result.Value.PositionChangeReasonName);
+
+        var raw = await LoadRawAsync(harness, result.Value.Id);
+        Assert.Null(raw.PositionChangeReasonId);
+        var history = await harness.Employment().GetHistoryAsync(EmployeeId);
+        Assert.True(history.Succeeded, history.Message);
+        Assert.Single(history.Value!);
+    }
+
+    [Fact]
+    public async Task An_invalid_or_cross_tenant_position_change_reason_is_rejected()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+
+        var invalid = NewHireRequest();
+        invalid.PositionChangeReasonId = Guid.NewGuid();
+        var invalidResult = await harness.Employment().CreateChangeAsync(EmployeeId, invalid, "EMP-001");
+
+        Assert.False(invalidResult.Succeeded);
+        Assert.Equal("positionChangeReasonId", invalidResult.Errors!.Single().Field);
+
+        var crossTenant = NewHireRequest();
+        crossTenant.PositionChangeReasonId = OrganizationTestHarness.PositionChangeReasonId(
+            SeedData.TenantIds.Demo02, "NEW_HIRE");
+        var crossTenantResult = await harness.Employment().CreateChangeAsync(EmployeeId, crossTenant, "EMP-001");
+
+        Assert.False(crossTenantResult.Succeeded);
+        Assert.Equal("positionChangeReasonId", crossTenantResult.Errors!.Single().Field);
+    }
 
     // OrganizationTestHarness uses this fixed business date for deterministic effective-date assertions.
     private static readonly DateOnly Today = new(2026, 3, 4);
@@ -102,6 +144,32 @@ public class EmployeeEmploymentEndToEndTests
         var current = await harness.Employment().GetCurrentAsync(EmployeeId);
         Assert.True(current.Succeeded);
         Assert.Equal(dto.Id, current.Value!.Id);
+    }
+
+    [Fact]
+    public async Task Effective_department_and_designation_are_used_by_list_filters_sort_and_csv()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+
+        var hire = await harness.Employment().CreateChangeAsync(EmployeeId, NewHireRequest(), "EMP-001");
+        Assert.True(hire.Succeeded, hire.Message);
+
+        var effectiveDate = Today.AddDays(1);
+        var change = await harness.Employment().CreateChangeAsync(EmployeeId, DeptChangeRequest(effectiveDate), "EMP-001");
+        Assert.True(change.Succeeded, change.Message);
+
+        harness.Clock.Now = new DateTimeOffset(2026, 3, 5, 9, 0, 0, TimeSpan.Zero);
+        var query = new EmployeeQuery { Search = "EMP-001", DepartmentId = DeptHr, DesignationId = DesigSe, SortBy = "department" };
+        var list = await harness.Employees().GetAsync(query);
+        Assert.True(list.Succeeded, list.Message);
+        var item = Assert.Single(list.Value!.Items);
+        Assert.Equal(change.Value!.DepartmentName, item.DepartmentName);
+        Assert.Equal(change.Value.DesignationName, item.DesignationName);
+
+        var csv = await harness.Employees().ExportAsync(query);
+        Assert.True(csv.Succeeded, csv.Message);
+        var csvText = Encoding.UTF8.GetString(csv.Value!.Content.Skip(3).ToArray());
+        Assert.Contains($",{change.Value.DepartmentName},{change.Value.DesignationName},", csvText, StringComparison.Ordinal);
     }
 
     [Fact]

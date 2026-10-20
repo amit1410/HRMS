@@ -77,39 +77,42 @@ function NewPage() {
   const [tab, setTab] = useState<FormTab>('personal')
   const [createdId, setCreatedId] = useState<string | undefined>(undefined)
   const employeeId = createdId
-  const employee = useApiQuery((signal) => employeeId ? getEmployee(employeeId, signal) : Promise.resolve(null), [employeeId])
+  const goNext = (current: FormTab) => {
+    const index = TABS.findIndex((item) => item.id === current)
+    const next = TABS[index + 1]
+    if (next) setTab(next.id)
+  }
 
   return (
     <>
       <PageHeader title="New employee" subtitle="Add someone to the directory" />
       <TabNav tab={tab} setTab={setTab} />
       <div className="employee-details-shell">
-        <EmployeeProfileSidebar employee={employee.data} activeSection={tab as EmployeeSection} onSectionChange={setTab} />
         <main className="employee-section-content" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0}>
-        {tab === 'personal' && <PersonalDetailsForm onCreated={setCreatedId} />}
+        {tab === 'personal' && <PersonalDetailsForm onCreated={setCreatedId} onSaved={() => goNext('personal')} />}
         {tab === 'contact' &&
           (employeeId ? (
-            <ContactDetailsForm employeeId={employeeId} />
+            <ContactDetailsForm employeeId={employeeId} onSaved={() => goNext('contact')} />
           ) : (
             <NeedsEmployeeNotice />
           ))}
         {tab === 'address' &&
           (employeeId ? (
-            <AddressDetailsForm employeeId={employeeId} />
+            <AddressDetailsForm employeeId={employeeId} onSaved={() => goNext('address')} />
           ) : (
             <NeedsEmployeeNotice />
           ))}
-        {tab === 'family' && (employeeId ? <FamilyDetailsForm employeeId={employeeId} /> : <NeedsEmployeeNotice />)}
+        {tab === 'family' && (employeeId ? <FamilyDetailsForm employeeId={employeeId} onSaved={() => goNext('family')} /> : <NeedsEmployeeNotice />)}
         {tab === 'bank' &&
           (employeeId ? (
-            <BankDetailsForm employeeId={employeeId} />
+            <BankDetailsForm employeeId={employeeId} onSaved={() => goNext('bank')} />
           ) : (
             <NeedsEmployeeNotice />
           ))}
-        {tab === 'previousEmployment' && (employeeId ? <PreviousEmploymentForm employeeId={employeeId} /> : <NeedsEmployeeNotice />)}
+        {tab === 'previousEmployment' && (employeeId ? <PreviousEmploymentForm employeeId={employeeId} onSaved={() => goNext('previousEmployment')} /> : <NeedsEmployeeNotice />)}
         {tab === 'employment' &&
           (employeeId ? (
-            <EmploymentSectionForm employeeId={employeeId} />
+            <EmploymentSectionForm employeeId={employeeId} onSaved={() => goNext('employment')} />
           ) : (
             <NeedsEmployeeNotice />
           ))}
@@ -129,6 +132,11 @@ function EditPage({ id }: { id: string }) {
   useDocumentTitle('Edit employee')
   const [tab, setTab] = useState<FormTab>('personal')
   const employee = useApiQuery((signal) => getEmployee(id, signal), [id])
+  const goNext = (current: FormTab) => {
+    const index = TABS.findIndex((item) => item.id === current)
+    const next = TABS[index + 1]
+    if (next) setTab(next.id)
+  }
 
   return (
     <>
@@ -137,13 +145,13 @@ function EditPage({ id }: { id: string }) {
       <div className="employee-details-shell">
         <EmployeeProfileSidebar employee={employee.data} activeSection={tab as EmployeeSection} onSectionChange={setTab} />
         <main className="employee-section-content" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={0}>
-        {tab === 'personal' && <PersonalDetailsForm employeeId={id} />}
-        {tab === 'contact' && <ContactDetailsForm employeeId={id} />}
-        {tab === 'address' && <AddressDetailsForm employeeId={id} />}
-        {tab === 'family' && <FamilyDetailsForm employeeId={id} />}
-        {tab === 'bank' && <BankDetailsForm employeeId={id} />}
-        {tab === 'previousEmployment' && <PreviousEmploymentForm employeeId={id} />}
-        {tab === 'employment' && <EmploymentSectionForm employeeId={id} />}
+        {tab === 'personal' && <PersonalDetailsForm employeeId={id} onSaved={() => goNext('personal')} />}
+        {tab === 'contact' && <ContactDetailsForm employeeId={id} onSaved={() => goNext('contact')} />}
+        {tab === 'address' && <AddressDetailsForm employeeId={id} onSaved={() => goNext('address')} />}
+        {tab === 'family' && <FamilyDetailsForm employeeId={id} onSaved={() => goNext('family')} />}
+        {tab === 'bank' && <BankDetailsForm employeeId={id} onSaved={() => goNext('bank')} />}
+        {tab === 'previousEmployment' && <PreviousEmploymentForm employeeId={id} onSaved={() => goNext('previousEmployment')} />}
+        {tab === 'employment' && <EmploymentSectionForm employeeId={id} onSaved={() => goNext('employment')} />}
         {tab === 'supervisor' && <SupervisorSectionForm employeeId={id} onEmploymentChange={() => setTab('employment')} />}
         </main>
       </div>

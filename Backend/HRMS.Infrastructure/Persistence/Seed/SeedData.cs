@@ -418,6 +418,11 @@ public static class SeedData
             [DomainPermissions.Confirmation.ReviewCaseManage] = 302,
             [DomainPermissions.Confirmation.ReviewManagerSubmit] = 303,
             [DomainPermissions.Confirmation.ReviewHrbpSubmit] = 304,
+            [DomainPermissions.WelcomeInvitation.View] = 305,
+            [DomainPermissions.WelcomeInvitation.Send] = 306,
+            [DomainPermissions.WelcomeInvitation.Resend] = 307,
+            [DomainPermissions.WelcomeInvitation.Retry] = 308,
+            [DomainPermissions.WelcomeInvitation.ViewHistory] = 309,
         };
 
     /// <summary>The fixed id for a role. Throws for a role that has not been given one.</summary>

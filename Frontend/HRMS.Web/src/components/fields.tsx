@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SupervisorOption, SupervisorType } from '../api/types.ts'
 import { getSupervisorOptions } from '../api/employeeSubsections.ts'
@@ -32,6 +33,7 @@ interface CommonProps {
   hint?: string
   required?: boolean
   disabled?: boolean
+  action?: ReactNode
 }
 
 /** The `id`s the label, error and hint are published under, and the aria attributes that reference them. */
@@ -127,6 +129,7 @@ export function TextField({
   error,
   required,
   disabled,
+  action,
 }: TextFieldProps) {
   const { hintId, errorId, describedBy } = fieldIds(id, hint, error)
 
@@ -140,24 +143,27 @@ export function TextField({
       hint={hint}
       hintId={hintId}
     >
-      <input
-        id={id}
-        name={id}
-        type={type}
-        className={error ? 'input has-error' : 'input'}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        autoComplete={autoComplete}
-        autoCapitalize={autoCapitalize}
-        maxLength={maxLength}
-        min={min}
-        max={max}
-        placeholder={placeholder}
-        required={required}
-        disabled={disabled}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedBy}
-      />
+      <div className={action ? 'field-input-action' : undefined}>
+        <input
+          id={id}
+          name={id}
+          type={type}
+          className={error ? 'input has-error' : 'input'}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          autoComplete={autoComplete}
+          autoCapitalize={autoCapitalize}
+          maxLength={maxLength}
+          min={min}
+          max={max}
+          placeholder={placeholder}
+          required={required}
+          disabled={disabled}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={describedBy}
+        />
+        {action}
+      </div>
     </FieldShell>
   )
 }
@@ -337,6 +343,8 @@ export interface SupervisorFieldProps extends CommonProps {
   supervisorType: SupervisorType
   /** Currently selected supervisor employee ID. */
   value: string
+  selectedCode?: string | null
+  selectedName?: string | null
   /** Callback when a supervisor is selected or cleared. */
   onChange: (employeeId: string, option: SupervisorOption | null) => void
 }
@@ -351,6 +359,8 @@ export function SupervisorField({
   employeeId,
   supervisorType,
   value,
+  selectedCode,
+  selectedName,
   onChange,
   hint,
   error,
@@ -362,61 +372,106 @@ export function SupervisorField({
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(false)
   const [highlightIndex, setHighlightIndex] = useState(-1)
+  const [page, setPage] = useState(1)
+  const [hasNextPage, setHasNextPage] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const requestControllerRef = useRef<AbortController | null>(null)
+  const requestSequenceRef = useRef(0)
   const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const [listPosition, setListPosition] = useState<{ top: number; left: number; width: number } | null>(null)
 
   const selectedOption = options.find((o) => o.employeeId === value) ?? null
 
   const fetchOptions = useCallback(
-    (search: string) => {
+    (search: string, requestedPage = 1, append = false) => {
+      requestControllerRef.current?.abort()
       const controller = new AbortController()
+      const requestSequence = ++requestSequenceRef.current
+      requestControllerRef.current = controller
       setLoading(true)
-      getSupervisorOptions(employeeId, supervisorType, controller.signal)
+      setLoadError(false)
+      getSupervisorOptions(employeeId, supervisorType, { search: search || undefined, page: requestedPage, pageSize: 20 }, controller.signal)
         .then((data) => {
-          const filtered = search
-            ? data.filter(
-                (o) =>
-                  o.employeeCode.toLowerCase().includes(search.toLowerCase()) ||
-                  o.fullName.toLowerCase().includes(search.toLowerCase()),
-              )
+          if (controller.signal.aborted || requestSequence !== requestSequenceRef.current) return
+          const pageData = Array.isArray(data)
+            ? { items: data, page: 1, hasNextPage: false }
             : data
-          setOptions(filtered)
+          setOptions((previous) => {
+            if (!append) return pageData.items
+            const merged = [...previous, ...pageData.items]
+            return [...new Map(merged.map((option) => [option.employeeId, option])).values()]
+          })
+          setPage(pageData.page)
+          setHasNextPage(pageData.hasNextPage)
         })
         .catch(() => {
-          setOptions([])
+          if (controller.signal.aborted || requestSequence !== requestSequenceRef.current) return
+          setLoadError(true)
+          if (!append) setOptions([])
         })
-        .finally(() => setLoading(false))
-      return controller
+        .finally(() => {
+          if (!controller.signal.aborted && requestSequence === requestSequenceRef.current) setLoading(false)
+        })
     },
     [employeeId, supervisorType],
   )
 
   useEffect(() => {
-    const controller = fetchOptions('')
-    return () => controller.abort()
+    return () => {
+      requestControllerRef.current?.abort()
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
   }, [fetchOptions])
+
+  const updateListPosition = useCallback(() => {
+    const input = inputRef.current
+    if (!input) return
+    const rect = input.getBoundingClientRect()
+    setListPosition({ top: rect.bottom + 4, left: rect.left, width: rect.width })
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    updateListPosition()
+    const handleViewportChange = () => updateListPosition()
+    window.addEventListener('resize', handleViewportChange)
+    window.addEventListener('scroll', handleViewportChange, true)
+    return () => {
+      window.removeEventListener('resize', handleViewportChange)
+      window.removeEventListener('scroll', handleViewportChange, true)
+    }
+  }, [open, updateListPosition])
+
+  useEffect(() => {
+    if (!open) return
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node
+      if (!inputRef.current?.contains(target) && !listRef.current?.contains(target)) {
+        setOpen(false)
+        setHighlightIndex(-1)
+      }
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    return () => document.removeEventListener('pointerdown', handlePointerDown)
+  }, [open])
 
   function handleInputChange(event: React.ChangeEvent<HTMLInputElement>): void {
     const newValue = event.target.value
     setQuery(newValue)
     setHighlightIndex(-1)
+    setOpen(true)
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
-      const filtered = newValue
-        ? options.filter(
-            (o) =>
-              o.employeeCode.toLowerCase().includes(newValue.toLowerCase()) ||
-              o.fullName.toLowerCase().includes(newValue.toLowerCase()),
-          )
-        : options
-      setOptions(filtered.length > 0 ? filtered : options)
-    }, 150)
+      fetchOptions(newValue.trim())
+    }, 250)
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
     if (!open) return
     const items = options
+    if (items.length === 0) return
     switch (event.key) {
       case 'ArrowDown':
         event.preventDefault()
@@ -452,14 +507,20 @@ export function SupervisorField({
     setOpen(false)
   }
 
-  const displayValue = selectedOption
+  const selectedLabel = selectedOption
     ? `${selectedOption.employeeCode} — ${selectedOption.fullName}`
-    : query
+    : value && (selectedCode || selectedName)
+      ? `${selectedCode ?? ''} — ${selectedName ?? ''}`
+      : ''
+  const displayValue = open ? query : selectedLabel
 
   return (
     <div className="field">
       <label htmlFor={id}>{label}</label>
       <div className="supervisor-field">
+        <span className="supervisor-field-search-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20" focusable="false"><circle cx="8.5" cy="8.5" r="5.25" /><path d="m12.5 12.5 4 4" /></svg>
+        </span>
         <input
           ref={inputRef}
           id={id}
@@ -469,7 +530,7 @@ export function SupervisorField({
           value={displayValue}
           placeholder={loading ? 'Loading…' : 'Search by name or code…'}
           onChange={handleInputChange}
-          onFocus={() => setOpen(true)}
+          onFocus={() => { setQuery(''); setOpen(true); if (!loading) fetchOptions('') }}
           onKeyDown={handleKeyDown}
           disabled={disabled}
           aria-invalid={error ? true : undefined}
@@ -477,7 +538,7 @@ export function SupervisorField({
           aria-expanded={open}
           aria-autocomplete="list"
         />
-        {selectedOption && (
+        {(selectedOption || value) && (
           <button
             type="button"
             className="supervisor-field-clear"
@@ -487,8 +548,16 @@ export function SupervisorField({
             ×
           </button>
         )}
-        {open && options.length > 0 && (
-          <div ref={listRef} className="supervisor-field-list" role="listbox">
+        {open && (loading || loadError || options.length > 0 || (!query && !loading)) && listPosition && createPortal(
+          <div
+            ref={listRef}
+            className="supervisor-field-list"
+            role="listbox"
+            style={{ top: listPosition.top, left: listPosition.left, width: listPosition.width }}
+          >
+            {loading && <div className="supervisor-field-option"><span className="supervisor-field-option-meta">Loading employees…</span></div>}
+            {loadError && <div className="supervisor-field-option"><span className="supervisor-field-option-meta">Unable to load employees. Try again.</span></div>}
+            {!loading && !loadError && options.length === 0 && <div className="supervisor-field-option"><span className="supervisor-field-option-meta">No eligible active employees found.</span></div>}
             {options.map((option, index) => (
               <div
                 key={option.employeeId}
@@ -509,7 +578,9 @@ export function SupervisorField({
                 )}
               </div>
             ))}
-          </div>
+            {!loading && !loadError && hasNextPage && <button type="button" className="supervisor-field-option" onMouseDown={(event) => event.preventDefault()} onClick={() => fetchOptions(query.trim(), page + 1, true)}>Load more employees</button>}
+          </div>,
+          document.body,
         )}
       </div>
       {error !== undefined && (

@@ -1,4 +1,4 @@
-import { useState, type RefObject } from 'react'
+import { useRef, useState, type RefObject } from 'react'
 import { useAuth } from '../auth/useAuth.ts'
 import { Spinner } from '../components/Spinner.tsx'
 import { initials } from '../lib/format.ts'
@@ -9,9 +9,10 @@ import { initials } from '../lib/format.ts'
  * The tenant is shown deliberately. Every request is scoped to it server-side from the token, and an
  * operator with accounts in two tenants needs to see, without checking, which one they are looking at.
  */
-export function Header({ onMenu, menuButtonRef, menuOpen }: { onMenu: () => void; menuButtonRef: RefObject<HTMLButtonElement | null>; menuOpen: boolean }) {
+export function Header({ onMenu, menuButtonRef, menuOpen, onSearch, searchButtonRef }: { onMenu: () => void; menuButtonRef: RefObject<HTMLButtonElement | null>; menuOpen: boolean; onSearch?: () => void; searchButtonRef?: RefObject<HTMLButtonElement | null> }) {
   const { user, logout } = useAuth()
   const [signingOut, setSigningOut] = useState(false)
+  const fallbackSearchButtonRef = useRef<HTMLButtonElement>(null)
 
   async function onSignOut() {
     setSigningOut(true)
@@ -34,6 +35,7 @@ export function Header({ onMenu, menuButtonRef, menuOpen }: { onMenu: () => void
         <span className="tenant-name">{user.tenantName}</span>
         <span className="tenant-code">{user.tenantCode}</span>
       </div>
+      <button ref={searchButtonRef ?? fallbackSearchButtonRef} type="button" className="header-search-trigger" onClick={onSearch} aria-label="Search pages and actions"><span aria-hidden="true">⌕</span><span>Search HRMS</span><kbd>Ctrl K</kbd></button>
 
       <div className="header-user">
         <div className="user-text">

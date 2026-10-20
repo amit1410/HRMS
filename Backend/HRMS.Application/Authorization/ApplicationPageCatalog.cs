@@ -36,7 +36,11 @@ public static class ApplicationPageCatalog
         Page("ADMIN.ROLE_MANAGEMENT", "Role Management", "ADMINISTRATION", "/role-management", [Permissions.RoleManagement.AssignmentView]),
         Page("ADMIN.PAGE_ACCESS", "Page Access Management", "ADMINISTRATION", "/page-access-management", [Permissions.PageAccess.View],
             Action("VIEW", "View", Permissions.PageAccess.View), Action("MANAGE", "Manage", Permissions.PageAccess.Manage)),
-        Page("ADMIN.ACCOUNT_EMPLOYEE_LINKS", "Account–Employee Links", "ADMINISTRATION", "/administration/account-employee-links", [Permissions.AccountEmployeeLink.View])
+        Page("ADMIN.ACCOUNT_EMPLOYEE_LINKS", "Account-Employee Links", "ADMINISTRATION", "/administration/account-employee-links", [Permissions.AccountEmployeeLink.View]),
+        Page("COMMUNICATION.WELCOME_INVITATIONS", "Welcome Invitations", "COMMUNICATION", "/communication/welcome-invitations", [Permissions.WelcomeInvitation.View],
+            Action("VIEW", "View", Permissions.WelcomeInvitation.View), Action("SEND", "Send", Permissions.WelcomeInvitation.Send),
+            Action("RESEND", "Resend", Permissions.WelcomeInvitation.Resend), Action("RETRY", "Retry", Permissions.WelcomeInvitation.Retry),
+            Action("VIEW_HISTORY", "View history", Permissions.WelcomeInvitation.ViewHistory))
     ];
 
     private static ApplicationPageDefinition Page(string code, string name, string module, string route,

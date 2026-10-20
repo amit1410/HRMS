@@ -7,6 +7,7 @@ import { Permissions } from '../../auth/permissions.ts'
 import type { FlashState } from '../../hooks/useFlash.ts'
 import {
   makeAddress,
+  makeContact,
   makeEmployee,
   makeEmployeeDetail,
   makeEmployeeSensitiveDetails,
@@ -20,6 +21,8 @@ import { EmployeeFormPage } from './EmployeeFormPage.tsx'
 const EMPLOYEE_ID = 'e1000000-0000-0000-0000-000000000001'
 const EMPLOYEE_URL = `/api/employees/${EMPLOYEE_ID}`
 const SENSITIVE_URL = `${EMPLOYEE_URL}/sensitive-details`
+const CONTACT_URL = `${EMPLOYEE_URL}/contact`
+const PREVIOUS_EMPLOYMENT_URL = `${EMPLOYEE_URL}/previous-employment`
 const NEW_CREATE_URL = '/api/employees/personal-details'
 const NEW_UPDATE_URL = `/api/employees/${EMPLOYEE_ID}/personal-details`
 const NEW_ROUTE = '/employees/new'
@@ -55,6 +58,12 @@ function sentBody(stub: StubAdapter, method: 'post' | 'put', url: string): unkno
   return stub.callsTo(method, url)[0]?.body
 }
 
+async function fillNewEmployeeRequiredFields(): Promise<void> {
+  fireEvent.change(field('Job status'), { target: { value: 'Probation' } })
+  await userEvent.type(field('Aadhaar Number'), '111122223333')
+  await userEvent.type(field('PAN Number'), 'abcde1234f')
+}
+
 describe('EmployeeFormPage (Personal Details)', () => {
   let stub: StubAdapter
 
@@ -64,6 +73,7 @@ describe('EmployeeFormPage (Personal Details)', () => {
 
     stub.on('get', EMPLOYEE_URL, () => ({ data: ok(makeEmployeeDetail()) }))
     stub.on('get', SENSITIVE_URL, () => ({ data: ok(makeEmployeeSensitiveDetails()) }))
+    stub.on('get', CONTACT_URL, () => ({ data: ok(makeContact()) }))
     stub.on('get', '/api/countries', () => ({ data: ok(paged([])) }))
     stub.on('get', '/api/states', () => ({ data: ok(paged([])) }))
     stub.on('get', '/api/cities', () => ({ data: ok(paged([])) }))
@@ -105,13 +115,14 @@ describe('EmployeeFormPage (Personal Details)', () => {
       await userEvent.type(field('First name'), 'Ravi')
       await userEvent.type(field('Last name'), 'Menon')
       fireEvent.change(field('Date of joining'), { target: { value: '2024-02-01' } })
+      await fillNewEmployeeRequiredFields()
 
       const save = screen.getByRole('button', { name: 'SAVE' })
       expect(save).toBeEnabled()
       await userEvent.click(save)
 
       await waitFor(() => expect(stub.callsTo('post', NEW_CREATE_URL)).toHaveLength(1))
-      expect(await screen.findByText(/Employee created/)).toBeInTheDocument()
+      expect(await screen.findByRole('tab', { name: 'Contact Details' })).toHaveAttribute('aria-selected', 'true')
     })
 
     it('shows New Hire for the employee code and only the Personal Details sections', () => {
@@ -136,7 +147,7 @@ describe('EmployeeFormPage (Personal Details)', () => {
       expect(screen.queryByLabelText(/^Email/)).not.toBeInTheDocument()
     })
 
-    it('creates then flips in place to UPDATE showing the assigned code', async () => {
+    it('creates then advances to Contact Details with the created employee id preserved', async () => {
       stub.on('post', NEW_CREATE_URL, () => ({
         status: 201,
         data: ok(makeEmployeeDetail({ employeeCode: 'WE100' })),
@@ -146,6 +157,7 @@ describe('EmployeeFormPage (Personal Details)', () => {
       await userEvent.type(field('First name'), 'Ravi')
       await userEvent.type(field('Last name'), 'Menon')
       fireEvent.change(field('Date of joining'), { target: { value: '2024-02-01' } })
+      await fillNewEmployeeRequiredFields()
 
       // Create is the only SAVE button on screen at this point.
       await userEvent.click(screen.getByRole('button', { name: 'SAVE' }))
@@ -160,14 +172,9 @@ describe('EmployeeFormPage (Personal Details)', () => {
       expect(body).not.toHaveProperty('departmentId')
       expect(body).not.toHaveProperty('designationId')
 
-      // The form stays on the page: New Hire is replaced by the generated code and SAVE becomes UPDATE,
-      // with an inline success message. No navigation to the list.
-      expect(await screen.findByText('WE100')).toBeInTheDocument()
-      expect(screen.queryByText('New Hire')).not.toBeInTheDocument()
-      expect(screen.getByText('Employee created. Employee code WE100 has been assigned.'))
-      expect(screen.getByRole('button', { name: 'UPDATE' })).toBeInTheDocument()
+      expect(await screen.findByRole('tab', { name: 'Contact Details' })).toHaveAttribute('aria-selected', 'true')
       expect(screen.queryByText(/Landed on \/employees$/)).not.toBeInTheDocument()
-      expect(stub.callsTo('get', '/api/employees')).toHaveLength(0)
+      expect(stub.callsTo('get', CONTACT_URL)).toHaveLength(1)
     })
 
     it('shows the ESIC number when ESIC is applicable', async () => {
@@ -207,6 +214,35 @@ describe('EmployeeFormPage (Personal Details)', () => {
       await userEvent.click(screen.getByRole('button', { name: 'SAVE' }))
 
       expect(await screen.findByText('Date of joining is required.')).toBeInTheDocument()
+      expect(stub.callsTo('post', NEW_CREATE_URL)).toHaveLength(0)
+    })
+
+    it('shows field-level errors for missing Job status, Aadhaar and PAN', async () => {
+      renderForm()
+
+      await userEvent.click(screen.getByRole('button', { name: 'SAVE' }))
+
+      expect(await screen.findByText('Job status is required.')).toBeInTheDocument()
+      expect(screen.getByText('Aadhaar number is required.')).toBeInTheDocument()
+      expect(screen.getByText('PAN number is required.')).toBeInTheDocument()
+      expect(stub.callsTo('post', NEW_CREATE_URL)).toHaveLength(0)
+    })
+
+    it('blocks a new employee with missing or invalid required identity fields and preserves values', async () => {
+      renderForm()
+      await userEvent.type(field('First name'), 'Ravi')
+      await userEvent.type(field('Last name'), 'Menon')
+      fireEvent.change(field('Date of joining'), { target: { value: '2024-02-01' } })
+      fireEvent.change(field('Job status'), { target: { value: 'Probation' } })
+      await userEvent.type(field('Aadhaar Number'), '123')
+      await userEvent.type(field('PAN Number'), 'BAD')
+
+      await userEvent.click(screen.getByRole('button', { name: 'SAVE' }))
+
+      expect(await screen.findByText('Aadhaar number must be exactly 12 digits.')).toBeInTheDocument()
+      expect(await screen.findByText('PAN must be in the format ABCDE1234F (5 letters, 4 digits, 1 letter).')).toBeInTheDocument()
+      expect(field('Aadhaar Number')).toHaveValue('123')
+      expect(field('PAN Number')).toHaveValue('BAD')
       expect(stub.callsTo('post', NEW_CREATE_URL)).toHaveLength(0)
     })
 
@@ -257,9 +293,7 @@ describe('EmployeeFormPage (Personal Details)', () => {
       expect(body).not.toHaveProperty('departmentId')
       expect(body).not.toHaveProperty('email')
 
-      // The form stays on the page with an inline success message instead of navigating away.
-      expect(screen.getByText('Personal details updated successfully for Nadia Farrell.'))
-      expect(screen.getByRole('button', { name: 'UPDATE' })).toBeInTheDocument()
+      expect(await screen.findByRole('tab', { name: 'Contact Details' })).toHaveAttribute('aria-selected', 'true')
       expect(screen.queryByText(/Landed on \/employees$/)).not.toBeInTheDocument()
     })
 
@@ -290,13 +324,19 @@ describe('EmployeeFormPage (Personal Details)', () => {
       renderForm({ route: EDIT_ROUTE })
       await screen.findByDisplayValue('Nadia')
 
-      // Every field the GET returns is pre-filled in the edit form, including the four sensitive ones.
+      // Ordinary employee detail reads expose only masks; the protected endpoint is not called on load.
       expect(field('Religion')).toHaveValue('Religion-A')
       expect(field('Caste')).toHaveValue('Caste-A')
-      expect(field('PF Number')).toHaveValue('PF-TEST-001')
-      expect(field('UAN Number')).toHaveValue('UAN-TEST-001')
+      expect(field('Aadhaar Number')).toHaveValue('XXXX-XXXX-3333')
+      expect(field('PAN Number')).toHaveValue('A****F')
+      expect(stub.callsTo('get', SENSITIVE_URL)).toHaveLength(0)
+
+      await userEvent.click(screen.getAllByRole('button', { name: 'Show' })[0]!)
+      await waitFor(() => expect(stub.callsTo('get', SENSITIVE_URL)).toHaveLength(1))
       expect(field('Aadhaar Number')).toHaveValue('111122223333')
       expect(field('PAN Number')).toHaveValue('ABCDE1234F')
+      expect(field('PF Number')).toHaveValue('PF-TEST-001')
+      expect(field('UAN Number')).toHaveValue('UAN-TEST-001')
 
       // Change all six fields and save.
       await userEvent.clear(field('Religion'))
@@ -365,6 +405,7 @@ describe('EmployeeFormPage (tabbed Add/Edit)', () => {
     stub.on('get', SENSITIVE_URL, () => ({ data: ok(makeEmployeeSensitiveDetails()) }))
     stub.on('get', ADDRESS_URL, () => ({ data: ok([]) }))
     stub.on('get', CONTACT_URL, () => ({ status: 404, data: fail('Contact record not found for this employee.') }))
+    stub.on('get', PREVIOUS_EMPLOYMENT_URL, () => ({ data: ok([]) }))
   })
 
   afterEach(() => {
@@ -392,8 +433,9 @@ describe('EmployeeFormPage (tabbed Add/Edit)', () => {
     await userEvent.type(field('First name'), 'Ravi')
     await userEvent.type(field('Last name'), 'Menon')
     fireEvent.change(field('Date of joining'), { target: { value: '2024-02-01' } })
+    await fillNewEmployeeRequiredFields()
     await userEvent.click(screen.getByRole('button', { name: 'SAVE' }))
-    expect(await screen.findByText('WE100')).toBeInTheDocument()
+    expect(await screen.findByRole('tab', { name: 'Contact Details' })).toHaveAttribute('aria-selected', 'true')
 
     await userEvent.click(screen.getByRole('tab', { name: 'Address Details' }))
     expect(await screen.findByRole('button', { name: 'SAVE' })).toBeInTheDocument()
@@ -413,8 +455,9 @@ describe('EmployeeFormPage (tabbed Add/Edit)', () => {
     await userEvent.type(field('First name'), 'Ravi')
     await userEvent.type(field('Last name'), 'Menon')
     fireEvent.change(field('Date of joining'), { target: { value: '2024-02-01' } })
+    await fillNewEmployeeRequiredFields()
     await userEvent.click(screen.getByRole('button', { name: 'SAVE' }))
-    expect(await screen.findByText('WE100')).toBeInTheDocument()
+    expect(await screen.findByRole('tab', { name: 'Contact Details' })).toHaveAttribute('aria-selected', 'true')
 
     await userEvent.click(screen.getByRole('tab', { name: 'Address Details' }))
     const current = screen.getByRole('group', { name: 'Current Address' })
@@ -434,5 +477,40 @@ describe('EmployeeFormPage (tabbed Add/Edit)', () => {
     await userEvent.click(screen.getByRole('tab', { name: 'Address Details' }))
     const current = screen.getByRole('group', { name: 'Current Address' })
     expect(await within(current).findByLabelText(/^City \/ Town$/)).toHaveValue('Mumbai')
+  })
+
+  it('advances from Previous Employment only after a successful save', async () => {
+    stub.on('post', PREVIOUS_EMPLOYMENT_URL, () => ({
+      status: 201,
+      data: ok({ id: 'p1000000-0000-0000-0000-000000000001', company: 'Acme', designation: null, location: null, employmentType: 'FullTime', tenureFrom: '2020-01-01', tenureTill: '2022-01-01', documentOfProof: null }),
+    }))
+    renderForm({ route: EDIT_ROUTE })
+    await screen.findByDisplayValue('Nadia')
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Previous Employment' }))
+    await userEvent.click(screen.getByRole('button', { name: '+ Add Previous Employment' }))
+    await userEvent.type(field('Company'), 'Acme')
+    fireEvent.change(field('Start date'), { target: { value: '2020-01-01' } })
+    fireEvent.change(field('End date'), { target: { value: '2022-01-01' } })
+    await userEvent.click(screen.getByRole('button', { name: 'Save Previous Employment' }))
+
+    await waitFor(() => expect(stub.callsTo('post', PREVIOUS_EMPLOYMENT_URL)).toHaveLength(1))
+    expect(screen.getByRole('tab', { name: 'Employment' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('keeps Previous Employment active when its save fails', async () => {
+    stub.on('post', PREVIOUS_EMPLOYMENT_URL, () => ({ status: 400, data: fail('Previous employment could not be saved.') }))
+    renderForm({ route: EDIT_ROUTE })
+    await screen.findByDisplayValue('Nadia')
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Previous Employment' }))
+    await userEvent.click(screen.getByRole('button', { name: '+ Add Previous Employment' }))
+    await userEvent.type(field('Company'), 'Acme')
+    fireEvent.change(field('Start date'), { target: { value: '2020-01-01' } })
+    fireEvent.change(field('End date'), { target: { value: '2022-01-01' } })
+    await userEvent.click(screen.getByRole('button', { name: 'Save Previous Employment' }))
+
+    expect(await screen.findByText('Previous employment could not be saved.')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Previous Employment' })).toHaveAttribute('aria-selected', 'true')
   })
 })

@@ -59,7 +59,7 @@ public sealed class EmployeeManagerResolver : IEmployeeManagerResolver
         if (record.ManagerId is not Guid managerId)
         {
             if (asOfDate == businessDate &&
-                (employee.ReportingManagerId is not null || legacySupervisor is not null && supervisorManagerId is not null))
+                (employee.ReportingManagerId is not null || supervisorManagerId is not null))
                 return Result<EmployeeManagerResolution>.Success(new(
                     EmployeeManagerResolutionStatus.LegacyConflict, employeeId, null, null, null,
                     "The effective employment is explicitly unassigned but a legacy manager assignment remains; reconciliation is required."));
@@ -70,7 +70,8 @@ public sealed class EmployeeManagerResolver : IEmployeeManagerResolver
         }
 
         if (asOfDate == businessDate &&
-            (employee.ReportingManagerId != record.ManagerId || legacySupervisor is not null && supervisorManagerId != record.ManagerId))
+            (employee.ReportingManagerId is Guid legacyEmployeeManagerId && legacyEmployeeManagerId != record.ManagerId ||
+             supervisorManagerId is Guid legacySupervisorManagerId && legacySupervisorManagerId != record.ManagerId))
             return Result<EmployeeManagerResolution>.Success(new(
                 EmployeeManagerResolutionStatus.LegacyConflict, employeeId, record.ManagerId, null, null,
                 "The effective employment manager differs from a legacy manager assignment; reconciliation is required."));

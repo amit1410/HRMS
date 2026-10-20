@@ -24,6 +24,7 @@ const api = vi.hoisted(() => ({
 const employeeMatrix = {
   role: api.roles[0],
   grantedPermissions: [Permissions.pageAccess.view],
+  provisionedPermissions: [Permissions.pageAccess.view, Permissions.pageAccess.manage],
   pages: [{
     code: 'page-access',
     name: 'Page Access Management',
@@ -82,6 +83,25 @@ describe('PageAccessManagementPage', () => {
     expect(api.getMatrix).toHaveBeenCalledWith(1)
   })
 
+  it('keeps the page shell renderable while roles are loading', () => {
+    api.listRoles.mockReturnValueOnce(new Promise(() => {}))
+
+    renderAsUser(<PageAccessManagementPage />, { user: makeUser({ permissions: [Permissions.pageAccess.view, Permissions.pageAccess.manage] }) })
+
+    expect(screen.getByRole('heading', { name: 'Page Access Management' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Role' })).toBeInTheDocument()
+    expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument()
+  })
+
+  it('shows an initial API error inline without entering the error boundary', async () => {
+    api.listRoles.mockRejectedValueOnce(new Error('Unable to load roles'))
+
+    renderAsUser(<PageAccessManagementPage />, { user: makeUser({ permissions: [Permissions.pageAccess.view] }) })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load roles')
+    expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument()
+  })
+
   it('changes roles, toggles actions, and saves the expected permission codes', async () => {
     renderAsUser(<PageAccessManagementPage />, { user: makeUser({ permissions: [Permissions.pageAccess.view, Permissions.pageAccess.manage] }) })
     await screen.findByText('/page-access-management')
@@ -96,6 +116,42 @@ describe('PageAccessManagementPage', () => {
     await waitFor(() => expect(api.update).toHaveBeenCalledWith(2, expect.arrayContaining([Permissions.pageAccess.view])))
     expect(api.update.mock.calls[0]![1]).not.toContain(Permissions.pageAccess.manage)
     expect(screen.getByRole('status')).toHaveTextContent('Page access saved.')
+  })
+
+  it('keeps role grants unchanged while provisioning missing permissions and clears warning only on success', async () => {
+    const unsupported = 'WelcomeInvitation.Send'
+    api.getMatrix.mockResolvedValueOnce({ ...employeeMatrix, grantedPermissions: [Permissions.pageAccess.view, unsupported], provisionedPermissions: [Permissions.pageAccess.view] })
+    renderAsUser(<PageAccessManagementPage />, { user: makeUser({ permissions: [Permissions.pageAccess.view, Permissions.pageAccess.manage] }) })
+    await screen.findByText('/page-access-management')
+
+    expect(screen.getByText(/Some selected permissions are missing from this tenant's catalog/i)).toBeInTheDocument()
+    api.update.mockRejectedValueOnce(new Error('One or more permissions are not provisioned in this tenant database.'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }))
+    await waitFor(() => expect(api.update).toHaveBeenCalledWith(1, [Permissions.pageAccess.view, unsupported]))
+    expect(screen.getByText('One or more permissions are not provisioned in this tenant database.')).toBeInTheDocument()
+    expect(screen.getByText(/Some selected permissions are missing/i)).toBeInTheDocument()
+
+    api.update.mockResolvedValueOnce({ ...employeeMatrix, grantedPermissions: [Permissions.pageAccess.view], provisionedPermissions: undefined })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }))
+    await waitFor(() => expect(api.update).toHaveBeenCalledTimes(2))
+    expect(screen.getByText(/Some selected permissions are missing/i)).toBeInTheDocument()
+
+    api.update.mockResolvedValueOnce({ ...employeeMatrix, grantedPermissions: [Permissions.pageAccess.view], provisionedPermissions: [Permissions.pageAccess.view, unsupported] })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Configuration' }))
+    await waitFor(() => expect(screen.queryByText(/Some selected permissions are missing/i)).not.toBeInTheDocument())
+    expect(screen.getByRole('status')).toHaveTextContent('Review your selection, then save again')
+    expect(api.update.mock.calls[2]![1]).toEqual([Permissions.pageAccess.view, unsupported])
+    expect(unsupported).toBe('WelcomeInvitation.Send')
+  })
+
+  it('renders when a matrix response does not include provisioning diagnostics', async () => {
+    api.getMatrix.mockResolvedValueOnce({ ...employeeMatrix, provisionedPermissions: undefined })
+
+    renderAsUser(<PageAccessManagementPage />, { user: makeUser({ permissions: [Permissions.pageAccess.view, Permissions.pageAccess.manage] }) })
+
+    expect(await screen.findByText('/page-access-management')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save Configuration' })).toBeInTheDocument()
+    expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument()
   })
 
   it('previews a selected user with effective roles, permissions, pages, scopes, and manager access', async () => {

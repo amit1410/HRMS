@@ -65,17 +65,46 @@ public class EmployeePersonalDetailsTests
     }
 
     [Fact]
-    public async Task Create_personal_details_without_job_status_keeps_it_null_without_employment_or_status_audit()
+    public async Task Create_personal_details_without_job_status_is_rejected()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();
+        var request = NewRequest();
+        request.JobStatus = null;
 
-        var result = await harness.Employees().CreatePersonalDetailsAsync(NewRequest());
+        var result = await harness.Employees().CreatePersonalDetailsAsync(request);
+
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Contains(result.Errors!, e => e.Field == "jobStatus");
+    }
+
+    [Fact]
+    public async Task Create_personal_details_rejects_invalid_aadhaar_and_pan()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var request = NewRequest();
+        request.AadhaarNumber = "123ABC";
+        request.PanNumber = "BAD";
+
+        var result = await harness.Employees().CreatePersonalDetailsAsync(request);
+
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Contains(result.Errors!, e => e.Field == "aadhaarNumber");
+        Assert.Contains(result.Errors!, e => e.Field == "panNumber");
+    }
+
+    [Fact]
+    public async Task Create_personal_details_normalizes_pan_to_uppercase()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var request = NewRequest();
+        request.PanNumber = "abcde1234f";
+
+        var result = await harness.Employees().CreatePersonalDetailsAsync(request);
 
         Assert.True(result.Succeeded, result.Message);
-        using var unscoped = harness.CreateUnscopedContext();
-        Assert.Null(await unscoped.Employees.IgnoreQueryFilters().Where(e => e.Id == result.Value!.Id).Select(e => e.JobStatus).SingleAsync());
-        Assert.Empty(await unscoped.EmployeeEmployments.IgnoreQueryFilters().Where(e => e.EmployeeId == result.Value.Id).ToListAsync());
-        Assert.Empty(await unscoped.EmployeeAuditLogs.IgnoreQueryFilters().Where(e => e.EmployeeId == result.Value.Id && e.FieldName == "JobStatus").ToListAsync());
+        using var read = harness.CreateUnscopedContext();
+        Assert.Equal("ABCDE1234F", await read.Employees.IgnoreQueryFilters()
+            .Where(e => e.Id == result.Value!.Id).Select(e => e.PanNumber).SingleAsync());
     }
 
     [Fact]
@@ -224,6 +253,95 @@ public class EmployeePersonalDetailsTests
         Assert.Equal(ResultStatus.NotFound, result.Status);
     }
 
+    [Fact]
+    public async Task Update_rejects_when_required_values_are_missing_from_the_effective_record()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var created = (await harness.Employees().CreatePersonalDetailsAsync(NewRequest())).Value!;
+
+        using (var arrange = harness.CreateContext())
+        {
+            var stored = await arrange.Employees.SingleAsync(e => e.Id == created.Id);
+            stored.JobStatus = null;
+            stored.AadhaarNumber = null;
+            stored.PanNumber = null;
+            await arrange.SaveChangesAsync();
+        }
+
+        var request = NewRequest();
+        request.JobStatus = null;
+        request.AadhaarNumber = null;
+        request.PanNumber = null;
+        var result = await harness.Employees().UpdatePersonalDetailsAsync(created.Id, request);
+
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Contains(result.Errors!, e => e.Field == "jobStatus");
+        Assert.Contains(result.Errors!, e => e.Field == "aadhaarNumber");
+        Assert.Contains(result.Errors!, e => e.Field == "panNumber");
+    }
+
+    [Fact]
+    public async Task Update_preserves_valid_identifiers_and_normalizes_new_pan()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var created = (await harness.Employees().CreatePersonalDetailsAsync(NewRequest())).Value!;
+        var request = NewRequest();
+        request.AadhaarNumber = null;
+        request.PanNumber = "abcde1234f";
+
+        var result = await harness.Employees().UpdatePersonalDetailsAsync(created.Id, request);
+
+        Assert.True(result.Succeeded, result.Message);
+        using var read = harness.CreateUnscopedContext();
+        var stored = await read.Employees.IgnoreQueryFilters().SingleAsync(e => e.Id == created.Id);
+        Assert.Equal("111122223333", stored.AadhaarNumber);
+        Assert.Equal("ABCDE1234F", stored.PanNumber);
+    }
+
+    [Fact]
+    public async Task Update_preserves_esic_when_blank_and_persists_a_changed_value()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var create = NewRequest();
+        create.EsicApplicable = true;
+        create.EsicNumber = "ESIC-000123";
+        var created = (await harness.Employees().CreatePersonalDetailsAsync(create)).Value!;
+
+        var unrelated = NewRequest();
+        unrelated.EsicApplicable = true;
+        unrelated.EsicNumber = null;
+        var preserved = await harness.Employees().UpdatePersonalDetailsAsync(created.Id, unrelated);
+        Assert.True(preserved.Succeeded, preserved.Message);
+
+        var changed = NewRequest();
+        changed.EsicApplicable = true;
+        changed.EsicNumber = "ESIC-000456";
+        var updated = await harness.Employees().UpdatePersonalDetailsAsync(created.Id, changed);
+        Assert.True(updated.Succeeded, updated.Message);
+
+        using var read = harness.CreateUnscopedContext();
+        var stored = await read.Employees.IgnoreQueryFilters().SingleAsync(e => e.Id == created.Id);
+        Assert.Equal("ESIC-000456", stored.EsicNumber);
+    }
+
+    [Fact]
+    public async Task Update_accepts_matching_masks_but_never_persists_them()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var created = (await harness.Employees().CreatePersonalDetailsAsync(NewRequest())).Value!;
+        var request = NewRequest();
+        request.AadhaarNumber = "XXXX-XXXX-3333";
+        request.PanNumber = "A****F";
+
+        var result = await harness.Employees().UpdatePersonalDetailsAsync(created.Id, request);
+
+        Assert.True(result.Succeeded, result.Message);
+        using var read = harness.CreateUnscopedContext();
+        var stored = await read.Employees.IgnoreQueryFilters().SingleAsync(e => e.Id == created.Id);
+        Assert.Equal("111122223333", stored.AadhaarNumber);
+        Assert.Equal("ABCDE1234F", stored.PanNumber);
+    }
+
     private static EmployeePersonalDetailsRequest NewRequest() => new()
     {
         Salutation = "Mr.",
@@ -237,6 +355,9 @@ public class EmployeePersonalDetailsTests
         Religion = "Christian",
         Caste = "Igbo",
         Citizenship = "Nigeria",
-        DateOfJoining = Joined
+        DateOfJoining = Joined,
+        JobStatus = "Probation",
+        AadhaarNumber = "111122223333",
+        PanNumber = "ABCDE1234F"
     };
 }

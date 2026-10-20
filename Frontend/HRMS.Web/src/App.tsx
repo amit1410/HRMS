@@ -22,10 +22,11 @@ import { TenantLoginSettingsPage } from './pages/TenantLoginSettingsPage.tsx'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.tsx'
 import { ChangePasswordPage } from './pages/ChangePasswordPage.tsx'
 import { TenantPasswordRecoverySettingsPage } from './pages/TenantPasswordRecoverySettingsPage.tsx'
+import { ConfigurationCenterPage } from './pages/ConfigurationCenterPage.tsx'
+import { WelcomeInvitationsPage } from './pages/communication/WelcomeInvitationsPage.tsx'
 import { isApexHost } from './lib/isApexHost.ts'
 import { isPlatformHost } from './lib/isPlatformHost.ts'
 import { MasterManagementPage } from './pages/masters/MasterManagementPage.tsx'
-import { BankMasterPage } from './pages/masters/BankMasterPage.tsx'
 import { AccountEmployeeLinksPage } from './pages/administration/AccountEmployeeLinksPage.tsx'
 import { RoleManagementPage } from './pages/administration/RoleManagementPage.tsx'
 import { PageAccessManagementPage } from './pages/administration/PageAccessManagementPage.tsx'
@@ -177,6 +178,7 @@ function TenantApplication() {
                 <Route element={<AppLayout />}>
                   <Route index element={<Navigate to="/dashboard" replace />} />
                   <Route path="dashboard" element={<DashboardPage />} />
+                  <Route path="configuration" element={<ConfigurationCenterPage />} />
                   <Route path="my-profile" element={<MyProfilePage />} />
                   <Route path="change-password" element={<ChangePasswordPage />} />
                   <Route path="configuration/login-settings" element={<RequirePermission permission={Permissions.user.edit}><TenantLoginSettingsPage /></RequirePermission>} />
@@ -233,7 +235,6 @@ function TenantApplication() {
                   <Route path="payroll/reports" element={<RequirePermission permission={Permissions.payroll.analyticsView}><PayrollReportsPage /></RequirePermission>} />
                   <Route path="payroll/my-adjustments" element={<RequirePermission permission={Permissions.payroll.adjustmentsView}><RequireEmployeeIdentity><MyPayrollAdjustmentsPage /></RequireEmployeeIdentity></RequirePermission>} />
                   <Route path="payroll/my-tax-declarations" element={<RequirePermission permission={Permissions.payroll.taxDeclarationViewOwn}><RequireEmployeeIdentity><MyTaxDeclarationsPage /></RequireEmployeeIdentity></RequirePermission>} />
-                  <Route path="masters/banks" element={<RequirePermission permission={Permissions.bankMaster.view}><BankMasterPage /></RequirePermission>} />
                   <Route path="masters/:kind" element={<MasterRouteGuard />} />
                   <Route
                     path="configuration/employee-code"
@@ -243,6 +244,7 @@ function TenantApplication() {
                       </RequirePermission>
                     }
                   />
+                  <Route path="communication/welcome-invitations" element={<RequirePermission permission={Permissions.welcomeInvitation.view}><WelcomeInvitationsPage /></RequirePermission>} />
                   <Route path="leave-management/types" element={<RequirePermission permission={Permissions.leave.typeManage}><LeaveTypesPage /></RequirePermission>} />
                   <Route path="leave-management/working-day-calendar" element={<RequirePermission permission={Permissions.leave.policyView}><LeaveWorkingDayCalendarPage /></RequirePermission>} />
                   <Route path="leave-management" element={<RequirePermission anyOf={[Permissions.leave.requestViewOwn, Permissions.leave.dashboardViewAll, Permissions.leave.approve]}><LeaveDashboardPage /></RequirePermission>} />
@@ -352,7 +354,9 @@ function LegacyMasterRedirect({ kind }: { kind: 'departments' | 'designations' }
 
 function MasterRouteGuard() {
   const { kind } = useParams()
-  const permission = kind === 'departments'
+  const permission = kind === 'banks'
+    ? Permissions.bankMaster.view
+    : kind === 'departments'
     ? Permissions.department.view
     : kind === 'designations'
       ? Permissions.designation.view

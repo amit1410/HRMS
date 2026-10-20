@@ -10,20 +10,21 @@ public sealed record PlatformPermissionRequirement(string Permission) : IAuthori
 
 public sealed class PlatformPermissionHandler : AuthorizationHandler<PlatformPermissionRequirement>
 {
-    private readonly IHrmsCatalogDbContext _catalog;
+    private readonly IServiceProvider _services;
 
-    public PlatformPermissionHandler(IHrmsCatalogDbContext catalog) => _catalog = catalog;
+    public PlatformPermissionHandler(IServiceProvider services) => _services = services;
 
     protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, PlatformPermissionRequirement requirement)
     {
         if (!Guid.TryParse(context.User.FindFirstValue("sub"), out var userId) ||
             context.User.FindFirstValue("auth_scope") != "platform") return;
-        var user = await _catalog.PlatformUsers.AsNoTracking().SingleOrDefaultAsync(x => x.Id == userId && x.IsActive);
+        var catalog = _services.GetRequiredService<IHrmsCatalogDbContext>();
+        var user = await catalog.PlatformUsers.AsNoTracking().SingleOrDefaultAsync(x => x.Id == userId && x.IsActive);
         if (user is null) return;
         if (!int.TryParse(context.User.FindFirstValue("security_revision"), out var revision) || revision != user.SecurityRevision) return;
-        var allowed = await (from ur in _catalog.PlatformUserRoles
-                             join rp in _catalog.PlatformRolePermissions on ur.PlatformRoleId equals rp.PlatformRoleId
-                             join p in _catalog.PlatformPermissions on rp.PlatformPermissionId equals p.Id
+        var allowed = await (from ur in catalog.PlatformUserRoles
+                             join rp in catalog.PlatformRolePermissions on ur.PlatformRoleId equals rp.PlatformRoleId
+                             join p in catalog.PlatformPermissions on rp.PlatformPermissionId equals p.Id
                              where ur.PlatformUserId == userId && p.Name == requirement.Permission
                              select p.Id).AnyAsync();
         if (allowed) context.Succeed(requirement);

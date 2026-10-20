@@ -15,7 +15,6 @@ import {
   TITLES,
   type BloodGroup,
   type Employee,
-  type EmployeeSensitiveDetails,
   type Gender,
   type MaritalStatus,
 } from '../../api/types.ts'
@@ -56,6 +55,7 @@ interface PersonalDetailsFormProps {
    * editing an existing employee.
    */
   onCreated?: (id: string) => void
+  onSaved?: () => void | Promise<void>
 }
 
 /**
@@ -65,7 +65,7 @@ interface PersonalDetailsFormProps {
  * independent and has its own SAVE/UPDATE button. After a create the form stays put, replaces "New Hire"
  * with the backend-generated code and flips to edit mode, so the user can keep working on the same record.
  */
-export function PersonalDetailsForm({ employeeId, onCreated }: PersonalDetailsFormProps) {
+export function PersonalDetailsForm({ employeeId, onCreated, onSaved }: PersonalDetailsFormProps) {
   const { can } = useAuth()
   const canViewSensitive = can(Permissions.employeeSensitive.view)
   const canEditSensitive = can(Permissions.employeeSensitive.edit)
@@ -77,31 +77,68 @@ export function PersonalDetailsForm({ employeeId, onCreated }: PersonalDetailsFo
   const [error, setError] = useState<ApiError | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [revealingSensitive, setRevealingSensitive] = useState(false)
+  const [sensitiveRevealed, setSensitiveRevealed] = useState(false)
+  const [maskedAadhaar, setMaskedAadhaar] = useState<string | null>(null)
+  const [maskedPan, setMaskedPan] = useState<string | null>(null)
+  const [maskedEsic, setMaskedEsic] = useState<string | null>(null)
   const initialSnapshot = useRef(JSON.stringify(emptyPersonalDetailsValues()))
 
   // On a direct edit route the record is fetched; there is no fetch on create (the create response is used).
-  const query = useApiQuery<{ employee: Employee; sensitive: EmployeeSensitiveDetails | null } | null>(
+  const query = useApiQuery<{ employee: Employee } | null>(
     async (signal) => {
       if (!employeeId) return null
       const employee = await getEmployee(employeeId, signal)
-      const sensitive = canViewSensitive
-        ? await getEmployeeSensitiveDetails(employeeId, signal)
-        : null
-      return { employee, sensitive }
+      return { employee }
     },
-    [employeeId, canViewSensitive],
+    [employeeId],
   )
 
   // Populate the form from the fetched record once it arrives. Only runs for a direct edit; a create
   // populates from its own response and never reaches here.
   useEffect(() => {
     if (employeeId && query.data) {
-      const loaded = toPersonalDetailsValues(query.data.employee, query.data.sensitive)
+      const loaded = toPersonalDetailsValues(query.data.employee)
       setValues(loaded)
       initialSnapshot.current = JSON.stringify(loaded)
       setEmployeeCode(query.data.employee.employeeCode)
+      setMaskedAadhaar(query.data.employee.maskedAadhaarNumber ?? null)
+      setMaskedPan(query.data.employee.maskedPanNumber ?? null)
+      setMaskedEsic(query.data.employee.maskedEsicNumber ?? null)
+      setSensitiveRevealed(false)
     }
   }, [employeeId, query.data])
+
+  async function revealSensitive(): Promise<void> {
+    if (!currentId || !canViewSensitive || sensitiveRevealed || revealingSensitive) return
+    setRevealingSensitive(true)
+    setError(null)
+    try {
+      const sensitive = await getEmployeeSensitiveDetails(currentId)
+      setValues((previous) => {
+        const next = {
+          ...previous,
+          aadhaarNumber: sensitive.aadhaarNumber ?? '',
+          panNumber: sensitive.panNumber ?? '',
+          uanNumber: sensitive.uanNumber ?? previous.uanNumber,
+          pfNumber: sensitive.pfNumber ?? previous.pfNumber,
+          esicNumber: sensitive.esicNumber ?? previous.esicNumber,
+          mediclaimNumber: sensitive.mediclaimNumber ?? previous.mediclaimNumber,
+        }
+        initialSnapshot.current = JSON.stringify(next)
+        return next
+      })
+      setSensitiveRevealed(true)
+    } catch (caught) {
+      setError(toApiError(caught))
+    } finally {
+      setRevealingSensitive(false)
+    }
+  }
+
+  function hideSensitive(): void {
+    setSensitiveRevealed(false)
+  }
 
   const isEdit = currentId !== undefined
   const displayedCode = isEdit ? employeeCode : undefined
@@ -130,7 +167,7 @@ export function PersonalDetailsForm({ employeeId, onCreated }: PersonalDetailsFo
     event.preventDefault()
     if (saving) return
 
-    const requiredErrors = validateRequiredPersonalDetails(values)
+    const requiredErrors = validateRequiredPersonalDetails(values, !isEdit)
     if (Object.keys(requiredErrors).length > 0) {
       setError(new ApiError('Please fix the highlighted fields.', { fieldErrors: requiredErrors }))
       setSuccess(null)
@@ -148,8 +185,13 @@ export function PersonalDetailsForm({ employeeId, onCreated }: PersonalDetailsFo
         const updated = await updatePersonalDetails(currentId!, body)
         const loaded = toPersonalDetailsValues(updated, body)
         setValues(loaded)
+        setMaskedAadhaar(updated.maskedAadhaarNumber ?? null)
+        setMaskedPan(updated.maskedPanNumber ?? null)
+        setMaskedEsic(updated.maskedEsicNumber ?? null)
+        setSensitiveRevealed(false)
         initialSnapshot.current = JSON.stringify(loaded)
         setSuccess(`Personal details updated successfully for ${updated.fullName}.`)
+        await onSaved?.()
       } else {
         const created = await createPersonalDetails(body)
         // Create → the same form becomes an edit form: code replaces "New Hire", SAVE becomes UPDATE.
@@ -158,10 +200,15 @@ export function PersonalDetailsForm({ employeeId, onCreated }: PersonalDetailsFo
         setEmployeeCode(created.employeeCode)
         const loaded = toPersonalDetailsValues(created, body)
         setValues(loaded)
+        setMaskedAadhaar(created.maskedAadhaarNumber ?? null)
+        setMaskedPan(created.maskedPanNumber ?? null)
+        setMaskedEsic(created.maskedEsicNumber ?? null)
+        setSensitiveRevealed(false)
         initialSnapshot.current = JSON.stringify(loaded)
         setSuccess(
           `Employee created. Employee code ${created.employeeCode} has been assigned.`,
         )
+        await onSaved?.()
       }
     } catch (caught) {
       setError(toApiError(caught))
@@ -371,22 +418,34 @@ export function PersonalDetailsForm({ employeeId, onCreated }: PersonalDetailsFo
             <TextField
               id="aadhaarNumber"
               label="Aadhaar Number"
-              value={values.aadhaarNumber}
+              value={currentId && !sensitiveRevealed ? maskedAadhaar ?? '' : values.aadhaarNumber}
               onChange={(value) => set('aadhaarNumber', value)}
               maxLength={12}
+              required
               error={fieldError('aadhaarNumber')}
-              disabled={!canEditSensitive}
-              hint="12 digits. Optional. Left blank when already recorded."
+              disabled={(!canEditSensitive && isEdit) || (!!currentId && !!maskedAadhaar && !sensitiveRevealed)}
+              action={currentId && canViewSensitive && maskedAadhaar ? (
+                <button type="button" className="button button-secondary field-action" onClick={sensitiveRevealed ? hideSensitive : revealSensitive} disabled={revealingSensitive}>
+                  {revealingSensitive ? 'Loading…' : sensitiveRevealed ? 'Hide' : 'Show'}
+                </button>
+              ) : undefined}
+              hint={isEdit ? (maskedAadhaar ? 'Masked by default. Reveal to view or update.' : 'No Aadhaar number is stored.') : 'Exactly 12 digits.'}
             />
             <TextField
               id="panNumber"
               label="PAN Number"
-              value={values.panNumber}
+              value={currentId && !sensitiveRevealed ? maskedPan ?? '' : values.panNumber}
               onChange={(value) => set('panNumber', value.toUpperCase())}
               maxLength={10}
+              required
               error={fieldError('panNumber')}
-              disabled={!canEditSensitive}
-              hint="Format: ABCDE1234F. Optional."
+              disabled={(!canEditSensitive && isEdit) || (!!currentId && !!maskedPan && !sensitiveRevealed)}
+              action={currentId && canViewSensitive && maskedPan ? (
+                <button type="button" className="button button-secondary field-action" onClick={sensitiveRevealed ? hideSensitive : revealSensitive} disabled={revealingSensitive}>
+                  {revealingSensitive ? 'Loading…' : sensitiveRevealed ? 'Hide' : 'Show'}
+                </button>
+              ) : undefined}
+              hint={isEdit ? (maskedPan ? 'Masked by default. Reveal to view or update.' : 'No PAN number is stored.') : 'Format: ABCDE1234F.'}
             />
             <TextField
               id="uanNumber"
@@ -432,13 +491,18 @@ export function PersonalDetailsForm({ employeeId, onCreated }: PersonalDetailsFo
               <TextField
                 id="esicNumber"
                 label="ESIC Number"
-                value={values.esicNumber}
+                value={currentId && !sensitiveRevealed ? maskedEsic ?? '' : values.esicNumber}
                 onChange={(value) => set('esicNumber', value)}
                 maxLength={50}
                 required
                 error={fieldError('esicNumber')}
-                disabled={!canEditSensitive}
-                hint="Required when ESIC is applicable."
+                disabled={!canEditSensitive || (!!currentId && !!maskedEsic && !sensitiveRevealed)}
+                action={currentId && canViewSensitive && maskedEsic ? (
+                  <button type="button" className="button button-secondary field-action" onClick={sensitiveRevealed ? hideSensitive : revealSensitive} disabled={revealingSensitive}>
+                    {revealingSensitive ? 'Loading…' : sensitiveRevealed ? 'Hide' : 'Show'}
+                  </button>
+                ) : undefined}
+                hint={currentId ? (maskedEsic ? 'Masked by default. Reveal to view or update.' : 'No ESIC number is stored.') : 'Required when ESIC is applicable.'}
               />
             </div>
           )}
@@ -485,7 +549,9 @@ export function PersonalDetailsForm({ employeeId, onCreated }: PersonalDetailsFo
               value={values.jobStatus}
               onChange={(value) => set('jobStatus', value)}
               options={[{ value: '', label: '— Select —' }, ...JOB_STATUSES.map((s) => ({ value: s, label: s }))]}
-              hint="Optional."
+              required
+              error={fieldError('jobStatus')}
+              hint={isEdit ? 'Leave blank to keep the stored status.' : 'Required for a new employee.'}
             />
           </div>
         </fieldset>

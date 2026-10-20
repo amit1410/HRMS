@@ -32,6 +32,7 @@ import { loadBankOptions } from './referenceOptions.ts'
 interface BankDetailsFormProps {
   /** The employee whose bank details are being viewed/edited. */
   employeeId: string
+  onSaved?: () => void | Promise<void>
 }
 
 interface FormValues {
@@ -99,7 +100,7 @@ function toRequest(values: FormValues): EmployeeBankDetailRequest {
  * add / edit / update / delete. Delete is a soft delete — the record is deactivated, never removed —
  * and the bank itself is picked from the tenant-scoped bank master, never typed in.
  */
-export function BankDetailsForm({ employeeId }: BankDetailsFormProps) {
+export function BankDetailsForm({ employeeId, onSaved }: BankDetailsFormProps) {
   const { can } = useAuth()
   const canEditSensitive = can(Permissions.employee.edit) && can(Permissions.employeeSensitive.edit)
   const canViewSensitive = can(Permissions.employeeSensitive.view)
@@ -189,6 +190,7 @@ export function BankDetailsForm({ employeeId }: BankDetailsFormProps) {
       }
       setEditor(null)
       await records.refetch()
+      await onSaved?.()
     } catch (caught) {
       setError(toApiError(caught))
     } finally {

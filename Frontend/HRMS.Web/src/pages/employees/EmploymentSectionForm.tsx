@@ -4,7 +4,7 @@ import {
   getEmploymentHistory,
 } from '../../api/employeeSubsections.ts'
 import { getEmployeeCodeConfiguration } from '../../api/employeeCodeConfiguration.ts'
-import { toApiError, hasFieldErrors, type ApiError } from '../../api/errors.ts'
+import { ApiError, toApiError, hasFieldErrors } from '../../api/errors.ts'
 import type {
   EmployeeEmploymentHistory,
   EmploymentChangeRequest,
@@ -12,9 +12,11 @@ import type {
   EmploymentType,
   EmployeeStatus,
 } from '../../api/types.ts'
-import { EMPLOYEE_STATUSES, EMPLOYMENT_CHANGE_REASONS, EMPLOYMENT_TYPES } from '../../api/types.ts'
+import { Permissions } from '../../auth/permissions.ts'
+import { useAuth } from '../../auth/useAuth.ts'
+import { EMPLOYMENT_CHANGE_REASONS } from '../../api/types.ts'
 import { Card } from '../../components/Card.tsx'
-import { SelectField, SupervisorField, TextField, type SelectOption } from '../../components/fields.tsx'
+import { SelectField, TextField, type SelectOption } from '../../components/fields.tsx'
 import { ErrorState } from '../../components/ErrorState.tsx'
 import { Notice } from '../../components/Notice.tsx'
 import { Spinner } from '../../components/Spinner.tsx'
@@ -22,7 +24,6 @@ import { useApiQuery } from '../../hooks/useApiQuery.ts'
 import { formatDate } from '../../lib/format.ts'
 import {
   loadCountryOptions,
-  loadCostCenterOptions,
   loadDepartmentOptions,
   loadDesignationOptions,
   loadEmployeeTypeOptions,
@@ -51,7 +52,6 @@ interface FormValues {
   employeeCode: string
   effectiveFrom: string
   changeReason: EmploymentChangeReason
-  managerId: string
   holdingCompanyId: string
   lobId: string
   organisationId: string
@@ -79,7 +79,6 @@ const EMPTY: FormValues = {
   employeeCode: '',
   effectiveFrom: '',
   changeReason: 'NewJoining',
-  managerId: '',
   holdingCompanyId: '',
   lobId: '',
   organisationId: '',
@@ -117,7 +116,6 @@ function toRequest(values: FormValues): EmploymentChangeRequest {
     employeeCode: values.employeeCode || null,
     effectiveFrom: values.effectiveFrom,
     changeReason: values.changeReason,
-    managerId: values.managerId || null,
     holdingCompanyId: values.holdingCompanyId || null,
     lobId: values.lobId || null,
     organisationId: values.organisationId || null,
@@ -147,7 +145,6 @@ function formValuesFromHistory(record: EmployeeEmploymentHistory, employeeCode =
     employeeCode,
     effectiveFrom: record.effectiveFrom,
     changeReason: record.changeReason,
-    managerId: record.managerId ?? '',
     holdingCompanyId: record.holdingCompanyId ?? '',
     lobId: record.lobId ?? '',
     organisationId: record.organisationId ?? '',
@@ -182,10 +179,12 @@ function formValuesFromHistory(record: EmployeeEmploymentHistory, employeeCode =
  * master, never typed in.
  */
 export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }: EmploymentSectionFormProps) {
+  const { can } = useAuth()
   const [values, setValues] = useState<FormValues>(() => ({ ...EMPTY, employeeCode }))
   const [error, setError] = useState<ApiError | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [step, setStep] = useState(0)
   const hydratedEmployeeId = useRef<string | null>(null)
 
   const history = useApiQuery((signal) => getEmploymentHistory(employeeId, signal), [employeeId])
@@ -246,13 +245,27 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
   const employeeTypes = useApiQuery((signal) => loadEmployeeTypeOptions({ activeOnly: true }, signal), [])
   const countries = useApiQuery((signal) => loadCountryOptions({ activeOnly: true }, signal), [])
   const workLocations = useApiQuery((signal) => loadWorkLocationOptions({ activeOnly: true }, signal), [])
-  const costCenters = useApiQuery((signal) => loadCostCenterOptions({ activeOnly: true }, signal), [])
   const changeReasons = useApiQuery(
     (signal) => loadPositionChangeReasonOptions({ activeOnly: true }, signal),
     [],
   )
 
   const fieldError = (field: string) => error?.fieldErrors[field]
+  const stepLabels = ['Employment Details', 'Organization Structure', 'Position Details', 'Location Details']
+  const stepFields: (keyof FormValues)[][] = [['effectiveFrom', 'employeeCode'], [], [], []]
+
+  function validateStep(nextStep: number): void {
+    const missing = (stepFields[step] ?? []).filter((field) => {
+      if (field === 'employeeCode' && !(manualCode && !employeeCode)) return false
+      return !String(values[field] ?? '').trim()
+    })
+    if (missing.length) {
+      setError(new ApiError('Complete the required fields before continuing.', { status: 400, fieldErrors: Object.fromEntries(missing.map((field) => [field, 'This field is required.'])) }))
+      return
+    }
+    setError(null)
+    setStep(nextStep)
+  }
 
   function update<F extends keyof FormValues>(field: F, value: FormValues[F]): void {
     setError(null)
@@ -268,6 +281,7 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
 
   function reset(): void {
     setValues(EMPTY)
+    setStep(0)
     setError(null)
     setSuccess(null)
   }
@@ -280,14 +294,20 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
     setError(null)
     setSuccess(null)
     try {
-      if (import.meta.env.DEV) console.debug('EMPLOYMENT SAVE CLICKED', { employeeId, effectiveDate: values.effectiveFrom, changeReason: values.positionChangeReasonId, managerId: values.managerId, holdingCompanyId: values.holdingCompanyId, lobId: values.lobId, organisationId: values.organisationId, departmentId: values.departmentId, designationId: values.designationId })
+      if (import.meta.env.DEV) console.debug('EMPLOYMENT SAVE CLICKED', { employeeId, effectiveDate: values.effectiveFrom, changeReason: values.positionChangeReasonId, holdingCompanyId: values.holdingCompanyId, lobId: values.lobId, organisationId: values.organisationId, departmentId: values.departmentId, designationId: values.designationId })
       const saved = await createEmploymentChange(employeeId, toRequest(values))
       setValues((previous) => formValuesFromHistory(saved, employeeCode || previous.employeeCode))
       setSuccess('Employment change recorded.')
       await history.refetch()
       await onSaved?.()
     } catch (caught) {
-      setError(toApiError(caught))
+      const apiError = toApiError(caught)
+      const firstField = Object.keys(apiError.fieldErrors)[0] as keyof FormValues | undefined
+      if (firstField) {
+        const fieldStep = stepFields.findIndex((fields) => fields.includes(firstField))
+        if (fieldStep >= 0) setStep(fieldStep)
+      }
+      setError(apiError)
     } finally {
       setSaving(false)
     }
@@ -320,13 +340,14 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
       <div className="employment-layout">
         <div className="employment-overview">
           <Card className="employment-card current-employment-card">
-            <div className="employment-card-heading"><div><p className="eyebrow">Current Employment</p><h2>{display(current?.designationName)}</h2></div><span className="employment-status-badge current">CURRENT</span></div>
+            <div className="employment-card-heading"><div><p className="eyebrow">Current Employment</p><h2>{display(current?.designationName)}</h2></div>{current && <span className="employment-status-badge current">{current.employmentStatus}</span>}</div>
             {current ? <div className="employment-summary-grid">
               <Summary label="Department" value={current.departmentName} />
-              <Summary label="Grade" value={current.gradeName} />
-              <Summary label="Work Location" value={current.workLocationName} />
-              <Summary label="Reporting Manager" value={managerDisplay(current)} />
+              <Summary label="Location" value={current.workLocationName || current.countryLocationName} />
               <Summary label="Effective From" value={formatDate(current.effectiveFrom)} />
+              <Summary label="Employment Status" value={current.employmentStatus} />
+              <Summary label="Grade" value={current.gradeName} />
+              <Summary label="Reporting Manager" value={managerDisplay(current)} />
               <Summary label="Change Reason" value={current.positionChangeReasonName} />
               <Summary label="Employee Type" value={current.employeeTypeName} />
               <Summary label="Cost Center" value={current.costCenterName} />
@@ -351,9 +372,13 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
 
         <Card className="employment-card change-panel">
           <div className="employment-card-heading"><div><p className="eyebrow">Employment</p><h2>Add Employment Change</h2></div></div>
+            {!can(Permissions.employmentHistory.change) ? <Notice tone="info">You do not have permission to add employment changes.</Notice> : <>
             {sameDayCorrection && <Notice tone="info">This will create a new correction revision for the employment record effective {formatDate(values.effectiveFrom)}.</Notice>}
+            <div className="employment-stepper" aria-label="Employment change steps">
+              {stepLabels.map((label, index) => <button key={label} type="button" className={step === index ? 'is-active' : ''} aria-current={step === index ? 'step' : undefined} onClick={() => index <= step && setStep(index)}>{index + 1}<span>{label}</span></button>)}
+            </div>
             <form className="employment-editor" onSubmit={saveEmploymentChange} noValidate>
-              <EmploymentAccordion title="1. Employment Details" defaultOpen>
+              <div hidden={step !== 0}><EmploymentAccordion title="1. Employment Details" defaultOpen>
                 <div className="form-grid">
                   {manualCode && !employeeCode && (
                     <TextField
@@ -387,27 +412,16 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
                   />
                   <SelectField
                     id="positionChangeReasonId"
-                    label="Change reason"
+                    label="Change Reason (Optional)"
                     value={values.positionChangeReasonId}
                     onChange={(value) => update('positionChangeReasonId', value)}
                     options={asOptions(changeReasons.data?.options ?? [], values.positionChangeReasonId)}
                     placeholder="— Select a reason —"
-                    required
                     error={fieldError('positionChangeReasonId')}
                   />
-                  <SupervisorField
-                    id="managerId"
-                    label="Direct manager"
-                    employeeId={employeeId}
-                    supervisorType="L1"
-                    value={values.managerId}
-                    onChange={(managerId) => update('managerId', managerId)}
-                    hint="Optional. Clear this field to explicitly leave the employee unassigned."
-                    error={fieldError('managerId')}
-                  />
                 </div>
-              </EmploymentAccordion>
-              <EmploymentAccordion title="2. Organization Structure">
+              </EmploymentAccordion></div>
+              <div hidden={step !== 1}><EmploymentAccordion title="2. Organization Structure" defaultOpen>
                 <div className="form-grid">
                   <SelectField
                     id="holdingCompanyId"
@@ -496,8 +510,8 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
                     error={fieldError('subFunctionId')}
                   />
                 </div>
-              </EmploymentAccordion>
-              <EmploymentAccordion title="3. Position Details">
+              </EmploymentAccordion></div>
+              <div hidden={step !== 2}><EmploymentAccordion title="3. Position Details" defaultOpen>
                 <div className="form-grid">
                   <SelectField
                     id="gradeId"
@@ -527,8 +541,8 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
                     error={fieldError('employeeTypeId')}
                   />
                 </div>
-              </EmploymentAccordion>
-              <EmploymentAccordion title="4. Location Details">
+              </EmploymentAccordion></div>
+              <div hidden={step !== 3}><EmploymentAccordion title="4. Location Details" defaultOpen>
                 <div className="form-grid">
                   <SelectField
                     id="countryLocationId"
@@ -550,73 +564,16 @@ export function EmploymentSectionForm({ employeeId, employeeCode = '', onSaved }
                     error={fieldError('workLocationId')}
                   />
                 </div>
-              </EmploymentAccordion>
-              <EmploymentAccordion title="5. Additional Details">
-                <div className="form-grid">
-                  <SelectField
-                    id="costCenterId"
-                    label="Cost center"
-                    value={values.costCenterId}
-                    onChange={(value) => update('costCenterId', value)}
-                    options={asOptions(costCenters.data?.options ?? [], values.costCenterId)}
-                    placeholder="— Select —"
-                    error={fieldError('costCenterId')}
-                  />
-                  <SelectField
-                    id="employmentType"
-                    label="Employment type"
-                    value={values.employmentType}
-                    onChange={(value) => update('employmentType', value as EmploymentType)}
-                    options={EMPLOYMENT_TYPES.map((t) => ({ value: t, label: t }))}
-                    error={fieldError('employmentType')}
-                  />
-                  <SelectField
-                    id="employmentStatus"
-                    label="Employment status"
-                    value={values.employmentStatus}
-                    onChange={(value) => update('employmentStatus', value as EmployeeStatus)}
-                    options={EMPLOYEE_STATUSES.map((s) => ({ value: s, label: s }))}
-                    error={fieldError('employmentStatus')}
-                  />
-                  <TextField
-                    id="businessRole"
-                    label="Business role"
-                    value={values.businessRole}
-                    onChange={(value) => update('businessRole', value)}
-                    maxLength={100}
-                    hint="Optional."
-                    error={fieldError('businessRole')}
-                  />
-                  <TextField
-                    id="gradeLevel"
-                    label="Grade level"
-                    value={values.gradeLevel}
-                    onChange={(value) => update('gradeLevel', value)}
-                    maxLength={50}
-                    hint="Optional."
-                    error={fieldError('gradeLevel')}
-                  />
-                  <TextField
-                    id="careerGroup"
-                    label="Career group"
-                    value={values.careerGroup}
-                    onChange={(value) => update('careerGroup', value)}
-                    maxLength={100}
-                    hint="Optional."
-                    error={fieldError('careerGroup')}
-                  />
-                </div>
-              </EmploymentAccordion>
-
+              </EmploymentAccordion></div>
                 <div className="form-actions">
-                <button type="submit" className="button button-primary" aria-label="ADD EMPLOYMENT" disabled={saving}>
-                  {saving ? <Spinner size={14} label="Saving…" /> : 'Save Employment Change'}
-                </button>
+                {step > 0 && <button type="button" className="button button-secondary" onClick={() => setStep((currentStep) => currentStep - 1)} disabled={saving}>Back</button>}
+                {step < 3 ? <button type="button" className="button button-primary" onClick={() => validateStep(step + 1)}>Next</button> : <button type="submit" className="button button-primary" aria-label="ADD EMPLOYMENT" disabled={saving}>{saving ? <Spinner size={14} label="Saving…" /> : 'Save Employment Change'}</button>}
                 <button type="button" className="button button-secondary" onClick={reset} disabled={saving}>
                   Reset
                 </button>
               </div>
             </form>
+            </>}
         </Card>
       </div>
       <Notice tone="info">Employment history is maintained as an audit trail and cannot be deleted.</Notice>

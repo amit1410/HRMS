@@ -247,7 +247,7 @@ public class EmployeeExportTests
 
         // Code, Salutation, names, email, then two empty fields for phone and date of birth; defaults for enums; no manager and no address.
         Assert.Equal(
-            "EMP-777,,Sam,,Okafor,sam.okafor@demo01.com,,,Other,Unspecified,Unspecified,2023-05-01,,,Active,,,Engineering,Software Engineer,,,,,,,,False,False,,,False,,,",
+            "EMP-777,,Sam,,Okafor,sam.okafor@demo01.com,,,Other,Unspecified,Unspecified,2023-05-01,,,Active,Probation,,Engineering,Software Engineer,,XXXX-XXXX-3333,A****F,,,,,False,False,,,False,,,",
             line);
     }
 
@@ -338,7 +338,10 @@ public class EmployeeExportTests
         DateOfJoining = new DateOnly(2023, 5, 1),
         Status = EmployeeStatus.Active,
         DepartmentId = OrganizationTestHarness.DepartmentId(Demo01, "ENG"),
-        DesignationId = OrganizationTestHarness.DesignationId(Demo01, "SE")
+        DesignationId = OrganizationTestHarness.DesignationId(Demo01, "SE"),
+        JobStatus = "Probation",
+        AadhaarNumber = "111122223333",
+        PanNumber = "ABCDE1234F"
     };
 
     /// <summary>The document with its byte-order mark removed, after asserting the mark is there.</summary>

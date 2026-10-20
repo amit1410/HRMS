@@ -10,11 +10,13 @@ import { ActiveBadge } from '../../components/Badge.tsx'
 import { useAuth } from '../../auth/useAuth.ts'
 import { Permissions } from '../../auth/permissions.ts'
 import { MasterBulkImport } from '../../components/MasterBulkImport.tsx'
+import { BankMasterPage } from './BankMasterPage.tsx'
 
 type ParentDefinition = { label: string; required: boolean; load: () => Promise<{ id: string; code: string; name: string }[]> }
 type MasterDefinition = { title: string; singular: string; subtitle: string; nameLabel: string; parent?: ParentDefinition }
 
 const definitions: Record<string, MasterDefinition> = {
+  banks: { title: 'Banks', singular: 'bank', subtitle: 'Manage banks available for employee bank accounts and payroll.', nameLabel: 'Bank name' },
   'holding-companies': { title: 'Holding Companies', singular: 'holding company', subtitle: 'Manage the companies that own or group your organization.', nameLabel: 'Company name' },
   'lines-of-business': { title: 'LOB', singular: 'LOB', subtitle: 'Manage lines of business used across the workspace.', nameLabel: 'LOB name', parent: { label: 'Holding Company', required: false, load: async () => listHoldingCompanies({ isActive: true }) } },
   organisations: { title: 'Organizations', singular: 'organization', subtitle: 'Manage the organizations available to your people.', nameLabel: 'Organization name' },
@@ -36,7 +38,7 @@ const definitions: Record<string, MasterDefinition> = {
 const groups: { title: string; items: [string, string][] }[] = [
   { title: 'Organization', items: [['holding-companies', 'Holding Companies'], ['lines-of-business', 'LOB'], ['organisations', 'Organizations'], ['departments', 'Departments'], ['sub-departments', 'Sub Departments'], ['sections', 'Sections'], ['sub-sections', 'Sub Sections']] },
   { title: 'Classification', items: [['functions', 'Functions'], ['sub-functions', 'Sub Functions'], ['grades', 'Grades'], ['designations', 'Designations'], ['employee-types', 'Employee Types']] },
-  { title: 'Workplace', items: [['countries', 'Countries'], ['work-locations', 'Work Locations'], ['cost-centers', 'Cost Centers']] },
+  { title: 'Workplace', items: [['countries', 'Countries'], ['work-locations', 'Work Locations'], ['cost-centers', 'Cost Centers'], ['banks', 'Banks']] },
   { title: 'Employment', items: [['position-change-reasons', 'Change Reasons']] },
 ]
 const bulkKinds = new Set(['holding-companies', 'lines-of-business', 'organisations', 'departments', 'sub-departments', 'sections', 'sub-sections', 'functions', 'sub-functions', 'grades', 'designations', 'employee-types', 'work-locations', 'cost-centers', 'position-change-reasons'])
@@ -69,7 +71,7 @@ export function MasterManagementPage() {
   const closeRef = useRef<HTMLButtonElement>(null)
   const triggerRef = useRef<HTMLElement | null>(null)
   const intentHandledRef = useRef(false)
-  const visibleGroups = useMemo(() => groups.map(group => ({ ...group, items: group.items.filter(([key, label]) => label.toLowerCase().includes(catalogueSearch.toLowerCase().trim()) && (key !== 'departments' || can(Permissions.department.view)) && (key !== 'designations' || can(Permissions.designation.view))) })).filter(group => group.items.length > 0), [catalogueSearch, can])
+  const visibleGroups = useMemo(() => groups.map(group => ({ ...group, items: group.items.filter(([key, label]) => label.toLowerCase().includes(catalogueSearch.toLowerCase().trim()) && (key !== 'departments' || can(Permissions.department.view)) && (key !== 'designations' || can(Permissions.designation.view)) && (key !== 'banks' || can(Permissions.bankMaster.view))) })).filter(group => group.items.length > 0), [catalogueSearch, can])
   const totalPages = Math.max(1, Math.ceil(totalCount / 25))
 
   useEffect(() => { intentHandledRef.current = false; setPage(1); setEditing(null); setEditorOpen(false); setDirty(false); setError(null) }, [kind])
@@ -94,7 +96,7 @@ export function MasterManagementPage() {
     catch (caught) { setRows([]); setTotalCount(0); setError(caught instanceof ApiError ? caught.message : 'Unable to load master records.') }
     finally { setLoading(false) }
   }
-  useEffect(() => { void refresh() }, [kind, page, search, status])
+  useEffect(() => { if (kind !== 'banks') void refresh() }, [kind, page, search, status])
   useEffect(() => {
     const requestedId = searchParams.get('edit')
     if (!intentHandledRef.current && requestedId && !editorOpen && canEdit) {
@@ -103,6 +105,7 @@ export function MasterManagementPage() {
     } else if (!intentHandledRef.current && searchParams.get('add') === '1' && !editorOpen && canCreate) { intentHandledRef.current = true; startNew() }
   }, [rows, searchParams, editorOpen, canEdit, canCreate])
 
+  if (kind === 'banks') return <BankMasterPage />
   if (!definition) return <Notice tone="error">This master is not available. Location is not supported by the current data model.</Notice>
   if (!canView) return <Notice tone="error">You do not have permission to view this master.</Notice>
   function startNew(element?: HTMLElement) { triggerRef.current = element ?? null; setEditing(null); setEditorOpen(true); setDirty(false); setForm({ code: '', name: '', description: '', isActive: true, parentId: null }); setError(null); setInfo(null) }

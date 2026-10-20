@@ -1,18 +1,22 @@
-import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { listDepartments } from '../api/departments.ts'
 import { listDesignations } from '../api/designations.ts'
 import { listEmployees } from '../api/employees.ts'
 import { Permissions } from '../auth/permissions.ts'
 import { useAuth } from '../auth/useAuth.ts'
 import { Card } from '../components/Card.tsx'
-import { EmptyState } from '../components/EmptyState.tsx'
-import { PageHeader } from '../components/PageHeader.tsx'
+import { DashboardEmptyState } from '../components/dashboard/DashboardEmptyState.tsx'
+import { DashboardHeader } from '../components/dashboard/DashboardHeader.tsx'
+import { DashboardQuickActions } from '../components/dashboard/DashboardQuickActions.tsx'
+import { DashboardSection } from '../components/dashboard/DashboardSection.tsx'
+import { DashboardShell } from '../components/dashboard/DashboardShell.tsx'
+import { composeDashboard } from '../components/dashboard/composeDashboard.ts'
 import { useDocumentTitle } from '../hooks/useDocumentTitle.ts'
-import { CountTile } from './dashboard/CountTile.tsx'
 import { ExportEmployeesButton } from './dashboard/ExportEmployeesButton.tsx'
 import { HeadcountByDepartmentCard } from './dashboard/HeadcountByDepartmentCard.tsx'
+import { EmployeeStatusCard } from './dashboard/EmployeeStatusCard.tsx'
 import { RecentHiresCard } from './dashboard/RecentHiresCard.tsx'
+import { CountTile } from './dashboard/CountTile.tsx'
+import { AttendanceOperationsWidget, HrLeaveSummaryWidget, IdentityFallback, ManagerAttendanceWidget, SelfServiceWidgets } from '../components/dashboard/RoleDashboardWidgets.tsx'
 
 export function DashboardPage() {
   useDocumentTitle('Dashboard')
@@ -21,46 +25,64 @@ export function DashboardPage() {
   const canViewDepartments = can(Permissions.department.view)
   const canViewDesignations = can(Permissions.designation.view)
   const canExport = can(Permissions.employee.export)
-  const hasAnything = canViewEmployees || canViewDepartments || canViewDesignations
   const canCreateEmployee = can(Permissions.employee.create)
   const canConfigureCodes = can(Permissions.employeeCodeConfiguration.view)
-  const calendarDate = useLocalDate()
-  const month = calendarDate.toLocaleString('en-US', { month: 'long' }).toUpperCase()
-  const day = String(calendarDate.getDate()).padStart(2, '0')
-  const weekday = calendarDate.toLocaleString('en-US', { weekday: 'long' })
+  const composition = composeDashboard({ workspace: 'tenant', permissions: user?.permissions ?? [], user })
+  const hasAnything = canViewEmployees || canViewDepartments || canViewDesignations || !composition.isFallback
+  const hasWidget = (id: string) => composition.widgets.some((widget) => widget.id === id)
+  const linked = user?.employeeIdentity?.status === 'Linked' && Boolean(user.employeeIdentity.employee?.id)
+  const hasSelfAccess = can(Permissions.leave.requestViewOwn) || can(Permissions.leave.balanceViewOwn) || can(Permissions.payroll.payslipViewOwn)
+  const quickActions = [
+    { to: '/employees', label: 'Employee directory', icon: 'people', show: canViewEmployees },
+    { to: '/employees/new', label: 'Add employee', icon: '+', show: canCreateEmployee },
+    { to: '/leave-management', label: 'Leave administration', icon: 'calendar', show: can(Permissions.leave.dashboardViewAll) },
+    { to: '/confirmation/review-cases', label: 'Confirmation reviews', icon: 'check', show: can(Permissions.confirmation.reviewCaseView) },
+    { to: '/separation/hr-inbox', label: 'Separation workflows', icon: 'exit', show: can(Permissions.separation.hrReview) },
+    { to: '/configuration/employee-code', label: 'Configure employee codes', icon: 'settings', show: canConfigureCodes },
+    { to: '/role-management', label: 'User and role management', icon: 'users', show: can(Permissions.roleManagement.assignmentView) || can(Permissions.user.view) },
+    { to: '/page-access-management', label: 'Page access management', icon: 'shield', show: can(Permissions.pageAccess.view) },
+    { to: '/configuration/login-settings', label: 'Tenant configuration', icon: 'settings', show: can(Permissions.user.edit) },
+  ] as const
+  const showQuickActions = quickActions.some((action) => action.show)
+  const topQuickActions = quickActions.filter((action) => ['/employees', '/employees/new', '/configuration/employee-code'].includes(action.to))
+  const hrQuickActions = quickActions.filter((action) => ['/employees', '/employees/new', '/leave-management', '/confirmation/review-cases', '/separation/hr-inbox'].includes(action.to))
+  const administrationQuickActions = quickActions.filter((action) => ['/role-management', '/page-access-management', '/configuration/login-settings'].includes(action.to))
+  const today = new Date()
+  const todayLabel = today.toLocaleDateString(undefined, { weekday: 'long' })
+  const monthLabel = today.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+  const displayName = user?.fullName || [user?.firstName, user?.lastName].filter(Boolean).join(' ') || 'there'
+  const coreActionRoutes = ['/employees', '/employees/new', '/configuration/employee-code']
+  const additionalHrActions = hrQuickActions.filter((action) => !coreActionRoutes.includes(action.to))
 
-  return <>
-    <PageHeader title="Dashboard" subtitle="Your people, at a glance." actions={canExport ? <ExportEmployeesButton /> : undefined} />
-    {!hasAnything ? <Card><EmptyState title="Nothing to show yet" message="Your roles do not yet include permission to view employees, departments or designations. An administrator can grant them." /></Card> : <>
+  return <DashboardShell>
+    <DashboardHeader title="Dashboard" subtitle={user?.tenantName ? `${user.tenantName} · Your people, at a glance.` : 'Your people, at a glance.'} actions={canExport ? <ExportEmployeesButton /> : undefined} />
+    {!hasAnything || composition.isFallback ? (hasSelfAccess && !linked ? <IdentityFallback /> : <Card><DashboardEmptyState /></Card>) : <>
       <section className="dashboard-welcome" aria-label="Welcome message">
-        <div className="dashboard-welcome-copy"><p className="dashboard-welcome-eyebrow">People operations</p><h2>Welcome back, {user?.firstName || 'there'}</h2><p>A clear view of your organization.</p></div>
-        <div className="dashboard-welcome-art" aria-hidden="true"><span className="welcome-art-back welcome-art-back-one" /><span className="welcome-art-back welcome-art-back-two" /><div className="welcome-calendar"><div className="welcome-calendar-header">{month}</div><div className="welcome-calendar-body"><strong>{day}</strong><span>{weekday}</span></div><span className="welcome-calendar-ring welcome-calendar-ring-one" /><span className="welcome-calendar-ring welcome-calendar-ring-two" /></div></div>
+        <div className="dashboard-welcome-copy"><p className="dashboard-welcome-eyebrow">People operations</p><h2>Welcome back, {displayName}</h2><p>A clear view of your organization.</p></div>
+        <div className="dashboard-welcome-art" aria-label={`${todayLabel}, ${today.getDate()} ${monthLabel}`}>
+          <span className="welcome-art-back welcome-art-back-one" aria-hidden="true" />
+          <span className="welcome-art-back welcome-art-back-two" aria-hidden="true" />
+          <span className="welcome-calendar" aria-hidden="true"><span className="welcome-calendar-header">{todayLabel}</span><span className="welcome-calendar-body"><strong>{today.getDate()}</strong><span>{monthLabel}</span></span></span>
+        </div>
       </section>
-      <div className="stat-grid">
-        {canViewEmployees && <><CountTile label="Total employees" hint="All records, any status" icon="♙" load={(signal) => listEmployees({ pageSize: 1 }, signal)} /><CountTile label="Active employees" hint="Currently employed" icon="✓" load={(signal) => listEmployees({ pageSize: 1, status: 'Active' }, signal)} /></>}
+      <DashboardSection title="At a glance" className="dashboard-section-kpis"><div className="stat-grid">
+        {canViewEmployees && <><CountTile label="Total employees" hint="Scoped employee records" icon="•" load={(signal) => listEmployees({ pageSize: 1 }, signal)} /><CountTile label="Active employees" hint="Currently employed" icon="✓" load={(signal) => listEmployees({ pageSize: 1, status: 'Active' }, signal)} /></>}
         {canViewDepartments && <CountTile label="Departments" hint="Active only" icon="▦" load={(signal) => listDepartments({ pageSize: 1, isActive: true }, signal)} />}
         {canViewDesignations && <CountTile label="Designations" hint="Active only" icon="✦" load={(signal) => listDesignations({ pageSize: 1, isActive: true }, signal)} />}
-      </div>
-      <div className="dashboard-grid">{canViewDepartments && <HeadcountByDepartmentCard />}<QuickActions canCreateEmployee={canCreateEmployee} canViewEmployees={canViewEmployees} canConfigureCodes={canConfigureCodes} /></div>
-      {canViewEmployees && <RecentHiresCard />}
+      </div></DashboardSection>
+      <DashboardSection title="Analytics and actions"><div className="dashboard-analytics-grid">
+        {canViewDepartments && <HeadcountByDepartmentCard />}
+        {canViewEmployees && <EmployeeStatusCard />}
+        {topQuickActions.some((action) => action.show) && <div className="dashboard-top-actions"><Card title="Quick actions" subtitle="Common tasks"><DashboardQuickActions actions={topQuickActions} bare /></Card></div>}
+      </div></DashboardSection>
+      {canViewEmployees && <DashboardSection title="Recent employees"><RecentHiresCard /></DashboardSection>}
+      {(hasWidget('tenant.hr-leave-summary') || hasWidget('tenant.attendance-operations') || hasWidget('tenant.manager-attendance')) && <DashboardSection title="Authorized operations" className="dashboard-role-section"><div className="dashboard-role-grid">{hasWidget('tenant.hr-leave-summary') && <HrLeaveSummaryWidget />}{hasWidget('tenant.attendance-operations') && <AttendanceOperationsWidget />}{hasWidget('tenant.manager-attendance') && <ManagerAttendanceWidget />}</div></DashboardSection>}
+      {(hasWidget('tenant.self-profile') || hasWidget('tenant.self-leave-balances') || hasWidget('tenant.self-leave-requests')) && <DashboardSection title="My workspace" className="dashboard-role-section"><SelfServiceWidgets showProfile={hasWidget('tenant.self-profile') && linked} showBalances={hasWidget('tenant.self-leave-balances') && linked} showRequests={hasWidget('tenant.self-leave-requests') && linked} /></DashboardSection>}
+      {showQuickActions && (additionalHrActions.some((action) => action.show) || administrationQuickActions.some((action) => action.show)) && <section className="dashboard-action-groups" aria-label="Additional dashboard actions">
+        {additionalHrActions.some((action) => action.show) && <Card title="HR quick actions" subtitle="Common tasks"><DashboardQuickActions actions={additionalHrActions} bare /></Card>}
+        {administrationQuickActions.some((action) => action.show) && <Card title="Administration quick actions" subtitle="Common tasks"><DashboardQuickActions actions={administrationQuickActions} bare /></Card>}
+      </section>}
+
     </>}
-  </>
-}
-
-function QuickActions({ canCreateEmployee, canViewEmployees, canConfigureCodes }: { canCreateEmployee: boolean; canViewEmployees: boolean; canConfigureCodes: boolean }) {
-  const actions = [{ to: '/employees/new', label: 'Add employee', icon: '+', show: canCreateEmployee }, { to: '/employees', label: 'View directory', icon: '↗', show: canViewEmployees }, { to: '/configuration/employee-code', label: 'Configure employee codes', icon: '⚙', show: canConfigureCodes }].filter((action) => action.show)
-  if (actions.length === 0) return null
-  return <Card title="Quick actions" subtitle="Common tasks"><div className="quick-actions">{actions.map((action) => <Link className="quick-action" to={action.to} key={action.to}><span className="quick-action-icon" aria-hidden="true">{action.icon}</span><span>{action.label}</span><span className="quick-action-arrow" aria-hidden="true">→</span></Link>)}</div></Card>
-}
-
-function useLocalDate(): Date {
-  const [date, setDate] = useState(() => new Date())
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>
-    const schedule = () => { const now = new Date(); const nextMidnight = new Date(now); nextMidnight.setHours(24, 0, 0, 0); timer = setTimeout(() => { setDate(new Date()); schedule() }, Math.max(1000, nextMidnight.getTime() - now.getTime())) }
-    const refresh = () => { if (document.visibilityState === 'visible') setDate(new Date()) }
-    schedule(); document.addEventListener('visibilitychange', refresh)
-    return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', refresh) }
-  }, [])
-  return date
+  </DashboardShell>
 }

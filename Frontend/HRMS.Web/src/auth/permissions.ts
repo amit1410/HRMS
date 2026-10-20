@@ -54,6 +54,13 @@ export const Permissions = {
     edit: 'User.Edit',
     delete: 'User.Delete',
   },
+  welcomeInvitation: {
+    view: 'WelcomeInvitation.View',
+    send: 'WelcomeInvitation.Send',
+    resend: 'WelcomeInvitation.Resend',
+    retry: 'WelcomeInvitation.Retry',
+    viewHistory: 'WelcomeInvitation.ViewHistory',
+  },
   accountEmployeeLink: {
     view: 'AccountEmployeeLink.View',
     viewHistory: 'AccountEmployeeLink.ViewHistory',

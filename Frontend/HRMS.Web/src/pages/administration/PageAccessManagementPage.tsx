@@ -98,6 +98,11 @@ export function PageAccessManagementPage() {
   useEffect(() => { if (roleId === undefined) return; void getPageAccessMatrix(roleId).then((value) => { setMatrix(value); setSelected(new Set(value.grantedPermissions)); setNotice('') }).catch((caught) => setError(toApiError(caught))) }, [roleId])
 
   const pagesByModule = useMemo(() => [...(matrix?.pages ?? [])].reduce<Record<string, PageAccessPage[]>>((groups, page) => { (groups[page.moduleCode] ??= []).push(page); return groups }, {}), [matrix])
+  const selectedNotProvisioned = useMemo(() => {
+    const provisionedPermissions = matrix?.provisionedPermissions
+    if (!Array.isArray(provisionedPermissions)) return []
+    return [...selected].filter((permission) => !provisionedPermissions.includes(permission))
+  }, [matrix, selected])
   function toggle(permission: string) { setSelected((current) => { const next = new Set(current); if (next.has(permission)) next.delete(permission); else next.add(permission); return next }) }
   function togglePage(page: PageAccessPage) {
     const permissions = [...page.requiredPermissions, ...page.actions.map((action) => action.permission)]
@@ -105,7 +110,25 @@ export function PageAccessManagementPage() {
     setSelected((current) => { const next = new Set(current); permissions.forEach((permission) => shouldGrant ? next.add(permission) : next.delete(permission)); return next })
   }
   const [isSaving, setIsSaving] = useState(false)
-  async function save() { if (!roleId || isSaving) return; setIsSaving(true); try { setMatrix(await updatePageAccess(roleId, [...selected])); setNotice('Page access saved.'); setError(undefined) } catch (caught) { setError(toApiError(caught)) } finally { setIsSaving(false) } }
+  async function save() {
+    if (!roleId || isSaving) return
+    const permissionsToProvision = selectedNotProvisioned
+    setIsSaving(true)
+    try {
+      const response = await updatePageAccess(roleId, [...selected])
+      const responseProvisioned = (response as PageAccessMatrix & { provisionedPermissions?: string[] }).provisionedPermissions
+      const updated = Array.isArray(responseProvisioned)
+        ? { ...response, provisionedPermissions: responseProvisioned }
+        : { ...response, provisionedPermissions: matrix?.provisionedPermissions ?? [] }
+      setMatrix(updated)
+      if (permissionsToProvision.length > 0 && permissionsToProvision.every((permission) => updated.provisionedPermissions?.includes(permission))) {
+        setNotice('Missing permissions were provisioned. Review your selection, then save again to apply role changes.')
+      } else {
+        setNotice('Page access saved.')
+      }
+      setError(undefined)
+    } catch (caught) { setError(toApiError(caught)) } finally { setIsSaving(false) }
+  }
   async function loadPreviewUsers(value: string) { try { setPreviewUsers(await searchAccessPreviewUsers(value)) } catch (caught) { setError(toApiError(caught)) } }
   useEffect(() => { if (tab !== 'history') return; void getPageAccessHistory({ roleId, userId: historyUserId || undefined, eventType: historyEventType || undefined, fromDate: historyFromDate || undefined, toDate: historyToDate || undefined, page: historyPage, pageSize: 25 }).then(setHistory).catch((caught) => setError(toApiError(caught))) }, [tab, roleId, historyUserId, historyEventType, historyFromDate, historyToDate, historyPage])
   useEffect(() => { if (!previewUserId) return; void getPageAccessHistory({ userId: previewUserId, page: 1, pageSize: 5 }).then(setPreviewHistory).catch((caught) => setError(toApiError(caught))) }, [previewUserId])
@@ -117,6 +140,7 @@ export function PageAccessManagementPage() {
       </div>
     </div>
     {error && <p className="form-error" role="alert">{error.message}</p>}
+    {selectedNotProvisioned.length > 0 && <p className="form-error" role="alert">Some selected permissions are missing from this tenant's catalog. Save will provision these catalog entries only; role permissions will not change until you review the selection and save again: {selectedNotProvisioned.join(', ')}</p>}
     {notice && <p className="form-success" role="status">{notice}</p>}
     <nav className="page-access-tabs" aria-label="Page Access sections"><button className={tab === 'access' ? 'is-active' : ''} type="button" onClick={() => setTab('access')}><AccessTabIcon />Page Access</button><button className={tab === 'history' ? 'is-active' : ''} type="button" onClick={() => setTab('history')}><AccessTabIcon history />History</button></nav>
     {tab === 'access' && <><section className="page-access-toolbar" aria-label="Page access filters"><label className="field page-access-role"><span>Role</span><select className="select" aria-label="Role" value={roleId ?? ''} onChange={(event) => setRoleId(Number(event.target.value))}><option value="" disabled>Select a role</option>{roles.map((role) => <option key={role.id} value={role.id}>{role.name}{role.name === 'Employee' || role.name === 'Manager' ? ' (System Role)' : ''}</option>)}</select></label><div className="page-access-toolbar-divider" aria-hidden="true" /><div className="page-access-preview-filter"><div className="page-access-filter-heading"><span>Preview User Access</span><small>Read-only effective access</small></div><div className="page-access-preview-controls"><div className="page-access-search"><span aria-hidden="true">⌕</span><input className="input" aria-label="Search user" placeholder="Search user" onChange={(event) => void loadPreviewUsers(event.target.value)} /></div><select className="select" aria-label="Select a preview user" value={previewUserId} onChange={async (event) => { setPreviewUserId(event.target.value); setPreview(event.target.value ? await getUserAccessPreview(event.target.value) : undefined) }}><option value="">Select a user</option>{previewUsers.map((user) => <option key={user.userId} value={user.userId}>{user.displayName} — {user.email}</option>)}</select></div></div></section>{preview && <section className="page-access-preview-result" aria-label="Preview results"><div><strong>Effective roles:</strong><span>{preview.roles.map((role) => role.roleName).join(', ') || 'None'}</span></div><div><strong>Permissions:</strong><span>{preview.permissions.join(', ') || 'None'}</span></div><div><strong>Tenant-wide grants:</strong><span>{preview.tenantWideRoleCount}</span></div><div><strong>Manager access:</strong><span>{preview.hasManagerAccess ? 'Yes' : 'No'}</span></div><div><strong>Accessible pages:</strong><span>{preview.pages.map((page) => page.name).join(', ') || 'None'}</span></div><div className="page-access-preview-history"><h3>Recent Access Changes</h3>{previewHistory?.items.map((item) => <p key={item.id}>{item.eventType}: {item.permissionCode ?? item.scopeDimension ?? 'Scope'} ({item.occurredAtUtc})</p>)}</div></section>}{Object.entries(pagesByModule).map(([module, pages], moduleIndex) => <section className={`page-access-module page-access-module-${moduleThemes[moduleIndex % moduleThemes.length]}`} key={module}><header className="page-access-module-header"><ModuleIcon module={module} /><div><h2>{module}</h2><p>{moduleDescriptions[module] ?? 'Manage access for this application area'}</p></div></header><div className="page-access-module-pages">{pages.map((page) => <article className="page-access-row" key={page.code}><div className="page-access-page-heading"><strong>{page.name}</strong><small>{page.route}</small></div><div className="page-access-permissions"><label><input type="checkbox" checked={page.requiredPermissions.every((permission) => selected.has(permission))} onChange={() => togglePage(page)} disabled={!canManage} /> <span>View</span></label>{page.actions.map((action) => <label key={action.code}><input type="checkbox" checked={selected.has(action.permission)} onChange={() => toggle(action.permission)} disabled={!canManage} /> <span>{action.name}</span></label>)}</div></article>)}</div></section>)}</>}

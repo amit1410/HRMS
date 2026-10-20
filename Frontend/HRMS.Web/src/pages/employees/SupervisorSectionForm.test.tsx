@@ -2,10 +2,6 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { SupervisorSectionForm } from './SupervisorSectionForm.tsx'
 
-const { scheduledEffectiveFrom } = vi.hoisted(() => ({
-  scheduledEffectiveFrom: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-}))
-
 vi.mock('../../auth/useAuth.ts', () => ({
   useAuth: () => ({ can: () => true }),
 }))
@@ -21,32 +17,21 @@ vi.mock('../../api/employeeSubsections.ts', () => ({
     l2ManagerId: null,
     createdDate: '2026-03-04T00:00:00Z',
   }),
-  getEmploymentHistory: vi.fn().mockResolvedValue([
-    {
-      id: 'history-1', employeeId: 'employee-1', effectiveFrom: '2026-03-04', effectiveTo: null,
-      managerId: 'manager-1', managerEmployeeCode: 'EMP-002', managerFullName: 'Owen Brand',
-      employmentType: 'FullTime', employmentStatus: 'Active', changeReason: 'NewJoining',
-    },
-    {
-      id: 'history-2', employeeId: 'employee-1', effectiveFrom: scheduledEffectiveFrom, effectiveTo: null,
-      managerId: 'manager-3', managerEmployeeCode: 'EMP-003', managerFullName: 'Maya Singh',
-      employmentType: 'FullTime', employmentStatus: 'Active', changeReason: 'Transfer',
-    },
-  ]),
+  getEmploymentHistory: vi.fn().mockResolvedValue([]),
   getSupervisorOptions: vi.fn().mockResolvedValue([]),
   upsertSupervisor: vi.fn(),
 }))
 
 describe('SupervisorSectionForm', () => {
-  it('shows resolved and scheduled L1 states and keeps L1 read-only', async () => {
+  it('renders L1 alongside the other editable supervisor roles', async () => {
     render(<SupervisorSectionForm employeeId="employee-1" onEmploymentChange={vi.fn()} />)
 
-    const current = await screen.findByLabelText('Current direct manager (L1)')
-    await waitFor(() => expect(current).toHaveValue('EMP-002 — Owen Brand'))
-    expect(current).toHaveAttribute('readonly')
-    expect(screen.getByText(/Scheduled L1: EMP-003/)).toBeInTheDocument()
-    expect(screen.queryByText('manager-1')).not.toBeInTheDocument()
+    const l1 = await screen.findByLabelText('L1 manager')
+    await waitFor(() => expect(l1).toBeInTheDocument())
+    expect(l1).not.toHaveAttribute('readonly')
+    expect(screen.getByLabelText('L2 manager')).toBeInTheDocument()
+    expect(screen.getByLabelText('L3 manager')).toBeInTheDocument()
     expect(screen.getByText('Resolved')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Change through Employment' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Change through Employment' })).not.toBeInTheDocument()
   })
 })

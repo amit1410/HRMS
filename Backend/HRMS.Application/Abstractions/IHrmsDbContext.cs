@@ -34,6 +34,8 @@ public interface IHrmsDbContext
     DbSet<AuthorizationConfigurationEvent> AuthorizationConfigurationEvents { get; }
     DbSet<RefreshToken> RefreshTokens { get; }
     DbSet<UserInvitation> UserInvitations { get; }
+    DbSet<WelcomeInvitationBatch> WelcomeInvitationBatches { get; }
+    DbSet<WelcomeInvitationAttempt> WelcomeInvitationAttempts { get; }
     DbSet<PasswordResetOtp> PasswordResetOtps { get; }
     DbSet<Department> Departments { get; }
     DbSet<Designation> Designations { get; }

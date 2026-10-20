@@ -105,8 +105,8 @@ public class EmployeeService : IEmployeeService
                 x.Employee.EmployeeCode ?? string.Empty,
                 x.Employee.FirstName + " " + x.Employee.LastName,
                 x.Employee.Contact != null && x.Employee.Contact.OfficialEmail != null ? x.Employee.Contact.OfficialEmail : x.Employee.Email,
-                x.Current != null && x.Current.Department != null ? x.Current.Department.Name : x.Employee.Department != null ? x.Employee.Department.Name : null,
-                x.Current != null && x.Current.Designation != null ? x.Current.Designation.Name : x.Employee.Designation != null ? x.Employee.Designation.Name : null,
+                x.Current != null ? x.Current.DepartmentName ?? (x.Current.Department != null ? x.Current.Department.Name : null) ?? (x.Employee.Department != null ? x.Employee.Department.Name : null) : x.Employee.Department != null ? x.Employee.Department.Name : null,
+                x.Current != null ? x.Current.DesignationName ?? (x.Current.Designation != null ? x.Current.Designation.Name : null) ?? (x.Employee.Designation != null ? x.Employee.Designation.Name : null) : x.Employee.Designation != null ? x.Employee.Designation.Name : null,
                 x.Current != null ? x.Current.EmploymentStatus : x.Employee.Status,
                 x.Employee.DateOfJoining,
                 x.Current != null))
@@ -178,6 +178,13 @@ public class EmployeeService : IEmployeeService
             return Result<EmployeeDto>.Unauthorized(NoTenantMessage);
         }
 
+        var requiredProblem = ValidateRequiredCreationFields(
+            request.JobStatus, request.AadhaarNumber, request.PanNumber);
+        if (requiredProblem is not null)
+        {
+            return requiredProblem;
+        }
+
         var employeeCode = request.EmployeeCode.Trim();
         var email = request.Email.Trim();
 
@@ -229,7 +236,7 @@ public class EmployeeService : IEmployeeService
             DesignationId = request.DesignationId,
             ReportingManagerId = request.ReportingManagerId,
             AadhaarNumber = Normalize(request.AadhaarNumber),
-            PanNumber = Normalize(request.PanNumber),
+            PanNumber = Normalize(request.PanNumber)?.ToUpperInvariant(),
             PfNumber = Normalize(request.PfNumber),
             UanNumber = Normalize(request.UanNumber),
             EsicNumber = Normalize(request.EsicNumber),
@@ -298,6 +305,12 @@ public class EmployeeService : IEmployeeService
             return Result<EmployeeDto>.NotFound(NotFoundMessage);
         }
 
+        var requiredFields = ResolveRequiredEmployeeFields(
+            employee.JobStatus, employee.AadhaarNumber, employee.PanNumber,
+            request.JobStatus, request.AadhaarNumber, request.PanNumber);
+        if (requiredFields.Error is not null)
+            return requiredFields.Error;
+
         if (request.ReportingManagerId == id)
         {
             return Result<EmployeeDto>.Invalid("reportingManagerId", "An employee cannot report to themselves.");
@@ -351,6 +364,7 @@ public class EmployeeService : IEmployeeService
         employee.Caste = Normalize(request.Caste);
         employee.EmployeeType = Normalize(request.EmployeeType);
         employee.DateOfJoining = request.DateOfJoining;
+        employee.JobStatus = requiredFields.JobStatus;
         employee.GroupDateOfJoining = request.GroupDateOfJoining;
         employee.DateOfLeaving = request.DateOfLeaving;
         employee.Status = request.Status;
@@ -358,8 +372,8 @@ public class EmployeeService : IEmployeeService
         employee.DepartmentId = request.DepartmentId;
         employee.DesignationId = request.DesignationId;
         employee.ReportingManagerId = request.ReportingManagerId;
-        employee.AadhaarNumber = Normalize(request.AadhaarNumber);
-        employee.PanNumber = Normalize(request.PanNumber);
+        employee.AadhaarNumber = requiredFields.AadhaarNumber;
+        employee.PanNumber = requiredFields.PanNumber;
         employee.PfNumber = Normalize(request.PfNumber);
         employee.UanNumber = Normalize(request.UanNumber);
         employee.EsicNumber = Normalize(request.EsicNumber);
@@ -427,6 +441,13 @@ public class EmployeeService : IEmployeeService
             return Result<EmployeeDto>.Unauthorized(NoTenantMessage);
         }
 
+        var requiredProblem = ValidateRequiredCreationFields(
+            request.JobStatus, request.AadhaarNumber, request.PanNumber);
+        if (requiredProblem is not null)
+        {
+            return requiredProblem;
+        }
+
         var birthProblem = await ValidateBirthLocationAsync(request, cancellationToken);
         if (birthProblem is not null)
         {
@@ -454,12 +475,23 @@ public class EmployeeService : IEmployeeService
             return Result<EmployeeDto>.NotFound(NotFoundMessage);
         }
 
+        var requiredFields = ResolveRequiredEmployeeFields(
+            employee.JobStatus, employee.AadhaarNumber, employee.PanNumber,
+            request.JobStatus, request.AadhaarNumber, request.PanNumber);
+        if (requiredFields.Error is not null)
+            return requiredFields.Error;
+
         var birthProblem = await ValidateBirthLocationAsync(request, cancellationToken);
         if (birthProblem is not null)
         {
             return birthProblem;
         }
 
+        // A blank update value is the form's "unchanged" representation. Apply the effective
+        // values after validating them so a masked placeholder can never reach persistence.
+        request.JobStatus = requiredFields.JobStatus;
+        request.AadhaarNumber = requiredFields.AadhaarNumber;
+        request.PanNumber = requiredFields.PanNumber;
         ApplyPersonalDetails(employee, request, preserveSensitive: true, canEditSensitive: canEditSensitive);
 
         await _db.SaveChangesAsync(cancellationToken);
@@ -519,7 +551,8 @@ public class EmployeeService : IEmployeeService
             return Result<EmployeeExportDto>.Unauthorized(NoTenantMessage);
         }
 
-        var filtered = ApplyFilters(_db.Employees.AsNoTracking(), query);
+        var businessDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().DateTime);
+        var filtered = ApplyEffectiveFilters(_db.Employees.AsNoTracking(), query, businessDate);
 
         var total = await filtered.CountAsync(cancellationToken);
         if (total > MaxExportRows)
@@ -530,9 +563,10 @@ public class EmployeeService : IEmployeeService
 
         // Same ordering as the list endpoint, so the file matches what the user was looking at. Take() is a
         // belt-and-braces bound in case rows are inserted between the count and this read.
-        var rows = await ProjectDetail(ApplySort(filtered, query))
+        var rows = await ProjectDetail(ApplyEffectiveSort(filtered, query, businessDate))
             .Take(MaxExportRows)
             .ToListAsync(cancellationToken);
+        rows = await ApplyEffectiveEmploymentToExportRowsAsync(rows, businessDate, cancellationToken);
 
         var csv = new CsvBuilder(
             "Employee Code", "Salutation", "First Name", "Middle Name", "Last Name", "Email", "Phone",
@@ -591,6 +625,57 @@ public class EmployeeService : IEmployeeService
 
         return Result<EmployeeExportDto>.Success(
             new EmployeeExportDto(fileName, "text/csv; charset=utf-8", csv.ToUtf8Bytes(), csv.RowCount));
+    }
+
+    private async Task<List<EmployeeDto>> ApplyEffectiveEmploymentToExportRowsAsync(
+        List<EmployeeDto> rows,
+        DateOnly businessDate,
+        CancellationToken cancellationToken)
+    {
+        var employeeIds = rows.Select(row => row.Id).ToArray();
+        if (employeeIds.Length == 0)
+            return rows;
+
+        var current = await _db.EmployeeEmploymentHistory.AsNoTracking()
+            .Where(h => employeeIds.Contains(h.EmployeeId) && !h.IsSuperseded &&
+                        h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate))
+            .OrderByDescending(h => h.EffectiveFrom)
+            .ThenByDescending(h => h.RevisionNumber)
+            .Select(h => new
+            {
+                h.EmployeeId,
+                h.EmploymentStatus,
+                DepartmentName = h.DepartmentName ?? (h.Department == null ? null : h.Department.Name),
+                DesignationName = h.DesignationName ?? (h.Designation == null ? null : h.Designation.Name),
+                ManagerName = h.Manager == null ? null : h.Manager.FirstName + " " + h.Manager.LastName,
+                EmployeeType = h.EmployeeType == null ? null : h.EmployeeType.Name,
+                CostCenterCode = h.CostCenter == null ? null : h.CostCenter.Code,
+                h.DepartmentId,
+                h.DesignationId,
+                h.ManagerId,
+                h.EffectiveFrom
+            })
+            .ToListAsync(cancellationToken);
+
+        var currentByEmployee = current
+            .GroupBy(item => item.EmployeeId)
+            .ToDictionary(group => group.Key, group => group.First());
+
+        return rows.Select(row => currentByEmployee.TryGetValue(row.Id, out var employment)
+            ? row with
+            {
+                Status = employment.EmploymentStatus,
+                DateOfLeaving = employment.EmploymentStatus == EmployeeStatus.Active ? null : employment.EffectiveFrom,
+                DepartmentId = employment.DepartmentId,
+                DepartmentName = employment.DepartmentName,
+                DesignationId = employment.DesignationId,
+                DesignationName = employment.DesignationName,
+                ReportingManagerId = employment.ManagerId,
+                ReportingManagerName = employment.ManagerName,
+                EmployeeType = employment.EmployeeType,
+                CostCenterCode = employment.CostCenterCode
+            }
+            : row).ToList();
     }
 
     private static IQueryable<Employee> ApplyFilters(IQueryable<Employee> employees, EmployeeQuery query)
@@ -685,21 +770,21 @@ public class EmployeeService : IEmployeeService
         var descending = query.SortDescending;
         var sortBy = query.SortBy?.Trim().ToLowerInvariant();
         var currentHistory = _db.EmployeeEmploymentHistory
-            .Where(h => h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
+            .Where(h => !h.IsSuperseded && h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate));
 
         if (sortBy == "department")
         {
             var ordered = descending
-                ? employees.OrderByDescending(e => currentHistory.Where(h => h.EmployeeId == e.Id).Select(h => h.Department!.Name).FirstOrDefault() ?? e.Department!.Name)
-                : employees.OrderBy(e => currentHistory.Where(h => h.EmployeeId == e.Id).Select(h => h.Department!.Name).FirstOrDefault() ?? e.Department!.Name);
+                ? employees.OrderByDescending(e => currentHistory.Where(h => h.EmployeeId == e.Id).OrderByDescending(h => h.EffectiveFrom).ThenByDescending(h => h.RevisionNumber).Select(h => h.DepartmentName ?? (h.Department == null ? null : h.Department.Name)).FirstOrDefault() ?? e.Department!.Name)
+                : employees.OrderBy(e => currentHistory.Where(h => h.EmployeeId == e.Id).OrderByDescending(h => h.EffectiveFrom).ThenByDescending(h => h.RevisionNumber).Select(h => h.DepartmentName ?? (h.Department == null ? null : h.Department.Name)).FirstOrDefault() ?? e.Department!.Name);
             return ordered.ThenBy(e => e.Id);
         }
 
         if (sortBy == "designation")
         {
             var ordered = descending
-                ? employees.OrderByDescending(e => currentHistory.Where(h => h.EmployeeId == e.Id).Select(h => h.Designation!.Name).FirstOrDefault() ?? e.Designation!.Name)
-                : employees.OrderBy(e => currentHistory.Where(h => h.EmployeeId == e.Id).Select(h => h.Designation!.Name).FirstOrDefault() ?? e.Designation!.Name);
+                ? employees.OrderByDescending(e => currentHistory.Where(h => h.EmployeeId == e.Id).OrderByDescending(h => h.EffectiveFrom).ThenByDescending(h => h.RevisionNumber).Select(h => h.DesignationName ?? (h.Designation == null ? null : h.Designation.Name)).FirstOrDefault() ?? e.Designation!.Name)
+                : employees.OrderBy(e => currentHistory.Where(h => h.EmployeeId == e.Id).OrderByDescending(h => h.EffectiveFrom).ThenByDescending(h => h.RevisionNumber).Select(h => h.DesignationName ?? (h.Designation == null ? null : h.Designation.Name)).FirstOrDefault() ?? e.Designation!.Name);
             return ordered.ThenBy(e => e.Id);
         }
 
@@ -1102,6 +1187,8 @@ public class EmployeeService : IEmployeeService
             DateOfJoining = request.DateOfJoining
         };
 
+        // Sensitive edit permission still controls persistence; creation validation requires the values
+        // in the request, but an unauthorized caller cannot write them.
         ApplyPersonalDetails(employee, request, canEditSensitive: canEditSensitive, applyJobStatus: false);
 
         try
@@ -1289,7 +1376,10 @@ public class EmployeeService : IEmployeeService
         if (canEditSensitive)
         {
             employee.EsicApplicable = request.EsicApplicable;
-            employee.EsicNumber = Normalize(request.EsicNumber);
+            // The normal employee projection exposes only a masked ESIC value. Treat a blank
+            // edit value as "unchanged", just like the other sensitive identifiers, so an
+            // unrelated personal-details update cannot erase the stored number.
+            employee.EsicNumber = OverwriteOrKeep(employee.EsicNumber, request.EsicNumber, preserveSensitive);
             employee.MediclaimNumber = Normalize(request.MediclaimNumber);
         }
         employee.Gratuity = request.Gratuity;
@@ -1301,7 +1391,7 @@ public class EmployeeService : IEmployeeService
             employee.PfNumber = OverwriteOrKeep(employee.PfNumber, request.PfNumber, preserveSensitive);
             employee.UanNumber = OverwriteOrKeep(employee.UanNumber, request.UanNumber, preserveSensitive);
             employee.AadhaarNumber = OverwriteOrKeep(employee.AadhaarNumber, request.AadhaarNumber, preserveSensitive);
-            employee.PanNumber = OverwriteOrKeep(employee.PanNumber, request.PanNumber, preserveSensitive);
+            employee.PanNumber = OverwriteOrKeep(employee.PanNumber, request.PanNumber, preserveSensitive)?.ToUpperInvariant();
         }
         employee.DateOfJoining = request.DateOfJoining;
         if (applyJobStatus)
@@ -1356,6 +1446,59 @@ public class EmployeeService : IEmployeeService
         }
 
         return null;
+    }
+
+    private static Result<EmployeeDto>? ValidateRequiredCreationFields(
+        string? jobStatus,
+        string? aadhaarNumber,
+        string? panNumber)
+    {
+        var errors = EmployeeCreationValidation.ValidateRequiredFields(jobStatus, aadhaarNumber, panNumber);
+        return errors.Count == 0 ? null : Result<EmployeeDto>.Invalid("Personal Details are invalid.", errors);
+    }
+
+    /// <summary>
+    /// Resolves an update into the values that will actually be stored. Null means the client did not
+    /// resend a value (the normal edit-form representation); an empty string is an explicit clear and is
+    /// rejected for required fields. A masked value is accepted only when it is the mask of the current
+    /// value, so a mask can never be persisted or silently replace an invalid new identifier.
+    /// </summary>
+    private static (Result<EmployeeDto>? Error, string? JobStatus, string? AadhaarNumber, string? PanNumber)
+        ResolveRequiredEmployeeFields(
+            string? currentJobStatus,
+            string? currentAadhaar,
+            string? currentPan,
+            string? requestedJobStatus,
+            string? requestedAadhaar,
+            string? requestedPan)
+    {
+        var jobStatus = ResolveRequiredUpdateValue(currentJobStatus, requestedJobStatus);
+        var aadhaar = ResolveRequiredUpdateValue(currentAadhaar, requestedAadhaar, EmployeeDto.MaskAadhaar);
+        var pan = ResolveRequiredUpdateValue(currentPan, requestedPan, EmployeeDto.MaskPan)?.ToUpperInvariant();
+        var errors = EmployeeCreationValidation.ValidateRequiredFields(jobStatus, aadhaar, pan);
+
+        if (errors.Count > 0)
+            return (Result<EmployeeDto>.Invalid("Personal Details are invalid.", errors), jobStatus, aadhaar, pan);
+
+        return (null, jobStatus!.Trim(), aadhaar!.Trim(), pan!.Trim().ToUpperInvariant());
+    }
+
+    private static string? ResolveRequiredUpdateValue(
+        string? current,
+        string? requested,
+        Func<string?, string?>? mask = null)
+    {
+        if (requested is null)
+            return current;
+
+        if (string.IsNullOrWhiteSpace(requested))
+            return string.Empty;
+
+        var candidate = requested.Trim();
+        if (mask is not null && candidate.Equals(mask(current), StringComparison.OrdinalIgnoreCase))
+            return current;
+
+        return candidate;
     }
 
     /// <summary>

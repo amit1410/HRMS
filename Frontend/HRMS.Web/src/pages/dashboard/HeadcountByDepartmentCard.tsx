@@ -27,7 +27,7 @@ export function HeadcountByDepartmentCard() {
 
   const departments = (data?.items ?? []).slice(0, TOP_N)
   const largest = Math.max(1, ...departments.map((department) => department.employeeCount))
-  const hidden = (data?.items.length ?? 0) - departments.length
+  const hidden = Math.max(0, (data?.totalCount ?? data?.items.length ?? 0) - departments.length)
 
   return (
     <Card
@@ -48,13 +48,13 @@ export function HeadcountByDepartmentCard() {
         />
       ) : (
         <>
-          <ul className="bar-list">
+          <ul className="bar-list" aria-label="Department headcount chart">
             {departments.map((department) => (
               <li key={department.id} className="bar-row">
                 <span className="bar-label" title={department.name}>
                   {department.name}
                 </span>
-                <span className="bar-track">
+                <span className="bar-track" role="img" aria-label={`${department.name}: ${formatNumber(department.employeeCount)} employees`}>
                   <span
                     className="bar-fill"
                     style={{ width: `${(department.employeeCount / largest) * 100}%` }}
@@ -64,6 +64,11 @@ export function HeadcountByDepartmentCard() {
               </li>
             ))}
           </ul>
+          <table className="sr-only">
+            <caption>Headcount by active department</caption>
+            <thead><tr><th scope="col">Department</th><th scope="col">Employees</th></tr></thead>
+            <tbody>{departments.map((department) => <tr key={department.id}><th scope="row">{department.name}</th><td>{formatNumber(department.employeeCount)}</td></tr>)}</tbody>
+          </table>
           {hidden > 0 && (
             <p className="card-note">
               {hidden} more {hidden === 1 ? 'department' : 'departments'} not shown.

@@ -52,6 +52,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<AuthorizationConfigurationEvent> AuthorizationConfigurationEvents => Set<AuthorizationConfigurationEvent>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<UserInvitation> UserInvitations => Set<UserInvitation>();
+    public DbSet<WelcomeInvitationBatch> WelcomeInvitationBatches => Set<WelcomeInvitationBatch>();
+    public DbSet<WelcomeInvitationAttempt> WelcomeInvitationAttempts => Set<WelcomeInvitationAttempt>();
     public DbSet<PasswordResetOtp> PasswordResetOtps => Set<PasswordResetOtp>();
     public DbSet<Department> Departments => Set<Department>();
     public DbSet<Designation> Designations => Set<Designation>();
@@ -530,6 +532,8 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         // paths (login lookup, seeding) opt out explicitly with IgnoreQueryFilters().
         modelBuilder.Entity<User>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<UserInvitation>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<WelcomeInvitationBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<WelcomeInvitationAttempt>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AccountEmployeeCurrentLink>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<AccountEmployeeLinkEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<UserRole>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);

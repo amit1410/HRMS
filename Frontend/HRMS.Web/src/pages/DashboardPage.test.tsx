@@ -84,8 +84,8 @@ describe('DashboardPage', () => {
     expect(screen.getByText('Tomas Lind')).toBeInTheDocument()
     expect(screen.getByText('Resigned')).toBeInTheDocument()
 
-    expect(await screen.findByText('25')).toBeInTheDocument()
-    expect(screen.getByText('5')).toBeInTheDocument()
+    expect((await screen.findAllByText('25'))[0]).toBeInTheDocument()
+    expect(screen.getAllByText('5')[0]).toBeInTheDocument()
   })
 
   it('names the tenant, so a user with accounts in two cannot mistake one for the other', async () => {
@@ -131,6 +131,18 @@ describe('DashboardPage', () => {
     expect(stub.calls).toHaveLength(0)
   })
 
+  it('does not request team attendance for an administrator without a linked employee', async () => {
+    renderAsUser(<DashboardPage />, {
+      user: makeUser({
+        permissions: [Permissions.attendance.view],
+        employeeIdentity: null,
+      }),
+    })
+
+    expect(await screen.findByText('Nothing to show yet')).toBeInTheDocument()
+    expect(stub.callsTo('get', '/api/attendance/manager/team')).toHaveLength(0)
+  })
+
   it('shows only the panels a partial permission set covers', async () => {
     renderAsUser(<DashboardPage />, {
       user: makeUser({ permissions: [Permissions.department.view] }),
@@ -146,7 +158,7 @@ describe('DashboardPage', () => {
     renderAsUser(<DashboardPage />)
 
     // Departments still arrive…
-    expect(await screen.findByText('25')).toBeInTheDocument()
+    expect((await screen.findAllByText('25'))[0]).toBeInTheDocument()
     // …while the employee tiles say "unavailable" rather than a wrong number.
     await waitFor(() => expect(screen.getAllByText('—')).toHaveLength(2))
     expect(screen.getByText('Could not load this')).toBeInTheDocument()

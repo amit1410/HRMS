@@ -47,6 +47,17 @@ describe('PlatformTenantsPage Development password reset', () => {
     })
   })
 
+  it('does not request platform tenants without the effective view permission', () => {
+    canPermission.mockReturnValue(false)
+
+    render(<PlatformTenantsPage />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('You do not have permission to view platform tenants.')
+    expect(listPlatformTenants).not.toHaveBeenCalled()
+
+    canPermission.mockReturnValue(true)
+  })
+
   it('requires confirmation before resetting', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     render(<PlatformTenantsPage />)

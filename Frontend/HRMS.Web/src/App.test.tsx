@@ -150,6 +150,7 @@ describe('App', () => {
 
     renderApp('/dashboard')
     await screen.findByRole('heading', { name: 'Dashboard', level: 1 })
+    await userEvent.click(screen.getByRole('button', { name: 'People' }))
 
     await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
 
@@ -163,13 +164,31 @@ describe('App', () => {
 
     renderApp('/dashboard')
     await screen.findByRole('heading', { name: 'Dashboard', level: 1 })
+    await userEvent.click(screen.getByRole('button', { name: 'People' }))
 
     // The href and the route table have to agree; a typo in either is a link that lands on the 404.
     expect(screen.getByRole('link', { name: 'Employees' })).toHaveAttribute('href', '/employees')
-    expect(screen.getByRole('link', { name: 'Masters' })).toHaveAttribute('href', '/masters/holding-companies')
+    expect(screen.queryByRole('link', { name: 'Masters' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Employee Code Configuration' })).not.toBeInTheDocument()
 
+    await userEvent.click(screen.getByRole('button', { name: 'Administration' }))
+    expect(screen.getByRole('link', { name: 'Configuration Center' })).toHaveAttribute('href', '/configuration')
+
+    await userEvent.click(screen.getByRole('button', { name: 'People' }))
     await userEvent.click(screen.getByRole('link', { name: 'Employees' }))
     expect(await screen.findByRole('heading', { name: 'Employees', level: 1 })).toBeInTheDocument()
+  })
+
+  it('keeps the direct Device Integration route protected by device permissions, not Attendance.View', async () => {
+    const attendanceOnlyUser = makeUser({ roles: ['Attendance viewer'], permissions: [Permissions.attendance.view] })
+    window.localStorage.setItem(session.refreshTokenKey, 'refresh-1')
+    stub.on('post', '/api/auth/refresh', () => ({ data: ok(makeLoginResponse({ user: attendanceOnlyUser })) }))
+    stub.on('get', '/api/auth/me', () => ({ data: ok(attendanceOnlyUser) }))
+
+    renderApp('/attendance/devices')
+
+    expect(await screen.findByText('You do not have access to that')).toBeInTheDocument()
+    expect(screen.queryByText('Attendance Device Integration')).not.toBeInTheDocument()
   })
 
   it('leaves a module the user cannot open out of the navigation entirely', async () => {
@@ -187,6 +206,7 @@ describe('App', () => {
 
     renderApp('/dashboard')
     await screen.findByRole('heading', { name: 'Dashboard', level: 1 })
+    await userEvent.click(screen.getByRole('button', { name: 'People' }))
 
     // Absent, not disabled: a greyed link still says the screen is somewhere they might get to.
     expect(screen.getByRole('link', { name: 'Employees' })).toBeInTheDocument()

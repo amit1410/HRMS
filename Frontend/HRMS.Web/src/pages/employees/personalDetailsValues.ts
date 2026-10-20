@@ -94,14 +94,18 @@ export function toPersonalDetailsValues(
     caste: employee.caste ?? '',
     citizenship: employee.citizenship ?? '',
     esicApplicable: employee.esicApplicable,
-    esicNumber: sensitive?.esicNumber ?? '',
+    // ESIC is sensitive: the regular employee response contains the authorized masked value.
+    // The protected endpoint can replace it with the raw value when the user is allowed to edit.
+    esicNumber: sensitive?.esicNumber ?? employee.maskedEsicNumber ?? '',
     pfNumber: sensitive?.pfNumber ?? '',
     mediclaimNumber: sensitive?.mediclaimNumber ?? '',
     uanNumber: sensitive?.uanNumber ?? '',
     gratuity: employee.gratuity,
     pension: employee.pension,
-    aadhaarNumber: sensitive?.aadhaarNumber ?? '',
-    panNumber: sensitive?.panNumber ?? '',
+    // Raw Aadhaar/PAN values are never used to populate the edit form. The update API preserves
+    // stored values when these fields are left blank, so loading them here would only increase exposure.
+    aadhaarNumber: '',
+    panNumber: '',
     dateOfJoining: employee.dateOfJoining,
     jobStatus: employee.jobStatus ?? '',
   }
@@ -114,11 +118,33 @@ export function toPersonalDetailsValues(
  * failure instead of the normal "Date of joining is required." field error, so this must be caught here
  * rather than left to the server response.
  */
-export function validateRequiredPersonalDetails(values: PersonalDetailsValues): Record<string, string> {
+export function validateRequiredPersonalDetails(
+  values: PersonalDetailsValues,
+  isCreate = false,
+): Record<string, string> {
   const errors: Record<string, string> = {}
   if (!values.firstName.trim()) errors.firstName = 'First name is required.'
   if (!values.lastName.trim()) errors.lastName = 'Last name is required.'
   if (!values.dateOfJoining.trim()) errors.dateOfJoining = 'Date of joining is required.'
+  if (isCreate && !values.jobStatus.trim()) errors.jobStatus = 'Job status is required.'
+  if (values.aadhaarNumber.trim() && !/^\d{12}$/.test(values.aadhaarNumber.trim())) {
+    errors.aadhaarNumber = 'Aadhaar number must be exactly 12 digits.'
+  }
+  if (values.panNumber.trim() && !/^[A-Z]{5}\d{4}[A-Z]$/.test(values.panNumber.trim().toUpperCase())) {
+    errors.panNumber = 'PAN must be in the format ABCDE1234F (5 letters, 4 digits, 1 letter).'
+  }
+  if (isCreate) {
+    if (!/^\d{12}$/.test(values.aadhaarNumber.trim())) {
+      errors.aadhaarNumber = values.aadhaarNumber.trim()
+        ? 'Aadhaar number must be exactly 12 digits.'
+        : 'Aadhaar number is required.'
+    }
+    if (!/^[A-Z]{5}\d{4}[A-Z]$/.test(values.panNumber.trim().toUpperCase())) {
+      errors.panNumber = values.panNumber.trim()
+        ? 'PAN must be in the format ABCDE1234F (5 letters, 4 digits, 1 letter).'
+        : 'PAN number is required.'
+    }
+  }
   return errors
 }
 
@@ -147,7 +173,7 @@ export function toPersonalDetailsRequest(values: PersonalDetailsValues): Employe
     gratuity: values.gratuity,
     pension: values.pension,
     aadhaarNumber: values.aadhaarNumber.trim() || null,
-    panNumber: values.panNumber.trim() || null,
+    panNumber: values.panNumber.trim().toUpperCase() || null,
     dateOfJoining: values.dateOfJoining,
     jobStatus: values.jobStatus.trim() || null,
   }

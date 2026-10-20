@@ -45,4 +45,12 @@ internal static class ConfiguredProvider
             ? CatalogProviderKind.MySql
             : CatalogProviderKind.SqlServer;
     }
+
+    internal static string ResolveCatalogConnectionString(
+        IConfiguration configuration,
+        CatalogProviderKind provider) =>
+        provider is CatalogProviderKind.Sqlite
+            ? configuration.GetConnectionString("SqliteCatalog") ?? "Data Source=hrms_catalog_dev.db"
+            : configuration.GetConnectionString("Catalog")
+                ?? throw new InvalidOperationException("Connection string 'Catalog' is not configured.");
 }

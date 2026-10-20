@@ -37,7 +37,12 @@ public sealed class TenantShardResolutionMiddleware
         ITenantShardResolver resolver,
         IShardContext shardContext)
     {
-        if (context.Items.ContainsKey(PlatformRequestRoutingMiddleware.PlatformHostItem))
+        if (context.Items.ContainsKey(PlatformRequestRoutingMiddleware.CatalogDiagnosticBypassItem)
+            && HttpMethods.IsGet(context.Request.Method)
+            && string.Equals(
+                context.Request.Path.Value,
+                PlatformRequestRoutingMiddleware.CatalogDiagnosticPath,
+                StringComparison.Ordinal))
         {
             await _next(context);
             return;

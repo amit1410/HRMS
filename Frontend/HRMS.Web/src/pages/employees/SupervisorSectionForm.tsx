@@ -14,7 +14,8 @@ import { toApiError, type ApiError } from '../../api/errors.ts'
 
 interface SupervisorSectionFormProps {
   employeeId: string
-  onEmploymentChange: () => void
+  onEmploymentChange?: () => void
+  onSaved?: () => void | Promise<void>
 }
 
 type Role = {
@@ -26,6 +27,7 @@ type Role = {
 }
 
 const ROLES: Role[] = [
+  { label: 'L1 manager', type: 'L1', idKey: 'l1ManagerId', codeKey: 'l1ManagerCode', nameKey: 'l1ManagerName' },
   { label: 'L2 manager', type: 'L2', idKey: 'l2ManagerId', codeKey: 'l2ManagerCode', nameKey: 'l2ManagerName' },
   { label: 'L3 manager', type: 'L3', idKey: 'l3ManagerId', codeKey: 'l3ManagerCode', nameKey: 'l3ManagerName' },
   { label: 'L4 manager', type: 'Other', idKey: 'l4ManagerId', codeKey: 'l4ManagerCode', nameKey: 'l4ManagerName' },
@@ -35,9 +37,10 @@ const ROLES: Role[] = [
   { label: 'CHRO manager', type: 'HR', idKey: 'chroManagerId', codeKey: 'chroManagerCode', nameKey: 'chroManagerName' },
 ]
 
-export function SupervisorSectionForm({ employeeId, onEmploymentChange }: SupervisorSectionFormProps) {
+export function SupervisorSectionForm({ employeeId, onSaved }: SupervisorSectionFormProps) {
   const { can } = useAuth()
   const [values, setValues] = useState<EmployeeSupervisorRequest>({})
+  const [initialValues, setInitialValues] = useState<EmployeeSupervisorRequest>({})
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<ApiError | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -45,13 +48,24 @@ export function SupervisorSectionForm({ employeeId, onEmploymentChange }: Superv
   const history = useApiQuery((signal) => getEmploymentHistory(employeeId, signal), [employeeId])
 
   useEffect(() => {
+    const current = history.data?.find(isEffectiveToday)
     if (supervisor.data) {
-      setValues(supervisorRequest(supervisor.data))
+      const next = supervisorRequest(supervisor.data)
+      if (!next.l1ManagerId && current?.managerId) {
+        next.l1ManagerId = current.managerId
+        next.l1ManagerCode = current.managerEmployeeCode
+        next.l1ManagerName = current.managerFullName
+      }
+      setValues(next)
+      setInitialValues(next)
       return
     }
 
-    const current = history.data?.find(isEffectiveToday)
-    if (current) setValues((previous) => ({ ...previous, l1ManagerId: current.managerId ?? null, l1ManagerCode: current.managerEmployeeCode ?? null, l1ManagerName: current.managerFullName ?? null }))
+    if (current) {
+      const next = { ...values, l1ManagerId: current.managerId ?? null, l1ManagerCode: current.managerEmployeeCode ?? null, l1ManagerName: current.managerFullName ?? null }
+      setValues(next)
+      setInitialValues(next)
+    }
   }, [supervisor.data, history.data])
 
   function updateRole(role: Role, managerId: string, option: SupervisorOption | null): void {
@@ -74,6 +88,7 @@ export function SupervisorSectionForm({ employeeId, onEmploymentChange }: Superv
       await upsertSupervisor(employeeId, values)
       setSuccess('Additional supervisor assignments saved.')
       await supervisor.refetch()
+      await onSaved?.()
     } catch (caught) {
       setError(toApiError(caught))
     } finally {
@@ -84,33 +99,19 @@ export function SupervisorSectionForm({ employeeId, onEmploymentChange }: Superv
   if (supervisor.isLoading && !supervisor.data && history.isLoading) return <Card><div className="table-loading"><Spinner label="Loading supervisor assignments..." /></div></Card>
   if (supervisor.error && supervisor.error.status !== 404 && !supervisor.data) return <Card><ErrorState error={supervisor.error} onRetry={supervisor.refetch} /></Card>
 
-  const status = supervisor.data?.l1ResolutionStatus
-  const message = supervisor.data?.l1ResolutionMessage
   const canEdit = can(Permissions.employee.edit)
 
   return (
-    <Card className="form-card">
+    <Card className="form-card supervisor-form-card">
       {error && <Notice tone="error">{error.message}</Notice>}
       {success && <Notice tone="success">{success}</Notice>}
-      <div className="employment-card-heading">
-        <div><p className="eyebrow">Supervisor assignments</p><h2>Reporting relationships</h2></div>
-        {status && <Badge tone={status === 'Resolved' ? 'success' : 'warning'}>{status}</Badge>}
+      <div className="employment-card-heading supervisor-card-heading">
+        <div><p className="eyebrow">Employee details</p><h2>Supervisor assignments</h2><p>Assign the reporting relationships used across HRMS workflows.</p></div>
+        {supervisor.data?.l1ResolutionStatus && <Badge tone={supervisor.data.l1ResolutionStatus === 'Resolved' ? 'success' : 'warning'}>{supervisor.data.l1ResolutionStatus}</Badge>}
       </div>
-      {message && status !== 'Resolved' && <Notice tone="info">{message}</Notice>}
-      <div className="form-section supervisor-direct-manager">
-        <label htmlFor="resolved-l1-manager">Current direct manager (L1)</label>
-        <input id="resolved-l1-manager" className="input" value={values.l1ManagerId ? `${values.l1ManagerCode ?? ''} — ${values.l1ManagerName ?? 'Manager'}` : 'Unassigned'} readOnly />
-        <p className="field-hint">L1 is resolved from effective Employment history and cannot be edited here.</p>
-        <button type="button" className="button button-secondary" onClick={onEmploymentChange}>Change through Employment</button>
-      </div>
-      {history.data?.filter(isScheduled).map((record) => (
-        <div className="supervisor-scheduled" key={record.id} role="status">
-          Scheduled L1: {record.managerEmployeeCode ?? 'Unassigned'} — {record.managerFullName ?? 'No manager'} effective {record.effectiveFrom}.
-        </div>
-      ))}
       {canEdit ? <form onSubmit={submit} noValidate>
-        <fieldset className="form-section">
-          <legend>Additional supervisor roles</legend>
+        <fieldset className="form-section supervisor-form-section">
+          <legend>Reporting relationships</legend>
           <div className="form-grid">
             {ROLES.map((role) => <SupervisorField
               key={role.idKey}
@@ -119,11 +120,16 @@ export function SupervisorSectionForm({ employeeId, onEmploymentChange }: Superv
               employeeId={employeeId}
               supervisorType={role.type}
               value={String(values[role.idKey] ?? '')}
+              selectedCode={values[role.codeKey] as string | null | undefined}
+              selectedName={values[role.nameKey] as string | null | undefined}
               onChange={(managerId, option) => updateRole(role, managerId, option)}
             />)}
           </div>
         </fieldset>
-        <div className="form-actions"><button type="submit" className="button button-primary" disabled={saving}>{saving ? 'Saving...' : 'Save additional assignments'}</button></div>
+        <div className="form-actions">
+          <button type="button" className="button button-secondary" onClick={() => { setValues(initialValues); setError(null); setSuccess(null) }} disabled={saving}>Cancel</button>
+          <button type="submit" className="button button-primary" disabled={saving}>{saving ? 'Saving...' : 'Save supervisor assignments'}</button>
+        </div>
       </form> : <Notice tone="info">You do not have permission to edit supervisor assignments.</Notice>}
     </Card>
   )
@@ -162,10 +168,4 @@ function isEffectiveToday(record: EmployeeEmploymentHistory): boolean {
   const now = new Date()
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   return record.effectiveFrom <= today && (record.effectiveTo == null || record.effectiveTo >= today)
-}
-
-function isScheduled(record: EmployeeEmploymentHistory): boolean {
-  const now = new Date()
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  return record.effectiveFrom > today
 }

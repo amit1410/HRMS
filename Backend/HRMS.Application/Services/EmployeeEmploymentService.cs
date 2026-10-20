@@ -891,9 +891,6 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         if (!request.DesignationId.HasValue)
             return Result<EmployeeEmploymentHistoryDto>.Invalid("designationId", "Designation is required.");
 
-        if (!request.PositionChangeReasonId.HasValue)
-            return Result<EmployeeEmploymentHistoryDto>.Invalid("positionChangeReasonId", "Change reason is required.");
-
         if (!Enum.IsDefined(typeof(EmploymentChangeReason), request.ChangeReason) ||
             request.ChangeReason == EmploymentChangeReason.Unspecified)
         {
@@ -1070,10 +1067,13 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
                 return (Result<EmployeeEmploymentHistoryDto>.Invalid("costCenterId", "Cost Center does not exist, is inactive, or belongs to another tenant."), references);
         }
 
-        references.PositionChangeReason = await _db.PositionChangeReasons.AsNoTracking().FirstOrDefaultAsync(
-            p => p.Id == request.PositionChangeReasonId && p.TenantId == tenantId && p.IsActive, cancellationToken);
-        if (references.PositionChangeReason is null)
-            return (Result<EmployeeEmploymentHistoryDto>.Invalid("positionChangeReasonId", "Position Change Reason does not exist, is inactive, or belongs to another tenant."), references);
+        if (request.PositionChangeReasonId is Guid positionChangeReasonId)
+        {
+            references.PositionChangeReason = await _db.PositionChangeReasons.AsNoTracking().FirstOrDefaultAsync(
+                p => p.Id == positionChangeReasonId && p.TenantId == tenantId && p.IsActive, cancellationToken);
+            if (references.PositionChangeReason is null)
+                return (Result<EmployeeEmploymentHistoryDto>.Invalid("positionChangeReasonId", "Position Change Reason does not exist, is inactive, or belongs to another tenant."), references);
+        }
 
         if (request.ManagerId is Guid managerId)
         {

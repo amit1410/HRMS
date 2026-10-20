@@ -492,15 +492,15 @@ public class EmployeeSubResourcesController : ControllerBase
     /// <param name="type">Supervisor type (L1, L2, L3, Other, HR, Time).</param>
     [HttpGet("supervisor-options")]
     [HasPermission(Permissions.Employee.View)]
-    [ProducesResponseType(typeof(ApiResponse<IReadOnlyList<SupervisorOptionDto>>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<PagedResult<SupervisorOptionDto>>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ApiResponse), StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<SupervisorOptionDto>>>> GetSupervisorOptions(
-        Guid id, [FromQuery] string type, CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<PagedResult<SupervisorOptionDto>>>> GetSupervisorOptions(
+        Guid id, [FromQuery] string type, [FromQuery] SupervisorOptionsQuery query, CancellationToken cancellationToken)
     {
-        var result = await _supervisorService.GetSupervisorOptionsAsync(id, type, cancellationToken);
+        var result = await _supervisorService.GetSupervisorOptionsAsync(id, type, query, cancellationToken);
         return result.ToActionResult();
     }
 
@@ -702,4 +702,9 @@ public class EmployeeSubResourcesController : ControllerBase
         var result = await _auditService.GetAsync(id, query, cancellationToken);
         return result.ToActionResult();
     }
+}
+
+/// <summary>Query-string model for the paged supervisor-options endpoint.</summary>
+public sealed class SupervisorOptionsQuery : PagedQuery
+{
 }

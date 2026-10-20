@@ -1,4 +1,5 @@
 using FluentValidation;
+using HRMS.Application.Common;
 using HRMS.Application.DTOs.Employees;
 using HRMS.Application.Validators.Common;
 using HRMS.Domain.Enums;
@@ -103,11 +104,12 @@ public class EmployeeRequestValidator : AbstractValidator<EmployeeRequest>
             .When(x => x.DateOfLeaving.HasValue && x.DateOfJoining != default);
 
         RuleFor(x => x.AadhaarNumber)
-            .Matches(@"^\d{12}$").WithMessage("Aadhaar number must be exactly 12 digits.")
+            .Matches(EmployeeCreationValidation.AadhaarPattern).WithMessage("Aadhaar number must be exactly 12 digits.")
             .When(x => !string.IsNullOrWhiteSpace(x.AadhaarNumber));
 
         RuleFor(x => x.PanNumber)
-            .Matches(@"^[A-Z]{5}\d{4}[A-Z]$").WithMessage("PAN must be in the format ABCDE1234F (5 letters, 4 digits, 1 letter).")
+            .Matches(EmployeeCreationValidation.PanPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                .WithMessage("PAN must be in the format ABCDE1234F (5 letters, 4 digits, 1 letter).")
             .When(x => !string.IsNullOrWhiteSpace(x.PanNumber));
 
         RuleFor(x => x.UanNumber)

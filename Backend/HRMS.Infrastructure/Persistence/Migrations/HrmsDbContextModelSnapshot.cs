@@ -8109,6 +8109,7 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime?>("ModifiedDate")
+                        .IsConcurrencyToken()
                         .HasColumnType("datetime2");
 
                     b.Property<int>("Priority")
@@ -8131,6 +8132,55 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.HasIndex("TenantId", "Status", "EffectiveFrom", "EffectiveTo");
 
                     b.ToTable("LeavePolicyVersions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyVersionAuditEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("LeavePolicyVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("PreviousStatus")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("VersionNumber")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ActorUserId");
+
+                    b.HasIndex("TenantId", "LeavePolicyVersionId", "OccurredAtUtc", "Id");
+
+                    b.ToTable("LeavePolicyVersionAuditEvents", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveReminderDelivery", b =>
@@ -18611,6 +18661,123 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("WeeklyOffDays", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.WelcomeInvitationAttempt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("AttemptType")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<int>("DeliveryStatus")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ErrorCategory")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("ErrorSummary")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<Guid?>("PortalUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("RecipientEmailSnapshot")
+                        .IsRequired()
+                        .HasMaxLength(320)
+                        .HasColumnType("nvarchar(320)");
+
+                    b.Property<DateTime>("RequestedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("RequestedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("SentAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BatchId");
+
+                    b.HasIndex("EmployeeId");
+
+                    b.HasIndex("PortalUserId");
+
+                    b.HasIndex("TenantId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "EmployeeId", "RequestedAtUtc");
+
+                    b.HasIndex("TenantId", "DeliveryStatus", "NextAttemptAtUtc", "LeaseExpiresAtUtc")
+                        .HasDatabaseName("IX_WelcomeInvitationAttempts_Tenant_Status_Next_LeaseExp");
+
+                    b.ToTable("WelcomeInvitationAttempts", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.WelcomeInvitationBatch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTime>("RequestedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("RequestedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("TotalAccepted")
+                        .HasColumnType("int");
+
+                    b.Property<int>("TotalRejected")
+                        .HasColumnType("int");
+
+                    b.Property<int>("TotalRequested")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "RequestedAtUtc");
+
+                    b.ToTable("WelcomeInvitationBatches", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.WorkLocation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -22063,6 +22230,27 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("LeavePolicy");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.LeavePolicyVersionAuditEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.User", "ActorUser")
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ActorUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.LeavePolicyVersion", "LeavePolicyVersion")
+                        .WithMany("AuditEvents")
+                        .HasForeignKey("TenantId", "LeavePolicyVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ActorUser");
+
+                    b.Navigation("LeavePolicyVersion");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.LeaveReminderDelivery", b =>
@@ -25649,6 +25837,50 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("WeeklyOffConfiguration");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.WelcomeInvitationAttempt", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.WelcomeInvitationBatch", "Batch")
+                        .WithMany("Attempts")
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("HRMS.Domain.Entities.Employee", "Employee")
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.User", "PortalUser")
+                        .WithMany()
+                        .HasForeignKey("PortalUserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Batch");
+
+                    b.Navigation("Employee");
+
+                    b.Navigation("PortalUser");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.WelcomeInvitationBatch", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.WorkLocation", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -26076,6 +26308,8 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                 {
                     b.Navigation("ApplicabilitySets");
 
+                    b.Navigation("AuditEvents");
+
                     b.Navigation("Rules");
                 });
 
@@ -26468,6 +26702,11 @@ namespace HRMS.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("HRMS.Domain.Entities.WeeklyOffConfiguration", b =>
                 {
                     b.Navigation("Days");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.WelcomeInvitationBatch", b =>
+                {
+                    b.Navigation("Attempts");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.YearEndTaxEmployee", b =>

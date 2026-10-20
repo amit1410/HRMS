@@ -127,17 +127,66 @@ public class EmployeeServiceTests
     }
 
     [Fact]
-    public async Task Create_without_job_status_keeps_it_null_without_employment_or_status_audit()
+    public async Task Create_without_job_status_is_rejected()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();
 
-        var result = await harness.Employees().CreateAsync(NewRequest(harness));
+        var request = NewRequest(harness);
+        request.JobStatus = null;
+        var result = await harness.Employees().CreateAsync(request);
+
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Contains(result.Errors!, e => e.Field == "jobStatus");
+    }
+
+    [Theory]
+    [InlineData("aadhaarNumber")]
+    [InlineData("panNumber")]
+    public async Task Create_without_required_statutory_identifier_is_rejected(string field)
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var request = NewRequest(harness);
+        if (field == "aadhaarNumber")
+            request.AadhaarNumber = null;
+        else
+            request.PanNumber = null;
+
+        var result = await harness.Employees().CreateAsync(request);
+
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Contains(result.Errors!, e => e.Field == field);
+    }
+
+    [Fact]
+    public async Task Create_rejects_invalid_aadhaar_and_pan_formats()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var request = NewRequest(harness);
+        request.AadhaarNumber = "12345678901A";
+        request.PanNumber = "ABCDE12345";
+
+        var result = await harness.Employees().CreateAsync(request);
+
+        Assert.Equal(ResultStatus.ValidationFailed, result.Status);
+        Assert.Contains(result.Errors!, e => e.Field == "aadhaarNumber");
+        Assert.Contains(result.Errors!, e => e.Field == "panNumber");
+    }
+
+    [Fact]
+    public async Task Create_normalizes_lowercase_pan_and_returns_only_masked_identifiers()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        var request = NewRequest(harness);
+        request.PanNumber = "abcde1234f";
+
+        var result = await harness.Employees().CreateAsync(request);
 
         Assert.True(result.Succeeded, result.Message);
-        using var unscoped = harness.CreateUnscopedContext();
-        Assert.Null(await unscoped.Employees.IgnoreQueryFilters().Where(e => e.Id == result.Value!.Id).Select(e => e.JobStatus).SingleAsync());
-        Assert.Empty(await unscoped.EmployeeEmployments.IgnoreQueryFilters().Where(e => e.EmployeeId == result.Value.Id).ToListAsync());
-        Assert.Empty(await unscoped.EmployeeAuditLogs.IgnoreQueryFilters().Where(e => e.EmployeeId == result.Value.Id && e.FieldName == "JobStatus").ToListAsync());
+        Assert.Equal("XXXX-XXXX-3333", result.Value!.MaskedAadhaarNumber);
+        Assert.Equal("A****F", result.Value.MaskedPanNumber);
+        using var read = harness.CreateUnscopedContext();
+        Assert.Equal("ABCDE1234F", await read.Employees.IgnoreQueryFilters()
+            .Where(e => e.Id == result.Value.Id).Select(e => e.PanNumber).SingleAsync());
     }
 
     [Fact]
@@ -366,7 +415,10 @@ public class EmployeeServiceTests
             Email = "nadia.farrell@demo01.com",
             DateOfJoining = Joined,
             DepartmentId = OrganizationTestHarness.DepartmentId(Demo02, "OPS"),
-            DesignationId = OrganizationTestHarness.DesignationId(Demo02, "SR")
+            DesignationId = OrganizationTestHarness.DesignationId(Demo02, "SR"),
+            JobStatus = "Probation",
+            AadhaarNumber = "111122223333",
+            PanNumber = "ABCDE1234F"
         };
 
         var result = await harness.Employees().CreateAsync(request);
@@ -630,6 +682,9 @@ public class EmployeeServiceTests
         DepartmentId = OrganizationTestHarness.DepartmentId(Demo01, "ENG"),
         DesignationId = OrganizationTestHarness.DesignationId(Demo01, "SE"),
         ReportingManagerId = OrganizationTestHarness.EmployeeId(Demo01, "EMP-002"),
+        JobStatus = "Probation",
+        AadhaarNumber = "111122223333",
+        PanNumber = "ABCDE1234F",
         Address = "1 New Street"
     };
 
@@ -652,6 +707,11 @@ public class EmployeeServiceTests
         DepartmentId = dto.DepartmentId,
         DesignationId = dto.DesignationId,
         ReportingManagerId = dto.ReportingManagerId,
+        // Seeded directory rows predate the mandatory statutory fields. Supply valid
+        // synthetic values so these update tests exercise their intended behavior.
+        JobStatus = dto.JobStatus ?? "Probation",
+        AadhaarNumber = "111122223333",
+        PanNumber = "ABCDE1234F",
         Address = dto.Address
     };
 

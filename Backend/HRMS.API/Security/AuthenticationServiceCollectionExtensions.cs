@@ -152,6 +152,11 @@ public static class AuthenticationServiceCollectionExtensions
                 .AddAuthenticationSchemes("PlatformBearer")
                 .RequireAuthenticatedUser()
                 .RequireClaim(PlatformClaimTypes.Scope, "platform"));
+            options.AddPolicy("PlatformSuperAdmin", policy => policy
+                .AddAuthenticationSchemes("PlatformBearer")
+                .RequireAuthenticatedUser()
+                .RequireClaim(PlatformClaimTypes.Scope, "platform")
+                .RequireClaim(HrmsClaimTypes.Role, PlatformRoleNames.PlatformSuperAdmin));
             foreach (var permission in PlatformPermissions.All)
             {
                 options.AddPolicy(permission, policy => policy

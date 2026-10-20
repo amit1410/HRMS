@@ -13,6 +13,7 @@ import { loadCountryOptions, loadStateOptions, truncationHint } from './referenc
 interface AddressDetailsFormProps {
   /** The employee whose address details are being viewed/edited. */
   employeeId: string
+  onSaved?: () => void | Promise<void>
 }
 
 /** The values of one address block (current or permanent), rendered as free text plus the country/state pickers. */
@@ -73,7 +74,7 @@ function toAddressRequest(addressType: AddressType, part: AddressPartValues): Em
  * blocks; while it is set the permanent block mirrors the current one live and is disabled, and the save
  * persists the flag (echoing the contact's other fields so they are not wiped) alongside both addresses.
  */
-export function AddressDetailsForm({ employeeId }: AddressDetailsFormProps) {
+export function AddressDetailsForm({ employeeId, onSaved }: AddressDetailsFormProps) {
   const [current, setCurrent] = useState<AddressPartValues>(emptyPart())
   const [permanent, setPermanent] = useState<AddressPartValues>(emptyPart())
   const [sameAsCurrent, setSameAsCurrent] = useState(false)
@@ -148,6 +149,7 @@ export function AddressDetailsForm({ employeeId }: AddressDetailsFormProps) {
       await upsertAddress(employeeId, toAddressRequest('Permanent', permanentPayload))
       setHasSaved(true)
       setSuccess('Address Details updated successfully.')
+      await onSaved?.()
     } catch (caught) {
       setError(toApiError(caught))
     } finally {

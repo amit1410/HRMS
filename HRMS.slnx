@@ -7,6 +7,7 @@
     <Project Path="Backend/HRMS.Infrastructure.MySqlCatalogMigrations/HRMS.Infrastructure.MySqlCatalogMigrations.csproj" />
     <Project Path="Backend/HRMS.Infrastructure.MySqlMigrations/HRMS.Infrastructure.MySqlMigrations.csproj" />
     <Project Path="Backend/HRMS.MigrationHost/HRMS.MigrationHost.csproj" />
+    <Project Path="Backend/HRMS.WelcomeInvitationOperator/HRMS.WelcomeInvitationOperator.csproj" />
     <Project Path="Backend/HRMS.Tests/HRMS.Tests.csproj" />
   </Folder>
 </Solution>

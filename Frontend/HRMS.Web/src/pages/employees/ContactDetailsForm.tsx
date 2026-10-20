@@ -12,6 +12,7 @@ import { useApiQuery } from '../../hooks/useApiQuery.ts'
 interface ContactDetailsFormProps {
   /** The employee whose contact details are being viewed/edited. */
   employeeId: string
+  onSaved?: () => void | Promise<void>
 }
 
 /**
@@ -80,7 +81,7 @@ function toContactRequest(values: ContactValues): {
  * and emails; the "Permanent Address same as Current Address" flag is edited on the Address Details tab,
  * so this form merely echoes the flag it loads back on save rather than re-deciding it.
  */
-export function ContactDetailsForm({ employeeId }: ContactDetailsFormProps) {
+export function ContactDetailsForm({ employeeId, onSaved }: ContactDetailsFormProps) {
   const [values, setValues] = useState<ContactValues>(emptyContactValues())
   const [hasSaved, setHasSaved] = useState(false)
   const [error, setError] = useState<ApiError | null>(null)
@@ -120,6 +121,7 @@ export function ContactDetailsForm({ employeeId }: ContactDetailsFormProps) {
       setValues(toContactValues(saved))
       setHasSaved(true)
       setSuccess('Contact Details updated successfully.')
+      await onSaved?.()
     } catch (caught) {
       setError(toApiError(caught))
     } finally {
