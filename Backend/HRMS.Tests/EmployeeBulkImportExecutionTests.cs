@@ -421,19 +421,36 @@ public sealed class EmployeeBulkImportExecutionTests
     }
 
     [Fact]
-    public async Task Runtime_failure_stops_later_rows_but_keeps_prior_atomic_successes()
+    public async Task Row_two_failure_rolls_back_that_employee_and_later_valid_rows_continue_once()
     {
-        using var f = await Fixture.CreateAsync(new FailEmployeeNameInterceptor("Asha1")); await f.ConfigureCodeAsync();
-        var bytes = await f.CreateWorkbookAsync(3);
+        using var f = await Fixture.CreateAsync(new FailEmployeeNameInterceptor("Asha0")); await f.ConfigureCodeAsync();
+        var bytes = await f.CreateWorkbookAsync(4);
+        var employeeBaseline = await f.Db.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == TenantId);
+        var historyBaseline = await f.Db.EmployeeEmploymentHistory.IgnoreQueryFilters().CountAsync(x => x.TenantId == TenantId);
         var prepared = await f.PrepareAsync(bytes); Assert.True(prepared.Succeeded, prepared.Message);
         var result = await f.ConfirmAsync(prepared.Value!.OperationId, prepared.Value.ConfirmationToken, bytes);
         Assert.True(result.Succeeded, result.Message);
-        Assert.Equal((1, 1, 1), (result.Value!.SucceededRows, result.Value.FailedRows, result.Value.SkippedRows));
+        Assert.Equal((3, 1, 0), (result.Value!.SucceededRows, result.Value.FailedRows, result.Value.SkippedRows));
         Assert.Equal("PartiallyCompleted", result.Value.State);
-        Assert.Equal(new[] { "Succeeded", "Failed", "Skipped" }, result.Value.Rows.Select(x => x.Status));
-        Assert.Equal(1, await f.Db.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == TenantId && x.FirstName == "Asha0"));
-        Assert.False(await f.Db.Employees.IgnoreQueryFilters().AnyAsync(x => x.TenantId == TenantId && x.FirstName == "Asha1"));
-        Assert.False(await f.Db.Employees.IgnoreQueryFilters().AnyAsync(x => x.TenantId == TenantId && x.FirstName == "Asha2"));
+        Assert.Equal(new[] { "Failed", "Succeeded", "Succeeded", "Succeeded" }, result.Value.Rows.Select(x => x.Status));
+        Assert.Equal(employeeBaseline + 3, await f.Db.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == TenantId));
+        Assert.Equal(historyBaseline + 3, await f.Db.EmployeeEmploymentHistory.IgnoreQueryFilters().CountAsync(x => x.TenantId == TenantId));
+        Assert.False(await f.Db.Employees.IgnoreQueryFilters().AnyAsync(x => x.TenantId == TenantId && x.FirstName == "Asha0"));
+        Assert.All(new[] { "Asha1", "Asha2", "Asha3" }, name =>
+            Assert.True(f.Db.Employees.IgnoreQueryFilters().Any(x => x.TenantId == TenantId && x.FirstName == name)));
+        Assert.Equal(3, result.Value.Rows.Where(x => x.Status == "Succeeded").Select(x => x.EmployeeCode).Distinct().Count());
+        Assert.Equal(3, result.Value.Rows.Where(x => x.Status == "Succeeded").Select(x => x.EmployeeCode).Count());
+
+        var diagnostic = Assert.Single(f.PreparationLogger.Entries, x => x.Message.Contains("Employee import row onboarding failed."));
+        Assert.Contains("Excel row 2", diagnostic.Message);
+        Assert.Contains("failure status Exception", diagnostic.Message);
+        Assert.Contains("failure fields none", diagnostic.Message);
+        Assert.DoesNotContain("Asha0", diagnostic.Message);
+        Assert.DoesNotContain("sensitive-marker", diagnostic.Message);
+
+        f.Db.ClearChangeTracker();
+        Assert.False(await f.Execution.ProcessQueuedOperationAsync(prepared.Value.OperationId));
+        Assert.Equal(employeeBaseline + 3, await f.Db.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == TenantId));
     }
 
     [Fact]

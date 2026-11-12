@@ -313,11 +313,17 @@ public sealed class EmployeeBulkImportExecutionService(
                     var errorCategory = onboardingException is null
                         ? $"result_{creation?.Status.ToString().ToLowerInvariant() ?? "unknown"}"
                         : GetSafeErrorCategory(onboardingException);
+                    var failureStatus = onboardingException is null
+                        ? creation?.Status.ToString() ?? "Unknown"
+                        : "Exception";
+                    var failureFields = GetSafeFailureFields(creation?.Errors);
                     logger?.LogError(
-                        "Employee import row onboarding failed. Operation {OperationId}, Excel row {ExcelRowNumber}, stage {FailureStage}, exception type {ExceptionType}, error category {ErrorCategory}.",
+                        "Employee import row onboarding failed. Operation {OperationId}, Excel row {ExcelRowNumber}, stage {FailureStage}, failure status {FailureStatus}, failure fields {FailureFields}, exception type {ExceptionType}, error category {ErrorCategory}.",
                         claimed.Id,
                         row.ExcelRowNumber,
                         failureStage,
+                        failureStatus,
+                        failureFields,
                         onboardingException?.GetType().Name ?? "None",
                         errorCategory);
                     db.ClearChangeTracker();
@@ -325,10 +331,7 @@ public sealed class EmployeeBulkImportExecutionService(
                         "employee.create_failed", "Employee onboarding failed and was rolled back. Correct the row or current tenant data before retrying.",
                         CancellationToken.None);
                     if (!failed.Succeeded) return;
-                    foreach (var pending in rows.Where(x => x.ExcelRowNumber > row.ExcelRowNumber && x.Status == EmployeeImportRowStatus.Pending))
-                        await persistence.SkipClaimedRowAsync(claimed.Id, pending.ExcelRowNumber, leaseId, "import.stopped",
-                            "Not processed because an earlier row failed.", CancellationToken.None);
-                    break;
+                    continue;
                 }
             }
 
@@ -350,6 +353,22 @@ public sealed class EmployeeBulkImportExecutionService(
         InvalidOperationException => "invalid_operation",
         _ => "unhandled_exception"
     };
+
+    private static string GetSafeFailureFields(IReadOnlyList<ValidationError>? errors)
+    {
+        if (errors is null || errors.Count == 0) return "none";
+        var fields = errors
+            .Select(error => error.Field)
+            .Where(field => !string.IsNullOrWhiteSpace(field))
+            .Select(field => new string(field.Where(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '.')
+                .Take(64).ToArray()))
+            .Where(field => field.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(field => field, StringComparer.Ordinal)
+            .Take(8)
+            .ToArray();
+        return fields.Length == 0 ? "none" : string.Join(',', fields);
+    }
 
     private async Task FinalizeUnprocessableOperationAsync(Guid operationId, Guid leaseId, string errorCode, string message, CancellationToken cancellationToken)
     {
