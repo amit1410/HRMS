@@ -22,13 +22,24 @@ public enum ResultStatus
 /// </summary>
 public sealed class Result<T>
 {
-    private Result(bool succeeded, ResultStatus status, string message, T? value, IReadOnlyList<ValidationError>? errors)
+    private Result(bool succeeded, ResultStatus status, string message, T? value, IReadOnlyList<ValidationError>? errors,
+        string? diagnosticStage = null, string? diagnosticCode = null, int? diagnosticRowNumber = null,
+        string? diagnosticOperation = null, string? diagnosticResourceType = null, string? diagnosticExceptionType = null,
+        string? diagnosticHResult = null, bool? diagnosticResourceInsideWorkspace = null)
     {
         Succeeded = succeeded;
         Status = status;
         Message = message;
         Value = value;
         Errors = errors;
+        DiagnosticStage = diagnosticStage;
+        DiagnosticCode = diagnosticCode;
+        DiagnosticRowNumber = diagnosticRowNumber;
+        DiagnosticOperation = diagnosticOperation;
+        DiagnosticResourceType = diagnosticResourceType;
+        DiagnosticExceptionType = diagnosticExceptionType;
+        DiagnosticHResult = diagnosticHResult;
+        DiagnosticResourceInsideWorkspace = diagnosticResourceInsideWorkspace;
     }
 
     public bool Succeeded { get; }
@@ -36,12 +47,25 @@ public sealed class Result<T>
     public string Message { get; }
     public T? Value { get; }
     public IReadOnlyList<ValidationError>? Errors { get; }
+    /// <summary>Safe internal diagnostic metadata. API error envelopes deliberately do not expose it.</summary>
+    public string? DiagnosticStage { get; }
+    public string? DiagnosticCode { get; }
+    public int? DiagnosticRowNumber { get; }
+    public string? DiagnosticOperation { get; }
+    public string? DiagnosticResourceType { get; }
+    public string? DiagnosticExceptionType { get; }
+    public string? DiagnosticHResult { get; }
+    public bool? DiagnosticResourceInsideWorkspace { get; }
 
     public static Result<T> Success(T value, string message = "Success") =>
         new(true, ResultStatus.Success, message, value, null);
 
-    public static Result<T> Failure(ResultStatus status, string message, IReadOnlyList<ValidationError>? errors = null) =>
-        new(false, status, message, default, errors);
+    public static Result<T> Failure(ResultStatus status, string message, IReadOnlyList<ValidationError>? errors = null,
+        string? diagnosticStage = null, string? diagnosticCode = null, int? diagnosticRowNumber = null,
+        string? diagnosticOperation = null, string? diagnosticResourceType = null, string? diagnosticExceptionType = null,
+        string? diagnosticHResult = null, bool? diagnosticResourceInsideWorkspace = null) =>
+        new(false, status, message, default, errors, diagnosticStage, diagnosticCode, diagnosticRowNumber,
+            diagnosticOperation, diagnosticResourceType, diagnosticExceptionType, diagnosticHResult, diagnosticResourceInsideWorkspace);
 
     public static Result<T> Unauthorized(string message) => Failure(ResultStatus.Unauthorized, message);
 

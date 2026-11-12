@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -16,6 +18,91 @@ internal static class Program
 }
 
 public sealed record SyntheticFile(string RelativePath, byte[] Content);
+
+// Local-development key-wrapping candidate. This deliberately uses user-scoped DPAPI
+// (CRYPTPROTECT_UI_FORBIDDEN; CRYPTPROTECT_LOCAL_MACHINE is never set). It is not a
+// portable or disaster-recovery key store and remains subject to independent review.
+[SupportedOSPlatform("windows")]
+public static class WindowsDpapiKeyProtector
+{
+    private const uint UiForbidden = 0x1;
+    private static readonly byte[] ContextPrefix = "HRMS local backup data key v1:"u8.ToArray();
+
+    public static byte[] Protect(ReadOnlySpan<byte> key, string backupId)
+        => Transform(key, backupId, protect: true);
+
+    public static byte[] Unprotect(ReadOnlySpan<byte> protectedKey, string backupId)
+        => Transform(protectedKey, backupId, protect: false);
+
+    private static byte[] Transform(ReadOnlySpan<byte> input, string backupId, bool protect)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Windows DPAPI current-user protection is required.");
+        if (string.IsNullOrWhiteSpace(backupId) || backupId.Length > 128) throw new ArgumentException("A bounded backup identifier is required.", nameof(backupId));
+        if (protect && input.Length != 32) throw new ArgumentException("A 256-bit AES data key is required.", nameof(input));
+        var inputBytes = input.ToArray();
+        var entropyText = ContextPrefix.Concat(System.Text.Encoding.UTF8.GetBytes(backupId)).ToArray();
+        var entropyBytes = SHA256.HashData(entropyText);
+        var inputBlob = Allocate(inputBytes);
+        var entropyBlob = Allocate(entropyBytes);
+        DataBlob outputBlob = default;
+        IntPtr description = IntPtr.Zero;
+        try
+        {
+            var success = protect
+                ? CryptProtectData(ref inputBlob, null, ref entropyBlob, IntPtr.Zero, IntPtr.Zero, UiForbidden, out outputBlob)
+                : CryptUnprotectData(ref inputBlob, out description, ref entropyBlob, IntPtr.Zero, IntPtr.Zero, UiForbidden, out outputBlob);
+            if (!success) throw new CryptographicException($"Windows DPAPI operation failed with error {Marshal.GetLastWin32Error()}.");
+            var result = new byte[outputBlob.Length];
+            Marshal.Copy(outputBlob.Data, result, 0, result.Length);
+            if (!protect && result.Length != 32)
+            {
+                CryptographicOperations.ZeroMemory(result);
+                throw new CryptographicException("Protected data did not contain a 256-bit AES key.");
+            }
+            return result;
+        }
+        finally
+        {
+            ZeroAndFree(inputBlob);
+            ZeroAndFree(entropyBlob);
+            if (outputBlob.Data != IntPtr.Zero) _ = LocalFree(outputBlob.Data);
+            if (description != IntPtr.Zero) _ = LocalFree(description);
+            CryptographicOperations.ZeroMemory(inputBytes);
+            CryptographicOperations.ZeroMemory(entropyText);
+            CryptographicOperations.ZeroMemory(entropyBytes);
+        }
+    }
+
+    private static DataBlob Allocate(byte[] bytes)
+    {
+        var pointer = Marshal.AllocHGlobal(bytes.Length);
+        Marshal.Copy(bytes, 0, pointer, bytes.Length);
+        return new DataBlob { Length = bytes.Length, Data = pointer };
+    }
+
+    private static void ZeroAndFree(DataBlob blob)
+    {
+        if (blob.Data == IntPtr.Zero) return;
+        Marshal.Copy(new byte[blob.Length], 0, blob.Data, blob.Length);
+        Marshal.FreeHGlobal(blob.Data);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DataBlob { public int Length; public IntPtr Data; }
+
+    [DllImport("crypt32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CryptProtectData(ref DataBlob input, string? description, ref DataBlob entropy,
+        IntPtr reserved, IntPtr prompt, uint flags, out DataBlob output);
+
+    [DllImport("crypt32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CryptUnprotectData(ref DataBlob input, out IntPtr description, ref DataBlob entropy,
+        IntPtr reserved, IntPtr prompt, uint flags, out DataBlob output);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr LocalFree(IntPtr memory);
+}
 
 public static class BackupPackage
 {
@@ -70,6 +157,75 @@ public static class BackupPackage
             try { File.Delete(staging); }
             catch (Exception cleanup) { throw new IOException("Encryption failed and staging cleanup also failed; output was not committed.", new AggregateException(failure, cleanup)); }
             throw new IOException("Encryption failed; no output was committed.", failure);
+        }
+    }
+
+    // Local Windows candidate: encrypts first, wraps the one-time AES key with user-scoped
+    // DPAPI entropy bound to backupId, and commits the wrapped key without overwriting.
+    // The caller must still enforce ACLs on approvedStagingDirectory and obtain security review.
+    [SupportedOSPlatform("windows")]
+    public static ProtectedBackupArtifact EncryptToFileWithCurrentUserKey(
+        string destinationPath, IReadOnlyList<SyntheticFile> files, string approvedStagingDirectory, string backupId, int chunkSize = 64 * 1024)
+    {
+        ValidateDestinationFile(destinationPath, approvedStagingDirectory);
+        if (string.IsNullOrWhiteSpace(backupId) || backupId.Length > 128) throw new ArgumentException("A bounded backup identifier is required.", nameof(backupId));
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("The local key-protection workflow requires Windows DPAPI.");
+        var encryptedPath = Path.GetFullPath(destinationPath);
+        var wrappedKeyPath = encryptedPath + ".dpapi-key";
+        if (File.Exists(wrappedKeyPath)) throw new IOException("Wrapped key destination already exists; overwrite refused.");
+        byte[]? key = null;
+        byte[]? protectedKey = null;
+        var artifactCommitted = false;
+        var wrappedKeyCommitted = false;
+        var stagingKeyPath = Path.Combine(Path.GetFullPath(approvedStagingDirectory), ".backup-key-" + Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            key = EncryptToFile(encryptedPath, files, approvedStagingDirectory, chunkSize);
+            artifactCommitted = true;
+            protectedKey = WindowsDpapiKeyProtector.Protect(key, backupId);
+            using (var output = new FileStream(stagingKeyPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            {
+                output.Write(protectedKey);
+                output.Flush(true);
+            }
+            File.Move(stagingKeyPath, wrappedKeyPath);
+            wrappedKeyCommitted = true;
+            using var artifact = File.OpenRead(encryptedPath);
+            return new(backupId, encryptedPath, wrappedKeyPath, Convert.ToHexString(SHA256.HashData(artifact)), "AES-256-GCM", "Windows-DPAPI-CurrentUser");
+        }
+        catch (Exception failure)
+        {
+            var cleanupFailures = new List<Exception>();
+            try { if (File.Exists(stagingKeyPath)) File.Delete(stagingKeyPath); } catch (Exception ex) { cleanupFailures.Add(ex); }
+            try { if (wrappedKeyCommitted) File.Delete(wrappedKeyPath); } catch (Exception ex) { cleanupFailures.Add(ex); }
+            try { if (artifactCommitted) File.Delete(encryptedPath); } catch (Exception ex) { cleanupFailures.Add(ex); }
+            if (cleanupFailures.Count > 0)
+                throw new IOException("Encrypted artifact setup failed and cleanup was incomplete.", new AggregateException([failure, .. cleanupFailures]));
+            throw;
+        }
+        finally
+        {
+            if (key is not null) CryptographicOperations.ZeroMemory(key);
+            if (protectedKey is not null) CryptographicOperations.ZeroMemory(protectedKey);
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    public static void DecryptToDirectoryWithCurrentUserKey(string encryptedPath, string wrappedKeyPath, string backupId, string destinationDirectory)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("The local key-protection workflow requires Windows DPAPI.");
+        var protectedKey = File.ReadAllBytes(wrappedKeyPath);
+        byte[]? key = null;
+        try
+        {
+            key = WindowsDpapiKeyProtector.Unprotect(protectedKey, backupId);
+            using var input = new FileStream(encryptedPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
+            DecryptToDirectory(input, key, destinationDirectory);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(protectedKey);
+            if (key is not null) CryptographicOperations.ZeroMemory(key);
         }
     }
 
@@ -226,10 +382,15 @@ public static class BackupPackage
     private sealed record ManifestEntry([property: JsonPropertyName("Path")] string Path, [property: JsonPropertyName("Length")] ulong Length, [property: JsonPropertyName("Sha256")] string Sha256);
 }
 
+public sealed record ProtectedBackupArtifact(string BackupId, string ArtifactPath, string ProtectedKeyPath, string Sha256,
+    string EncryptionAlgorithm, string KeyProtection);
+
 internal static class PrototypeTests
 {
     public static void RunAll()
     {
+        RunStreamingArchiveTests();
+        if (OperatingSystem.IsWindows()) RunWindowsDpapiTests();
         var key = RandomNumberGenerator.GetBytes(32); var files = new[] { new SyntheticFile("exports/alpha.txt", Encoding.UTF8.GetBytes("alpha")), new SyntheticFile("exports/beta.bin", Enumerable.Range(0, 200_000).Select(i => (byte)(i % 251)).ToArray()) }; using var p = new MemoryStream(); BackupPackage.Encrypt(p, files, key, 4096); var bytes = p.ToArray(); var restored = BackupPackage.Decrypt(new MemoryStream(bytes), key); Assert(restored.Count == 2 && restored[1].Content.SequenceEqual(files[1].Content), "round trip");
         using var freshPackage1 = new MemoryStream(); var freshKey1 = BackupPackage.EncryptWithFreshKey(freshPackage1, files, 4096); using var freshPackage2 = new MemoryStream(); var freshKey2 = BackupPackage.EncryptWithFreshKey(freshPackage2, files, 4096); Assert(!freshKey1.SequenceEqual(freshKey2), "fresh-key workflow generates distinct keys"); Assert(BackupPackage.Decrypt(new MemoryStream(freshPackage1.ToArray()), freshKey1).Count == 2, "fresh-key workflow round trip");
         Expect(() => BackupPackage.Decrypt(new MemoryStream(bytes), RandomNumberGenerator.GetBytes(32))); Expect(() => BackupPackage.Decrypt(new MemoryStream(bytes[..^1]), key)); Expect(() => BackupPackage.Decrypt(new MemoryStream(bytes.Concat(new byte[] { 1 }).ToArray()), key)); var tampered = bytes.ToArray(); tampered[^1] ^= 1; Expect(() => BackupPackage.Decrypt(new MemoryStream(tampered), key));
@@ -250,8 +411,230 @@ internal static class PrototypeTests
         Expect(() => BackupPackage.Encrypt(new MemoryStream(), files, key, 0)); Expect(() => BackupPackage.Encrypt(new MemoryStream(), new[] { new SyntheticFile(new string('x', BackupPackage.MaxManifestBytes), new byte[] { 1 }) }, key)); Expect(() => BackupPackage.Encrypt(new MemoryStream(), Enumerable.Range(0, BackupPackage.MaxFileCount + 1).Select(i => new SyntheticFile($"f{i}", Array.Empty<byte>())).ToArray(), key));
         using var empty = new MemoryStream(); BackupPackage.Encrypt(empty, Array.Empty<SyntheticFile>(), key); Assert(BackupPackage.Decrypt(new MemoryStream(empty.ToArray()), key).Count == 0, "zero-length package"); using var zeroFile = new MemoryStream(); BackupPackage.Encrypt(zeroFile, new[] { new SyntheticFile("empty.txt", Array.Empty<byte>()) }, key); Assert(BackupPackage.Decrypt(new MemoryStream(zeroFile.ToArray()), key)[0].Content.Length == 0, "empty file"); Console.WriteLine("Tests: streaming round-trip, authentication, truncation, trailing-data, atomic output, interrupted writes, destination policy, reparse rejection, cleanup, empty-file and zero-package behavior, bounded metadata, resource-limit rejection");
     }
+
+    private static void RunStreamingArchiveTests()
+    {
+        const string backupId = "synthetic-stream-01";
+        var key = RandomNumberGenerator.GetBytes(32);
+        var root = Path.Combine(Path.GetTempPath(), "hrms-stream-archive-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var artifact = Path.Combine(root, "synthetic.hrb");
+        var length = 32L * 1024 * 1024;
+        try
+        {
+            using (var input = new PatternStream(length))
+            using (var output = new FileStream(artifact, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 1024, FileOptions.SequentialScan))
+                StreamingBackupArchive.EncryptWithKey(input, output, backupId, key, 64 * 1024);
+
+            using (var source = new FileStream(artifact, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.SequentialScan))
+            {
+                source.Position = 0;
+                Assert(StreamingBackupArchive.Verify(source, key, backupId).BackupId == backupId, "large streaming artifact verifies");
+            }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+
+        // Small deterministic fixture covers format attacks while keeping test diagnostics compact.
+        using var plain = new MemoryStream(Enumerable.Range(0, 12_000).Select(i => (byte)(i % 239)).ToArray());
+        using var encoded = new MemoryStream();
+        StreamingBackupArchive.EncryptWithKey(plain, encoded, backupId, key, 4096);
+        var original = encoded.ToArray();
+        using (var verify = new MemoryStream(original)) Assert(StreamingBackupArchive.Verify(verify, key, backupId).BackupId == backupId, "streaming archive verifies");
+        using (var verifyAndDecrypt = new MemoryStream(original))
+        using (var restored = new MemoryStream())
+        {
+            StreamingBackupArchive.VerifyThenDecrypt(verifyAndDecrypt, restored, key, backupId);
+            Assert(restored.ToArray().SequenceEqual(Enumerable.Range(0, 12_000).Select(i => (byte)(i % 239))), "verify-before-decrypt round trip");
+        }
+        ExpectAny(() => StreamingBackupArchive.Verify(new MemoryStream(original), key, "wrong-id"));
+        var wrongKey = RandomNumberGenerator.GetBytes(32);
+        try
+        {
+            using var wrongSource = new MemoryStream(original);
+            using var noPlaintext = new HashingNullStream();
+            ExpectCrypto(() => StreamingBackupArchive.VerifyThenDecrypt(wrongSource, noPlaintext, wrongKey, backupId));
+        }
+        finally { CryptographicOperations.ZeroMemory(wrongKey); }
+        ExpectAny(() => StreamingBackupArchive.Verify(new MemoryStream(original[..^5]), key, backupId));
+        using (var truncatedSource = new MemoryStream(original[..^5]))
+        using (var counting = new CountingStream())
+        {
+            ExpectAny(() => StreamingBackupArchive.VerifyThenDecrypt(truncatedSource, counting, key, backupId));
+            Assert(counting.BytesWritten == 0, "truncation rejected before plaintext emission");
+        }
+        var metadataTamper = original.ToArray();
+        var headerLength = BinaryPrimitives.ReadUInt32BigEndian(metadataTamper.AsSpan(8, 4));
+        var purposeIndex = Array.IndexOf(metadataTamper, (byte)'H', 12, checked((int)headerLength));
+        Assert(purposeIndex >= 0, "metadata test marker exists"); metadataTamper[purposeIndex] ^= 1;
+        ExpectAny(() => StreamingBackupArchive.Verify(new MemoryStream(metadataTamper), key, backupId));
+        var chunkTamper = original.ToArray();
+        var firstChunk = 12 + checked((int)headerLength) + 16 + 12;
+        chunkTamper[firstChunk + 9] ^= 0x40;
+        ExpectAny(() => StreamingBackupArchive.Verify(new MemoryStream(chunkTamper), key, backupId));
+        var reordered = ReorderFirstTwoChunks(original, checked((int)headerLength));
+        ExpectAny(() => StreamingBackupArchive.Verify(new MemoryStream(reordered), key, backupId));
+        Console.WriteLine("Tests: streamed 32 MiB input with bounded buffers; round-trip, header authentication, ciphertext tamper, truncation, wrong backup ID, reordered chunks, and verify-before-decrypt.");
+        CryptographicOperations.ZeroMemory(key);
+    }
+
+    private static byte[] ReorderFirstTwoChunks(byte[] archive, int headerLength)
+    {
+        var first = 12 + headerLength + 16;
+        var firstLength = checked((int)BinaryPrimitives.ReadUInt32BigEndian(archive.AsSpan(first + 8, 4)));
+        var firstRecordLength = 12 + firstLength + 16;
+        var second = first + firstRecordLength;
+        var secondLength = checked((int)BinaryPrimitives.ReadUInt32BigEndian(archive.AsSpan(second + 8, 4)));
+        var secondRecordLength = 12 + secondLength + 16;
+        var result = archive[..first].Concat(archive.AsSpan(second, secondRecordLength).ToArray())
+            .Concat(archive.AsSpan(first, firstRecordLength).ToArray())
+            .Concat(archive.AsSpan(second + secondRecordLength).ToArray()).ToArray();
+        return result;
+    }
+
+    private sealed class PatternStream(long length) : Stream
+    {
+        private long _position;
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var n = (int)Math.Min(count, length - _position);
+            for (var i = 0; i < n; i++) buffer[offset + i] = (byte)((_position + i) % 251);
+            _position += n;
+            return n;
+        }
+        public override int Read(Span<byte> buffer)
+        {
+            var n = (int)Math.Min(buffer.Length, length - _position);
+            for (var i = 0; i < n; i++) buffer[i] = (byte)((_position + i) % 251);
+            _position += n;
+            return n;
+        }
+        public override bool CanRead => true; public override bool CanSeek => false; public override bool CanWrite => false;
+        public override long Length => length; public override long Position { get => _position; set => throw new NotSupportedException(); }
+        public override void Flush() { } public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException(); public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class HashingNullStream : Stream
+    {
+        public override void Write(byte[] buffer, int offset, int count) => throw new Exception("Plaintext was released before full authentication.");
+        public override void Write(ReadOnlySpan<byte> buffer) => throw new Exception("Plaintext was released before full authentication.");
+        public override bool CanRead => false; public override bool CanSeek => false; public override bool CanWrite => true;
+        public override long Length => 0; public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override void Flush() { } public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException(); public override void SetLength(long value) => throw new NotSupportedException();
+    }
+    private sealed class CountingStream : Stream
+    {
+        public long BytesWritten { get; private set; }
+        public override void Write(byte[] buffer, int offset, int count) => BytesWritten += count;
+        public override void Write(ReadOnlySpan<byte> buffer) => BytesWritten += buffer.Length;
+        public override bool CanRead => false; public override bool CanSeek => false; public override bool CanWrite => true;
+        public override long Length => BytesWritten; public override long Position { get => BytesWritten; set => throw new NotSupportedException(); }
+        public override void Flush() { } public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException(); public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void RunWindowsDpapiTests()
+    {
+        var key = RandomNumberGenerator.GetBytes(32);
+        try
+        {
+            var wrapped = WindowsDpapiKeyProtector.Protect(key, "synthetic-backup-id");
+            var recovered = WindowsDpapiKeyProtector.Unprotect(wrapped, "synthetic-backup-id");
+            try { Assert(CryptographicOperations.FixedTimeEquals(key, recovered), "Windows DPAPI current-user key-wrap round trip"); }
+            finally { CryptographicOperations.ZeroMemory(recovered); }
+            ExpectCrypto(() => WindowsDpapiKeyProtector.Unprotect(wrapped, "different-backup-id"));
+
+            var root = Path.Combine(Path.GetTempPath(), "hrms-dpapi-package-test-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            var encryptedPath = Path.Combine(root, "synthetic.hreb");
+            var restorePath = Path.Combine(root, "isolated-restore");
+            try
+            {
+                var syntheticFiles = new[] { new SyntheticFile("synthetic.txt", "synthetic-only"u8.ToArray()) };
+                var artifact = BackupPackage.EncryptToFileWithCurrentUserKey(encryptedPath, syntheticFiles, root, "synthetic-package-1", 4096);
+                Assert(artifact.Sha256.Length == 64 && File.Exists(artifact.ProtectedKeyPath), "DPAPI-wrapped backup key metadata");
+                BackupPackage.DecryptToDirectoryWithCurrentUserKey(artifact.ArtifactPath, artifact.ProtectedKeyPath, artifact.BackupId, restorePath);
+                Assert(File.ReadAllText(Path.Combine(restorePath, "synthetic.txt")) == "synthetic-only", "DPAPI-wrapped package restore");
+                ExpectCrypto(() => BackupPackage.DecryptToDirectoryWithCurrentUserKey(artifact.ArtifactPath, artifact.ProtectedKeyPath, "wrong-package", Path.Combine(root, "wrong-restore")));
+            }
+            finally { Directory.Delete(root, recursive: true); }
+
+            RunSyntheticPublisherAndRestoreTest();
+        }
+        finally { CryptographicOperations.ZeroMemory(key); }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void RunSyntheticPublisherAndRestoreTest()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hrms-stream-publish-test-" + Guid.NewGuid().ToString("N"));
+        StreamingArtifactPublisher.InitializeNewProtectedRoot(root);
+        try
+        {
+            var sourceUuid = "synthetic-source-uuid";
+            var targetIdentity = new RestoreTargetIdentity("127.0.0.1", 43306, "synthetic-restore-uuid", "hrms_restore_synthetic", true, true, true, "VerifyCA");
+            var sourceSnapshot = new DatabaseSnapshot(3, new string('A', 64), ["migration-1", "migration-2"],
+                new ImportAggregate("b89d04aa-1419-4c85-a7e3-48ab1d92d111", "Processing", 10_000, 0, 1, 2_844, 7_155, "expired"), true);
+            var target = new SyntheticRestoreTarget(targetIdentity, sourceSnapshot);
+            using var dump = new MemoryStream("synthetic SQL stream only"u8.ToArray());
+            var published = StreamingArtifactPublisher.Publish(dump, root, "synthetic-backup-restore-01",
+                new StreamingBackupArchive.ArchiveScope(sourceUuid, "WEB1", "hrms_web1", "127.0.0.1", 3306, "hrms_catalog", "MySql", "VerifyCA"), sourceSnapshot, () => 0, () => { }, 4096);
+            Assert(File.Exists(published.ArtifactPath) && File.Exists(published.ProtectedKeyPath) && published.Sha256.Length == 64,
+                "atomic encrypted artifact and wrapped-key publication");
+            var result = IsolatedRestoreVerifier.VerifyAndRestore(published.ArtifactPath, published.ProtectedKeyPath,
+                published.BackupId, published.Sha256, new RestoreSourceIdentity(sourceUuid, "WEB1", "hrms_web1", "127.0.0.1", 3306, "hrms_catalog", "MySql", "VerifyCA"),
+                sourceSnapshot, targetIdentity, target);
+            Assert(result.Target.ServerUuid != sourceUuid && target.RestoredInput == "synthetic SQL stream only", "isolated restore identity and authenticated stream");
+
+            var wrongUserTarget = new SyntheticRestoreTarget(targetIdentity, sourceSnapshot);
+            ExpectCrypto(() => IsolatedRestoreVerifier.VerifyAndRestore(published.ArtifactPath, published.ProtectedKeyPath,
+                published.BackupId, published.Sha256, new RestoreSourceIdentity(sourceUuid, "WEB1", "hrms_web1", "127.0.0.1", 3306, "hrms_catalog", "MySql", "VerifyCA"),
+                sourceSnapshot, targetIdentity, wrongUserTarget, new WrongUserDpapiUnwrapper()));
+            Assert(!wrongUserTarget.ImportOpened, "DPAPI wrong-user failure occurs before restore starts");
+
+            var failedRestore = new SyntheticRestoreTarget(targetIdentity, sourceSnapshot with { TableCount = 4 });
+            ExpectAny(() => IsolatedRestoreVerifier.VerifyAndRestore(published.ArtifactPath, published.ProtectedKeyPath,
+                published.BackupId, published.Sha256, new RestoreSourceIdentity(sourceUuid, "WEB1", "hrms_web1", "127.0.0.1", 3306, "hrms_catalog", "MySql", "VerifyCA"),
+                sourceSnapshot, targetIdentity, failedRestore));
+            Assert(failedRestore.WasAborted, "mismatched isolated restore is aborted");
+
+            var badTarget = new SyntheticRestoreTarget(targetIdentity with { ServerUuid = sourceUuid }, sourceSnapshot);
+            ExpectAny(() => IsolatedRestoreVerifier.VerifyAndRestore(published.ArtifactPath, published.ProtectedKeyPath,
+                published.BackupId, published.Sha256, new RestoreSourceIdentity(sourceUuid, "WEB1", "hrms_web1", "127.0.0.1", 3306, "hrms_catalog", "MySql", "VerifyCA"),
+                sourceSnapshot, targetIdentity with { ServerUuid = sourceUuid }, badTarget));
+
+            using var failedProducer = new MemoryStream("partial"u8.ToArray());
+            ExpectAny(() => StreamingArtifactPublisher.Publish(failedProducer, root, "synthetic-failed-producer",
+                new StreamingBackupArchive.ArchiveScope(sourceUuid, "WEB1", "hrms_web1", "127.0.0.1", 3306, "hrms_catalog", "MySql", "VerifyCA"), sourceSnapshot, () => 17, () => { }, 4096));
+            Assert(!Directory.Exists(Path.Combine(root, "synthetic-failed-producer")) &&
+                !Directory.EnumerateDirectories(root, ".staging-*", SearchOption.TopDirectoryOnly).Any(), "failed producer staging cleanup");
+            Console.WriteLine("Tests: DPAPI-wrapped atomic publish, synthetic isolated restore, wrong-target rejection, and interrupted producer cleanup.");
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private sealed class SyntheticRestoreTarget(RestoreTargetIdentity identity, DatabaseSnapshot snapshot) : IIsolatedRestoreTarget
+    {
+        private readonly MemoryStream _input = new();
+        public bool WasAborted { get; private set; }
+        public string RestoredInput => Encoding.UTF8.GetString(_input.ToArray());
+        public RestoreTargetIdentity InspectIdentity() => identity;
+        public bool ImportOpened { get; private set; }
+        public Stream OpenImportStream() { ImportOpened = true; return _input; }
+        public void CompleteImport() { }
+        public void AbortImport() => WasAborted = true;
+        public DatabaseSnapshot InspectRestoredSnapshot() => snapshot;
+    }
+    private sealed class WrongUserDpapiUnwrapper : IBackupDataKeyUnwrapper
+    {
+        public byte[] Unprotect(ReadOnlySpan<byte> protectedKey, string backupId)
+            => throw new CryptographicException("Synthetic DPAPI user-profile mismatch.");
+    }
     private static void Expect(Action a) { try { a(); throw new Exception("Expected validation failure."); } catch (InvalidDataException) { } catch (ArgumentException) { } }
-    private static void ExpectAny(Action a) { try { a(); throw new Exception("Expected failure."); } catch (InvalidDataException) { } catch (ArgumentException) { } catch (IOException) { } }
+    private static void ExpectCrypto(Action a) { try { a(); throw new Exception("Expected cryptographic failure."); } catch (CryptographicException) { } }
+    private static void ExpectAny(Action a) { try { a(); throw new Exception("Expected failure."); } catch (InvalidDataException) { } catch (InvalidOperationException) { } catch (ArgumentException) { } catch (IOException) { } catch (CryptographicException) { } }
     private static void Assert(bool x, string n) { if (!x) throw new Exception($"Assertion failed: {n}"); }
     private sealed class ThrowingWriteStream(int limit) : MemoryStream
     {

@@ -62,6 +62,7 @@ public interface IHrmsDbContext
     DbSet<EmployeeCodeConfig> EmployeeCodeConfigs { get; }
     DbSet<EmployeeCodeRule> EmployeeCodeRules { get; }
     DbSet<EmployeeCodeConfigVersion> EmployeeCodeConfigVersions { get; }
+    DbSet<EmployeeCodeConfigurationAuditEvent> EmployeeCodeConfigurationAuditEvents { get; }
     DbSet<EmployeeCodeRuleCondition> EmployeeCodeRuleConditions { get; }
     DbSet<EmployeeCodeSegment> EmployeeCodeSegments { get; }
     DbSet<EmployeeCodeSequence> EmployeeCodeSequences { get; }
@@ -114,6 +115,9 @@ public interface IHrmsDbContext
     DbSet<SeparationExitExecution> SeparationExitExecutions { get; }
     DbSet<SeparationExitExecutionEvent> SeparationExitExecutionEvents { get; }
     DbSet<ImportBatch> ImportBatches { get; }
+    DbSet<EmployeeImportOperation> EmployeeImportOperations { get; }
+    DbSet<EmployeeImportRow> EmployeeImportRows { get; }
+    DbSet<EmployeeImportRecoveryAudit> EmployeeImportRecoveryAudits { get; }
     DbSet<LeaveType> LeaveTypes { get; }
     DbSet<LeavePeriod> LeavePeriods { get; }
     DbSet<LeavePolicy> LeavePolicies { get; }

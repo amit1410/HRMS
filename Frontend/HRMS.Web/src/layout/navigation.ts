@@ -8,6 +8,8 @@ export interface NavItem {
   permission?: string
   /** Used for catalogue entries whose child screens have independent permissions. */
   anyPermission?: readonly string[]
+  /** Every listed permission is required before this entry is shown. */
+  allPermissions?: readonly string[]
   /**
    * Whether the screen exists yet. The nav is written once, in delivery order: an item that is not
    * built is shown greyed with a "soon" marker rather than linking to a 404.
@@ -44,6 +46,7 @@ export interface ConfigurationDestination {
   description: string
   permission?: string
   anyPermission?: readonly string[]
+  allPermissions?: readonly string[]
   icon: 'employee' | 'master' | 'leave' | 'attendance' | 'payroll' | 'policy' | 'security'
 }
 
@@ -112,6 +115,13 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: 'Employees',
     to: '/employees',
     permission: Permissions.employee.view,
+    available: true,
+    group: 'employee',
+  },
+  {
+    label: 'Employee Bulk Upload',
+    to: '/employees/bulk-upload',
+    allPermissions: [Permissions.employee.import, Permissions.employee.create, Permissions.employeeSensitive.edit],
     available: true,
     group: 'employee',
   },
@@ -235,6 +245,7 @@ const NAV_SEARCH_ITEMS: readonly NavItem[] = [
       to: destination.to,
       permission: destination.permission,
       anyPermission: destination.anyPermission,
+      allPermissions: destination.allPermissions,
       available: true,
       group: 'administration' as const,
     })),
@@ -250,6 +261,7 @@ export function visibleNavItems(can: (permission: string) => boolean, user?: Aut
   return NAV_ITEMS.filter((item) =>
     (item.permission === undefined || can(item.permission)) &&
     (item.anyPermission === undefined || item.anyPermission.some(can)) &&
+    (item.allPermissions === undefined || item.allPermissions.every(can)) &&
     (!item.requiresEmployeeIdentity || user?.employeeIdentity?.status === 'Linked'),
   )
 }
@@ -277,6 +289,7 @@ function visibleNavItemsFrom(items: readonly NavItem[], can: (permission: string
   return items.filter((item) =>
     (item.permission === undefined || can(item.permission)) &&
     (item.anyPermission === undefined || item.anyPermission.some(can)) &&
+    (item.allPermissions === undefined || item.allPermissions.every(can)) &&
     (!item.requiresEmployeeIdentity || user?.employeeIdentity?.status === 'Linked'),
   )
 }

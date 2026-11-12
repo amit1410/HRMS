@@ -6,6 +6,8 @@ using HRMS.Application.EmployeeCodes;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using System.Data;
+using System.Text.Json;
 
 namespace HRMS.Application.Services;
 
@@ -30,9 +32,36 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
         return Result<EmployeeCodeConfigurationDto>.Success(Map(config, version));
     }
 
+    public async Task<Result<IReadOnlyList<EmployeeCodeConfigurationDto>>> GetVersionsAsync(CancellationToken cancellationToken = default)
+    {
+        if (_tenant.TenantId is not Guid tenantId) return Result<IReadOnlyList<EmployeeCodeConfigurationDto>>.Unauthorized("No authenticated tenant.");
+        var config = await _db.EmployeeCodeConfigs.AsNoTracking().FirstOrDefaultAsync(x => x.TenantId == tenantId, cancellationToken);
+        if (config is null) return Result<IReadOnlyList<EmployeeCodeConfigurationDto>>.Success([]);
+        var versions = await _db.EmployeeCodeConfigVersions.AsNoTracking()
+            .Where(v => v.TenantId == tenantId && v.EmployeeCodeConfigId == config.Id)
+            .OrderByDescending(v => v.EffectiveFrom).ThenByDescending(v => v.CreatedDate)
+            .ToListAsync(cancellationToken);
+        return Result<IReadOnlyList<EmployeeCodeConfigurationDto>>.Success(versions.Select(v => Map(config, v)).ToList());
+    }
+
+    public async Task<Result<IReadOnlyList<EmployeeCodeConfigurationAuditDto>>> GetAuditAsync(Guid versionId, CancellationToken cancellationToken = default)
+    {
+        if (_tenant.TenantId is not Guid tenantId) return Result<IReadOnlyList<EmployeeCodeConfigurationAuditDto>>.Unauthorized("No authenticated tenant.");
+        var versionExists = await _db.EmployeeCodeConfigVersions.AnyAsync(v => v.TenantId == tenantId && v.Id == versionId, cancellationToken);
+        if (!versionExists) return Result<IReadOnlyList<EmployeeCodeConfigurationAuditDto>>.NotFound("Employee Code configuration version was not found.");
+        var events = await _db.EmployeeCodeConfigurationAuditEvents.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.EmployeeCodeConfigVersionId == versionId)
+            .OrderByDescending(x => x.OccurredAtUtc).ThenByDescending(x => x.Id)
+            .Select(x => new EmployeeCodeConfigurationAuditDto(x.Id, x.EmployeeCodeConfigVersionId,
+                x.Action, x.ActorUserId, x.OccurredAtUtc, x.OldValue, x.NewValue))
+            .ToListAsync(cancellationToken);
+        return Result<IReadOnlyList<EmployeeCodeConfigurationAuditDto>>.Success(events);
+    }
+
     public async Task<Result<EmployeeCodeConfigurationDto>> SaveAsync(EmployeeCodeConfigurationRequest request, CancellationToken cancellationToken = default)
     {
         if (_tenant.TenantId is not Guid tenantId) return Result<EmployeeCodeConfigurationDto>.Unauthorized("No authenticated tenant.");
+        if (_tenant.UserId is not Guid actorUserId) return Result<EmployeeCodeConfigurationDto>.Unauthorized("An authenticated user is required to change Employee Code configuration.");
         // Legacy callers still send AutoGenerate only; derive the explicit mode for compatibility.
         if (!request.AutoGenerate)
         {
@@ -41,7 +70,8 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
         }
         var validation = await _validator.ValidateAsync(request, cancellationToken);
         if (!validation.IsValid) return Result<EmployeeCodeConfigurationDto>.Invalid("Employee Code configuration is invalid.", validation.Errors.Select(e => new ValidationError(e.PropertyName, e.ErrorMessage)).ToList());
-        var config = await _db.EmployeeCodeConfigs.FirstOrDefaultAsync(cancellationToken);
+        await using var transaction = await _db.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        var config = await _db.EmployeeCodeConfigs.FirstOrDefaultAsync(x => x.TenantId == tenantId, cancellationToken);
         if (config is null) { config = new EmployeeCodeConfig { Id = Guid.NewGuid(), TenantId = tenantId }; _db.EmployeeCodeConfigs.Add(config); }
 
         // Rules are optional while a configuration is being created. Rule-Based generation reports a
@@ -52,11 +82,63 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
             : await _db.EmployeeCodeConfigVersions.FirstOrDefaultAsync(v => v.EmployeeCodeConfigId == config.Id && v.EffectiveFrom == request.EffectiveFrom, cancellationToken);
         if (request.VersionId is not null && version is null)
             return Result<EmployeeCodeConfigurationDto>.NotFound("The selected Employee Code configuration version was not found.");
+
+        var isNewVersion = version is null;
+        string? oldSnapshot = null;
+        if (version is not null)
+        {
+            oldSnapshot = Snapshot(version);
+            if (request.NextNumber < version.NextNumber)
+                return InvalidField("NextNumber", "Next number cannot be lower than the current sequence value.");
+
+            // Codes have no direct version foreign key. Protect a version when a coded employee's
+            // joining date or first employment effective date falls in its period; the latter is the
+            // date used by employment-time code generation and may differ from DateOfJoining.
+            var assignedEmployeeIds = await _db.Employees.IgnoreQueryFilters().AsNoTracking()
+                .Where(e => e.TenantId == tenantId && e.EmployeeCode != null &&
+                    ((e.DateOfJoining >= version.EffectiveFrom &&
+                      (version.EffectiveTo == null || e.DateOfJoining <= version.EffectiveTo)) ||
+                     _db.EmployeeEmploymentHistory.IgnoreQueryFilters().Any(h => h.TenantId == tenantId &&
+                         h.EmployeeId == e.Id && h.EffectiveFrom >= version.EffectiveFrom &&
+                         (version.EffectiveTo == null || h.EffectiveFrom <= version.EffectiveTo))))
+                .Select(e => e.Id).ToListAsync(cancellationToken);
+            var assignedUseDates = await _db.EmployeeEmploymentHistory.IgnoreQueryFilters().AsNoTracking()
+                .Where(h => h.TenantId == tenantId && assignedEmployeeIds.Contains(h.EmployeeId) &&
+                    h.EffectiveFrom >= version.EffectiveFrom &&
+                    (version.EffectiveTo == null || h.EffectiveFrom <= version.EffectiveTo))
+                .Select(h => h.EffectiveFrom).Distinct().ToListAsync(cancellationToken);
+            var assignedJoiningDates = await _db.Employees.IgnoreQueryFilters().AsNoTracking()
+                .Where(e => e.TenantId == tenantId && assignedEmployeeIds.Contains(e.Id) &&
+                    e.DateOfJoining >= version.EffectiveFrom &&
+                    (version.EffectiveTo == null || e.DateOfJoining <= version.EffectiveTo))
+                .Select(e => e.DateOfJoining).ToListAsync(cancellationToken);
+            var assignedUseDatesForValidation = assignedUseDates.Concat(assignedJoiningDates).Distinct().ToList();
+            if (assignedEmployeeIds.Count > 0)
+            {
+                if (request.AssignmentMode != version.AssignmentMode)
+                    return InvalidField("AssignmentMode", "Assignment mode cannot change after employee codes have been assigned in this effective period.");
+                if (request.GenerationMethod != version.GenerationMethod)
+                    return InvalidField("GenerationMethod", "Generation method cannot change after employee codes have been assigned in this effective period.");
+                if (!string.Equals(request.Prefix.Trim(), version.Prefix, StringComparison.OrdinalIgnoreCase))
+                    return InvalidField("Prefix", "Prefix cannot change after employee codes have been assigned in this effective period.");
+                if (request.Separator != version.Separator)
+                    return InvalidField("Separator", "Separator cannot change after employee codes have been assigned in this effective period.");
+                if (request.Padding != version.Padding)
+                    return InvalidField("Padding", "Padding cannot change after employee codes have been assigned in this effective period.");
+                var requestedEndForAssignments = request.EffectiveTo ?? DateOnly.MaxValue;
+                if (assignedUseDatesForValidation.Any(date => date < request.EffectiveFrom || date > requestedEndForAssignments))
+                {
+                    var field = assignedUseDatesForValidation.Any(date => date < request.EffectiveFrom) ? "EffectiveFrom" : "EffectiveTo";
+                    return InvalidField(field, "The effective date range cannot exclude employees whose codes were assigned during this configuration period.");
+                }
+            }
+
+        }
         if (version is null)
         {
             var requestedEnd = request.EffectiveTo ?? DateOnly.MaxValue;
             var overlapping = await _db.EmployeeCodeConfigVersions
-                .Where(v => v.EmployeeCodeConfigId == config.Id && v.IsActive)
+                .Where(v => v.TenantId == tenantId && v.EmployeeCodeConfigId == config.Id && v.IsActive)
                 .ToListAsync(cancellationToken);
             var conflicting = overlapping.FirstOrDefault(v =>
                 request.EffectiveFrom <= (v.EffectiveTo ?? DateOnly.MaxValue) &&
@@ -79,11 +161,20 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
         {
             var requestedEnd = request.EffectiveTo ?? DateOnly.MaxValue;
             var conflicting = await _db.EmployeeCodeConfigVersions
-                .Where(v => v.EmployeeCodeConfigId == config.Id && v.Id != version.Id && v.IsActive)
+                .Where(v => v.TenantId == tenantId && v.EmployeeCodeConfigId == config.Id && v.Id != version.Id && v.IsActive)
                 .AnyAsync(v => request.EffectiveFrom <= (v.EffectiveTo ?? DateOnly.MaxValue) &&
                                v.EffectiveFrom <= requestedEnd, cancellationToken);
             if (conflicting)
                 return Result<EmployeeCodeConfigurationDto>.Conflict("Another active Employee Code configuration is already effective for part of the selected date range.");
+        }
+
+        if (request.AssignmentMode == EmployeeCodeAssignmentMode.Auto && request.GenerationMethod == EmployeeCodeGenerationMethod.Simple)
+        {
+            var candidate = FormatSimpleCode(request.Prefix, request.Separator, request.Padding, request.NextNumber);
+            var duplicate = await _db.Employees.IgnoreQueryFilters().AsNoTracking()
+                .AnyAsync(e => e.TenantId == tenantId && e.EmployeeCode != null && e.EmployeeCode.ToUpper() == candidate.ToUpper(), cancellationToken);
+            if (duplicate)
+                return InvalidField("NextNumber", "The next generated employee code is already assigned. Increase the sequence until the next code is unique.");
         }
 
         version.AutoGenerate = request.AssignmentMode == EmployeeCodeAssignmentMode.Auto;
@@ -97,12 +188,60 @@ public sealed class EmployeeCodeConfigurationService : IEmployeeCodeConfiguratio
         version.EffectiveTo = request.EffectiveTo;
         version.IsActive = request.IsActive;
 
-        config.AssignmentMode = request.AssignmentMode;
-        config.GenerationMethod = request.AssignmentMode == EmployeeCodeAssignmentMode.Manual ? null : request.GenerationMethod;
-        config.AutoGenerate = request.AssignmentMode == EmployeeCodeAssignmentMode.Auto;
-        config.Prefix = request.Prefix.Trim().ToUpperInvariant(); config.NextNumber = request.NextNumber; config.Padding = request.Padding; config.Separator = request.Separator; config.EffectiveFrom = request.EffectiveFrom; config.EffectiveTo = request.EffectiveTo;
-        await _db.SaveChangesAsync(cancellationToken);
+        var latestVersion = await _db.EmployeeCodeConfigVersions.AsNoTracking()
+            .Where(v => v.TenantId == tenantId && v.EmployeeCodeConfigId == config.Id && v.Id != version.Id)
+            .OrderByDescending(v => v.EffectiveFrom).ThenByDescending(v => v.CreatedDate)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (latestVersion is null || version.EffectiveFrom >= latestVersion.EffectiveFrom)
+            latestVersion = version;
+        config.AssignmentMode = latestVersion.AssignmentMode;
+        config.GenerationMethod = latestVersion.GenerationMethod;
+        config.AutoGenerate = latestVersion.AutoGenerate;
+        config.Prefix = latestVersion.Prefix;
+        config.NextNumber = Math.Max(config.NextNumber, latestVersion.NextNumber);
+        config.Padding = latestVersion.Padding;
+        config.Separator = latestVersion.Separator;
+        config.EffectiveFrom = latestVersion.EffectiveFrom;
+        config.EffectiveTo = latestVersion.EffectiveTo;
+
+        var newSnapshot = Snapshot(version);
+        if (isNewVersion || !string.Equals(oldSnapshot, newSnapshot, StringComparison.Ordinal))
+        {
+            _db.EmployeeCodeConfigurationAuditEvents.Add(new EmployeeCodeConfigurationAuditEvent
+            {
+                Id = Guid.NewGuid(), TenantId = tenantId, EmployeeCodeConfigId = config.Id,
+                EmployeeCodeConfigVersionId = version.Id, ActorUserId = actorUserId,
+                Action = isNewVersion ? "Created" : "Updated", OccurredAtUtc = DateTime.UtcNow,
+                OldValue = oldSnapshot, NewValue = newSnapshot
+            });
+        }
+
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return Result<EmployeeCodeConfigurationDto>.Conflict("The Employee Code sequence changed while saving. Reload the configuration and try again.");
+        }
         return Result<EmployeeCodeConfigurationDto>.Success(Map(config, version), "Employee Code configuration saved.");
+    }
+
+    private static Result<EmployeeCodeConfigurationDto> InvalidField(string field, string message)
+        => Result<EmployeeCodeConfigurationDto>.Invalid("Employee Code configuration cannot be saved safely.", [new ValidationError(field, message)]);
+
+    private static string Snapshot(EmployeeCodeConfigVersion version)
+        => JsonSerializer.Serialize(new
+        {
+            version.AssignmentMode, version.GenerationMethod, version.Prefix, version.Separator,
+            version.NextNumber, version.Padding, version.EffectiveFrom, version.EffectiveTo, version.IsActive
+        });
+
+    private static string FormatSimpleCode(string prefix, string separator, int padding, long nextNumber)
+    {
+        var number = nextNumber.ToString(padding == 0 ? string.Empty : $"D{padding}");
+        return $"{prefix.Trim().ToUpperInvariant()}{separator}{number}";
     }
 
     public async Task<Result<IReadOnlyList<EmployeeCodeRuleDto>>> GetRulesAsync(CancellationToken cancellationToken = default)

@@ -349,11 +349,30 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
         EmploymentChangeRequest request,
         string changedBy,
         CancellationToken cancellationToken = default)
+        => await CreateHistoryCoreAsync(employeeId, request, changedBy, initialOnboarding: false, cancellationToken);
+
+    public async Task<Result<EmployeeEmploymentHistoryDto>> CreateInitialHistoryWithinTransactionAsync(
+        Guid employeeId, EmploymentChangeRequest request, string changedBy,
+        CancellationToken cancellationToken = default)
+    {
+        if (_db.CurrentTransaction is null)
+            return Result<EmployeeEmploymentHistoryDto>.Unavailable("Initial employment history requires an active onboarding transaction.");
+        return await CreateHistoryCoreAsync(employeeId, request, changedBy, initialOnboarding: true, cancellationToken);
+    }
+
+    private async Task<Result<EmployeeEmploymentHistoryDto>> CreateHistoryCoreAsync(
+        Guid employeeId,
+        EmploymentChangeRequest request,
+        string changedBy,
+        bool initialOnboarding,
+        CancellationToken cancellationToken)
     {
         if (_tenantContext.TenantId is not Guid tenantId)
             return Result<EmployeeEmploymentHistoryDto>.Unauthorized(NoTenantMessage);
 
-        if (!HasEmploymentChangePermission())
+        if (initialOnboarding
+                ? _authorization?.HasAnyPermission(Permissions.Employee.Create) != true
+                : !HasEmploymentChangePermission())
             return Result<EmployeeEmploymentHistoryDto>.Forbidden("This workflow is not authorized to change employment history.");
 
         var employee = await _db.Employees.FirstOrDefaultAsync(
@@ -374,6 +393,9 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             .ThenBy(e => e.RevisionNumber)
             .ToListAsync(cancellationToken);
 
+        if (initialOnboarding && (existingRecords.Count != 0 || request.ChangeReason != EmploymentChangeReason.NewJoining))
+            return Result<EmployeeEmploymentHistoryDto>.Invalid("changeReason", "Initial onboarding requires a new hire history record and no existing employment history.");
+
         if (request.ChangeReason != EmploymentChangeReason.ManagerChange && request.ManagerId is null)
         {
             request.ManagerId = existingRecords
@@ -390,7 +412,9 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
             return commandValidation;
 
         var validationDate = BusinessDateToday();
-        if (request.EffectiveFrom < validationDate)
+        // Initial onboarding records preserve the employee's actual historical start date.
+        // Past-effective changes to an existing employee remain prohibited.
+        if (!initialOnboarding && request.EffectiveFrom < validationDate)
         {
             return Result<EmployeeEmploymentHistoryDto>.Invalid(
                 "effectiveFrom", "Employment changes may not be effective-dated in the past.");
@@ -555,7 +579,9 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
 
         // ── Close the current open record ──────────────────────────────────────
 
-        await using var transaction = await _db.BeginTransactionAsync(cancellationToken);
+        var ownsTransaction = _db.CurrentTransaction is null;
+        await using var transaction = ownsTransaction ? await _db.BeginTransactionAsync(cancellationToken) : null;
+        var activeTransaction = transaction ?? _db.CurrentTransaction;
         var now = DateTime.UtcNow;
         var previousRecord = existingRecords
             .Where(e => e.EffectiveFrom < request.EffectiveFrom)
@@ -695,7 +721,8 @@ public class EmployeeEmploymentService : IEmployeeEmploymentService
 
         // The provisioning service adds the system-managed assignment to this context.
         await _db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        if (ownsTransaction)
+            await transaction!.CommitAsync(cancellationToken);
 
         // Reload the saved record with its master navigations so the response carries the display names
         // (department, designation, grade, …) the client shows in the history table. It is still tracked, so

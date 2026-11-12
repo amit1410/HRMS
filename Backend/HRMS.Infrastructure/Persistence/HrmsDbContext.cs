@@ -80,6 +80,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<EmployeeCodeConfig> EmployeeCodeConfigs => Set<EmployeeCodeConfig>();
     public DbSet<EmployeeCodeRule> EmployeeCodeRules => Set<EmployeeCodeRule>();
     public DbSet<EmployeeCodeConfigVersion> EmployeeCodeConfigVersions => Set<EmployeeCodeConfigVersion>();
+    public DbSet<EmployeeCodeConfigurationAuditEvent> EmployeeCodeConfigurationAuditEvents => Set<EmployeeCodeConfigurationAuditEvent>();
     public DbSet<EmployeeCodeRuleCondition> EmployeeCodeRuleConditions => Set<EmployeeCodeRuleCondition>();
     public DbSet<EmployeeCodeSegment> EmployeeCodeSegments => Set<EmployeeCodeSegment>();
     public DbSet<EmployeeCodeSequence> EmployeeCodeSequences => Set<EmployeeCodeSequence>();
@@ -123,6 +124,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
     public DbSet<SeparationExitInterviewHrNote> SeparationExitInterviewHrNotes => Set<SeparationExitInterviewHrNote>();
     public DbSet<SeparationExitInterviewEvent> SeparationExitInterviewEvents => Set<SeparationExitInterviewEvent>();
     public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
+    public DbSet<EmployeeImportOperation> EmployeeImportOperations => Set<EmployeeImportOperation>();
+    public DbSet<EmployeeImportRow> EmployeeImportRows => Set<EmployeeImportRow>();
+    public DbSet<EmployeeImportRecoveryAudit> EmployeeImportRecoveryAudits => Set<EmployeeImportRecoveryAudit>();
     public DbSet<LeaveType> LeaveTypes => Set<LeaveType>();
     public DbSet<LeavePeriod> LeavePeriods => Set<LeavePeriod>();
     public DbSet<LeavePolicy> LeavePolicies => Set<LeavePolicy>();
@@ -577,6 +581,9 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<SeparationExitExecution>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<SeparationExitExecutionEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<ImportBatch>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeImportOperation>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeImportRow>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeImportRecoveryAudit>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeaveType>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeavePeriod>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<LeavePolicy>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -770,6 +777,7 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         modelBuilder.Entity<PositionChangeReason>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeCodeConfig>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeCodeConfigVersion>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
+        modelBuilder.Entity<EmployeeCodeConfigurationAuditEvent>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeCodeRule>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeCodeRuleCondition>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
         modelBuilder.Entity<EmployeeCodeSegment>().HasQueryFilter(e => e.TenantId == _tenantContext.TenantId);
@@ -809,6 +817,11 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
             if (entry.State is EntityState.Modified or EntityState.Deleted)
                 throw new InvalidOperationException("Account employee link events are immutable.");
         }
+        foreach (var entry in ChangeTracker.Entries<EmployeeImportRecoveryAudit>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new InvalidOperationException("Employee import recovery audit records are append-only.");
+        }
         foreach (var entry in ChangeTracker.Entries<LeaveBalanceTransaction>())
         {
             if (entry.State is EntityState.Modified or EntityState.Deleted)
@@ -823,6 +836,11 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
         {
             if (entry.State is EntityState.Modified or EntityState.Deleted)
                 throw new InvalidOperationException("Leave policy version audit events are immutable.");
+        }
+        foreach (var entry in ChangeTracker.Entries<EmployeeCodeConfigurationAuditEvent>())
+        {
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
+                throw new InvalidOperationException("Employee Code configuration audit events are immutable.");
         }
 
         foreach (var entry in ChangeTracker.Entries<UserRoleAssignmentEvent>())

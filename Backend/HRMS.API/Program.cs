@@ -25,6 +25,25 @@ try
 {
     var builder = WebApplication.CreateBuilder(args);
 
+    var employeeBulkUploadOptions = builder.Configuration.GetSection(EmployeeBulkUploadOptions.SectionName).Get<EmployeeBulkUploadOptions>() ?? new EmployeeBulkUploadOptions();
+    if (employeeBulkUploadOptions.Validate() is { } employeeBulkUploadOptionsProblem)
+        throw new InvalidOperationException(employeeBulkUploadOptionsProblem);
+    builder.Services.AddSingleton(employeeBulkUploadOptions);
+
+    // Optional deployment-mounted secret file (for example a Docker secret). It is loaded only when
+    // explicitly configured; secret contents are never logged. Ordinary environment/config providers
+    // remain suitable for managed secret stores and workload identity.
+    var importStorageSecretFile = builder.Configuration["EmployeeImportStorage:ConfigurationFile"];
+    if (!string.IsNullOrWhiteSpace(importStorageSecretFile))
+    {
+        if (!Path.IsPathFullyQualified(importStorageSecretFile))
+            throw new InvalidOperationException("EmployeeImportStorage:ConfigurationFile must be an absolute mounted-secret path.");
+        builder.Configuration.AddJsonFile(importStorageSecretFile, optional: false, reloadOnChange: false);
+    }
+    if (!builder.Environment.IsDevelopment() &&
+        string.IsNullOrWhiteSpace(builder.Configuration["EmployeeImportStorage:Provider"]))
+        throw new InvalidOperationException("EmployeeImportStorage:Provider must be explicitly configured outside Development.");
+
     // Structured logging via Serilog, configured from appsettings ("Serilog" section).
     builder.Host.UseSerilog((context, services, configuration) => configuration
         .ReadFrom.Configuration(context.Configuration)

@@ -1,5 +1,6 @@
 using HRMS.Application.Common;
 using HRMS.Application.DTOs.Employees;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace HRMS.Application.Abstractions;
 
@@ -22,6 +23,22 @@ public interface IEmployeeService
         Guid id, CancellationToken cancellationToken = default);
 
     Task<Result<EmployeeDto>> CreateAsync(EmployeeRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Creates personal details, contact, job status and initial employment history in one transaction.</summary>
+    Task<Result<EmployeeDto>> CreateOnboardingAsync(
+        EmployeeOnboardingRequest request,
+        string changedBy,
+        CancellationToken cancellationToken = default,
+        bool canEditSensitive = true);
+
+    /// <summary>Creates onboarding data and its import row audit association inside a caller-owned transaction.</summary>
+    Task<Result<EmployeeDto>> CreateOnboardingWithinTransactionAsync(
+        EmployeeOnboardingRequest request,
+        string changedBy,
+        Guid importBatchId,
+        IDbContextTransaction callerTransaction,
+        CancellationToken cancellationToken = default,
+        bool canEditSensitive = true);
 
     Task<Result<EmployeeDto>> UpdateAsync(Guid id, EmployeeRequest request, CancellationToken cancellationToken = default);
 

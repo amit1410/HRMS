@@ -5,13 +5,15 @@ import { Notice } from '../components/Notice.tsx'
 import { PageHeader } from '../components/PageHeader.tsx'
 import { useApiQuery } from '../hooks/useApiQuery.ts'
 import { useFlash } from '../hooks/useFlash.ts'
-import { deleteEmployeeCodeRule, getEmployeeCodeConfiguration, getEmployeeCodeRules, getEmployeeCodeRule, previewEmployeeCode, saveEmployeeCodeConfiguration, saveEmployeeCodeRule, updateEmployeeCodeRule, type EmployeeCodePreview, type EmployeeCodePreviewRequest, type EmployeeCodeRule, type EmployeeCodeRuleRequest } from '../api/employeeCodeConfiguration.ts'
+import { deleteEmployeeCodeRule, getEmployeeCodeConfiguration, getEmployeeCodeConfigurationVersions, getEmployeeCodeRules, getEmployeeCodeRule, previewEmployeeCode, saveEmployeeCodeConfiguration, saveEmployeeCodeRule, updateEmployeeCodeRule, type EmployeeCodeConfiguration, type EmployeeCodePreview, type EmployeeCodePreviewRequest, type EmployeeCodeRule, type EmployeeCodeRuleRequest } from '../api/employeeCodeConfiguration.ts'
 import { MasterDropdown } from '../components/MasterDropdown.tsx'
 import type { MasterDropdownProps } from '../components/MasterDropdown.tsx'
 import { listHoldingCompanies, listLinesOfBusiness, listOrganisations, listDepartments, listSubDepartments, listSections, listSubSections, listFunctions, listSubFunctions, listGrades, listEmployeeTypes, listWorkLocations, listCostCenters } from '../api/masterData.ts'
 import { listDesignations } from '../api/designations.ts'
 import { listCountries } from '../api/countries.ts'
 import { ApiError } from '../api/errors.ts'
+import { useAuth } from '../auth/useAuth.ts'
+import { Permissions } from '../auth/permissions.ts'
 
 type RuleConditionDraft = { id?: string; clientId: string; field: number; operator: number; valueId: string; valueCode: string; include: boolean }
 
@@ -48,7 +50,10 @@ function clearDescendants(all: RuleConditionDraft[], changedField: number): Rule
 
 export function EmployeeCodeConfigurationPage() {
   const flash = useFlash()
+  const { can } = useAuth()
+  const canManage = can(Permissions.employeeCodeConfiguration.manage)
   const { data, error, isLoading, refetch } = useApiQuery((signal) => getEmployeeCodeConfiguration(signal), [])
+  const versionsQuery = useApiQuery((signal) => getEmployeeCodeConfigurationVersions(signal), [])
   const rulesQuery = useApiQuery((signal) => getEmployeeCodeRules(signal), [])
   const [autoGenerate, setAutoGenerate] = useState(false)
   const [generationMethod, setGenerationMethod] = useState<'Simple' | 'RuleBased'>('Simple')
@@ -61,6 +66,7 @@ export function EmployeeCodeConfigurationPage() {
   const [versionActive, setVersionActive] = useState(true)
   const [saving, setSaving] = useState(false)
   const [configurationError, setConfigurationError] = useState<string | null>(null)
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null)
   const [ruleName, setRuleName] = useState('Default Employee Rule')
   const [rulePriority, setRulePriority] = useState(100)
   const [ruleDefault, setRuleDefault] = useState(true)
@@ -79,7 +85,8 @@ export function EmployeeCodeConfigurationPage() {
   const [previewSaving, setPreviewSaving] = useState(false)
 
   useEffect(() => {
-    if (!data) return
+    if (!data || selectedVersionId) return
+    setSelectedVersionId(data.versionId ?? null)
     const configuredAuto = data.assignmentMode === 'Auto' || data.assignmentMode === 1 || (data.assignmentMode == null && data.autoGenerate)
     setAutoGenerate(configuredAuto)
     setGenerationMethod(data.generationMethod === 'RuleBased' || data.generationMethod === 1 ? 'RuleBased' : 'Simple')
@@ -90,7 +97,29 @@ export function EmployeeCodeConfigurationPage() {
     setEffectiveFrom(data.effectiveFrom?.slice(0, 10) || effectiveFrom)
     setEffectiveTo(data.effectiveTo?.slice(0, 10) || '')
     setVersionActive(data.isActive !== false)
-  }, [data])
+  }, [data, selectedVersionId])
+
+  function editConfiguration(configuration: EmployeeCodeConfiguration): void {
+    setSelectedVersionId(configuration.versionId ?? null)
+    setAutoGenerate(configuration.assignmentMode === 'Auto' || configuration.assignmentMode === 1 || (configuration.assignmentMode == null && configuration.autoGenerate))
+    setGenerationMethod(configuration.generationMethod === 'RuleBased' || configuration.generationMethod === 1 ? 'RuleBased' : 'Simple')
+    setPrefix(configuration.prefix)
+    setNextNumber(configuration.nextNumber)
+    setPadding(configuration.padding)
+    setSeparator(configuration.separator || '-')
+    setEffectiveFrom(configuration.effectiveFrom.slice(0, 10))
+    setEffectiveTo(configuration.effectiveTo?.slice(0, 10) || '')
+    setVersionActive(configuration.isActive)
+    setConfigurationError(null)
+  }
+
+  function createConfiguration(): void {
+    setSelectedVersionId(null)
+    setEffectiveFrom(new Date().toISOString().slice(0, 10))
+    setEffectiveTo('')
+    setVersionActive(true)
+    setConfigurationError(null)
+  }
 
   function updateCondition(conditionId: string, change: Partial<RuleConditionDraft>): void {
     setConditions((all) => {
@@ -134,10 +163,10 @@ export function EmployeeCodeConfigurationPage() {
     setSaving(true)
     setConfigurationError(null)
     try {
-      const editingSameVersion = data?.effectiveFrom?.slice(0, 10) === effectiveFrom
-      await saveEmployeeCodeConfiguration({ versionId: editingSameVersion ? data?.versionId ?? null : null, isActive: versionActive, autoGenerate, assignmentMode: autoGenerate ? 'Auto' : 'Manual', generationMethod: autoGenerate ? generationMethod : null, prefix: prefix.trim(), nextNumber, padding, separator, effectiveFrom, effectiveTo: effectiveTo || null })
+      const saved = await saveEmployeeCodeConfiguration({ versionId: selectedVersionId, isActive: versionActive, autoGenerate, assignmentMode: autoGenerate ? 'Auto' : 'Manual', generationMethod: autoGenerate ? generationMethod : null, prefix: prefix.trim(), nextNumber, padding, separator, effectiveFrom, effectiveTo: effectiveTo || null })
+      setSelectedVersionId(saved.versionId ?? null)
       flash.show('Employee Code configuration saved.')
-      await refetch()
+      await Promise.all([refetch(), versionsQuery.refetch()])
     } catch (error) {
       setConfigurationError(error instanceof ApiError ? error.message : 'Unable to save Employee Code configuration.')
     } finally {
@@ -251,32 +280,42 @@ export function EmployeeCodeConfigurationPage() {
       <PageHeader title="Employee Code Configuration" subtitle="Configure how employee codes are assigned for this workspace." />
       {error ? <Notice tone="error">Unable to load Employee Code configuration.</Notice> : null}
       {configurationError ? <Notice tone="error">{configurationError}</Notice> : null}
+      <Card title="Configuration records" subtitle="Select a date-effective version to review or edit it.">
+        {canManage ? <div className="form-actions"><button className="button button-secondary" type="button" onClick={createConfiguration}>New configuration</button></div> : null}
+        {versionsQuery.error ? <Notice tone="error">Unable to load Employee Code configuration records.</Notice> : null}
+        {versionsQuery.data?.length ? <div className="stack-list" aria-label="Employee Code configuration records">
+          {versionsQuery.data.map(configuration => <div className="list-row" key={configuration.versionId}>
+            <div><strong>{configuration.assignmentMode === 'Manual' || configuration.assignmentMode === 0 ? 'Manual' : 'Automatic'} · {configuration.prefix}</strong><span className="muted">{configuration.effectiveFrom.slice(0, 10)} to {configuration.effectiveTo?.slice(0, 10) ?? 'No end date'} · Next number {configuration.nextNumber} · {configuration.isActive ? 'Active' : 'Inactive'}</span></div>
+            {canManage ? <button className="button button-link" type="button" onClick={() => editConfiguration(configuration)} aria-label={`Edit configuration starting ${configuration.effectiveFrom.slice(0, 10)}`}>Edit</button> : null}
+          </div>)}
+        </div> : versionsQuery.isLoading ? <p className="muted">Loading configuration records…</p> : <p className="muted">No configuration versions exist yet.</p>}
+      </Card>
       <Card title="Employee Code Assignment" subtitle="Choose whether HR users enter codes or the system generates them.">
         {isLoading ? <p className="muted">Loading configuration…</p> : (
           <form className="form-stack" onSubmit={submit}>
             <fieldset className="choice-group">
               <legend>Assignment mode</legend>
-              <label className={`choice-card ${!autoGenerate ? 'choice-card-selected' : ''}`}><input type="radio" checked={!autoGenerate} onChange={() => setAutoGenerate(false)} /> <span><strong>Manual Employee Code</strong><small>HR enters the employee code during Initial Employment.</small></span></label>
-              <label className={`choice-card ${autoGenerate ? 'choice-card-selected' : ''}`}><input type="radio" checked={autoGenerate} onChange={() => setAutoGenerate(true)} /> <span><strong>Auto Generate Employee Code</strong><small>The system automatically generates the employee code during Initial Employment.</small></span></label>
+              <label className={`choice-card ${!autoGenerate ? 'choice-card-selected' : ''}`}><input type="radio" checked={!autoGenerate} disabled={!canManage} onChange={() => setAutoGenerate(false)} /> <span><strong>Manual Employee Code</strong><small>HR enters the employee code during Initial Employment.</small></span></label>
+              <label className={`choice-card ${autoGenerate ? 'choice-card-selected' : ''}`}><input type="radio" checked={autoGenerate} disabled={!canManage} onChange={() => setAutoGenerate(true)} /> <span><strong>Auto Generate Employee Code</strong><small>The system automatically generates the employee code during Initial Employment.</small></span></label>
             </fieldset>
 
             {autoGenerate ? <fieldset className="choice-group"><legend>Generation method</legend>
-              <label className={`choice-card ${generationMethod === 'Simple' ? 'choice-card-selected' : ''}`}><input type="radio" checked={generationMethod === 'Simple'} onChange={() => setGenerationMethod('Simple')} /> <span><strong>Simple Sequence</strong><small>Generate codes using a fixed prefix and running number.</small></span></label>
-              <label className={`choice-card ${generationMethod === 'RuleBased' ? 'choice-card-selected' : ''}`}><input type="radio" checked={generationMethod === 'RuleBased'} onChange={() => setGenerationMethod('RuleBased')} /> <span><strong>Advanced Rule-Based</strong><small>Generate codes from employment attributes and configured rules.</small></span></label>
+              <label className={`choice-card ${generationMethod === 'Simple' ? 'choice-card-selected' : ''}`}><input type="radio" checked={generationMethod === 'Simple'} disabled={!canManage} onChange={() => setGenerationMethod('Simple')} /> <span><strong>Simple Sequence</strong><small>Generate codes using a fixed prefix and running number.</small></span></label>
+              <label className={`choice-card ${generationMethod === 'RuleBased' ? 'choice-card-selected' : ''}`}><input type="radio" checked={generationMethod === 'RuleBased'} disabled={!canManage} onChange={() => setGenerationMethod('RuleBased')} /> <span><strong>Advanced Rule-Based</strong><small>Generate codes from employment attributes and configured rules.</small></span></label>
               {generationMethod === 'RuleBased' ? <p className="field-help">Active rules are evaluated from lowest priority number to highest; the default fallback is used when no specific rule matches.</p> : null}
             </fieldset> : null}
 
             <div className="form-grid form-grid-3">
-              <label className="field"><span>Prefix</span><input value={prefix} maxLength={10} onChange={(e) => setPrefix(e.target.value)} disabled={!autoGenerate} /></label>
-              <label className="field"><span>Starting / next number</span><input type="number" min={1} value={nextNumber} onChange={(e) => setNextNumber(Number(e.target.value))} disabled={!autoGenerate} /></label>
-              <label className="field"><span>Padding length</span><input type="number" min={0} max={10} value={padding} onChange={(e) => setPadding(Number(e.target.value))} disabled={!autoGenerate} /></label>
-              <label className="field"><span>Separator</span><select value={separator} onChange={(e) => setSeparator(e.target.value)} disabled={!autoGenerate}><option value="">None</option><option value="-">-</option><option value="/">/</option><option value=".">.</option><option value="_">_</option></select></label>
-              <label className="field"><span>Effective from</span><input type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} /></label>
-              <label className="field"><span>Effective to</span><input type="date" value={effectiveTo} onChange={(e) => setEffectiveTo(e.target.value)} /></label>
-              <label className="checkbox-field"><input type="checkbox" checked={versionActive} onChange={(e) => setVersionActive(e.target.checked)} /> Version active</label>
+              <label className="field"><span>Prefix</span><input value={prefix} maxLength={10} onChange={(e) => setPrefix(e.target.value)} disabled={!canManage || !autoGenerate} /></label>
+              <label className="field"><span>Starting / next number</span><input type="number" min={1} value={nextNumber} onChange={(e) => setNextNumber(Number(e.target.value))} disabled={!canManage || !autoGenerate} /></label>
+              <label className="field"><span>Padding length</span><input type="number" min={0} max={10} value={padding} onChange={(e) => setPadding(Number(e.target.value))} disabled={!canManage || !autoGenerate} /></label>
+              <label className="field"><span>Separator</span><select value={separator} onChange={(e) => setSeparator(e.target.value)} disabled={!canManage || !autoGenerate}><option value="">None</option><option value="-">-</option><option value="/">/</option><option value=".">.</option><option value="_">_</option></select></label>
+              <label className="field"><span>Effective from</span><input type="date" value={effectiveFrom} disabled={!canManage} onChange={(e) => setEffectiveFrom(e.target.value)} /></label>
+              <label className="field"><span>Effective to</span><input type="date" value={effectiveTo} disabled={!canManage} onChange={(e) => setEffectiveTo(e.target.value)} /></label>
+              <label className="checkbox-field"><input type="checkbox" checked={versionActive} disabled={!canManage} onChange={(e) => setVersionActive(e.target.checked)} /> Version active</label>
             </div>
             {autoGenerate && generationMethod === 'Simple' ? <p className="field-help">Example preview: <strong>{[prefix || 'EMP', String(Math.max(1, nextNumber)).padStart(Math.max(0, padding), '0')].join(separator)}</strong></p> : null}
-            <div className="form-actions"><button className="button button-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save Configuration'}</button></div>
+            {canManage ? <div className="form-actions"><button className="button button-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : selectedVersionId ? 'Save Changes' : 'Create Configuration'}</button></div> : null}
           </form>
         )}
       </Card>

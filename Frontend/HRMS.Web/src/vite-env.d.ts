@@ -14,6 +14,8 @@ interface ImportMetaEnv {
    * going to `VITE_API_BASE_URL`.
    */
   readonly VITE_API_ORIGIN_TEMPLATE?: string
+  /** Maximum employee rows accepted by the upload workflow; must match EmployeeBulkUpload:MaximumEmployeeRows. */
+  readonly VITE_EMPLOYEE_BULK_UPLOAD_MAX_ROWS?: string
 }
 
 interface ImportMeta {

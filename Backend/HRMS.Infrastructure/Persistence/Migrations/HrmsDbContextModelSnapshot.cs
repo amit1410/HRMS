@@ -4261,6 +4261,7 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("datetime2");
 
                     b.Property<long>("NextNumber")
+                        .IsConcurrencyToken()
                         .HasColumnType("bigint");
 
                     b.Property<int>("Padding")
@@ -4284,6 +4285,54 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.HasIndex("TenantId", "EmployeeCodeConfigId", "EffectiveFrom");
 
                     b.ToTable("EmployeeCodeConfigVersions", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeCodeConfigurationAuditEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EmployeeCodeConfigId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("EmployeeCodeConfigVersionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("NewValue")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("OldValue")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "EmployeeCodeConfigVersionId", "OccurredAtUtc", "Id");
+
+                    b.ToTable("EmployeeCodeConfigurationAuditEvents", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeCodeRule", b =>
@@ -4945,6 +4994,239 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.HasIndex("TenantId", "EmployeeId");
 
                     b.ToTable("EmployeeFamilyMembers", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeImportOperation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ClaimLeaseExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("ClaimLeaseId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("ConcurrencyStamp")
+                        .IsConcurrencyToken()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ConfirmationTokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<DateTime?>("ConfirmedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("FailedRows")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("ImportBatchId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("InitiatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("PreparedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("SanitizedSummary")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<int>("SkippedRows")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("StartedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("State")
+                        .HasColumnType("int");
+
+                    b.Property<int>("SucceededRows")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("TotalRows")
+                        .HasColumnType("int");
+
+                    b.Property<string>("WorkbookSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ImportBatchId")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "ConfirmationTokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "ImportBatchId");
+
+                    b.HasIndex("TenantId", "InitiatedByUserId");
+
+                    b.HasIndex("TenantId", "WorkbookSha256")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "State", "ClaimLeaseExpiresAtUtc");
+
+                    b.HasIndex("TenantId", "State", "PreparedAtUtc");
+
+                    b.ToTable("EmployeeImportOperations", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeImportRecoveryAudit", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("AfterFailedRows")
+                        .HasColumnType("int");
+
+                    b.Property<int>("AfterPendingRows")
+                        .HasColumnType("int");
+
+                    b.Property<int>("AfterSkippedRows")
+                        .HasColumnType("int");
+
+                    b.Property<int>("AfterSucceededRows")
+                        .HasColumnType("int");
+
+                    b.Property<int>("AfterTotalRows")
+                        .HasColumnType("int");
+
+                    b.Property<int>("BeforeFailedRows")
+                        .HasColumnType("int");
+
+                    b.Property<int>("BeforePendingRows")
+                        .HasColumnType("int");
+
+                    b.Property<int>("BeforeSkippedRows")
+                        .HasColumnType("int");
+
+                    b.Property<int>("BeforeSucceededRows")
+                        .HasColumnType("int");
+
+                    b.Property<int>("BeforeTotalRows")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Operator")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime>("RecoveryAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("SanitizedErrorCode")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "OperationId", "RecoveryAtUtc");
+
+                    b.ToTable("EmployeeImportRecoveryAudits", (string)null);
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeImportRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("EmployeeCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<Guid?>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int>("ExcelRowNumber")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ModifiedDate")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ProcessingCompletedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ProcessingStartedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("SanitizedErrorMessage")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<int>("Status")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasAlternateKey("TenantId", "Id");
+
+                    b.HasIndex("TenantId", "OperationId", "ExcelRowNumber")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "OperationId", "Status");
+
+                    b.ToTable("EmployeeImportRows", (string)null);
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeLeaveBalance", b =>
@@ -18700,8 +18982,29 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("nvarchar(128)");
 
+                    b.Property<DateTime?>("LastAttemptAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("LeaseExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("LeaseId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<int>("MaxAttempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(3);
+
+                    b.Property<DateTime?>("NextAttemptAtUtc")
+                        .HasColumnType("datetime2");
+
                     b.Property<Guid?>("PortalUserId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ProcessingStartedAtUtc")
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("RecipientEmailSnapshot")
                         .IsRequired()
@@ -18713,6 +19016,9 @@ namespace HRMS.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("RequestedByUserId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("int");
 
                     b.Property<DateTime?>("SentAtUtc")
                         .HasColumnType("datetime2");
@@ -18745,10 +19051,18 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("datetime2");
+
                     b.Property<string>("CorrelationId")
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
 
                     b.Property<DateTime>("RequestedAtUtc")
                         .HasColumnType("datetime2");
@@ -18772,6 +19086,9 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("int");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "IdempotencyKey")
+                        .IsUnique();
 
                     b.HasIndex("TenantId", "RequestedAtUtc");
 
@@ -20670,6 +20987,22 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeCodeConfigurationAuditEvent", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeCodeConfigVersion", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "EmployeeCodeConfigVersionId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeCodeRule", b =>
                 {
                     b.HasOne("HRMS.Domain.Entities.Tenant", "Tenant")
@@ -21011,6 +21344,63 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Employee");
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeImportOperation", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.ImportBatch", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "ImportBatchId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "InitiatedByUserId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeImportRecoveryAudit", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeImportOperation", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId", "OperationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeImportRow", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("HRMS.Domain.Entities.EmployeeImportOperation", "Operation")
+                        .WithMany("Rows")
+                        .HasForeignKey("TenantId", "OperationId")
+                        .HasPrincipalKey("TenantId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Operation");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeLeaveBalance", b =>
@@ -26216,6 +26606,11 @@ namespace HRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Conditions");
 
                     b.Navigation("Segments");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.EmployeeImportOperation", b =>
+                {
+                    b.Navigation("Rows");
                 });
 
             modelBuilder.Entity("HRMS.Domain.Entities.EmployeeLeaveBalance", b =>

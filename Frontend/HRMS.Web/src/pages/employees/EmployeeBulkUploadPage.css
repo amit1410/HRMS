@@ -1,0 +1,179 @@
+.employee-bulk-upload {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.employee-bulk-upload__instructions {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0 0 1rem;
+  padding-left: 1.25rem;
+  color: var(--text-secondary, #475569);
+}
+
+.employee-bulk-upload__steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  border-radius: var(--radius-md, 0.75rem);
+  color: var(--text-secondary, #475569);
+  list-style-position: inside;
+}
+
+.employee-bulk-upload__steps [aria-current='step'] {
+  color: var(--text-primary, #0f172a);
+  font-weight: 700;
+}
+
+.employee-bulk-upload__dropzone {
+  display: grid;
+  gap: 0.4rem;
+  padding: clamp(1rem, 3vw, 1.75rem);
+  border: 1px dashed var(--border-strong, #94a3b8);
+  border-radius: var(--radius-md, 0.75rem);
+  background: var(--surface-subtle, #f8fafc);
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.employee-bulk-upload__dropzone:focus-within,
+.employee-bulk-upload__dropzone.is-dragging {
+  border-color: var(--color-primary, #2563eb);
+  background: var(--surface-selected, #eff6ff);
+  outline: 2px solid transparent;
+}
+
+.employee-bulk-upload__dropzone input[type='file'] {
+  max-width: 100%;
+}
+
+.employee-bulk-upload__dropzone-title {
+  color: var(--text-primary, #0f172a);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.employee-bulk-upload__dropzone-help,
+.employee-bulk-upload__refresh-note,
+.employee-bulk-upload__token-note {
+  color: var(--text-secondary, #475569);
+  font-size: 0.9rem;
+}
+
+.employee-bulk-upload__replace {
+  margin-top: 0.5rem;
+}
+
+.employee-bulk-upload__actions {
+  flex-wrap: wrap;
+}
+
+.employee-bulk-upload__counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+
+.employee-bulk-upload__counts div,
+.employee-bulk-upload__prepared-details div {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  border-radius: var(--radius-sm, 0.5rem);
+  background: var(--surface-subtle, #f8fafc);
+}
+
+.employee-bulk-upload__counts dt,
+.employee-bulk-upload__prepared-details dt {
+  color: var(--text-secondary, #475569);
+  font-size: 0.82rem;
+}
+
+.employee-bulk-upload__counts dd,
+.employee-bulk-upload__prepared-details dd {
+  margin: 0.25rem 0 0;
+  color: var(--text-primary, #0f172a);
+  font-weight: 650;
+}
+
+.employee-bulk-upload__error-table-wrap {
+  max-height: 32rem;
+  overflow: auto;
+}
+
+.employee-bulk-upload__error-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface, #fff);
+}
+
+.employee-bulk-upload__error-table td {
+  min-width: 8rem;
+  max-width: 26rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.employee-bulk-upload__valid-message {
+  color: var(--color-success-text, #166534);
+}
+
+.employee-bulk-upload__blocked-message {
+  color: var(--color-danger-text, #991b1b);
+}
+
+.employee-bulk-upload__prepared-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.employee-bulk-upload__prepared-details code {
+  overflow-wrap: anywhere;
+}
+
+.employee-bulk-upload__refresh-note {
+  margin-bottom: 0;
+}
+
+.employee-bulk-upload__dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgb(15 23 42 / 55%);
+}
+
+.employee-bulk-upload__dialog {
+  width: min(100%, 34rem);
+  padding: 1.5rem;
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  border-radius: var(--radius-md, 0.75rem);
+  background: var(--surface, #fff);
+  box-shadow: 0 1.5rem 4rem rgb(15 23 42 / 20%);
+}
+
+.employee-bulk-upload__state {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.employee-bulk-upload progress {
+  width: 100%;
+  min-height: 0.8rem;
+}
+
+@media (max-width: 640px) {
+  .employee-bulk-upload__error-table {
+    min-width: 42rem;
+  }
+}

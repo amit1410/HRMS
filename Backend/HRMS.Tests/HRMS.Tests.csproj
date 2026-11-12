@@ -22,9 +22,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\HRMS.API\HRMS.API.csproj" />
+    <ProjectReference Include="..\HRMS.EmployeeImportPreflight\HRMS.EmployeeImportPreflight.csproj" />
     <ProjectReference Include="..\HRMS.Infrastructure\HRMS.Infrastructure.csproj" />
     <ProjectReference Include="..\HRMS.MigrationHost\HRMS.MigrationHost.csproj" />
     <ProjectReference Include="..\HRMS.WelcomeInvitationOperator\HRMS.WelcomeInvitationOperator.csproj" />
+    <ProjectReference Include="..\..\tools\BackupEncryptionPrototype\BackupEncryptionPrototype.csproj" />
   </ItemGroup>
 
 </Project>

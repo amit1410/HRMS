@@ -88,6 +88,31 @@ public class EmployeeEmploymentEndpointsTests : IClassFixture<HrmsApiFactory>
     }
 
     [Fact]
+    public async Task Employee_template_download_without_import_permission_is_forbidden()
+    {
+        using var client = Demo01Client(Permissions.Department.View);
+
+        var response = await client.GetAsync("/api/employees/bulk-upload/template");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Employee_template_download_returns_an_xlsx_for_import_permission()
+    {
+        using var client = Demo01Client(Permissions.Employee.Import);
+
+        var response = await client.GetAsync("/api/employees/bulk-upload/template");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", response.Content.Headers.ContentType!.MediaType);
+        Assert.Equal("employee-bulk-upload-template.xlsx", response.Content.Headers.ContentDisposition!.FileNameStar ?? response.Content.Headers.ContentDisposition.FileName);
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+        using var workbook = new ClosedXML.Excel.XLWorkbook(new MemoryStream(bytes));
+        Assert.Contains("Employees", workbook.Worksheets.Select(x => x.Name));
+    }
+
+    [Fact]
     public async Task Org_hierarchy_masters_are_available_for_the_dependent_dropdowns()
     {
         using var client = Demo01Client(Permissions.Department.View);

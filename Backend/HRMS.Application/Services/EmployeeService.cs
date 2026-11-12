@@ -53,6 +53,8 @@ public class EmployeeService : IEmployeeService
     private readonly ILogger<EmployeeService> _logger;
     private readonly IEmployeeAccessScopeService? _accessScope;
     private readonly IJobStatusService _jobStatusService;
+    private readonly IEmployeeEmploymentService? _employmentService;
+    private readonly ICurrentAuthorizationContext? _authorization;
 
     public EmployeeService(
         IHrmsDbContext db,
@@ -60,7 +62,9 @@ public class EmployeeService : IEmployeeService
         TimeProvider timeProvider,
         ILogger<EmployeeService> logger,
         IEmployeeAccessScopeService? accessScope = null,
-        IJobStatusService? jobStatusService = null)
+        IJobStatusService? jobStatusService = null,
+        IEmployeeEmploymentService? employmentService = null,
+        ICurrentAuthorizationContext? authorization = null)
     {
         _db = db;
         _tenantContext = tenantContext;
@@ -69,6 +73,8 @@ public class EmployeeService : IEmployeeService
         _accessScope = accessScope;
         _jobStatusService = jobStatusService ?? new JobStatusService(
             db, tenantContext, new EmployeeCreationAuthorizationContext(), timeProvider);
+        _employmentService = employmentService;
+        _authorization = authorization;
     }
 
     public async Task<Result<PagedResult<EmployeeListItemDto>>> GetAsync(
@@ -287,6 +293,108 @@ public class EmployeeService : IEmployeeService
         _logger.LogInformation("Created employee {EmployeeId} in tenant {TenantId}.", employee.Id, tenantId);
 
         return await ReloadAsync(employee.Id, "Employee created.", cancellationToken);
+    }
+
+    public async Task<Result<EmployeeDto>> CreateOnboardingAsync(
+        EmployeeOnboardingRequest request,
+        string changedBy,
+        CancellationToken cancellationToken = default,
+        bool canEditSensitive = true)
+        => await CreateOnboardingCoreAsync(request, changedBy, null, null, cancellationToken, canEditSensitive);
+
+    public async Task<Result<EmployeeDto>> CreateOnboardingWithinTransactionAsync(
+        EmployeeOnboardingRequest request,
+        string changedBy,
+        Guid importBatchId,
+        IDbContextTransaction callerTransaction,
+        CancellationToken cancellationToken = default,
+        bool canEditSensitive = true)
+    {
+        ArgumentNullException.ThrowIfNull(callerTransaction);
+        var activeTransaction = _db.CurrentTransaction;
+        if (activeTransaction is null ||
+            !ReferenceEquals(activeTransaction.GetDbTransaction(), callerTransaction.GetDbTransaction()))
+            return Result<EmployeeDto>.Conflict("The supplied onboarding transaction is not active on this DbContext.");
+        if (importBatchId == Guid.Empty)
+            return Result<EmployeeDto>.Invalid("importBatchId", "An import batch is required for imported onboarding.");
+
+        return await CreateOnboardingCoreAsync(request, changedBy, callerTransaction, importBatchId, cancellationToken, canEditSensitive);
+    }
+
+    private async Task<Result<EmployeeDto>> CreateOnboardingCoreAsync(
+        EmployeeOnboardingRequest request,
+        string changedBy,
+        IDbContextTransaction? callerTransaction,
+        Guid? importBatchId,
+        CancellationToken cancellationToken,
+        bool canEditSensitive)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId)
+            return Result<EmployeeDto>.Unauthorized(NoTenantMessage);
+        if (_employmentService is null)
+            return Result<EmployeeDto>.Unavailable("Employee employment service is unavailable.");
+        if (importBatchId is Guid batchId &&
+            !await _db.ImportBatches.AnyAsync(x => x.Id == batchId && x.TenantId == tenantId, cancellationToken))
+            return Result<EmployeeDto>.NotFound("Import batch was not found in this tenant.");
+
+        var personal = request.PersonalDetails;
+        var requiredProblem = ValidateRequiredCreationFields(personal.JobStatus, personal.AadhaarNumber, personal.PanNumber);
+        if (requiredProblem is not null) return requiredProblem;
+        var birthProblem = await ValidateBirthLocationAsync(personal, cancellationToken);
+        if (birthProblem is not null) return birthProblem;
+        if (request.InitialEmployment.EffectiveFrom != personal.DateOfJoining)
+            return Result<EmployeeDto>.Invalid("effectiveFrom", "Initial employment must be effective from the date of joining.");
+
+        var email = Normalize(request.Contact.OfficialEmail) ?? $"emp-{Guid.NewGuid():N}@placeholder.local";
+        var employee = new Employee { Id = Guid.NewGuid(), TenantId = tenantId, EmployeeCode = null,
+            Email = email, DateOfJoining = personal.DateOfJoining };
+        ApplyPersonalDetails(employee, personal,
+            canEditSensitive: canEditSensitive && _authorization?.HasAnyPermission(Permissions.EmployeeSensitive.Edit) == true,
+            applyJobStatus: false);
+        var contact = new EmployeeContact
+        {
+            Id = Guid.NewGuid(), TenantId = tenantId, EmployeeId = employee.Id,
+            OfficialEmail = Normalize(request.Contact.OfficialEmail), PersonalEmail = Normalize(request.Contact.PersonalEmail),
+            AlternateEmail = Normalize(request.Contact.AlternateEmail), OfficialPhone = Normalize(request.Contact.OfficialPhone),
+            PersonalPhone = Normalize(request.Contact.PersonalPhone), EmergencyNumber = Normalize(request.Contact.EmergencyNumber),
+            SameAsCurrentAddress = request.Contact.SameAsCurrentAddress
+        };
+
+        Result<EmployeeEmploymentHistoryDto>? historyResult = null;
+        try
+        {
+            async Task ExecuteOnboardingAsync(CancellationToken operationToken, bool ownsTransaction)
+            {
+                _db.ClearChangeTracker();
+                await using var transaction = ownsTransaction
+                    ? await _db.BeginTransactionAsync(IsolationLevel.Serializable, operationToken)
+                    : null;
+                await PersistEmployeeCreationAsync(employee, personal.JobStatus, created => _db.EmployeeContacts.Add(contact), operationToken, importBatchId);
+                historyResult = await _employmentService.CreateInitialHistoryWithinTransactionAsync(
+                    employee.Id, request.InitialEmployment, changedBy, operationToken);
+                if (historyResult is null || !historyResult.Succeeded)
+                    throw new OnboardingRejectedException(historyResult);
+                if (ownsTransaction)
+                    await transaction!.CommitAsync(operationToken);
+            }
+
+            if (callerTransaction is null)
+                await _db.CreateExecutionStrategy().ExecuteAsync(token => ExecuteOnboardingAsync(token, true), cancellationToken);
+            else
+                await ExecuteOnboardingAsync(cancellationToken, false);
+        }
+        catch (EmployeeCreationRejectedException exception)
+        {
+            return Result<EmployeeDto>.Failure(exception.Status, exception.Message, exception.Errors);
+        }
+        catch (OnboardingRejectedException exception)
+        {
+            return exception.Result is null
+                ? Result<EmployeeDto>.Failure(ResultStatus.ValidationFailed, "Initial employment history creation failed.")
+                : Result<EmployeeDto>.Failure(exception.Result.Status, exception.Result.Message, exception.Result.Errors);
+        }
+
+        return await ReloadAsync(employee.Id, "Employee onboarding completed.", cancellationToken);
     }
 
     public async Task<Result<EmployeeDto>> UpdateAsync(
@@ -1164,6 +1272,11 @@ public class EmployeeService : IEmployeeService
             permissions.Contains(Permissions.Employee.Create, StringComparer.Ordinal);
     }
 
+    private sealed class OnboardingRejectedException(Result<EmployeeEmploymentHistoryDto>? result) : Exception(result?.Message)
+    {
+        public Result<EmployeeEmploymentHistoryDto>? Result { get; } = result;
+    }
+
     /// <summary>
     /// Creates an employee from Personal Details, assigning the employee code and a uniqueness-safe
     /// placeholder email (the real work email is a separate Contact concern). The employee is created with
@@ -1209,7 +1322,8 @@ public class EmployeeService : IEmployeeService
         Employee employeeTemplate,
         string? requestedJobStatus,
         Action<Employee>? addRelatedRows,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? importBatchId = null)
     {
         var ownsTransaction = _db.CurrentTransaction is null;
 
@@ -1220,7 +1334,7 @@ public class EmployeeService : IEmployeeService
 
             var employee = CloneForCreation(employeeTemplate);
             var statusResult = await _jobStatusService.InitializeForCreationAsync(
-                employee, requestedJobStatus, cancellationToken: operationCancellationToken);
+                employee, requestedJobStatus, cancellationToken: operationCancellationToken, importBatchId: importBatchId);
             if (!statusResult.Succeeded)
             {
                 throw new EmployeeCreationRejectedException(statusResult);

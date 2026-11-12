@@ -50,6 +50,15 @@ describe('visibleNavItems', () => {
     expect(labels).not.toContain('Designations')
   })
 
+  it('shows Employee Bulk Upload only when all three backend workflow permissions are held', () => {
+    const required = [Permissions.employee.import, Permissions.employee.create, Permissions.employeeSensitive.edit]
+    expect(visibleNavItems(canWith(...required)).map(item => item.label)).toContain('Employee Bulk Upload')
+    for (const omitted of required) {
+      expect(visibleNavItems(canWith(...required.filter(permission => permission !== omitted))).map(item => item.label))
+        .not.toContain('Employee Bulk Upload')
+    }
+  })
+
   it('always shows Dashboard (no permission required)', () => {
     const items = visibleNavItems(canNever)
     expect(items.map((i) => i.label)).toContain('Dashboard')

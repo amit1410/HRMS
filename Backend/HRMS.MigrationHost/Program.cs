@@ -11,7 +11,9 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Configuration.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using MySql.Data.MySqlClient;
 using MySql.EntityFrameworkCore.Extensions;
 
 return await MigrationHost.RunAsync(args);
@@ -39,6 +41,7 @@ internal static class MigrationHost
             AddRepositoryConfiguration(builder);
             using var host = builder.Build();
             var configuration = host.Services.GetRequiredService<IConfiguration>();
+            parsed.ActualHostEnvironment = host.Services.GetRequiredService<IHostEnvironment>().EnvironmentName;
             return parsed.Command switch
             {
                 "validate" => await ValidateAsync(configuration, parsed),
@@ -51,10 +54,26 @@ internal static class MigrationHost
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"ERROR: {ex.Message}");
+            for (var current = ex; current is not null; current = current.InnerException)
+            {
+                Console.Error.WriteLine($"ERROR: {current.GetType().Name}: {SanitizeExceptionMessage(current.Message)}");
+                var tlsFrames = current.StackTrace?.Split([Environment.NewLine], StringSplitOptions.RemoveEmptyEntries)
+                    .Where(frame => frame.Contains("System.Net.Security", StringComparison.Ordinal)
+                        || frame.Contains("System.Net.SSPI", StringComparison.Ordinal)
+                        || frame.Contains("MySql.Data", StringComparison.Ordinal));
+                if (tlsFrames is not null)
+                    foreach (var frame in tlsFrames)
+                        Console.Error.WriteLine($"  at {frame.Trim()}");
+            }
             return 2;
         }
     }
+
+    private static string SanitizeExceptionMessage(string message)
+        => System.Text.RegularExpressions.Regex.Replace(
+            message,
+            @"(?i)(password|pwd|user\s*id|uid)\s*=\s*(?:""[^""]*""|'[^']*'|[^;\s]+)",
+            "$1=<redacted>");
 
     internal static IConfiguration BuildConfiguration(string[] args)
         => BuildConfiguration(args, null);
@@ -73,11 +92,11 @@ internal static class MigrationHost
             .Select((source, index) => (source, index))
             .First(x => x.source.GetType().Name.Contains("EnvironmentVariablesConfigurationSource", StringComparison.Ordinal)).index;
 
-        var repositoryBase = Path.Combine(Environment.CurrentDirectory, "Backend", "HRMS.API", "appsettings.json");
-        sources.Insert(0, new JsonConfigurationSource { Path = repositoryBase, Optional = true, ReloadOnChange = false });
+        var repositoryBase = ResolveRepositorySettingsPath("appsettings.json");
+        sources.Insert(0, CreateOptionalJsonSource(repositoryBase));
 
-        var environmentFile = Path.Combine(Environment.CurrentDirectory, "Backend", "HRMS.API", $"appsettings.{builder.Environment.EnvironmentName}.json");
-        sources.Insert(environmentVariablesIndex, new JsonConfigurationSource { Path = environmentFile, Optional = true, ReloadOnChange = false });
+        var environmentFile = ResolveRepositorySettingsPath($"appsettings.{builder.Environment.EnvironmentName}.json");
+        sources.Insert(environmentVariablesIndex, CreateOptionalJsonSource(environmentFile));
         if (builder.Environment.IsDevelopment())
         {
             if (addDevelopmentSecrets is null)
@@ -92,6 +111,52 @@ internal static class MigrationHost
                 .First(x => x.source.GetType().Name.Contains("EnvironmentVariablesConfigurationSource", StringComparison.Ordinal)).index;
             sources.Insert(environmentVariablesIndex, configurationSource);
         }
+
+        var externalConfig = builder.Configuration["EmployeeImportStorage:ConfigurationFile"];
+        if (!string.IsNullOrWhiteSpace(externalConfig))
+        {
+            if (!Path.IsPathFullyQualified(externalConfig))
+                throw new InvalidOperationException("EmployeeImportStorage:ConfigurationFile must be an absolute mounted-secret path.");
+            builder.Configuration.AddJsonFile(externalConfig, optional: false, reloadOnChange: false);
+        }
+    }
+
+
+
+    internal static string ResolveRepositorySettingsPath(string fileName)
+        => ResolveRepositorySettingsPath(fileName,
+            [Environment.CurrentDirectory, AppContext.BaseDirectory, Path.GetDirectoryName(typeof(MigrationHost).Assembly.Location)!]);
+
+    internal static string ResolveRepositorySettingsPath(string fileName, IEnumerable<string> startingDirectories)
+    {
+        foreach (var start in startingDirectories)
+        {
+            for (var directory = new DirectoryInfo(start); directory is not null; directory = directory.Parent)
+            {
+                var candidate = Path.Combine(directory.FullName, "Backend", "HRMS.API", fileName);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
+
+        return Path.Combine(Environment.CurrentDirectory, "Backend", "HRMS.API", fileName);
+    }
+
+    private static JsonConfigurationSource CreateOptionalJsonSource(string filePath)
+    {
+        var fullPath = Path.GetFullPath(filePath);
+        var providerRoot = Path.GetDirectoryName(fullPath)!;
+        while (!Directory.Exists(providerRoot))
+            providerRoot = Directory.GetParent(providerRoot)?.FullName
+                ?? throw new DirectoryNotFoundException("No existing parent directory is available for optional repository settings.");
+
+        return new JsonConfigurationSource
+        {
+            Path = Path.GetRelativePath(providerRoot, fullPath),
+            FileProvider = new PhysicalFileProvider(providerRoot),
+            Optional = true,
+            ReloadOnChange = false
+        };
     }
 
     private static async Task<int> ValidateAsync(IConfiguration config, Arguments args)
@@ -103,6 +168,11 @@ internal static class MigrationHost
             await CheckIdentityAsync(target, args);
             await ReportAsync("catalog", target.Catalog, args.CancellationToken);
             await ReportAsync($"tenant {args.TenantCode}", target.Tenant, args.CancellationToken);
+            if (target.Provider == DatabaseProviderType.MySql)
+            {
+                var recoveryAuditTableExists = await RecoveryAuditTableExistsAsync(target.Tenant, args.CancellationToken);
+                Console.WriteLine($"tenant employee import recovery audit table: {(recoveryAuditTableExists ? "present" : "absent")}");
+            }
             Console.WriteLine("VALIDATE OK: read-only checks completed; no schema, migration-history, or seed writes were attempted.");
         }
         return 0;
@@ -110,6 +180,9 @@ internal static class MigrationHost
 
     private static async Task<int> MigrateAsync(IConfiguration config, Arguments args)
     {
+        EmployeeImportMigrationGuard.ValidatePlanSelection(args.TenantOnly, args.TenantPlan, args.ApprovedMigrationOrder);
+        if (args.LocalDevelopmentPolicy && (!args.TenantOnly || args.TenantPlan != EmployeeImportRecoveryAuditMigrationPlan.Name))
+            throw new InvalidOperationException("The local-development policy is available only for the explicit WEB1 recovery-audit tenant plan.");
         if (!args.Confirm || !args.BackupVerified || !args.RestoreReady)
             throw new InvalidOperationException("Migrate requires --confirm, --backup-verified, and --restore-ready.");
 
@@ -150,6 +223,24 @@ internal static class MigrationHost
 
     private static async Task MigrateTenantOnlyAsync(IConfiguration config, Arguments args)
     {
+        if (args.TenantPlan is not null)
+        {
+            if (string.Equals(args.TenantPlan, EmployeeCodeAuditMigrationPlan.Name, StringComparison.Ordinal))
+            {
+                await MigrateEmployeeCodeAuditTenantOnlyAsync(config, args);
+                return;
+            }
+            if (string.Equals(args.TenantPlan, EmployeeImportRecoveryAuditMigrationPlan.Name, StringComparison.Ordinal))
+            {
+                await MigrateEmployeeImportRecoveryAuditTenantOnlyAsync(config, args);
+                return;
+            }
+            if (!string.Equals(args.TenantPlan, EmployeeImportMigrationPlan.Name, StringComparison.Ordinal))
+                throw new InvalidOperationException($"Unsupported tenant-only migration plan '{args.TenantPlan}'.");
+            await MigrateEmployeeImportTenantOnlyAsync(config, args);
+            return;
+        }
+
         if (ParseProvider(args.Provider) != DatabaseProviderType.MySql)
             throw new InvalidOperationException("--tenant-only is restricted to the MySql tenant provider.");
         if (!TenantOnlyApprovedMigrations.SetEquals(args.ApprovedMigrations))
@@ -184,6 +275,360 @@ internal static class MigrationHost
             Console.WriteLine("TENANT-ONLY MIGRATE OK: approved MySQL tenant migrations applied; catalog schema and history were not accessed for migration.");
         }
     }
+
+    private static async Task MigrateEmployeeCodeAuditTenantOnlyAsync(IConfiguration config, Arguments args)
+    {
+        EmployeeCodeAuditMigrationGuard.ValidateTarget(args.TenantId, args.Catalog, args.TenantCode, args.ShardKey,
+            args.Database ?? "", args.Provider);
+        var allowedApprovals = config.GetSection("MigrationHost:AllowedApprovals").Get<string[]>() ?? [];
+        EmployeeCodeAuditMigrationGuard.ValidateApproval(args.Confirm, args.BackupVerified, args.IsolatedRestoreTested,
+            args.MaintenanceWindow, args.Approval, args.Approval is not null && allowedApprovals.Contains(args.Approval, StringComparer.Ordinal),
+            args.BackupReference, args.RestoreTestReference);
+
+        var expectedAllowlist = $"{EmployeeCodeAuditMigrationPlan.TenantCode}:{EmployeeCodeAuditMigrationPlan.TenantId}:{EmployeeCodeAuditMigrationPlan.ShardKey}:{EmployeeCodeAuditMigrationPlan.Database}";
+        var tenantAllowlist = config.GetSection("MigrationHost:AllowedTenants").Get<string[]>() ?? [];
+        if (!tenantAllowlist.Contains(expectedAllowlist, StringComparer.Ordinal))
+            throw new InvalidOperationException("Employee Code Audit target is not in MigrationHost:AllowedTenants.");
+
+        var target = await OpenTargetAsync(config, args);
+        await using (target.Catalog)
+        await using (target.Tenant)
+        {
+            await CheckIdentityAsync(target, args); // read-only catalog tenant identity verification only
+            await VerifyEmployeeCodeAuditTenantHostAsync(target.Catalog, args.TenantId, args.CancellationToken);
+            EnsureTenantDatabase(target.Tenant, EmployeeCodeAuditMigrationPlan.Database);
+            await EmployeeCodeAuditMigrationWorkflow.ExecuteAsync(
+                async token =>
+                {
+                    await CheckIdentityAsync(target, args);
+                    await VerifyEmployeeCodeAuditTenantHostAsync(target.Catalog, args.TenantId, token);
+                    EnsureTenantDatabase(target.Tenant, EmployeeCodeAuditMigrationPlan.Database);
+                    var pending = await PendingAsync(target.Tenant, token);
+                    var applied = (await target.Tenant.Database.GetAppliedMigrationsAsync(token)).ToArray();
+                    var known = target.Tenant.Database.GetMigrations().ToArray();
+                    for (var i = 0; i < applied.Length; i++)
+                        if (i >= known.Length || !string.Equals(applied[i], known[i], StringComparison.Ordinal))
+                            throw new InvalidOperationException($"Tenant migration history is not a known prefix at '{applied[i]}'.");
+                    var shouldExecute = EmployeeCodeAuditMigrationGuard.ValidatePendingOrApplied(pending, applied);
+                    if (!shouldExecute) return (pending, false);
+                    var exists = await EmployeeCodeAuditMigrationWorkflow.AuditTableExistsAsync(target.Tenant, token);
+                    EmployeeCodeAuditMigrationGuard.ValidateAuditTableAbsent(exists);
+                    return (pending, true);
+                },
+                token => MigrationLock.AcquireAsync(target.Tenant, $"tenant-{args.TenantId}", token),
+                async (state, token) =>
+                {
+                    if (state.ShouldExecute)
+                        await TenantOnlyMigrationExecutor.ExecuteExactlyAsync(target.Tenant, state.Pending,
+                            [EmployeeCodeAuditMigrationPlan.MigrationId], token);
+                }, args.CancellationToken);
+            await ReportAsync($"tenant {args.TenantCode} after", target.Tenant, args.CancellationToken);
+            Console.WriteLine("EMPLOYEE CODE AUDIT TENANT-ONLY MIGRATE OK: catalog schema/history untouched; no seeding invoked.");
+        }
+    }
+
+    private static async Task MigrateEmployeeImportRecoveryAuditTenantOnlyAsync(IConfiguration config, Arguments args)
+    {
+        EmployeeImportRecoveryAuditMigrationGuard.ValidateTarget(args.TenantId, args.Catalog, args.TenantCode, args.ShardKey,
+            args.Database ?? "", args.Provider);
+        var allowedApprovals = config.GetSection("MigrationHost:AllowedApprovals").Get<string[]>() ?? [];
+        EmployeeImportRecoveryAuditMigrationGuard.ValidateApproval(args.Confirm, args.BackupVerified, args.BackupEncrypted,
+            args.RetentionApproved, args.IsolatedRestoreTested,
+            args.MaintenanceWindow, args.Approval, args.Approval is not null && allowedApprovals.Contains(args.Approval, StringComparer.Ordinal),
+            args.BackupReference, args.RestoreTestReference);
+
+        if (args.LocalDevelopmentPolicy)
+        {
+            if (!string.Equals(args.ActualHostEnvironment, "Development", StringComparison.Ordinal) ||
+                !string.Equals(args.Environment, "Development", StringComparison.Ordinal) ||
+                !string.Equals(config["MigrationHost:LocalDevelopment:Enabled"], "true", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The local-development policy is disabled or the actual host environment is not Development.");
+            if (!args.Confirm || !args.MaintenanceWindow || !args.WorkersPaused || string.IsNullOrWhiteSpace(args.LocalPolicyApproval) || string.IsNullOrWhiteSpace(args.Operator))
+                throw new InvalidOperationException("Local policy requires explicit confirmation, maintenance-window and worker-pause checks, operator identity, and a local policy approval reference.");
+            var localApprovals = config.GetSection("MigrationHost:LocalDevelopment:AllowedPolicyApprovals").Get<string[]>() ?? [];
+            if (!localApprovals.Contains(args.LocalPolicyApproval, StringComparer.Ordinal))
+                throw new InvalidOperationException("Local policy approval is not allowlisted.");
+            var workerOptions = config.GetSection(EmployeeBulkImportWorkerOptions.SectionName).Get<EmployeeBulkImportWorkerOptions>()
+                ?? new EmployeeBulkImportWorkerOptions();
+            if (workerOptions.Enabled)
+                throw new InvalidOperationException("Employee import worker must be disabled for local recovery migration maintenance.");
+            if (string.IsNullOrWhiteSpace(args.LocalEvidencePath))
+                throw new InvalidOperationException("A signed local backup and restore evidence file is required.");
+        }
+
+        var expectedAllowlist = $"{EmployeeImportRecoveryAuditMigrationPlan.TenantCode}:{EmployeeImportRecoveryAuditMigrationPlan.TenantId}:{EmployeeImportRecoveryAuditMigrationPlan.ShardKey}:{EmployeeImportRecoveryAuditMigrationPlan.Database}";
+        var tenantAllowlist = config.GetSection("MigrationHost:AllowedTenants").Get<string[]>() ?? [];
+        if (!tenantAllowlist.Contains(expectedAllowlist, StringComparer.Ordinal))
+            throw new InvalidOperationException("Employee Import Recovery Audit target is not in MigrationHost:AllowedTenants.");
+
+        var target = await OpenTargetAsync(config, args);
+        await using (target.Catalog)
+        await using (target.Tenant)
+        {
+            await CheckIdentityAsync(target, args);
+            await VerifyEmployeeCodeAuditTenantHostAsync(target.Catalog, args.TenantId, args.CancellationToken);
+            EnsureTenantDatabase(target.Tenant, EmployeeImportRecoveryAuditMigrationPlan.Database);
+            await EmployeeCodeAuditMigrationWorkflow.ExecuteAsync(
+                async token =>
+                {
+                    await CheckIdentityAsync(target, args);
+                    await VerifyEmployeeCodeAuditTenantHostAsync(target.Catalog, args.TenantId, token);
+                    EnsureTenantDatabase(target.Tenant, EmployeeImportRecoveryAuditMigrationPlan.Database);
+                    var pending = await PendingAsync(target.Tenant, token);
+                    var applied = (await target.Tenant.Database.GetAppliedMigrationsAsync(token)).ToArray();
+                    var known = target.Tenant.Database.GetMigrations().ToArray();
+                    for (var i = 0; i < applied.Length; i++)
+                        if (i >= known.Length || !string.Equals(applied[i], known[i], StringComparison.Ordinal))
+                            throw new InvalidOperationException($"Tenant migration history is not a known prefix at '{applied[i]}'.");
+                    var shouldExecute = EmployeeImportRecoveryAuditMigrationGuard.ValidatePendingOrApplied(pending, applied);
+                    if (!shouldExecute) return (pending, false);
+                    EmployeeImportRecoveryAuditMigrationGuard.ValidateAuditTableAbsent(
+                        await RecoveryAuditTableExistsAsync(target.Tenant, token));
+                    if (args.LocalDevelopmentPolicy)
+                    {
+                        var catalogRuntime = await EmployeeImportWeb1MySqlMetadataInspector.ReadIdentityAsync(target.Catalog, token);
+                        var tenantRuntime = await EmployeeImportWeb1MySqlMetadataInspector.ReadIdentityAsync(target.Tenant, token);
+                        if (!catalogRuntime.ServerUuid.Equals(tenantRuntime.ServerUuid, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidOperationException("Catalog and tenant connections did not resolve to the same approved local MySQL instance.");
+                        ValidateLocalDevelopmentRecoveryEvidence(config, args, target, tenantRuntime.ServerUuid, pending);
+                    }
+                    return (pending, true);
+                },
+                token => MigrationLock.AcquireAsync(target.Tenant, $"tenant-{args.TenantId}", token),
+                async (state, token) =>
+                {
+                    if (state.ShouldExecute)
+                        await TenantOnlyMigrationExecutor.ExecuteExactlyAsync(target.Tenant, state.Pending,
+                            [EmployeeImportRecoveryAuditMigrationPlan.MigrationId], token);
+                }, args.CancellationToken);
+            await ReportAsync($"tenant {args.TenantCode} after", target.Tenant, args.CancellationToken);
+            Console.WriteLine("EMPLOYEE IMPORT RECOVERY AUDIT TENANT-ONLY MIGRATE OK: catalog schema/history untouched; no seeding invoked.");
+        }
+    }
+
+    private static void ValidateLocalDevelopmentRecoveryEvidence(IConfiguration config, Arguments args, Target target,
+        string actualServerUuid, IReadOnlyList<string> pending)
+    {
+        var local = config.GetSection("MigrationHost:LocalDevelopment");
+        var catalogConnection = new MySqlConnectionStringBuilder(target.Catalog.Database.GetDbConnection().ConnectionString);
+        var tenantConnection = new MySqlConnectionStringBuilder(target.Tenant.Database.GetDbConnection().ConnectionString);
+        if (!uint.TryParse(local["Port"], out var expectedPort) || expectedPort == 0 ||
+            catalogConnection.Port != expectedPort || tenantConnection.Port != expectedPort)
+            throw new InvalidOperationException("Catalog and tenant ports do not match the approved local MySQL endpoint.");
+        var catalogTlsMode = catalogConnection.SslMode.ToString();
+        var tenantTlsMode = tenantConnection.SslMode.ToString();
+        if (catalogTlsMode != tenantTlsMode)
+            throw new InvalidOperationException("Catalog and tenant TLS modes differ.");
+        var expectation = new LocalRecoveryPolicyExpectation(
+            args.ActualHostEnvironment,
+            Environment.MachineName,
+            local["MachineName"] ?? "",
+            tenantConnection.Server,
+            tenantTlsMode,
+            local["MySqlServerUuid"] ?? "",
+            actualServerUuid,
+            args.TenantId,
+            args.TenantCode,
+            args.ShardKey,
+            args.Catalog,
+            args.Database ?? "",
+            args.Provider,
+            pending,
+            args.LocalPolicyApproval ?? "",
+            args.Approval ?? "",
+            args.BackupReference ?? "",
+            args.RestoreTestReference ?? "",
+            args.Operator ?? "",
+            new HashSet<string>(local.GetSection("AllowedPolicyApprovals").Get<string[]>() ?? [], StringComparer.Ordinal),
+            local["BackupRoot"] ?? "",
+            int.TryParse(local["RetentionDays"], out var retentionDays) ? retentionDays : 0,
+            local["RetentionPolicyReference"] ?? "",
+            DateTimeOffset.UtcNow);
+        LocalDevelopmentRecoveryPolicy.ValidateContext(expectation);
+        if (!OperatingSystem.IsWindows())
+            throw new InvalidOperationException("The local-development backup policy is supported only on Windows.");
+        LocalDevelopmentRecoveryPolicy.VerifyRestrictedBackupRoot(expectation.BackupRoot);
+        if (!string.Equals(catalogConnection.Server, tenantConnection.Server, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Catalog and tenant connection endpoints differ.");
+        var evidence = LocalDevelopmentRecoveryPolicy.ReadAndValidateEvidence(args.LocalEvidencePath!, local["EvidencePublicKeyPem"] ?? "", expectation);
+        LocalDevelopmentRecoveryPolicy.VerifyRestrictedBackupFile(args.LocalEvidencePath!);
+        LocalDevelopmentRecoveryPolicy.VerifyRestrictedBackupFile(evidence.ArtifactPath);
+    }
+
+    private static async Task<bool> RecoveryAuditTableExistsAsync(HrmsDbContext tenant, CancellationToken token)
+    {
+        var connection = tenant.Database.GetDbConnection();
+        var openedHere = connection.State != System.Data.ConnectionState.Open;
+        if (openedHere) await connection.OpenAsync(token);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'EmployeeImportRecoveryAudits'";
+            return Convert.ToInt32(await command.ExecuteScalarAsync(token)) != 0;
+        }
+        finally { if (openedHere) await connection.CloseAsync(); }
+    }
+
+    private static void EnsureTenantDatabase(DbContext tenant, string expected)
+    {
+        var actual = tenant.Database.GetDbConnection().Database;
+        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Tenant database mismatch. Expected '{expected}', connected to '{actual}'.");
+    }
+
+    private static async Task VerifyEmployeeCodeAuditTenantHostAsync(HrmsCatalogDbContext catalog, Guid tenantId, CancellationToken token)
+    {
+        var connection = catalog.Database.GetDbConnection();
+        var openedHere = connection.State != System.Data.ConnectionState.Open;
+        if (openedHere) await connection.OpenAsync(token);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT Host, Status FROM Tenants WHERE Id = @id";
+            var parameter = command.CreateParameter(); parameter.ParameterName = "@id"; parameter.Value = tenantId; command.Parameters.Add(parameter);
+            await using var reader = await command.ExecuteReaderAsync(token);
+            if (!await reader.ReadAsync(token)
+                || !string.Equals(reader.GetString(0), EmployeeCodeAuditMigrationPlan.TenantHost, StringComparison.OrdinalIgnoreCase)
+                || Convert.ToInt32(reader.GetValue(1)) != (int)TenantStatus.Active)
+                throw new InvalidOperationException("Catalog tenant host is not web1.localhost or tenant is not active.");
+        }
+        finally
+        {
+            if (openedHere) await connection.CloseAsync();
+        }
+    }
+
+    private static async Task MigrateEmployeeImportTenantOnlyAsync(IConfiguration config, Arguments args)
+    {
+        if (ParseProvider(args.Provider) != DatabaseProviderType.MySql
+            || !string.Equals(args.Catalog, EmployeeImportMigrationPlan.Catalog, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(args.TenantCode, EmployeeImportMigrationPlan.TenantCode, StringComparison.Ordinal)
+            || !string.Equals(args.ShardKey, EmployeeImportMigrationPlan.ShardKey, StringComparison.Ordinal)
+            || !string.Equals(args.Database, EmployeeImportMigrationPlan.Database, StringComparison.Ordinal))
+            throw new InvalidOperationException("The Employee Import plan is restricted to active WEB1 on MySQL database hrms_web1 in hrms_catalog.");
+        EmployeeImportMigrationGuard.ValidateRequestedMigrationOrder(args.ApprovedMigrationOrder);
+        if (!args.BackupEncrypted || !args.RetentionApproved || !args.IsolatedRestoreTested || !args.MaintenanceWindow || !args.WorkersPaused
+            || string.IsNullOrWhiteSpace(args.Approval) || string.IsNullOrWhiteSpace(args.BackupReference)
+            || string.IsNullOrWhiteSpace(args.RestoreTestReference))
+            throw new InvalidOperationException("The Employee Import plan requires encrypted retained backup evidence, isolated restore-test evidence, maintenance-window and worker-pause confirmation, and an approval reference.");
+        var allowedApprovals = config.GetSection("MigrationHost:AllowedApprovals").Get<string[]>() ?? [];
+        if (!allowedApprovals.Contains(args.Approval, StringComparer.Ordinal))
+            throw new InvalidOperationException("Employee Import approval is not present in MigrationHost:AllowedApprovals.");
+
+        var endpoint = new EmployeeImportMigrationExpectation(
+            args.TenantId,
+            RequiredArgument(args.ExpectedEndpointHost, "expected-endpoint-host"),
+            RequiredPort(args.ExpectedEndpointPort),
+            RequiredArgument(args.ExpectedServerHostname, "expected-server-hostname"),
+            RequiredArgument(args.ExpectedServerUuid, "expected-server-uuid"));
+        ValidateEmployeeImportConfiguredEndpoint(config, endpoint);
+
+        var allowedTenant = $"{EmployeeImportMigrationPlan.TenantCode}:{args.TenantId}:{EmployeeImportMigrationPlan.ShardKey}:{EmployeeImportMigrationPlan.Database}";
+        var tenantOnlyAllowlist = config.GetSection("MigrationHost:AllowedTenants").Get<string[]>() ?? [];
+        if (!tenantOnlyAllowlist.Contains(allowedTenant, StringComparer.Ordinal))
+            throw new InvalidOperationException("Employee Import target is not in MigrationHost:AllowedTenants (expected exact WEB1 code, ID, shard, and physical database).");
+
+        var target = await OpenTargetAsync(config, args);
+        await using (target.Catalog)
+        await using (target.Tenant)
+        {
+            if (!string.Equals(target.Tenant.Database.ProviderName, "MySql.EntityFrameworkCore", StringComparison.Ordinal)
+                || !string.Equals(target.Catalog.Database.ProviderName, "MySql.EntityFrameworkCore", StringComparison.Ordinal))
+                throw new InvalidOperationException("Employee Import plan did not resolve to the expected MySQL EF provider.");
+
+            EmployeeImportMigrationEvidence? lastEvidence = null;
+            async Task<EmployeeImportMigrationEvidence> Inspect(CancellationToken token)
+            {
+                var evidence = await ReadEmployeeImportMigrationEvidenceAsync(target, config, endpoint, token);
+                lastEvidence = evidence;
+                return evidence;
+            }
+
+            await EmployeeImportMigrationWorkflow.ExecuteAsync(
+                Inspect,
+                token => MigrationLock.AcquireAsync(target.Tenant, $"tenant-{args.TenantId}", token),
+                async token =>
+                {
+                    var evidence = lastEvidence ?? throw new InvalidOperationException("Locked migration evidence was not captured.");
+                    await TenantOnlyMigrationExecutor.ExecuteExactlyAsync(
+                        target.Tenant, evidence.PendingMigrations, EmployeeImportMigrationPlan.OrderedMigrationIds, token);
+                },
+                endpoint,
+                args.CancellationToken);
+
+            await ReportAsync($"tenant {args.TenantCode} after", target.Tenant, args.CancellationToken);
+            Console.WriteLine("EMPLOYEE IMPORT TENANT-ONLY MIGRATE OK: exact WEB1 MySQL migration plan applied; catalog schema and history were not migrated.");
+        }
+    }
+
+    private static void ValidateEmployeeImportConfiguredEndpoint(IConfiguration config, EmployeeImportMigrationExpectation expected)
+    {
+        var catalogValue = config.GetConnectionString("Catalog")
+            ?? throw new InvalidOperationException("ConnectionStrings:Catalog is required.");
+        var sharding = config.GetSection(ShardingOptions.SectionName).Get<ShardingOptions>() ?? new ShardingOptions();
+        if (string.IsNullOrWhiteSpace(sharding.MySqlConnectionStringTemplate))
+            throw new InvalidOperationException("Sharding:MySqlConnectionStringTemplate is required for the Employee Import plan.");
+
+        var catalog = new MySqlConnectionStringBuilder(catalogValue);
+        var template = new MySqlConnectionStringBuilder(sharding.MySqlConnectionStringTemplate);
+        var tenant = new MySqlConnectionStringBuilder(template.ConnectionString)
+        {
+            Database = template.Database.Replace(ShardingOptions.ShardKeyPlaceholder, EmployeeImportMigrationPlan.ShardKey, StringComparison.Ordinal)
+        };
+        if (!catalog.Database.Equals(EmployeeImportMigrationPlan.Catalog, StringComparison.OrdinalIgnoreCase)
+            || !tenant.Database.Equals(EmployeeImportMigrationPlan.Database, StringComparison.OrdinalIgnoreCase)
+            || !catalog.Server.Equals(expected.EndpointHost, StringComparison.OrdinalIgnoreCase)
+            || !tenant.Server.Equals(expected.EndpointHost, StringComparison.OrdinalIgnoreCase)
+            || catalog.Port != expected.EndpointPort || tenant.Port != expected.EndpointPort)
+            throw new InvalidOperationException("Configured catalog/tenant MySQL endpoints do not match the explicitly approved WEB1 endpoint.");
+    }
+
+    private static async Task<EmployeeImportMigrationEvidence> ReadEmployeeImportMigrationEvidenceAsync(
+        Target target,
+        IConfiguration config,
+        EmployeeImportMigrationExpectation expected,
+        CancellationToken cancellationToken)
+    {
+        var catalogValue = config.GetConnectionString("Catalog")!;
+        var sharding = config.GetSection(ShardingOptions.SectionName).Get<ShardingOptions>()!;
+        var catalogConnection = new MySqlConnectionStringBuilder(catalogValue);
+        var tenantConnection = new MySqlConnectionStringBuilder(sharding.MySqlConnectionStringTemplate!);
+        tenantConnection.Database = tenantConnection.Database.Replace(ShardingOptions.ShardKeyPlaceholder, EmployeeImportMigrationPlan.ShardKey, StringComparison.Ordinal);
+
+        var catalogRuntime = await EmployeeImportWeb1MySqlMetadataInspector.ReadIdentityAsync(target.Catalog, cancellationToken);
+        EmployeeImportMigrationGuard.ValidateRuntimeIdentity(catalogRuntime, EmployeeImportMigrationPlan.Catalog, expected);
+        var route = await EmployeeImportWeb1MySqlMetadataInspector.ReadRouteAsync(target.Catalog, expected.TenantId, cancellationToken);
+        EmployeeImportMigrationGuard.ValidateRoute(route, expected.TenantId);
+
+        var tenantRuntime = await EmployeeImportWeb1MySqlMetadataInspector.ReadIdentityAsync(target.Tenant, cancellationToken);
+        EmployeeImportMigrationGuard.ValidateRuntimeIdentity(tenantRuntime, EmployeeImportMigrationPlan.Database, expected);
+        var schema = await EmployeeImportWeb1MySqlMetadataInspector.ReadSchemaAsync(target.Tenant, cancellationToken);
+        var known = target.Tenant.Database.GetMigrations().ToArray();
+        var applied = (await target.Tenant.Database.GetAppliedMigrationsAsync(cancellationToken)).ToArray();
+        var pending = (await target.Tenant.Database.GetPendingMigrationsAsync(cancellationToken)).ToArray();
+
+        return new EmployeeImportMigrationEvidence(
+            route,
+            catalogConnection.Database,
+            catalogConnection.Server,
+            catalogConnection.Port,
+            tenantConnection.Server,
+            tenantConnection.Port,
+            catalogRuntime,
+            tenantRuntime,
+            known,
+            applied,
+            pending,
+            schema);
+    }
+
+    private static string RequiredArgument(string? value, string name)
+        => !string.IsNullOrWhiteSpace(value) ? value : throw new InvalidOperationException($"--{name} is required for the Employee Import plan.");
+
+    private static uint RequiredPort(string? value)
+        => uint.TryParse(value, out var port) && port is > 0 and <= 65535
+            ? port
+            : throw new InvalidOperationException("--expected-endpoint-port must be a valid TCP port.");
 
     private static void CheckTenantDatabase(HrmsDbContext tenant, string expectedDatabase)
     {
@@ -397,14 +842,15 @@ internal static class MigrationHost
         if (!discard) throw new InvalidOperationException("Release is missing LeavePoliciesController.Discard.");
         var migrationMetadata = System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(directory, "HRMS.Infrastructure.MySqlMigrations.dll")));
         if (!migrationMetadata.Contains("AddLeavePolicyDraftDiscard", StringComparison.Ordinal)) throw new InvalidOperationException("Release is missing the draft-discard migration.");
+        EmployeeImportMigrationGuard.ValidateReleaseMigrationInventory(migrationMetadata);
         var domainMetadata = System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(directory, "HRMS.Domain.dll")));
         if (!domainMetadata.Contains("Discarded", StringComparison.Ordinal)) throw new InvalidOperationException("Release is missing Discarded status handling.");
-        Console.WriteLine("VERIFY-RELEASE OK: required assemblies, endpoint, migration ID, and SHA-256 hashes verified.");
+        Console.WriteLine("VERIFY-RELEASE OK: required assemblies, endpoints, migration IDs, Employee Import snapshot, and SHA-256 hashes verified.");
         return 0;
     }
 
     private static DatabaseProviderType ParseProvider(string value) => Enum.TryParse<DatabaseProviderType>(value, true, out var provider) ? provider : throw new ArgumentException($"Unsupported provider '{value}'.");
-    private static void PrintUsage() => Console.WriteLine("hrms-migration-host validate|migrate --catalog NAME --tenant-id GUID --tenant-code CODE --shard KEY --provider MySql|SqlServer [--approved-migrations ID,...]\n  migrate additionally requires --confirm --backup-verified --restore-ready\n  migrate --tenant-only additionally requires --database NAME and exactly the two approved WEB1 tenant migration IDs; MySql only\n  hrms-migration-host catalog-preflight|catalog-migrate --catalog NAME --provider MySql|SqlServer --environment ENV --approved-migrations ID,...\n  catalog-migrate additionally requires --confirm --backup-verified --backup-encrypted --retention-approved --restore-ready --isolated-restore-tested --approval APPROVAL-ID\n  verify-release --publish-dir DIR");
+    private static void PrintUsage() => Console.WriteLine("hrms-migration-host validate|migrate --catalog NAME --tenant-id GUID --tenant-code CODE --shard KEY --provider MySql|SqlServer [--approved-migrations ID,...]\n  migrate additionally requires --confirm --backup-verified --restore-ready\n  migrate --tenant-only [--tenant-plan employee-import-web1|employee-code-audit-web1|employee-import-recovery-audit-web1] additionally requires --database NAME and plan-specific approval, backup and isolated-restore evidence\n  hrms-migration-host catalog-preflight|catalog-migrate --catalog NAME --provider MySql|SqlServer --environment ENV --approved-migrations ID,...\n  catalog-migrate additionally requires --confirm --backup-verified --backup-encrypted --retention-approved --restore-ready --isolated-restore-tested --approval APPROVAL-ID\n  verify-release --publish-dir DIR");
 
     private sealed record Target(HrmsCatalogDbContext Catalog, HrmsDbContext Tenant, DatabaseProviderType Provider);
 }
@@ -432,12 +878,17 @@ internal sealed class Arguments
 {
     private readonly Dictionary<string, string?> _values = new(StringComparer.OrdinalIgnoreCase);
     public string Command { get; private init; } = "help";
+    public string ActualHostEnvironment { get; set; } = "";
     public string Catalog => Required("catalog"); public Guid TenantId => Guid.Parse(Required("tenant-id")); public string TenantCode => Required("tenant-code"); public string ShardKey => Required("shard"); public string Provider => Required("provider"); public string Environment => Get("environment") ?? ""; public string? Approval => Get("approval"); public string? PublishDirectory => Get("publish-dir");
-    public bool Confirm => Has("confirm"); public bool BackupVerified => Has("backup-verified"); public bool BackupEncrypted => Has("backup-encrypted"); public bool RetentionApproved => Has("retention-approved"); public bool RestoreReady => Has("restore-ready"); public bool IsolatedRestoreTested => Has("isolated-restore-tested");
-    public bool TenantOnly => Has("tenant-only"); public string? Database => Get("database");
+    public bool Confirm => Has("confirm"); public bool BackupVerified => Has("backup-verified"); public bool BackupEncrypted => Has("backup-encrypted"); public bool RetentionApproved => Has("retention-approved"); public bool RestoreReady => Has("restore-ready"); public bool IsolatedRestoreTested => Has("isolated-restore-tested"); public bool MaintenanceWindow => Has("maintenance-window"); public bool WorkersPaused => Has("workers-paused");
+    public bool TenantOnly => Has("tenant-only"); public string? TenantPlan => Get("tenant-plan"); public string? Database => Get("database"); public string? BackupReference => Get("backup-reference"); public string? RestoreTestReference => Get("restore-test-reference");
+    public bool LocalDevelopmentPolicy => Has("local-development-policy"); public string? LocalEvidencePath => Get("local-evidence"); public string? LocalPolicyApproval => Get("local-policy-approval");
+    public string? Operator => Get("operator");
+    public string? ExpectedEndpointHost => Get("expected-endpoint-host"); public string? ExpectedEndpointPort => Get("expected-endpoint-port"); public string? ExpectedServerHostname => Get("expected-server-hostname"); public string? ExpectedServerUuid => Get("expected-server-uuid");
     public IReadOnlySet<string> ApprovedMigrations => new HashSet<string>((Get("approved-migrations") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries), StringComparer.Ordinal);
+    public IReadOnlyList<string> ApprovedMigrationOrder => Array.AsReadOnly((Get("approved-migrations") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     public CancellationToken CancellationToken => CancellationToken.None;
-    public static Arguments Parse(string[] args) { var result = new Arguments { Command = args.FirstOrDefault()?.ToLowerInvariant() ?? "help" }; for (var i = 1; i < args.Length; i++) { var key = args[i].TrimStart('-'); if (key is "confirm" or "backup-verified" or "restore-ready" or "tenant-only") result._values[key] = "true"; else if (i + 1 < args.Length) result._values[key] = args[++i]; } return result; }
+    public static Arguments Parse(string[] args) { var result = new Arguments { Command = args.FirstOrDefault()?.ToLowerInvariant() ?? "help" }; for (var i = 1; i < args.Length; i++) { var key = args[i].TrimStart('-'); if (key is "confirm" or "backup-verified" or "backup-encrypted" or "retention-approved" or "restore-ready" or "isolated-restore-tested" or "maintenance-window" or "workers-paused" or "tenant-only" or "local-development-policy") result._values[key] = "true"; else if (i + 1 < args.Length) result._values[key] = args[++i]; } return result; }
     private string Required(string key) => Get(key) ?? throw new ArgumentException($"--{key} is required."); private string? Get(string key) => _values.TryGetValue(key, out var value) ? value : null; private bool Has(string key) => _values.ContainsKey(key);
 }
 
@@ -448,6 +899,13 @@ internal static class TenantOnlyMigrationExecutor
         var unexpected = pending.Where(id => !approved.Contains(id)).ToArray();
         if (unexpected.Length != 0) throw new InvalidOperationException($"tenant has unapproved pending migrations: {string.Join(", ", unexpected)}.");
         return pending.Count == 0 ? Task.CompletedTask : tenant.Database.MigrateAsync(token);
+    }
+
+    public static Task ExecuteExactlyAsync(HrmsDbContext tenant, IReadOnlyList<string> pending, IReadOnlyList<string> approvedInOrder, CancellationToken token)
+    {
+        if (!pending.SequenceEqual(approvedInOrder, StringComparer.Ordinal))
+            throw new InvalidOperationException("Employee Import executor requires the exact approved migration set in order; no migration was invoked.");
+        return tenant.Database.MigrateAsync(token);
     }
 }
 

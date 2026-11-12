@@ -17,6 +17,10 @@ using HRMS.Infrastructure.Reminders;
 using HRMS.Infrastructure.Accrual;
 using HRMS.Infrastructure.Attendance;
 using HRMS.Infrastructure.Communication;
+using HRMS.Infrastructure.Storage;
+using HRMS.Infrastructure.BulkImport;
+using Amazon.Runtime;
+using Amazon.S3;
 
 namespace HRMS.Infrastructure;
 
@@ -78,6 +82,13 @@ public static class DependencyInjection
         }
 
         services.AddSingleton(Options.Create(sharding));
+
+        var employeeBulkImportWorkerOptions = configuration.GetSection(EmployeeBulkImportWorkerOptions.SectionName)
+            .Get<EmployeeBulkImportWorkerOptions>() ?? new EmployeeBulkImportWorkerOptions();
+        if (employeeBulkImportWorkerOptions.Validate() is { } importWorkerProblem)
+            throw new InvalidOperationException(importWorkerProblem);
+        services.AddSingleton(Options.Create(employeeBulkImportWorkerOptions));
+        services.AddHostedService<EmployeeBulkImportWorker>();
 
         var reminderOptions = configuration.GetSection(LeaveReminderOptions.SectionName).Get<LeaveReminderOptions>()
             ?? new LeaveReminderOptions();
@@ -169,8 +180,49 @@ public static class DependencyInjection
         // Application services depend on the abstractions; each resolves to the same scoped instance as its
         // context, so a request's changes are tracked and saved together.
         services.AddScoped<IHrmsDbContext>(sp => sp.GetRequiredService<HrmsDbContext>());
+        services.AddScoped<IEmployeeImportPreflightReadStore, EmployeeImportPreflightReadStore>();
         services.AddScoped<IPermissionCatalogProvisioner, PermissionCatalogProvisioner>();
         services.AddScoped<IHrmsCatalogDbContext>(sp => sp.GetRequiredService<HrmsCatalogDbContext>());
+        services.AddSingleton<IEmployeeImportWorkbookCipher, EmployeeImportWorkbookCipher>();
+        var importStorageProvider = configuration["EmployeeImportStorage:Provider"];
+        if (!string.IsNullOrWhiteSpace(importStorageProvider))
+        {
+            var storageOptions = EmployeeImportStorageOptions.LoadAndValidate(configuration, hostEnvironment);
+            if (storageOptions.Provider == EmployeeImportStorageProvider.S3)
+            {
+                services.AddSingleton<IAmazonS3>(_ =>
+                {
+                    var s3Config = new AmazonS3Config
+                    {
+                        ServiceURL = storageOptions.Endpoint!.ToString().TrimEnd('/'),
+                        AuthenticationRegion = storageOptions.Region,
+                        ForcePathStyle = true,
+                        Timeout = TimeSpan.FromSeconds(30),
+                        MaxErrorRetry = 2
+                    };
+                    if (storageOptions.CredentialMode == EmployeeImportStorageCredentialMode.Static)
+                    {
+                        AWSCredentials credentials = string.IsNullOrWhiteSpace(storageOptions.SessionToken)
+                            ? new BasicAWSCredentials(storageOptions.AccessKey, storageOptions.SecretKey)
+                            : new SessionAWSCredentials(storageOptions.AccessKey, storageOptions.SecretKey, storageOptions.SessionToken);
+                        return new AmazonS3Client(credentials, s3Config);
+                    }
+                    return new AmazonS3Client(s3Config);
+                });
+                services.AddScoped<IEmployeeImportObjectClient, S3EmployeeImportObjectClient>();
+                services.AddScoped<IEmployeeImportWorkbookStore, S3EmployeeImportWorkbookStore>();
+            }
+            else
+            {
+                services.AddScoped<IEmployeeImportWorkbookStore, EncryptedFileEmployeeImportWorkbookStore>();
+            }
+        }
+        else
+        {
+            // Compatibility for existing hosts: storage fails closed on first use until configured.
+            services.AddScoped<IEmployeeImportWorkbookStore, EncryptedFileEmployeeImportWorkbookStore>();
+        }
+        services.AddScoped<IEmployeeImportWorkbookReader>(sp => sp.GetRequiredService<IEmployeeImportWorkbookStore>());
         services.AddScoped<IEmployeeSerializationLock>(sp =>
         {
             var shard = sp.GetRequiredService<IShardContext>().Current;

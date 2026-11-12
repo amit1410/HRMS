@@ -21,6 +21,16 @@ public sealed class EmployeeCodeConfigurationController : ControllerBase
     public async Task<ActionResult<ApiResponse<EmployeeCodeConfigurationDto>>> Get(CancellationToken cancellationToken) =>
         (await _service.GetAsync(cancellationToken)).ToActionResult();
 
+    [HttpGet("versions")]
+    [HasPermission(Permissions.EmployeeCodeConfiguration.View)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<EmployeeCodeConfigurationDto>>>> GetVersions(CancellationToken cancellationToken) =>
+        (await _service.GetVersionsAsync(cancellationToken)).ToActionResult();
+
+    [HttpGet("versions/{versionId:guid}/audit")]
+    [HasPermission(Permissions.EmployeeCodeConfiguration.View)]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<EmployeeCodeConfigurationAuditDto>>>> GetAudit(Guid versionId, CancellationToken cancellationToken) =>
+        (await _service.GetAuditAsync(versionId, cancellationToken)).ToActionResult();
+
     [HttpPut]
     [HasPermission(Permissions.EmployeeCodeConfiguration.Manage)]
     public async Task<ActionResult<ApiResponse<EmployeeCodeConfigurationDto>>> Save([FromBody] EmployeeCodeConfigurationRequest request, CancellationToken cancellationToken) =>

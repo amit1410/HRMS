@@ -78,6 +78,18 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
         if (supervisor is null)
             return Result<EmployeeSupervisorDto>.NotFound("Supervisor record not found for this employee.");
 
+        var asOfDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        var resolution = await new EmployeeManagerResolver(_db, _tenantContext, _timeProvider)
+            .ResolveAsync(employeeId, asOfDate, cancellationToken);
+        if (resolution.Succeeded && resolution.Value is not null)
+        {
+            supervisor = supervisor with
+            {
+                L1ResolutionStatus = resolution.Value.Status.ToString(),
+                L1ResolutionMessage = resolution.Value.Message
+            };
+        }
+
         return Result<EmployeeSupervisorDto>.Success(supervisor);
     }
 
@@ -99,6 +111,20 @@ public class EmployeeSupervisorService : IEmployeeSupervisorService
         if (referenceValidation is not null)
         {
             return referenceValidation;
+        }
+
+        var businessDate = BusinessDateToday();
+        var effectiveManagerId = await _db.EmployeeEmploymentHistory
+            .Where(h => h.EmployeeId == employeeId && h.TenantId == tenantId && !h.IsSuperseded &&
+                        h.EffectiveFrom <= businessDate && (h.EffectiveTo == null || h.EffectiveTo >= businessDate))
+            .OrderByDescending(h => h.EffectiveFrom)
+            .ThenByDescending(h => h.RevisionNumber)
+            .Select(h => h.ManagerId)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (effectiveManagerId is Guid currentManagerId && request.L1ManagerId != currentManagerId)
+        {
+            return Result<EmployeeSupervisorDto>.Invalid(
+                "l1ManagerId", "L1 supervisor must match the effective employment manager.");
         }
 
         var existing = await _db.EmployeeSupervisors

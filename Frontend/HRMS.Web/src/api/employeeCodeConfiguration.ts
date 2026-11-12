@@ -30,6 +30,16 @@ export interface EmployeeCodeConfigurationRequest {
   effectiveTo?: string | null
 }
 
+export interface EmployeeCodeConfigurationAuditEvent {
+  id: string
+  configurationVersionId: string
+  action: string
+  actorUserId: string
+  occurredAtUtc: string
+  oldValue?: string | null
+  newValue: string
+}
+
 export interface EmployeeCodeRule {
   id: string
   name: string
@@ -84,6 +94,18 @@ export interface EmployeeCodePreview {
 export function getEmployeeCodeConfiguration(signal?: AbortSignal) {
   return request<EmployeeCodeConfiguration>(() =>
     api.get<ApiResponse<EmployeeCodeConfiguration>>('/api/employee-code-configuration', { signal }),
+  )
+}
+
+export function getEmployeeCodeConfigurationVersions(signal?: AbortSignal) {
+  return request<EmployeeCodeConfiguration[]>(() =>
+    api.get<ApiResponse<EmployeeCodeConfiguration[]>>('/api/employee-code-configuration/versions', { signal }),
+  )
+}
+
+export function getEmployeeCodeConfigurationAudit(versionId: string, signal?: AbortSignal) {
+  return request<EmployeeCodeConfigurationAuditEvent[]>(() =>
+    api.get<ApiResponse<EmployeeCodeConfigurationAuditEvent[]>>(`/api/employee-code-configuration/versions/${versionId}/audit`, { signal }),
   )
 }
 

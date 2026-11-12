@@ -1,0 +1,7 @@
+.env
+secrets/
+*.secret
+*.key
+*.password
+employee-import-storage.json
+artifacts/

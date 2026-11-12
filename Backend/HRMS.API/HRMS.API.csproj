@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>af221e70-58f4-4c5b-bbf0-034f30422395</UserSecretsId>
+    <!-- Keep archived nested build output out of SDK default item discovery. -->
+    <DefaultItemExcludesInProjectFolder>$(DefaultItemExcludesInProjectFolder);bin-rowlimit/**</DefaultItemExcludesInProjectFolder>
   </PropertyGroup>
 
   <ItemGroup>

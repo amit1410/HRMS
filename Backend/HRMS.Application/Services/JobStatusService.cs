@@ -26,7 +26,8 @@ public sealed class JobStatusService(
         Employee employee,
         string? jobStatus,
         string? reason = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Guid? importBatchId = null)
     {
         ArgumentNullException.ThrowIfNull(employee);
         cancellationToken.ThrowIfCancellationRequested();
@@ -70,7 +71,8 @@ public sealed class JobStatusService(
                 ChangeType = AuditChangeType.StatusChange,
                 ChangedBy = userId.ToString(),
                 Reason = Normalize(reason),
-                Source = JobStatusMutationSource.Creation.ToString()
+                Source = importBatchId.HasValue ? "Import" : JobStatusMutationSource.Creation.ToString(),
+                ImportBatchId = importBatchId
             });
         }
 

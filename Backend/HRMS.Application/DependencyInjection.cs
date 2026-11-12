@@ -17,6 +17,7 @@ public static class DependencyInjection
 
         // Injected rather than calling DateTime.UtcNow, so token lifetimes and audit stamps are testable.
         services.TryAddSingletonTimeProvider();
+        services.AddScoped<IEmployeeImportWorkerExecutionContext, EmployeeImportWorkerExecutionContext>();
 
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IPasswordRecoveryService, PasswordRecoveryService>();
@@ -37,6 +38,12 @@ public static class DependencyInjection
         services.AddScoped<IStateService, StateService>();
         services.AddScoped<ICityService, CityService>();
         services.AddScoped<IEmployeeService, EmployeeService>();
+        services.AddScoped<IEmployeeBulkUploadTemplateService, EmployeeBulkUploadTemplateService>();
+        services.AddScoped<IEmployeeBulkUploadValidationService, EmployeeBulkUploadValidationService>();
+        services.AddScoped<IEmployeeImportPersistenceService, EmployeeImportPersistenceService>();
+        services.AddScoped<IEmployeeImportRecoveryService, EmployeeImportRecoveryService>();
+        services.AddScoped<IEmployeeBulkImportExecutionService, EmployeeBulkImportExecutionService>();
+        services.AddScoped<IEmployeeBulkImportPreflightVerifier, EmployeeBulkImportPreflightVerifier>();
         services.AddScoped<IJobStatusService, JobStatusService>();
         services.AddScoped<IEmployeeAccessScopeService, EmployeeAccessScopeService>();
         services.AddScoped<ILeaveAuthorizationService, LeaveAuthorizationService>();

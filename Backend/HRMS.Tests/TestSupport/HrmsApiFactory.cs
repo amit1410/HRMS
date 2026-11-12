@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Cryptography;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Security;
 using HRMS.Domain.Entities;
@@ -135,6 +136,8 @@ public class HrmsApiFactory : WebApplicationFactory<HRMS.API.Controllers.SystemC
     private readonly SqliteConnection _catalogConnection;
 
     private readonly int _authPermitLimit;
+    private readonly string _employeeImportStorageRoot = Path.Combine(Path.GetTempPath(), $"hrms-api-import-{Guid.NewGuid():N}");
+    private readonly string _employeeImportTestKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
     /// <summary>
     /// The address every request appears to arrive from, or null to leave the test host's own value — which
@@ -242,6 +245,11 @@ public class HrmsApiFactory : WebApplicationFactory<HRMS.API.Controllers.SystemC
                 ["Database:SkipInitialization"] = "false",
                 ["Database:StartupMode"] = "Initialize",
                 ["Database:SeedDemoTenants"] = "true",
+                ["EmployeeImportStorage:Provider"] = "FileSystem",
+                ["EmployeeImportStorage:RootPath"] = _employeeImportStorageRoot,
+                ["EmployeeImportStorage:RetentionDays"] = "30",
+                ["EmployeeImportStorage:Encryption:ActiveKeyId"] = "disposable-test-key",
+                ["EmployeeImportStorage:Encryption:Keys:disposable-test-key"] = _employeeImportTestKey,
                 // Keep external password-recovery transports out of integration tests even when the
                 // process inherits a production environment or provider selection.
                 ["PasswordRecoveryProviders:EmailProvider"] = "Fake",
@@ -352,5 +360,6 @@ public class HrmsApiFactory : WebApplicationFactory<HRMS.API.Controllers.SystemC
         SqliteConnection.ClearAllPools();
         _tenantConnection.Dispose();
         _catalogConnection.Dispose();
+        if (Directory.Exists(_employeeImportStorageRoot)) Directory.Delete(_employeeImportStorageRoot, recursive: true);
     }
 }

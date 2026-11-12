@@ -15,6 +15,7 @@ public sealed class EmployeeCodeConfigVersionConfiguration : IEntityTypeConfigur
         builder.Property(x => x.GenerationMethod).IsRequired(false);
         builder.Property(x => x.Separator).HasMaxLength(1).IsRequired();
         builder.Property(x => x.EffectiveFrom).IsRequired();
+        builder.Property(x => x.NextNumber).IsConcurrencyToken();
         builder.HasAlternateKey(x => new { x.TenantId, x.Id });
         builder.HasIndex(x => new { x.TenantId, x.EmployeeCodeConfigId, x.EffectiveFrom });
         builder.HasOne(x => x.Tenant).WithMany().HasForeignKey(x => x.TenantId).OnDelete(DeleteBehavior.Restrict);

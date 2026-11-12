@@ -20,7 +20,8 @@ public interface IJobStatusService
         Employee employee,
         string? jobStatus,
         string? reason = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        Guid? importBatchId = null);
 
     Task<Result<JobStatusChangeResult>> ChangeAsync(
         JobStatusChangeRequest request,

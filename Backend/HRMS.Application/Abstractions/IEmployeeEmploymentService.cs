@@ -14,4 +14,6 @@ public interface IEmployeeEmploymentService
     Task<Result<EmployeeEmploymentHistoryDto>> GetAsOfAsync(Guid employeeId, DateOnly asOfDate, CancellationToken cancellationToken = default);
     Task<Result<EmployeeEmploymentHistoryDto>> GetCurrentAsync(Guid employeeId, CancellationToken cancellationToken = default);
     Task<Result<EmployeeEmploymentHistoryDto>> CreateChangeAsync(Guid employeeId, EmploymentChangeRequest request, string changedBy, CancellationToken cancellationToken = default);
+
+    Task<Result<EmployeeEmploymentHistoryDto>> CreateInitialHistoryWithinTransactionAsync(Guid employeeId, EmploymentChangeRequest request, string changedBy, CancellationToken cancellationToken = default);
 }

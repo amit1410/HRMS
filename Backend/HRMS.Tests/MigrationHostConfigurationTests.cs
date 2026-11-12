@@ -51,6 +51,60 @@ public sealed class MigrationHostConfigurationTests
             Environment.SetEnvironmentVariable(allowlistKey, oldAllowlist);
         }
     }
+    [Fact]
+    public void External_secret_configuration_overrides_environment_and_repository_values()
+    {
+        const string environmentNameKey = "DOTNET_ENVIRONMENT";
+        const string templateKey = "Sharding__MySqlConnectionStringTemplate";
+        const string fileKey = "EmployeeImportStorage__ConfigurationFile";
+        var oldEnvironment = Environment.GetEnvironmentVariable(environmentNameKey);
+        var oldTemplate = Environment.GetEnvironmentVariable(templateKey);
+        var oldFile = Environment.GetEnvironmentVariable(fileKey);
+        var path = Path.Combine(Path.GetTempPath(), $"hrms-migrationhost-config-{Guid.NewGuid():N}.json");
+        try
+        {
+            Environment.SetEnvironmentVariable(environmentNameKey, "Development");
+            Environment.SetEnvironmentVariable(templateKey, "Server=environment;Database=hrms_{shard}");
+            Environment.SetEnvironmentVariable(fileKey, null);
+            File.WriteAllText(path, "{\"Sharding\":{\"MySqlConnectionStringTemplate\":\"Server=external;Database=hrms_{shard}\"}}");
+            var configuration = MigrationHost.BuildConfiguration([], builder => builder.AddInMemoryCollection(
+                new Dictionary<string, string?> { ["EmployeeImportStorage:ConfigurationFile"] = path }));
+
+            Assert.Equal("Server=external;Database=hrms_{shard}", configuration["Sharding:MySqlConnectionStringTemplate"]);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentNameKey, oldEnvironment);
+            Environment.SetEnvironmentVariable(templateKey, oldTemplate);
+            Environment.SetEnvironmentVariable(fileKey, oldFile);
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void External_secret_configuration_rejects_relative_paths()
+    {
+        const string environmentNameKey = "DOTNET_ENVIRONMENT";
+        const string fileKey = "EmployeeImportStorage__ConfigurationFile";
+        var oldEnvironment = Environment.GetEnvironmentVariable(environmentNameKey);
+        var oldFile = Environment.GetEnvironmentVariable(fileKey);
+        try
+        {
+            Environment.SetEnvironmentVariable(environmentNameKey, "Development");
+            Environment.SetEnvironmentVariable(fileKey, null);
+            var exception = Assert.Throws<InvalidOperationException>(() => MigrationHost.BuildConfiguration([], builder =>
+                builder.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["EmployeeImportStorage:ConfigurationFile"] = "relative/secrets.json"
+                })));
+            Assert.Equal("EmployeeImportStorage:ConfigurationFile must be an absolute mounted-secret path.", exception.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(environmentNameKey, oldEnvironment);
+            Environment.SetEnvironmentVariable(fileKey, oldFile);
+        }
+    }
 
     [Fact]
     public void Command_line_arguments_override_repository_and_environment_configuration()

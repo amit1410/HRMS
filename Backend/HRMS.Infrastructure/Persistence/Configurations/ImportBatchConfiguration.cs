@@ -10,6 +10,9 @@ public class ImportBatchConfiguration : IEntityTypeConfiguration<ImportBatch>
     {
         builder.ToTable("ImportBatches");
         builder.HasKey(e => e.Id);
+        // Composite principal key allows employee-import operations to enforce tenant ownership
+        // while preserving the generic batch identifier and existing service contract.
+        builder.HasAlternateKey(e => new { e.TenantId, e.Id });
 
         builder.Property(e => e.TenantId).IsRequired();
         builder.Property(e => e.FileName).HasMaxLength(500);

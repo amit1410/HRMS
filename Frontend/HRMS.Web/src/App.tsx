@@ -11,6 +11,7 @@ import { DashboardPage } from './pages/DashboardPage.tsx'
 import { EmployeeDetailPage } from './pages/employees/EmployeeDetailPage.tsx'
 import { EmployeeFormPage } from './pages/employees/EmployeeFormPage.tsx'
 import { EmployeesPage } from './pages/employees/EmployeesPage.tsx'
+import { EmployeeBulkUploadPage } from './pages/employees/EmployeeBulkUploadPage.tsx'
 import { ForbiddenPage } from './pages/ForbiddenPage.tsx'
 import { LoginPage } from './pages/LoginPage.tsx'
 import { SetPasswordPage } from './pages/SetPasswordPage.tsx'
@@ -293,6 +294,26 @@ function TenantApplication() {
                   <Route path="attendance/reports/monthly" element={<RequirePermission permission={Permissions.attendance.reportView}><AttendanceReportPage kind="monthly" /></RequirePermission>} />
                   <Route path="attendance/reports/exceptions" element={<RequirePermission permission={Permissions.attendance.reportView}><RequirePermission permission={Permissions.attendance.exceptionView}><AttendanceReportPage kind="exceptions" /></RequirePermission></RequirePermission>} />
               <Route path="employees">
+                <Route
+                  path="bulk-upload"
+                  element={
+                    <RequirePermission permission={Permissions.employee.import}>
+                      <RequirePermission permission={Permissions.employee.create}>
+                        <RequirePermission permission={Permissions.employeeSensitive.edit}>
+                          <EmployeeBulkUploadPage />
+                        </RequirePermission>
+                      </RequirePermission>
+                    </RequirePermission>
+                  }
+                />
+                <Route
+                  path="bulk-upload/:operationId"
+                  element={
+                    <RequirePermission permission={Permissions.employee.import}>
+                      <EmployeeBulkUploadPage readOnly />
+                    </RequirePermission>
+                  }
+                />
                 <Route
                   index
                   element={
