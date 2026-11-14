@@ -385,28 +385,47 @@ jobs:
           artifact_root="$RUNNER_TEMP/hrms-f1-artifacts"
           rm -rf "$artifact_root"
           mkdir -p "$artifact_root"
-          python3 - "$F1_METRICS_ROOT/test.log" "$F1_METRICS_ROOT/private-test-diagnostics.log" <<'PY'
+          python3 - "$HRMS_EMPLOYEE_IMPORT_F1_RESULT_PATH" "$F1_METRICS_ROOT/test-exit-code.txt" "$F1_METRICS_ROOT/private-test-diagnostics.log" <<'PY'
+          import json
           import re
           import sys
           from pathlib import Path
 
-          source = Path(sys.argv[1])
-          destination = Path(sys.argv[2])
-          text = source.read_text(errors="replace") if source.exists() else ""
-          # Keep the complete test output after redaction. Filtering before redaction
-          # dropped the useful operation/checkpoint context from short failures.
-          lines = text.splitlines()
-          redacted = "\n".join(lines)
-          redacted = re.sub(r"(?i)(server|database|user id|password|pwd|secret|accesskey|secretkey|token|connectionstring)\s*[=:]\s*[^\s;,\]]+", r"\1=[REDACTED]", redacted)
-          redacted = re.sub(r"(?i)Synthetic[A-Za-z0-9_-]+", "[REDACTED_SYNTHETIC]", redacted)
-          redacted = re.sub(r"(?i)(?:aadhaar|pan)[^\s,;=]*\s*[=:]\s*[^\s,;\]]+", r"\1=[REDACTED_IDENTIFIER]", redacted)
-          redacted = re.sub(r"(?<![A-Za-z0-9])[0-9a-f]{8}-[0-9a-f-]{27,}(?![A-Za-z0-9])", "[REDACTED_GUID]", redacted, flags=re.IGNORECASE)
-          redacted = re.sub(r"(?<![A-Za-z0-9])[A-Z]{5}[0-9]{4}[A-Z](?![A-Za-z0-9])", "[REDACTED_IDENTIFIER]", redacted)
-          redacted = re.sub(r"(?<![0-9])[0-9]{12}(?![0-9])", "[REDACTED_NUMBER]", redacted)
-          redacted = re.sub(r"(?i)Bearer\s+[^\s]+", "Bearer [REDACTED]", redacted)
-          if not redacted.strip():
-              redacted = "No console diagnostics were emitted; inspect result.json for the structured failing checkpoint."
-          destination.write_text(redacted + ("\n" if redacted else ""), encoding="utf-8")
+          result_path = Path(sys.argv[1])
+          exit_path = Path(sys.argv[2])
+          destination = Path(sys.argv[3])
+          try:
+              result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {}
+          except (OSError, UnicodeError, json.JSONDecodeError):
+              result = {}
+          try:
+              test_exit_code = exit_path.read_text(encoding="utf-8").strip()
+          except (OSError, UnicodeError):
+              test_exit_code = "1"
+
+          def value(document, name, default=""):
+              return document.get(name, document.get(name[:1].upper() + name[1:], default)) if isinstance(document, dict) else default
+
+          def safe(value, pattern, fallback="[REDACTED]"):
+              return value if isinstance(value, str) and re.fullmatch(pattern, value) else fallback
+
+          failure = value(result, "failure", {}) or {}
+          completed = [safe(item, r"[A-Za-z0-9 ,/_-]+", "[REDACTED]") for item in (value(result, "completedChecks", []) or []) if isinstance(item, str)]
+          lines = [
+              "diagnostic_format=f1-structured-v2",
+              f"status={safe(value(result, 'status'), r'[A-Za-z0-9_]+', 'NOT_WRITTEN')}",
+              f"run_id={safe(value(result, 'runId'), r'[A-Za-z0-9-]+', 'unknown')}",
+              f"test_exit_code={safe(test_exit_code, r'[0-9]+', '1')}",
+              f"last_completed_checkpoint={safe(value(result, 'lastCompletedCheckpoint'), r'[A-Za-z0-9_-]+', 'unknown')}",
+              f"failing_checkpoint={safe(value(result, 'failingCheckpoint') or value(failure, 'failingCheckpoint'), r'[A-Za-z0-9_-]+', 'unknown')}",
+              f"failure_stage={safe(value(failure, 'stage'), r'[A-Za-z0-9 -]+', 'unknown')}",
+              f"error_category={safe(value(failure, 'category'), r'[A-Za-z0-9]+', 'unknown')}",
+              f"error_code={safe(value(failure, 'errorCode'), r'[A-Za-z0-9_]+', 'unknown')}",
+              f"completed_checks={';'.join(completed) if completed else 'none'}",
+              "raw_test_log=omitted_by_policy",
+              "raw_exception_text=omitted_by_policy",
+          ]
+          destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
           cp "$F1_METRICS_ROOT/sanitized-report.json" "$artifact_root/" 2>/dev/null || true
           cp "$F1_METRICS_ROOT/sanitized-summary.md" "$artifact_root/" 2>/dev/null || true
