@@ -51,20 +51,21 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         ValidateComposeConfiguration(configuration);
         ValidateStorageConfiguration(configuration);
         using var credentialScope = EmployeeImportMySqlCredentialAdapter.BeginPromptSession(configuration);
-        var started = DateTimeOffset.UtcNow;
         var completed = new List<string>();
         var manifest = NewManifest(configuration);
         await EmployeeImportMySqlOwnershipManifest.WriteNewAsync(manifest, configuration.ManifestPath, cancellationToken);
-
-        // This is the first provider operation; the gate above has already validated every approval and target.
-        beforeFirstConnection?.Invoke();
-        await VerifyTargetAsync(configuration, cancellationToken);
-        foreach (var database in manifest.Databases)
-            if (await DatabaseExistsAsync(configuration, database.Name, cancellationToken))
-                throw new InvalidOperationException("Refusing to use an existing database in the disposable allowlist.");
-
+        var stage = "provider target verification";
         try
         {
+            // This is the first provider operation; the gate above has already validated every approval and target.
+            beforeFirstConnection?.Invoke();
+            await VerifyTargetAsync(configuration, cancellationToken);
+            stage = "run-scoped database absence verification";
+            foreach (var database in manifest.Databases)
+                if (await DatabaseExistsAsync(configuration, database.Name, cancellationToken))
+                    throw new InvalidOperationException("Refusing to use an existing database in the disposable allowlist.");
+
+            stage = "run-scoped database creation";
             foreach (var database in manifest.Databases)
             {
                 await CreateOwnedDatabaseAsync(configuration, database.Name, database.OwnershipMarker, cancellationToken);
@@ -72,26 +73,34 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
                 await EmployeeImportMySqlOwnershipManifest.WriteNewOrReplaceAsync(manifest, configuration.ManifestPath, cancellationToken);
             }
 
+            stage = "catalog migration";
             await MigrateAsync(configuration, configuration.CatalogDatabase, catalog: true, cancellationToken);
+            stage = "tenant migration";
             await MigrateAsync(configuration, configuration.TenantDatabase, catalog: false, cancellationToken);
+            stage = "migration-down schema migration";
             await MigrateAsync(configuration, configuration.MigrationDownDatabase, catalog: false, cancellationToken);
             manifest = manifest with { Databases = manifest.Databases.Select(x => x with { MigrationSucceeded = true }).ToArray() };
             await EmployeeImportMySqlOwnershipManifest.WriteNewOrReplaceAsync(manifest, configuration.ManifestPath, cancellationToken);
             completed.Add("Catalog and tenant MySQL migrations applied");
 
+            stage = "employee-import schema verification";
             await VerifyImportSchemaAsync(configuration, cancellationToken);
             completed.Add("Employee import operation/row tables and tenant keys verified on MySQL");
+            stage = "encrypted workbook storage verification";
             await VerifyMinioWorkbookStoreAsync(configuration, cancellationToken);
             completed.Add("S3-compatible encrypted workbook persistence, integrity, privacy, duplicate and key-rotation checks");
+            stage = "employee-import worker execution";
             await VerifyMySqlOnboardingExecutionAsync(configuration, cancellationToken);
             completed.Add("Durable prepare, confirm/queue, worker execution, generated code, audit association, and committed row outcomes");
+            stage = "migration-down rollback";
             await MigrateDownAsync(configuration, cancellationToken);
             completed.Add("Migration-down database rolled back in isolation");
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            var failure = EmployeeImportMySqlFailureDiagnostics.Create(stage, exception);
             await WriteResultAsync(configuration.ResultPath, new(configuration.RunId, "FAILED_RETAINED_FOR_REVIEW", completed,
-                "Provider acceptance failed; owned databases were retained for inspection."), CancellationToken.None);
+                "Provider acceptance failed; owned databases were retained for inspection.", failure), CancellationToken.None);
             throw new InvalidOperationException("Employee-import MySQL acceptance failed. The run-owned databases were retained; inspect the private manifest and results before any cleanup.");
         }
 
@@ -963,4 +972,9 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
     }
 }
 
-public sealed record EmployeeImportMySqlRunResult(string RunId, string Status, IReadOnlyList<string> CompletedChecks, string Notes);
+public sealed record EmployeeImportMySqlRunResult(
+    string RunId,
+    string Status,
+    IReadOnlyList<string> CompletedChecks,
+    string Notes,
+    EmployeeImportMySqlFailureDiagnostic? Failure = null);
