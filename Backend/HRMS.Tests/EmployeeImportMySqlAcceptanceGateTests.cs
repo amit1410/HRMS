@@ -195,6 +195,27 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
     }
 
     [Fact]
+    public void Preparation_diagnostics_are_serialized_in_result_and_remain_sanitized()
+    {
+        var result = new EmployeeImportMySqlRunResult(
+            "run-test", "FAILED_RETAINED_FOR_REVIEW", [], "retained",
+            new EmployeeImportMySqlFailureDiagnostic(
+                "test", "employee-import worker execution", "EmployeeImportExecution", "INVALID_OPERATION",
+                "inspect private log", "import_prepare_persistence",
+                new EmployeeImportPreparationDiagnostic("Conflict", "PreparationPersistenceConflict", "PREPARE_CONFLICT",
+                    ["Department Code *"], 3, 0)));
+
+        var json = System.Text.Json.JsonSerializer.Serialize(result);
+
+        Assert.Contains("import_prepare_persistence", json, StringComparison.Ordinal);
+        Assert.Contains("PreparationPersistenceConflict", json, StringComparison.Ordinal);
+        Assert.Contains("Department Code *", json, StringComparison.Ordinal);
+        Assert.Contains("ExpectedRows", json, StringComparison.Ordinal);
+        Assert.Contains("ActualRows", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("raw employee value", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Login_path_mode_requires_an_exclusive_administrator_source()
     {
         var values = ValidValues();
