@@ -52,6 +52,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         ValidateStorageConfiguration(configuration);
         using var credentialScope = EmployeeImportMySqlCredentialAdapter.BeginPromptSession(configuration);
         var completed = new List<string>();
+        (int ProcessedRows, int SuccessfulRows)? largeImport = null;
         var manifest = NewManifest(configuration);
         await EmployeeImportMySqlOwnershipManifest.WriteNewAsync(manifest, configuration.ManifestPath, cancellationToken);
         var stage = "provider target verification";
@@ -90,7 +91,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             await VerifyMinioWorkbookStoreAsync(configuration, cancellationToken);
             completed.Add("S3-compatible encrypted workbook persistence, integrity, privacy, duplicate and key-rotation checks");
             stage = "employee-import worker execution";
-            await VerifyMySqlOnboardingExecutionAsync(configuration, cancellationToken);
+            largeImport = await VerifyMySqlOnboardingExecutionAsync(configuration, cancellationToken);
             completed.Add("Durable prepare, confirm/queue, worker execution, generated code, audit association, and committed row outcomes");
             stage = "migration-down rollback";
             await MigrateDownAsync(configuration, cancellationToken);
@@ -105,7 +106,8 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         }
 
         var result = new EmployeeImportMySqlRunResult(configuration.RunId, "SCHEMA_PROVIDER_CHECKS_PASSED", completed,
-            "Employee import execution and MinIO end-to-end scenarios are separate acceptance steps and are not inferred from migration checks.");
+            "Employee import execution and MinIO end-to-end scenarios completed successfully.",
+            Failure: null, ProcessedRows: largeImport!.Value.ProcessedRows, SuccessfulRows: largeImport.Value.SuccessfulRows);
         await WriteResultAsync(configuration.ResultPath, result, cancellationToken);
         return result;
     }
@@ -234,7 +236,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         await context.Database.ExecuteSqlRawAsync("SELECT 1 FROM EmployeeImportRows LIMIT 0", ct);
     }
 
-    private static async Task VerifyMySqlOnboardingExecutionAsync(EmployeeImportMySqlAcceptanceConfiguration c, CancellationToken ct)
+    private static async Task<(int ProcessedRows, int SuccessfulRows)> VerifyMySqlOnboardingExecutionAsync(EmployeeImportMySqlAcceptanceConfiguration c, CancellationToken ct)
     {
         var tenantId = Guid.NewGuid();
         var userId = Guid.NewGuid();
@@ -419,7 +421,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             recoveryHost.Dispose();
             concurrentHost.Dispose();
 
-            await VerifyTenThousandRowScenarioAsync(c, db, execution, shardDescriptor, tenantId, seededUser,
+            var largeImport = await VerifyTenThousandRowScenarioAsync(c, db, execution, shardDescriptor, tenantId, seededUser,
                 shard, tenant, template.Value!, department, designation, ct);
 
             // A runtime failure after a prior row committed must retain that success and close later rows as skipped.
@@ -486,6 +488,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             // The unique operation/object identity was created by this run; deletion uses the store's retention guard.
             await workbookStore.DeleteExpiredAsync(prepared.Value.OperationId, DateTime.UtcNow.AddYears(-20), ct);
             CryptographicOperations.ZeroMemory(bytes);
+            return largeImport;
         }
     }
 
@@ -804,7 +807,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         }
     }
 
-    private static async Task VerifyTenThousandRowScenarioAsync(
+    private static async Task<(int ProcessedRows, int SuccessfulRows)> VerifyTenThousandRowScenarioAsync(
         EmployeeImportMySqlAcceptanceConfiguration c,
         HrmsDbContext db,
         IEmployeeBulkImportExecutionService execution,
@@ -884,6 +887,8 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             !csvLines.Any(x => x.StartsWith("5000,Failed,", StringComparison.Ordinal)) ||
             !csvLines.Any(x => x.StartsWith("10000,Failed,", StringComparison.Ordinal)))
             throw new InvalidOperationException("Failed-row CSV export did not contain exactly the three durable failed rows.");
+
+        return (operation.TotalRows, operation.SucceededRows);
     }
 
     private sealed class FailEmployeeSaveInterceptor(params string[] firstNames) : SaveChangesInterceptor
@@ -977,4 +982,6 @@ public sealed record EmployeeImportMySqlRunResult(
     string Status,
     IReadOnlyList<string> CompletedChecks,
     string Notes,
-    EmployeeImportMySqlFailureDiagnostic? Failure = null);
+    EmployeeImportMySqlFailureDiagnostic? Failure = null,
+    int? ProcessedRows = null,
+    int? SuccessfulRows = null);

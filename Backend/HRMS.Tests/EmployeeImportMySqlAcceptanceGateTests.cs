@@ -185,7 +185,7 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
     public void Filesystem_existing_loopback_mode_requires_explicit_opt_ins_and_preserves_run_root()
     {
         var values = ValidValues();
-        var root = Path.Combine(Path.GetTempPath(), "hrms-employee-import-f1", "run202610280");
+        var root = Path.Combine(Path.GetTempPath(), "hrms-employee-import-f1", "run202610280", "workbooks");
         values[EmployeeImportMySqlAcceptanceEnvironment.MySqlMode] = "ExistingLoopback";
         values[EmployeeImportMySqlAcceptanceEnvironment.ServerIdentity] = "local-mysql-host";
         values[EmployeeImportMySqlAcceptanceEnvironment.HostPort] = "3306";
@@ -201,7 +201,22 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
 
         Assert.Equal(EmployeeImportMySqlMode.ExistingLoopback, accepted.MySqlMode);
         Assert.Equal(EmployeeImportStorageMode.FileSystem, accepted.StorageMode);
-        Assert.Equal(Path.GetFullPath(root), Path.GetFullPath(accepted.FileSystemRoot));
+        Assert.Equal(Path.GetFullPath(root), Path.GetFullPath(accepted.FileSystemRoot!));
+    }
+
+    [Fact]
+    public void Filesystem_root_must_contain_the_exact_run_directory()
+    {
+        var values = ValidValues();
+        values[EmployeeImportMySqlAcceptanceEnvironment.StorageMode] = "FileSystem";
+        values[EmployeeImportMySqlAcceptanceEnvironment.ApproveFileSystemStorage] = "true";
+        values[EmployeeImportMySqlAcceptanceEnvironment.FileSystemRoot] =
+            Path.Combine(Path.GetTempPath(), "hrms-employee-import-f1", "workbooks");
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            EmployeeImportMySqlAcceptanceConfiguration.Read(values));
+
+        Assert.Contains("run", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -349,6 +364,11 @@ public sealed class EmployeeImportMySqlProviderFactAttribute : FactAttribute
     public EmployeeImportMySqlProviderFactAttribute(bool allowExistingManifest = false)
     {
         try { _ = EmployeeImportMySqlAcceptanceConfiguration.Read(EmployeeImportMySqlAcceptanceEnvironment.Snapshot(), allowExistingManifest); }
-        catch (Exception) { Skip = "Employee-import MySQL/MinIO acceptance is safely skipped until its isolated configuration and all explicit approvals are present."; }
+        catch (Exception) when (!string.Equals(
+            Environment.GetEnvironmentVariable(EmployeeImportMySqlAcceptanceEnvironment.CiRequired),
+            "true", StringComparison.OrdinalIgnoreCase))
+        {
+            Skip = "Employee-import MySQL/MinIO acceptance is safely skipped until its isolated configuration and all explicit approvals are present.";
+        }
     }
 }
