@@ -394,6 +394,17 @@ public class HrmsDbContext : DbContext, IHrmsDbContext
 
         if (Database.IsMySql())
         {
+            modelBuilder.Entity<ConfirmationReviewerReview>()
+                .HasIndex(x => new
+                {
+                    x.TenantId,
+                    x.ConfirmationReviewCaseId,
+                    x.ReviewRound,
+                    x.ReviewerType,
+                    x.VersionNumber
+                })
+                .HasDatabaseName("IX_ConfReviewerReviews_Tenant_Case_Round_Type_Version");
+
             // MySql.Data returns DateTime for SQL date columns. Apply one provider-wide conversion so every
             // DateOnly property materializes correctly without changing the domain model or SQL date schema.
             foreach (var entityType in modelBuilder.Model.GetEntityTypes())

@@ -107,9 +107,6 @@ BEGIN
     IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ConfirmationReviewerReviews' AND INDEX_NAME = 'IX_ConfReviewerReviews_Tenant_Case_Type_Version') THEN
         DROP INDEX `IX_ConfReviewerReviews_Tenant_Case_Type_Version` ON `ConfirmationReviewerReviews`;
     END IF;
-    IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ConfirmationReviewerReviews' AND INDEX_NAME = 'IX_ConfirmationReviewerReviews_TenantId_ConfirmationReviewCaseId_ReviewerType_VersionNumber') THEN
-        DROP INDEX `IX_ConfirmationReviewerReviews_TenantId_ConfirmationReviewCaseId_ReviewerType_VersionNumber` ON `ConfirmationReviewerReviews`;
-    END IF;
     IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ConfirmationReviewerReviews' AND INDEX_NAME = 'IX_ConfirmationReviewerReviews_TenantId_ConfirmationReviewCaseI~') THEN
         DROP INDEX `IX_ConfirmationReviewerReviews_TenantId_ConfirmationReviewCaseI~` ON `ConfirmationReviewerReviews`;
     END IF;
