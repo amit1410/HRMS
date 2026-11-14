@@ -393,13 +393,19 @@ jobs:
           source = Path(sys.argv[1])
           destination = Path(sys.argv[2])
           text = source.read_text(errors="replace") if source.exists() else ""
-          lines = [line for line in text.splitlines() if re.search(r"(?i)(failed|error|exception|assert|checkpoint|at )", line)]
+          # Keep the complete test output after redaction. Filtering before redaction
+          # dropped the useful operation/checkpoint context from short failures.
+          lines = text.splitlines()
           redacted = "\n".join(lines)
           redacted = re.sub(r"(?i)(server|database|user id|password|pwd|secret|accesskey|secretkey|token|connectionstring)\s*[=:]\s*[^\s;,\]]+", r"\1=[REDACTED]", redacted)
           redacted = re.sub(r"(?i)Synthetic[A-Za-z0-9_-]+", "[REDACTED_SYNTHETIC]", redacted)
+          redacted = re.sub(r"(?i)(?:aadhaar|pan)[^\s,;=]*\s*[=:]\s*[^\s,;\]]+", r"\1=[REDACTED_IDENTIFIER]", redacted)
+          redacted = re.sub(r"(?<![A-Za-z0-9])[0-9a-f]{8}-[0-9a-f-]{27,}(?![A-Za-z0-9])", "[REDACTED_GUID]", redacted, flags=re.IGNORECASE)
           redacted = re.sub(r"(?<![A-Za-z0-9])[A-Z]{5}[0-9]{4}[A-Z](?![A-Za-z0-9])", "[REDACTED_IDENTIFIER]", redacted)
           redacted = re.sub(r"(?<![0-9])[0-9]{12}(?![0-9])", "[REDACTED_NUMBER]", redacted)
           redacted = re.sub(r"(?i)Bearer\s+[^\s]+", "Bearer [REDACTED]", redacted)
+          if not redacted.strip():
+              redacted = "No console diagnostics were emitted; inspect result.json for the structured failing checkpoint."
           destination.write_text(redacted + ("\n" if redacted else ""), encoding="utf-8")
           PY
           cp "$F1_METRICS_ROOT/sanitized-report.json" "$artifact_root/" 2>/dev/null || true
@@ -451,3 +457,4 @@ jobs:
           if [ -n "$cnf" ]; then shred -u "$cnf" 2>/dev/null || rm -f "$cnf"; fi
           if [ -n "$credentials" ]; then shred -u "$credentials" 2>/dev/null || rm -f "$credentials"; fi
           if [ -n "$run_root" ]; then rm -rf "$run_root"; fi
+
