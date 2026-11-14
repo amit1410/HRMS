@@ -169,10 +169,15 @@ public sealed record EmployeeImportMySqlAcceptanceConfiguration(
         {
             RequireApproval(values, "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_FILESYSTEM_STORAGE");
             var root = Required(values, "HRMS_EMPLOYEE_IMPORT_F1_FILESYSTEM_ROOT");
-            if (!Path.IsPathFullyQualified(root) || !root.EndsWith(runId, StringComparison.OrdinalIgnoreCase) ||
+            var normalizedRoot = Path.GetFullPath(root)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var runScopedSegments = normalizedRoot.Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries);
+            if (!Path.IsPathFullyQualified(root) || !runScopedSegments.Contains(runId, StringComparer.OrdinalIgnoreCase) ||
                 root.Contains("MySQL Server 8.0\\Data", StringComparison.OrdinalIgnoreCase) ||
                 root.Contains("hrms_web1", StringComparison.OrdinalIgnoreCase) || root.Contains("hrms_catalog", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("The filesystem workbook root must be a dedicated run-scoped path outside MySQL data and protected HRMS paths.");
+                throw new InvalidOperationException("The filesystem workbook root must be inside a directory named exactly for this run and outside MySQL data and protected HRMS paths.");
         }
         var project = Required(values, "HRMS_EMPLOYEE_IMPORT_F1_COMPOSE_PROJECT");
         if (!string.Equals(project, $"hrms-f1-{runId.ToLowerInvariant()}", StringComparison.Ordinal))

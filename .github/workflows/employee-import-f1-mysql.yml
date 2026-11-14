@@ -291,8 +291,9 @@ jobs:
               error_code = value(failure, "errorCode", "UNEXPECTED_FAILURE")
           elif failed_tests:
               test_name = failed_tests[0]
-              stage = "provider test execution"
-              category = "TestFailure"
+              gate_failure = "AcceptanceGateTests" in test_name
+              stage = "configuration gate" if gate_failure else "provider test execution"
+              category = "ConfigurationGate" if gate_failure else "TestFailure"
               error_code = "TEST_FAILED"
           elif skipped_tests:
               test_name = skipped_tests[0]
@@ -322,17 +323,29 @@ jobs:
               "EmployeeImportExecution": "Inspect the private test log for the employee-import stage; no employee data is included here.",
               "Timeout": "Inspect the private test log for the timed operation and verify runner capacity.",
               "AcceptanceTestSkipped": "CI_REQUIRED must remain true; verify the isolated provider configuration is complete.",
+              "ConfigurationGate": "Inspect the sanitized configuration-gate diagnostic and correct the isolated CI settings before provider execution.",
               "ResultMissing": "Inspect the private test log; the provider did not write its result file.",
           }.get(category, "Inspect the private test log for the named stage; raw exception text is intentionally omitted.")
           seconds = elapsed_ms / 1000 if elapsed_ms else 0
           status = value(result, "status", "NOT_WRITTEN")
           status = safe(status, r"[A-Za-z0-9_]+", "NOT_WRITTEN")
+          processed_rows = value(result, "processedRows")
+          successful_rows = value(result, "successfulRows")
+          counts_confirmed = (
+              test_exit_code == 0 and
+              status == "SCHEMA_PROVIDER_CHECKS_PASSED" and
+              isinstance(processed_rows, int) and processed_rows > 0 and
+              isinstance(successful_rows, int) and 0 <= successful_rows <= processed_rows
+          )
           report = {
               "status": status,
               "run_id": safe(value(result, "runId", "unknown"), r"[A-Za-z0-9-]+", "unknown"),
               "test_exit_code": test_exit_code,
               "elapsed_seconds": round(seconds, 3),
-              "employees_per_minute": round(10000 / (seconds / 60), 2) if seconds else None,
+              "processed_rows": processed_rows if counts_confirmed else None,
+              "successful_rows": successful_rows if counts_confirmed else None,
+              "employees_per_minute": round(successful_rows / (seconds / 60), 2) if counts_confirmed and seconds else None,
+              "throughput_confirmed": counts_confirmed and bool(seconds),
               "acceptance_expectations": {
                   "successful_employees": 9997,
                   "failed_rows": [2, 5000, 10000],
