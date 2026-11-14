@@ -72,6 +72,39 @@ namespace HRMS.Infrastructure.MySqlCatalogMigrations.Migrations
                     b.ToTable("PlatformRefreshTokens", (string)null);
                 });
 
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformPasswordResetToken", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("char(36)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.Property<Guid>("PlatformUserId")
+                        .HasColumnType("char(36)");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<DateTime?>("UsedAtUtc")
+                        .HasColumnType("datetime(6)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("PlatformUserId", "UsedAtUtc", "ExpiresAtUtc")
+                        .HasDatabaseName("IX_PasswordResetTokens_User_Used_Expires");
+
+                    b.ToTable("PlatformPasswordResetTokens", (string)null);
+                });
+
             modelBuilder.Entity("HRMS.Domain.Entities.PlatformRole", b =>
                 {
                     b.Property<int>("Id")
@@ -323,6 +356,17 @@ namespace HRMS.Infrastructure.MySqlCatalogMigrations.Migrations
                 {
                     b.HasOne("HRMS.Domain.Entities.PlatformUser", "PlatformUser")
                         .WithMany("RefreshTokens")
+                        .HasForeignKey("PlatformUserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("PlatformUser");
+                });
+
+            modelBuilder.Entity("HRMS.Domain.Entities.PlatformPasswordResetToken", b =>
+                {
+                    b.HasOne("HRMS.Domain.Entities.PlatformUser", "PlatformUser")
+                        .WithMany()
                         .HasForeignKey("PlatformUserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

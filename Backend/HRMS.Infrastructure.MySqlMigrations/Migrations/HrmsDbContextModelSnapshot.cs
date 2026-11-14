@@ -3218,6 +3218,7 @@ namespace HRMS.Infrastructure.MySqlMigrations.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("TenantId", "ConfirmationReviewCaseId", "ReviewRound", "ReviewerType", "VersionNumber")
+                        .HasDatabaseName("IX_ConfReviewerReviews_Tenant_Case_Round_Type_Version")
                         .IsUnique();
 
                     b.ToTable("ConfirmationReviewerReviews", (string)null);

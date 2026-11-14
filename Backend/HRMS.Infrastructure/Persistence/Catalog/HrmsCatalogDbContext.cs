@@ -4,6 +4,7 @@ using HRMS.Domain.Entities;
 using HRMS.Infrastructure.Persistence.Catalog.Configurations;
 using HRMS.Infrastructure.Persistence.Conversions;
 using Microsoft.EntityFrameworkCore;
+using MySql.EntityFrameworkCore.Extensions;
 
 namespace HRMS.Infrastructure.Persistence.Catalog;
 
@@ -67,6 +68,13 @@ public class HrmsCatalogDbContext : DbContext, IHrmsCatalogDbContext
         modelBuilder.ApplyConfiguration(new PlatformRolePermissionConfiguration());
         modelBuilder.ApplyConfiguration(new PlatformRefreshTokenConfiguration());
         modelBuilder.ApplyConfiguration(new PlatformPasswordResetTokenConfiguration());
+
+        if (Database.IsMySql())
+        {
+            modelBuilder.Entity<PlatformPasswordResetToken>()
+                .HasIndex(x => new { x.PlatformUserId, x.UsedAtUtc, x.ExpiresAtUtc })
+                .HasDatabaseName("IX_PasswordResetTokens_User_Used_Expires");
+        }
 
         // Ordering is load-bearing: an Ignore placed *before* a configuration is silently undone by it, so
         // this has to sit after the two calls above. Tenant.Users is already ignored inside
