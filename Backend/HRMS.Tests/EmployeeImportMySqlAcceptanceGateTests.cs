@@ -86,6 +86,41 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
         Assert.Contains("private test log", diagnostic.Remediation, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("synthetic_tenant_creation")]
+    [InlineData("catalog_tenant_insert")]
+    [InlineData("shard_seeding")]
+    [InlineData("employee_code_configuration")]
+    [InlineData("template_creation")]
+    [InlineData("workbook_preparation")]
+    [InlineData("http_confirmation")]
+    [InlineData("queued_state_verification")]
+    [InlineData("worker_startup")]
+    [InlineData("row2_commit")]
+    [InlineData("row3_pause")]
+    [InlineData("host_shutdown")]
+    [InlineData("cancellation")]
+    [InlineData("lease_retention")]
+    [InlineData("recovery_claim")]
+    [InlineData("final_completion")]
+    public async Task Every_acceptance_checkpoint_preserves_a_nonempty_failure_identifier(string checkpoint)
+    {
+        var resultPath = Path.Combine(Path.GetTempPath(), $"hrms-f1-checkpoint-{Guid.NewGuid():N}.json");
+        try
+        {
+            var tracker = new EmployeeImportMySqlAcceptanceRunner.AcceptanceCheckpointTracker(resultPath, "run-test", []);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => tracker.RunAsync(checkpoint,
+                () => throw new InvalidOperationException("secret employee detail")));
+
+            Assert.Equal(checkpoint, tracker.ActiveCheckpoint);
+            Assert.False(string.IsNullOrWhiteSpace(tracker.ActiveCheckpoint));
+        }
+        finally
+        {
+            if (File.Exists(resultPath)) File.Delete(resultPath);
+        }
+    }
+
     [Fact]
     public void Login_path_mode_requires_an_exclusive_administrator_source()
     {
@@ -373,3 +408,4 @@ public sealed class EmployeeImportMySqlProviderFactAttribute : FactAttribute
         }
     }
 }
+
