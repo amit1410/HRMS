@@ -273,7 +273,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             await catalog.SaveChangesAsync(ct);
         });
         var tenant = new TestTenantContext(tenantId, userId);
-        await using (var db = CreateTenantContext(c, c.TenantDatabase))
+        await using (var db = CreateTenantContext(c, c.TenantDatabase, tenant))
         {
             await checkpoints.RunAsync("shard_seeding", () => DatabaseSeeder.SeedShardAsync(db, new IdentityPasswordHasher(), shard, ct,
                 configuration: new ConfigurationBuilder().Build(), isDevelopment: false));
@@ -459,10 +459,10 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             await checkpoints.RunAsync("http_confirmation", () => ConfirmOverHttpAsync(c, shardDescriptor, tenantId, seededUser, prepared!.Value!, ct));
             await checkpoints.RunAsync("queued_state_verification", async () =>
             {
-                var confirmedState = await ReadOperationStateAsync(c, tenantId, prepared!.Value.OperationId, ct);
+                var confirmedState = await ReadOperationStateAsync(c, tenantId, seededUser, prepared!.Value.OperationId, ct);
                 if (confirmedState != EmployeeImportOperationState.Queued)
                     throw new InvalidOperationException("HTTP confirmation did not durably queue the import before worker startup.");
-                await using var afterConfirmation = CreateTenantContext(c, c.TenantDatabase);
+                await using var afterConfirmation = CreateTenantContext(c, c.TenantDatabase, tenant);
                 if (await afterConfirmation.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == tenantId, ct) != before)
                     throw new InvalidOperationException("HTTP 202 confirmation created employees before the isolated worker started.");
             });
@@ -476,7 +476,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             {
                 interruptedClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TestTokens.Create(seededUser, tenantId, shard.TenantCode,
                     permissions: [Permissions.Employee.Import, Permissions.Employee.Create, Permissions.EmployeeSensitive.Edit]));
-                await checkpoints.RunAsync("row2_commit", () => WaitForImportAsync(c, tenantId, prepared!.Value.OperationId,
+                await checkpoints.RunAsync("row2_commit", () => WaitForImportAsync(c, tenantId, seededUser, prepared!.Value.OperationId,
                     async (context, operation) => operation.State == EmployeeImportOperationState.Processing &&
                         await context.EmployeeImportRows.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenantId && x.OperationId == operation.Id &&
                             x.ExcelRowNumber == 2 && x.Status == EmployeeImportRowStatus.Succeeded, ct), ct));
@@ -490,7 +490,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
 
             var oldLeaseId = Guid.Empty;
             var operationToExpire = prepared.Value.OperationId;
-            await using (var afterInterruption = CreateTenantContext(c, c.TenantDatabase))
+            await using (var afterInterruption = CreateTenantContext(c, c.TenantDatabase, tenant))
             {
                 await checkpoints.RunAsync("lease_retention", async () =>
                 {
@@ -516,7 +516,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             concurrentClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TestTokens.Create(seededUser, tenantId, shard.TenantCode,
                 permissions: [Permissions.Employee.Import, Permissions.Employee.Create, Permissions.EmployeeSensitive.Edit]));
 
-            await using var fencingDb = CreateTenantContext(c, c.TenantDatabase);
+            await using var fencingDb = CreateTenantContext(c, c.TenantDatabase, tenant);
             var stalePersistence = new EmployeeImportPersistenceService(fencingDb, tenant, clock);
             await checkpoints.RunAsync("recovery_claim", async () =>
             {
@@ -541,7 +541,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             }
 
             pauseAtRecovery.Release.TrySetResult();
-            await checkpoints.RunAsync("final_completion", () => WaitForImportAsync(c, tenantId, prepared!.Value.OperationId,
+            await checkpoints.RunAsync("final_completion", () => WaitForImportAsync(c, tenantId, seededUser, prepared!.Value.OperationId,
                 (_, operation) => Task.FromResult(operation.State == EmployeeImportOperationState.Completed), ct));
             var status = await execution.GetStatusAsync(prepared.Value.OperationId, cancellationToken: ct);
             if (!status.Succeeded || status.Value!.State != "Completed" || status.Value.SucceededRows != 3 ||
@@ -580,9 +580,9 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
                     throw new InvalidOperationException("A foreign tenant token read the run-owned import status through HTTP.");
             }
 
-            await using (var otherTenantDb = CreateTenantContext(c, c.TenantDatabase))
+            var otherTenant = new TestTenantContext(Guid.NewGuid(), Guid.NewGuid());
+            await using (var otherTenantDb = CreateTenantContext(c, c.TenantDatabase, otherTenant))
             {
-                var otherTenant = new TestTenantContext(Guid.NewGuid(), Guid.NewGuid());
                 var otherPersistence = new EmployeeImportPersistenceService(otherTenantDb, otherTenant, clock);
                 var crossTenantRead = await otherPersistence.GetAsync(prepared.Value.OperationId, ct);
                 if (crossTenantRead.Succeeded) throw new InvalidOperationException("A different tenant resolved this import operation.");
@@ -610,7 +610,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             {
                 partialClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TestTokens.Create(seededUser, tenantId, shard.TenantCode,
                     permissions: [Permissions.Employee.Import, Permissions.Employee.Create, Permissions.EmployeeSensitive.Edit]));
-                await WaitForImportAsync(c, tenantId, partialPrepared.Value.OperationId,
+                await WaitForImportAsync(c, tenantId, seededUser, partialPrepared.Value.OperationId,
                     (_, operation) => Task.FromResult(operation.State == EmployeeImportOperationState.PartiallyCompleted), ct);
                 var partialStatus = await partialClient.GetAsync($"/api/employees/bulk-upload/{partialPrepared.Value.OperationId:D}", ct);
                 var partialBody = await partialStatus.Content.ReadAsStringAsync(ct);
@@ -618,7 +618,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
                     !partialBody.Contains("SucceededRows\":1", StringComparison.OrdinalIgnoreCase) ||
                     !partialBody.Contains("FailedRows\":1", StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Partial runtime failure did not produce accurate sanitized status counts.");
-                await using var partialDb = CreateTenantContext(c, c.TenantDatabase);
+                await using var partialDb = CreateTenantContext(c, c.TenantDatabase, tenant);
                 var partialOperation = await partialDb.EmployeeImportOperations.IgnoreQueryFilters()
                     .SingleAsync(x => x.TenantId == tenantId && x.Id == partialPrepared.Value.OperationId, ct);
                 if (partialOperation.SucceededRows != 1 || partialOperation.FailedRows != 1 || partialOperation.SkippedRows != 0)
@@ -626,7 +626,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             }
 
             // Fresh DbContext simulates process restart after the row transaction committed.
-            await using (var restartedDb = CreateTenantContext(c, c.TenantDatabase))
+            await using (var restartedDb = CreateTenantContext(c, c.TenantDatabase, tenant))
             {
                 var afterRestart = await restartedDb.Employees.IgnoreQueryFilters()
                     .CountAsync(x => x.TenantId == tenantId && initialNames.Contains(x.FirstName), ct);
@@ -645,8 +645,8 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             if (!(await persistence.CompletePreparationAsync(extra.Value.Id, prepLease, "Synthetic claim race", ct)).Succeeded ||
                 !(await persistence.EnqueueAsync(extra.Value.Id, extraTokenHash, ct)).Succeeded)
                 throw new InvalidOperationException("Synthetic claim-race operation could not be queued.");
-            await using var claimDbA = CreateTenantContext(c, c.TenantDatabase);
-            await using var claimDbB = CreateTenantContext(c, c.TenantDatabase);
+            await using var claimDbA = CreateTenantContext(c, c.TenantDatabase, tenant);
+            await using var claimDbB = CreateTenantContext(c, c.TenantDatabase, tenant);
             var claimA = new EmployeeImportPersistenceService(claimDbA, tenant, clock)
                 .ClaimQueuedOperationAsync(extra.Value.Id, Guid.NewGuid(), ct);
             var claimB = new EmployeeImportPersistenceService(claimDbB, tenant, clock)
@@ -930,23 +930,23 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
     }
 
     private static async Task<EmployeeImportOperationState> ReadOperationStateAsync(EmployeeImportMySqlAcceptanceConfiguration c,
-        Guid tenantId, Guid operationId, CancellationToken cancellationToken)
+        Guid tenantId, Guid userId, Guid operationId, CancellationToken cancellationToken)
     {
-        await using var context = CreateTenantContext(c, c.TenantDatabase);
-        return await context.EmployeeImportOperations.IgnoreQueryFilters()
-            .Where(x => x.TenantId == tenantId && x.Id == operationId).Select(x => x.State).SingleAsync(cancellationToken);
+        await using var context = CreateTenantContext(c, c.TenantDatabase, new TestTenantContext(tenantId, userId));
+        return await context.EmployeeImportOperations
+            .Where(x => x.Id == operationId).Select(x => x.State).SingleAsync(cancellationToken);
     }
 
-    private static async Task WaitForImportAsync(EmployeeImportMySqlAcceptanceConfiguration c, Guid tenantId, Guid operationId,
+    private static async Task WaitForImportAsync(EmployeeImportMySqlAcceptanceConfiguration c, Guid tenantId, Guid userId, Guid operationId,
         Func<HrmsDbContext, EmployeeImportOperation, Task<bool>> condition, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(45));
         while (!timeout.IsCancellationRequested)
         {
-            await using var context = CreateTenantContext(c, c.TenantDatabase);
-            var operation = await context.EmployeeImportOperations.IgnoreQueryFilters().AsNoTracking()
-                .SingleOrDefaultAsync(x => x.TenantId == tenantId && x.Id == operationId, timeout.Token);
+            await using var context = CreateTenantContext(c, c.TenantDatabase, new TestTenantContext(tenantId, userId));
+            var operation = await context.EmployeeImportOperations.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.Id == operationId, timeout.Token);
             if (operation is not null && await condition(context, operation)) return;
             await Task.Delay(TimeSpan.FromMilliseconds(250), timeout.Token);
         }
@@ -956,7 +956,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
     private static async Task ExpireLeaseAsync(EmployeeImportMySqlAcceptanceConfiguration c, Guid tenantId, Guid operationId,
         CancellationToken cancellationToken)
     {
-        await using var context = CreateTenantContext(c, c.TenantDatabase);
+        await using var context = CreateTenantContext(c, c.TenantDatabase, new TestTenantContext(tenantId));
         var changed = await context.EmployeeImportOperations.IgnoreQueryFilters()
             .Where(x => x.TenantId == tenantId && x.Id == operationId)
             .ExecuteUpdateAsync(update => update.SetProperty(x => x.ClaimLeaseExpiresAtUtc, DateTime.UtcNow.AddMinutes(-1)), cancellationToken);
@@ -1074,10 +1074,10 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         workerClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
             "Bearer", TestTokens.Create(seededUser, tenantId, shard.TenantCode,
                 permissions: [Permissions.Employee.Import, Permissions.Employee.Create, Permissions.EmployeeSensitive.Edit]));
-        await WaitForImportAsync(c, tenantId, prepared.Value.OperationId,
+        await WaitForImportAsync(c, tenantId, seededUser, prepared.Value.OperationId,
             (_, operation) => Task.FromResult(operation.State == EmployeeImportOperationState.PartiallyCompleted), ct);
 
-        await using var verificationDb = CreateTenantContext(c, c.TenantDatabase);
+        await using var verificationDb = CreateTenantContext(c, c.TenantDatabase, tenant);
         var imported = await verificationDb.Employees.IgnoreQueryFilters()
             .Where(x => x.TenantId == tenantId && firstNames.Contains(x.FirstName))
             .ToListAsync(ct);
@@ -1154,8 +1154,9 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         throw new InvalidOperationException(message);
     }
 
-    private static HrmsDbContext CreateTenantContext(EmployeeImportMySqlAcceptanceConfiguration c, string db) =>
-        new(new DbContextOptionsBuilder<HrmsDbContext>().UseMySQL(Connection(c, db), x => x.MigrationsAssembly("HRMS.Infrastructure.MySqlMigrations")).Options, new TestTenantContext());
+    private static HrmsDbContext CreateTenantContext(EmployeeImportMySqlAcceptanceConfiguration c, string db, TestTenantContext? tenant = null) =>
+        new(new DbContextOptionsBuilder<HrmsDbContext>().UseMySQL(Connection(c, db), x => x.MigrationsAssembly("HRMS.Infrastructure.MySqlMigrations")).Options,
+            tenant ?? new TestTenantContext());
     private static HrmsCatalogDbContext CreateCatalogContext(EmployeeImportMySqlAcceptanceConfiguration c, string db) =>
         new(new DbContextOptionsBuilder<HrmsCatalogDbContext>().UseMySQL(Connection(c, db), x => x.MigrationsAssembly("HRMS.Infrastructure.MySqlCatalogMigrations")).Options);
     private static string Connection(EmployeeImportMySqlAcceptanceConfiguration c, string db)

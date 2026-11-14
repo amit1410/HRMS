@@ -18,6 +18,62 @@ public sealed class EmployeeImportPersistenceTests
     private static readonly Guid UserId = SeedData.Users.First(x => x.TenantId == TenantId).Id;
 
     [Fact]
+    public async Task Preparation_and_completion_use_the_same_tenant_scoped_context()
+    {
+        using var database = await CreateDatabaseAsync();
+        var tenant = new TestTenantContext(TenantId, UserId);
+        using var db = database.CreateContext(tenant);
+        var service = Service(db, tenant);
+
+        var started = await service.BeginPreparationAsync(Hash, TokenHash, 1, Guid.NewGuid());
+        Assert.True(started.Succeeded, started.Message);
+
+        var completed = await service.CompletePreparationAsync(started.Value!.Id, started.Value.ClaimLeaseId!.Value);
+
+        Assert.True(completed.Succeeded, completed.Message);
+        Assert.Equal(started.Value.Id, completed.Value!.Id);
+        Assert.Equal(EmployeeImportOperationState.Prepared,
+            await db.EmployeeImportOperations.Where(x => x.Id == started.Value.Id).Select(x => x.State).SingleAsync());
+    }
+
+    [Fact]
+    public async Task Mismatched_service_and_db_tenant_context_reproduces_prepare_not_found_without_bypassing_filters()
+    {
+        using var database = await CreateDatabaseAsync();
+        var serviceTenant = new TestTenantContext(TenantId, UserId);
+        var emptyDbTenant = new TestTenantContext();
+        using var db = database.CreateContext(emptyDbTenant);
+        var service = Service(db, serviceTenant);
+
+        var started = await service.BeginPreparationAsync(Hash, TokenHash, 1, Guid.NewGuid());
+        Assert.True(started.Succeeded, started.Message);
+
+        var completed = await service.CompletePreparationAsync(started.Value!.Id, started.Value.ClaimLeaseId!.Value);
+
+        Assert.Equal(HRMS.Application.Common.ResultStatus.NotFound, completed.Status);
+        Assert.Contains("not found", completed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(await db.EmployeeImportOperations.IgnoreQueryFilters()
+            .Where(x => x.Id == started.Value.Id && x.TenantId == TenantId).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Matching_context_does_not_allow_cross_tenant_operation_access()
+    {
+        using var database = await CreateDatabaseAsync();
+        var tenant = new TestTenantContext(TenantId, UserId);
+        using var db = database.CreateContext(tenant);
+        var operation = (await PrepareAsync(Service(db, tenant), Hash, TokenHash, 1)).Value!;
+
+        var otherTenantId = SeedData.TenantIds.Demo02;
+        var otherUserId = SeedData.Users.First(x => x.TenantId == otherTenantId).Id;
+        var otherTenant = new TestTenantContext(otherTenantId, otherUserId);
+        using var otherDb = database.CreateIsolatedContext(otherTenant);
+        var crossTenant = await Service(otherDb, otherTenant).GetAsync(operation.Id);
+
+        Assert.Equal(HRMS.Application.Common.ResultStatus.NotFound, crossTenant.Status);
+    }
+
+    [Fact]
     public async Task Workbook_identity_is_unique_per_tenant_but_shared_hash_is_allowed_across_tenants()
     {
         using var database = await CreateDatabaseAsync();
