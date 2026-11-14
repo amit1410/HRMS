@@ -1,10 +1,52 @@
 using HRMS.Tests.TestSupport;
+using HRMS.Domain.Entities;
+using HRMS.Domain.Enums;
+using HRMS.Infrastructure.Persistence.Seed;
+using HRMS.Infrastructure.Security;
+using Microsoft.EntityFrameworkCore;
 
 namespace HRMS.Tests;
 
 [Collection("Provider acceptance environment")]
 public sealed class EmployeeImportMySqlAcceptanceGateTests
 {
+    [Fact]
+    public async Task Synthetic_master_resolution_provisions_only_tenant_local_active_records()
+    {
+        using var database = new SqliteInMemoryDatabase();
+        var tenantId = Guid.NewGuid();
+        var tenant = new Tenant
+        {
+            Id = tenantId,
+            TenantCode = $"F1T{tenantId:N}"[..12],
+            TenantName = "Employee import F1 synthetic tenant",
+            Host = $"{tenantId:N}.f1.invalid",
+            ShardKey = tenantId.ToString("N"),
+            DatabaseProvider = DatabaseProviderType.MySql,
+            Status = TenantStatus.Active
+        };
+
+        using (var seeded = database.CreateContext(new TestTenantContext()))
+        {
+            await DatabaseSeeder.SeedShardAsync(seeded, new IdentityPasswordHasher(), tenant, CancellationToken.None);
+            Assert.Empty(await seeded.Departments.IgnoreQueryFilters().Where(x => x.TenantId == tenantId).ToListAsync());
+            Assert.Empty(await seeded.Designations.IgnoreQueryFilters().Where(x => x.TenantId == tenantId).ToListAsync());
+        }
+
+        using var context = database.CreateContext(new TestTenantContext(tenantId));
+        var department = await EmployeeImportAcceptanceMasterData.ResolveDepartmentAsync(context, tenantId, CancellationToken.None);
+        var designation = await EmployeeImportAcceptanceMasterData.ResolveDesignationAsync(context, tenantId, CancellationToken.None);
+
+        Assert.StartsWith("F1SYN-DEPT-", department, StringComparison.Ordinal);
+        Assert.StartsWith("F1SYN-DES-", designation, StringComparison.Ordinal);
+        Assert.Single(await context.Departments.IgnoreQueryFilters()
+            .Where(x => x.TenantId == tenantId && x.IsActive && x.Code == department).ToListAsync());
+        Assert.Single(await context.Designations.IgnoreQueryFilters()
+            .Where(x => x.TenantId == tenantId && x.IsActive && x.Code == designation).ToListAsync());
+        Assert.Empty(await context.Departments.IgnoreQueryFilters().Where(x => x.TenantId != tenantId).ToListAsync());
+        Assert.Empty(await context.Designations.IgnoreQueryFilters().Where(x => x.TenantId != tenantId).ToListAsync());
+    }
+
     [Fact]
     public void Disabled_harness_fails_closed_before_parsing_connection_or_touching_resources()
     {
@@ -92,6 +134,10 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
     [InlineData("shard_seeding")]
     [InlineData("seeded_user_resolution")]
     [InlineData("employee_code_configuration")]
+    [InlineData("workbook_template_loading")]
+    [InlineData("designation_resolution")]
+    [InlineData("department_resolution")]
+    [InlineData("synthetic_rows_generation")]
     [InlineData("template_creation")]
     [InlineData("workbook_preparation")]
     [InlineData("http_confirmation")]
