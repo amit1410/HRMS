@@ -1,12 +1,15 @@
 using System.Net;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Security;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
 using HRMS.Infrastructure.Persistence;
+using HRMS.Infrastructure.Persistence.Seed;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.Sqlite;
@@ -80,6 +83,43 @@ public class HrmsApiFactory : WebApplicationFactory<HRMS.API.Controllers.SystemC
         scope.ServiceProvider.GetRequiredService<IShardContext>().Use(shard);
         scope.ServiceProvider.GetRequiredService<ITenantExecutionContext>().Use(shard.TenantId);
         await action(scope.ServiceProvider);
+    }
+
+    /// <summary>Runs test setup as a seeded authenticated user without making an HTTP request.</summary>
+    public async Task ExecuteAsUserInTenantScopeAsync(string host, Guid userId, Func<IServiceProvider, Task> action)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        ArgumentNullException.ThrowIfNull(action);
+        if (userId == Guid.Empty) throw new ArgumentException("A test user is required.", nameof(userId));
+
+        var seededUser = SeedData.Users.SingleOrDefault(x => x.Id == userId)
+            ?? throw new ArgumentException("The test user is not part of the seeded test context.", nameof(userId));
+        var accessor = Services.GetRequiredService<IHttpContextAccessor>();
+        var previous = accessor.HttpContext;
+        var httpContext = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity([
+                new Claim(HrmsClaimTypes.TenantId, seededUser.TenantId.ToString("D")),
+                new Claim(HrmsClaimTypes.UserId, userId.ToString("D"))
+            ], "Test"))
+        };
+        accessor.HttpContext = httpContext;
+        try
+        {
+            await ExecuteInTenantScopeAsync(host, async services =>
+            {
+                var shard = services.GetRequiredService<IShardContext>().Current
+                    ?? throw new InvalidOperationException($"The test host '{host}' did not resolve a shard.");
+                if (shard.TenantId != seededUser.TenantId)
+                    throw new InvalidOperationException("The authenticated test user does not belong to the requested tenant host.");
+
+                await action(services);
+            });
+        }
+        finally
+        {
+            accessor.HttpContext = previous;
+        }
     }
 
     /// <summary>Held while a host is under construction; see <see cref="CreateHost"/> for why.</summary>
