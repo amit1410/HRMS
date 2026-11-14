@@ -374,18 +374,37 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
                 template = await new EmployeeBulkUploadTemplateService(db, tenant).GenerateAsync(ct);
                 if (!template.Succeeded) throw new InvalidOperationException("Synthetic workbook template generation failed.");
             });
-            using var workbook = new XLWorkbook(new MemoryStream(template.Value!));
-            var sheet = workbook.Worksheet("Employees");
-            var columns = sheet.Row(1).CellsUsed().ToDictionary(x => x.GetString(), x => x.Address.ColumnNumber);
-            var designation = await db.Designations.IgnoreQueryFilters().Where(x => x.TenantId == tenantId && x.IsActive).Select(x => x.Code).FirstAsync(ct);
-            var department = await db.Departments.IgnoreQueryFilters().Where(x => x.TenantId == tenantId && x.IsActive).Select(x => x.Code).FirstAsync(ct);
-            var initialNames = new[] { "SyntheticF1A", "SyntheticF1B", "SyntheticF1C" };
-            AddSyntheticRows(sheet, columns, department, designation, initialNames, RandomNumberGenerator.GetInt32(0, 10000));
-            var sensitiveIdentifiers = initialNames.SelectMany((_, index) => new[]
+            (XLWorkbook Workbook, IXLWorksheet Sheet, IReadOnlyDictionary<string, int> Columns)? loadedWorkbook = null;
+            await checkpoints.RunAsync("workbook_template_loading", () =>
             {
-                sheet.Cell(index + 2, columns["Aadhaar Number *"]).GetString(),
-                sheet.Cell(index + 2, columns["PAN *"]).GetString()
-            }).ToArray();
+                loadedWorkbook = LoadSyntheticWorkbook(template!.Value!);
+                return Task.CompletedTask;
+            });
+            using var workbook = loadedWorkbook!.Value.Workbook;
+            var sheet = loadedWorkbook.Value.Sheet;
+            var columns = loadedWorkbook.Value.Columns;
+            var designation = string.Empty;
+            await checkpoints.RunAsync("designation_resolution", async () =>
+            {
+                designation = await EmployeeImportAcceptanceMasterData.ResolveDesignationAsync(db, tenantId, ct);
+            });
+            var department = string.Empty;
+            await checkpoints.RunAsync("department_resolution", async () =>
+            {
+                department = await EmployeeImportAcceptanceMasterData.ResolveDepartmentAsync(db, tenantId, ct);
+            });
+            var initialNames = new[] { "SyntheticF1A", "SyntheticF1B", "SyntheticF1C" };
+            var sensitiveIdentifiers = Array.Empty<string>();
+            await checkpoints.RunAsync("synthetic_rows_generation", () =>
+            {
+                AddSyntheticRows(sheet, columns, department, designation, initialNames, RandomNumberGenerator.GetInt32(0, 10000));
+                sensitiveIdentifiers = initialNames.SelectMany((_, index) => new[]
+                {
+                    sheet.Cell(index + 2, columns["Aadhaar Number *"]).GetString(),
+                    sheet.Cell(index + 2, columns["PAN *"]).GetString()
+                }).ToArray();
+                return Task.CompletedTask;
+            });
             byte[] bytes = [];
             var before = 0;
             Result<EmployeeBulkImportPreparationDto>? prepared = null;
@@ -808,6 +827,30 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         }
     }
 
+    private static (XLWorkbook Workbook, IXLWorksheet Sheet, IReadOnlyDictionary<string, int> Columns) LoadSyntheticWorkbook(byte[] templateBytes)
+    {
+        var workbook = new XLWorkbook(new MemoryStream(templateBytes, writable: false));
+        try
+        {
+            var sheet = workbook.Worksheet("Employees");
+            var columns = sheet.Row(1).CellsUsed().ToDictionary(x => x.GetString(), x => x.Address.ColumnNumber);
+            var requiredHeaders = new[]
+            {
+                "First Name *", "Last Name *", "Aadhaar Number *", "PAN *", "Date of Joining *",
+                "Job Status *", "Employment Effective From *", "Department Code *", "Designation Code *",
+                "Employment Change Reason *", "Employment Type *"
+            };
+            if (requiredHeaders.Any(header => !columns.ContainsKey(header)))
+                throw new InvalidOperationException("Synthetic employee workbook is missing a required Employees header.");
+            return (workbook, sheet, columns);
+        }
+        catch
+        {
+            workbook.Dispose();
+            throw;
+        }
+    }
+
     private static void AddSyntheticRows(IXLWorksheet sheet, IReadOnlyDictionary<string, int> columns, string departmentCode, string designationCode, IReadOnlyList<string> firstNames, int uniqueSeed)
     {
         var today = DateTime.UtcNow.Date;
@@ -1125,6 +1168,67 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
     {
         private readonly HashSet<string> granted = permissions.ToHashSet(StringComparer.Ordinal);
         public bool HasAnyPermission(params string[] requested) => requested.Any(granted.Contains);
+    }
+}
+
+internal static class EmployeeImportAcceptanceMasterData
+{
+    public static async Task<string> ResolveDepartmentAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var code = await db.Departments.IgnoreQueryFilters()
+            .Where(x => x.TenantId == tenantId && x.IsActive)
+            .OrderBy(x => x.Code)
+            .Select(x => x.Code)
+            .FirstOrDefaultAsync(ct);
+        if (!string.IsNullOrWhiteSpace(code))
+            return code;
+
+        var syntheticCode = $"F1SYN-DEPT-{tenantId:N}"[..20];
+        db.Departments.Add(new Department
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantId,
+            Code = syntheticCode,
+            Name = "F1 Synthetic Department",
+            Description = "Disposable employee-import acceptance master data.",
+            IsActive = true
+        });
+        await db.SaveChangesAsync(ct);
+
+        var resolved = await db.Departments.IgnoreQueryFilters()
+            .Where(x => x.TenantId == tenantId && x.IsActive && x.Code == syntheticCode)
+            .Select(x => x.Code)
+            .SingleOrDefaultAsync(ct);
+        return resolved ?? throw new InvalidOperationException("Synthetic acceptance tenant has no active department after disposable provisioning.");
+    }
+
+    public static async Task<string> ResolveDesignationAsync(HrmsDbContext db, Guid tenantId, CancellationToken ct)
+    {
+        var code = await db.Designations.IgnoreQueryFilters()
+            .Where(x => x.TenantId == tenantId && x.IsActive)
+            .OrderBy(x => x.Code)
+            .Select(x => x.Code)
+            .FirstOrDefaultAsync(ct);
+        if (!string.IsNullOrWhiteSpace(code))
+            return code;
+
+        var syntheticCode = $"F1SYN-DES-{tenantId:N}"[..20];
+        db.Designations.Add(new Designation
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantId,
+            Code = syntheticCode,
+            Name = "F1 Synthetic Designation",
+            Description = "Disposable employee-import acceptance master data.",
+            IsActive = true
+        });
+        await db.SaveChangesAsync(ct);
+
+        var resolved = await db.Designations.IgnoreQueryFilters()
+            .Where(x => x.TenantId == tenantId && x.IsActive && x.Code == syntheticCode)
+            .Select(x => x.Code)
+            .SingleOrDefaultAsync(ct);
+        return resolved ?? throw new InvalidOperationException("Synthetic acceptance tenant has no active designation after disposable provisioning.");
     }
 }
 
