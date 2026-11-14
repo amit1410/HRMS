@@ -273,7 +273,70 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         {
             await checkpoints.RunAsync("shard_seeding", () => DatabaseSeeder.SeedShardAsync(db, new IdentityPasswordHasher(), shard, ct,
                 configuration: new ConfigurationBuilder().Build(), isDevelopment: false));
-            var seededUser = await db.Users.IgnoreQueryFilters().Where(x => x.TenantId == tenantId).Select(x => x.Id).FirstAsync(ct);
+            Guid seededUser = Guid.Empty;
+            await checkpoints.RunAsync("seeded_user_resolution", async () =>
+            {
+                var tenantUserIds = await db.Users.IgnoreQueryFilters()
+                    .Where(x => x.TenantId == tenantId)
+                    .Select(x => x.Id)
+                    .ToListAsync(ct);
+                if (tenantUserIds.Count == 0)
+                {
+                    // The synthetic tenant is intentionally absent from SeedData.Users. Provision one
+                    // non-production identity in this disposable shard so the real API path has a
+                    // tenant-owned subject without changing production seed data.
+                    db.Users.Add(new User
+                    {
+                        Id = userId,
+                        TenantId = tenantId,
+                        Email = $"employee-import-f1-{tenantId:N}@local.invalid",
+                        FirstName = "Employee Import F1",
+                        LastName = "Synthetic User",
+                        IsActive = true,
+                        PasswordHash = new IdentityPasswordHasher().Hash(Guid.NewGuid().ToString("N"))
+                    });
+                    await db.SaveChangesAsync(ct);
+                    tenantUserIds.Add(userId);
+                }
+
+                if (tenantUserIds.Count != 1)
+                    throw new InvalidOperationException("Synthetic acceptance tenant must have exactly one test user after shard seeding.");
+
+                seededUser = tenantUserIds[0];
+                var tenantAdminRoleId = SeedData.RoleId(RoleNames.TenantAdmin);
+                if (!await db.UserRoles.IgnoreQueryFilters().AnyAsync(x =>
+                        x.TenantId == tenantId && x.UserId == seededUser && x.RoleId == tenantAdminRoleId, ct))
+                {
+                    var assignment = new UserRole
+                    {
+                        Id = Guid.NewGuid(),
+                        UserId = seededUser,
+                        RoleId = tenantAdminRoleId,
+                        TenantId = tenantId,
+                        EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow),
+                        AssignmentSource = RoleAssignmentSource.System,
+                        AssignedByUserId = seededUser,
+                        AssignmentReason = "Disposable employee-import F1 acceptance identity",
+                        CreatedAtUtc = DateTime.UtcNow
+                    };
+                    db.UserRoles.Add(assignment);
+                    db.UserRoleAssignmentEvents.Add(new UserRoleAssignmentEvent
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = tenantId,
+                        AssignmentId = assignment.Id,
+                        UserId = seededUser,
+                        RoleId = tenantAdminRoleId,
+                        EventType = UserRoleAssignmentEventType.Assigned,
+                        EffectiveFrom = assignment.EffectiveFrom,
+                        AssignmentSource = assignment.AssignmentSource,
+                        Reason = assignment.AssignmentReason,
+                        PerformedByUserId = seededUser,
+                        OccurredAtUtc = assignment.CreatedAtUtc
+                    });
+                    await db.SaveChangesAsync(ct);
+                }
+            });
             tenant.UserId = seededUser;
             var authorization = new AcceptanceAuthorization(Permissions.Employee.Import, Permissions.Employee.Create,
                 Permissions.EmployeeSensitive.Edit, Permissions.EmploymentHistory.Change);
