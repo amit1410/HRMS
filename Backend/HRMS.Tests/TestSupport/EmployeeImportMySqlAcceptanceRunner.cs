@@ -316,9 +316,9 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
                     throw new InvalidOperationException("HTTP 202 confirmation created employees before the isolated worker started.");
 
             // First isolated API host simulates a process interruption after row 2 commits and before row 3 starts.
-            var crashAtNextRow = new CrashOnceAtRowStartInterceptor(3);
+            var interruptAtNextRow = new PauseAtRowStartInterceptor(3);
             using (var interruptedHost = new EmployeeImportF1ApiFactory(c, workerEnabled: true,
-                       shard.TenantCode, prepared.Value.OperationId, crashAtNextRow))
+                       shard.TenantCode, prepared.Value.OperationId, interruptAtNextRow))
             using (var interruptedClient = interruptedHost.CreateClientFor(shard.Host))
             {
                 interruptedClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TestTokens.Create(seededUser, tenantId, shard.TenantCode,
@@ -327,7 +327,10 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
                     async (context, operation) => operation.State == EmployeeImportOperationState.Processing &&
                         await context.EmployeeImportRows.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenantId && x.OperationId == operation.Id &&
                             x.ExcelRowNumber == 2 && x.Status == EmployeeImportRowStatus.Succeeded, ct), ct);
-                await crashAtNextRow.Interrupted.Task.WaitAsync(TimeSpan.FromSeconds(45), ct);
+                // Stop the isolated host while the worker is paused before row 3. Throwing from
+                // SaveChanges would be treated as a recoverable row failure by the worker and
+                // would not simulate a process interruption or preserve the processing lease.
+                await interruptAtNextRow.Entered.Task.WaitAsync(TimeSpan.FromSeconds(45), ct);
             }
 
             Guid oldLeaseId;
@@ -768,24 +771,6 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             .Where(x => x.TenantId == tenantId && x.Id == operationId)
             .ExecuteUpdateAsync(update => update.SetProperty(x => x.ClaimLeaseExpiresAtUtc, DateTime.UtcNow.AddMinutes(-1)), cancellationToken);
         if (changed != 1) throw new InvalidOperationException("Could not expire exactly the run-owned operation lease for recovery testing.");
-    }
-
-    private sealed class CrashOnceAtRowStartInterceptor(int excelRow) : SaveChangesInterceptor
-    {
-        private int triggered;
-        public TaskCompletionSource Interrupted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData,
-            InterceptionResult<int> result, CancellationToken cancellationToken = default)
-        {
-            var isTarget = eventData.Context?.ChangeTracker.Entries<EmployeeImportRow>().Any(entry =>
-                entry.Entity.ExcelRowNumber == excelRow && entry.Entity.Status == EmployeeImportRowStatus.Processing) == true;
-            if (isTarget && Interlocked.Exchange(ref triggered, 1) == 0)
-            {
-                Interrupted.TrySetResult();
-                throw new InvalidOperationException("Synthetic F1 process interruption before the next row transaction.");
-            }
-            return ValueTask.FromResult(result);
-        }
     }
 
     private sealed class PauseAtRowStartInterceptor(int excelRow) : SaveChangesInterceptor

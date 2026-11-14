@@ -24,7 +24,7 @@ public sealed class MySqlMigrationIdentifierTests
 
         var sql = db.GetService<IMigrator>().GenerateScript();
 
-        AssertIdentifierLengths(sql, MySqlCatalogMigrationsAssembly);
+        AssertIdentifierLengths(sql, MySqlCatalogMigrationsAssembly, "catalog up");
         Assert.Contains("IX_PasswordResetTokens_User_Used_Expires", sql, StringComparison.Ordinal);
         Assert.DoesNotContain("IX_PlatformPasswordResetTokens_PlatformUserId_UsedAtUtc_ExpiresAtUtc", sql, StringComparison.Ordinal);
     }
@@ -39,7 +39,7 @@ public sealed class MySqlMigrationIdentifierTests
 
         var sql = db.GetService<IMigrator>().GenerateScript();
 
-        AssertIdentifierLengths(sql, MySqlTenantMigrationsAssembly);
+        AssertIdentifierLengths(sql, MySqlTenantMigrationsAssembly, "tenant up");
     }
 
     [Fact]
@@ -59,9 +59,18 @@ public sealed class MySqlMigrationIdentifierTests
         Assert.Contains("PlatformPasswordResetTokens", catalog.GetService<IMigrator>().GenerateScript(), StringComparison.Ordinal);
         Assert.Equal("catalog-migration-down", catalog.Database.GetDbConnection().Database);
         Assert.Equal("tenant-migration-down", tenant.Database.GetDbConnection().Database);
+
+        AssertIdentifierLengths(DownScript(catalog), MySqlCatalogMigrationsAssembly, "catalog down");
+        AssertIdentifierLengths(DownScript(tenant), MySqlTenantMigrationsAssembly, "tenant down");
     }
 
-    private static void AssertIdentifierLengths(string sql, string migrationAssembly)
+    private static string DownScript(DbContext context)
+    {
+        var migrations = context.Database.GetMigrations().ToArray();
+        return context.GetService<IMigrator>().GenerateScript(migrations[^1], null);
+    }
+
+    private static void AssertIdentifierLengths(string sql, string migrationAssembly, string direction)
     {
         var identifiers = Regex.Matches(sql, "`(?<identifier>[^`]+)`")
             .Select(match => match.Groups["identifier"].Value)
@@ -73,7 +82,7 @@ public sealed class MySqlMigrationIdentifierTests
             .ToArray();
 
         Assert.True(excessive.Length == 0,
-            $"MySQL migration SQL from {migrationAssembly} contains identifiers over 64 characters: " +
+            $"MySQL {direction} migration SQL from {migrationAssembly} contains identifiers over 64 characters: " +
             string.Join(", ", excessive.Select(identifier => $"{identifier} ({identifier.Length})")));
     }
 }
