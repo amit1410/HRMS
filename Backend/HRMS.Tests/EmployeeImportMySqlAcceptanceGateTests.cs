@@ -139,7 +139,11 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
     [InlineData("department_resolution")]
     [InlineData("synthetic_rows_generation")]
     [InlineData("template_creation")]
-    [InlineData("workbook_preparation")]
+    [InlineData("workbook_serialization")]
+    [InlineData("employee_count_before_prepare")]
+    [InlineData("workbook_validation")]
+    [InlineData("import_prepare_persistence")]
+    [InlineData("prepare_no_employee_side_effects")]
     [InlineData("http_confirmation")]
     [InlineData("queued_state_verification")]
     [InlineData("worker_startup")]
@@ -166,6 +170,26 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
         {
             if (File.Exists(resultPath)) File.Delete(resultPath);
         }
+    }
+
+    [Fact]
+    public void Preparation_diagnostics_keep_status_code_fields_and_counts_without_values()
+    {
+        var result = Result<EmployeeBulkUploadValidationResult>.Failure(
+            ResultStatus.ValidationFailed,
+            "Workbook rejected.",
+            [new ValidationError("PAN *", "masked"), new ValidationError("raw-secret-field", "masked")]);
+
+        var diagnostic = EmployeeImportPreparationDiagnostics.FromValidation(result);
+
+        Assert.Equal("ValidationFailed", diagnostic.ResultStatus);
+        Assert.Equal("WorkbookValidation", diagnostic.Category);
+        Assert.Equal("WORKBOOK_VALIDATION_VALIDATIONFAILED", diagnostic.StableCode);
+        Assert.Equal(["PAN *"], diagnostic.ValidationFields);
+        Assert.Null(diagnostic.ExpectedRows);
+        Assert.Null(diagnostic.ActualRows);
+        Assert.DoesNotContain("masked", System.Text.Json.JsonSerializer.Serialize(diagnostic), StringComparison.Ordinal);
+        Assert.DoesNotContain("raw-secret-field", System.Text.Json.JsonSerializer.Serialize(diagnostic), StringComparison.Ordinal);
     }
 
     [Fact]

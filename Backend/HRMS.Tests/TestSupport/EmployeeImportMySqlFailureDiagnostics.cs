@@ -68,4 +68,5 @@ public sealed record EmployeeImportMySqlFailureDiagnostic(
     string Category,
     string ErrorCode,
     string Remediation,
-    string? FailingCheckpoint = null);
+    string? FailingCheckpoint = null,
+    EmployeeImportPreparationDiagnostic? Preparation = null);
