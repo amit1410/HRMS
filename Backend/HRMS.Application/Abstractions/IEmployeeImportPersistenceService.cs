@@ -23,9 +23,9 @@ public interface IEmployeeImportPersistenceService
     Task<Result<EmployeeImportRow>> StartClaimedRowAsync(Guid operationId, int excelRowNumber, Guid leaseId, CancellationToken cancellationToken = default);
     Task<Result<EmployeeImportRow>> RecoverAbandonedRowAsync(Guid operationId, int excelRowNumber, CancellationToken cancellationToken = default);
     Task<Result<EmployeeImportRow>> RecoverAbandonedClaimedRowAsync(Guid operationId, int excelRowNumber, Guid leaseId, CancellationToken cancellationToken = default);
-    Task<Result<EmployeeImportRow>> FailRowAsync(Guid operationId, int excelRowNumber, string errorCode, string sanitizedMessage, CancellationToken cancellationToken = default);
+    Task<Result<EmployeeImportRow>> FailRowAsync(Guid operationId, int excelRowNumber, string errorCode, string sanitizedMessage, string? employeeCode = null, CancellationToken cancellationToken = default);
     Task<Result<EmployeeImportRow>> SkipRowAsync(Guid operationId, int excelRowNumber, string errorCode, string sanitizedMessage, CancellationToken cancellationToken = default);
-    Task<Result<EmployeeImportRow>> FailClaimedRowAsync(Guid operationId, int excelRowNumber, Guid leaseId, string errorCode, string sanitizedMessage, CancellationToken cancellationToken = default);
+    Task<Result<EmployeeImportRow>> FailClaimedRowAsync(Guid operationId, int excelRowNumber, Guid leaseId, string errorCode, string sanitizedMessage, string? employeeCode = null, CancellationToken cancellationToken = default);
     Task<Result<EmployeeImportRow>> SkipClaimedRowAsync(Guid operationId, int excelRowNumber, Guid leaseId, string errorCode, string sanitizedMessage, CancellationToken cancellationToken = default);
     Task<Result<EmployeeImportRow>> CompleteRowWithinTransactionAsync(Guid operationId, int excelRowNumber, Guid employeeId, string? employeeCode, Guid leaseId, IDbContextTransaction callerTransaction, CancellationToken cancellationToken = default);
 }

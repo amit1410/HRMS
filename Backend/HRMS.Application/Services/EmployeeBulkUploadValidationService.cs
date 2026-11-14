@@ -264,6 +264,8 @@ public sealed class EmployeeBulkUploadValidationService(
             .Select(x => new { x.Id, x.EmployeeCode, x.Status }).ToListAsync(ct);
         var existingCodes = tenantEmployees.Where(x => x.EmployeeCode != null).Select(x => x.EmployeeCode!).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var tenantEmployeesByCode = tenantEmployees.Where(x => x.EmployeeCode != null).ToDictionary(x => x.EmployeeCode!, StringComparer.OrdinalIgnoreCase);
+        var reservedEmployeeCodes = new HashSet<string>(existingCodes, StringComparer.OrdinalIgnoreCase);
+        var nextSimpleCodeByVersion = new Dictionary<Guid, long>();
         var newCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var r = 2; r <= lastRow; r++)
         {
@@ -341,6 +343,17 @@ public sealed class EmployeeBulkUploadValidationService(
                 Add(issues, r, "EmployeeCode", "Date of Joining *", c["Date of Joining *"], "employee_code.configuration", "Automatic employee-code configuration has no generation method.", "Ask an administrator to correct employee-code configuration.");
             else if (config[0].AssignmentMode == EmployeeCodeAssignmentMode.Auto && config[0].GenerationMethod == EmployeeCodeGenerationMethod.Simple && manual.Length > 0)
                 Add(issues, r, "EmployeeCode", "Manual Employee Code", c["Manual Employee Code"], "employee_code.manual_not_allowed", "Manual employee code is ignored when automatic assignment is configured.", "Clear this cell; the employee code will be generated.");
+            else if (!issues.ContainsKey(r) && config[0].AssignmentMode == EmployeeCodeAssignmentMode.Auto && config[0].GenerationMethod == EmployeeCodeGenerationMethod.Simple)
+            {
+                var nextNumber = nextSimpleCodeByVersion.GetValueOrDefault(config[0].Id, Math.Max(1L, config[0].NextNumber));
+                var prefix = (config[0].Prefix ?? "EMP").Trim().ToUpperInvariant();
+                var separator = config[0].Separator ?? string.Empty;
+                var padding = Math.Clamp(config[0].Padding, 0, 10);
+                var candidate = prefix + separator + nextNumber.ToString(padding == 0 ? string.Empty : $"D{padding}");
+                nextSimpleCodeByVersion[config[0].Id] = nextNumber == long.MaxValue ? long.MaxValue : nextNumber + 1;
+                if (!reservedEmployeeCodes.Add(candidate))
+                    Add(issues, r, "EmployeeCode", "Date of Joining *", c["Date of Joining *"], "employee_code.generated_duplicate", "The next automatic employee code is already in use.", "Ask an administrator to advance the automatic employee-code sequence, then revalidate the workbook.");
+            }
             else if (config[0].AssignmentMode == EmployeeCodeAssignmentMode.Auto && config[0].GenerationMethod == EmployeeCodeGenerationMethod.RuleBased)
             {
                 if (manual.Length > 0) Add(issues, r, "EmployeeCode", "Manual Employee Code", c["Manual Employee Code"], "employee_code.manual_not_allowed", "Manual employee code is ignored when automatic assignment is configured.", "Clear this cell; the employee code will be generated.");

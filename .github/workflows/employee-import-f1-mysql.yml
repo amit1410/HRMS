@@ -1,0 +1,307 @@
+name: Employee Import F1 MySQL acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_isolated_run:
+        description: "Run the isolated synthetic 10,000-row employee-import acceptance test"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: employee-import-f1-mysql
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    if: ${{ inputs.confirm_isolated_run == true }}
+    name: Isolated MySQL F1 acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.HRMS_F1_CI_MYSQL_ROOT_PASSWORD }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p$MYSQL_ROOT_PASSWORD"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+
+    env:
+      DOTNET_NOLOGO: "true"
+      HRMS_EMPLOYEE_IMPORT_F1_EXECUTE: "true"
+      HRMS_EMPLOYEE_IMPORT_F1_ENVIRONMENT: isolated-employee-import-f1
+      HRMS_EMPLOYEE_IMPORT_F1_DATABASE_MODE: CreateNew
+      HRMS_EMPLOYEE_IMPORT_F1_MYSQL_MODE: ExistingLoopback
+      HRMS_EMPLOYEE_IMPORT_F1_APPROVE_EXISTING_LOOPBACK: "true"
+      HRMS_EMPLOYEE_IMPORT_F1_HOST_PORT: "3306"
+      HRMS_EMPLOYEE_IMPORT_F1_SERVER_PORT: "3306"
+      HRMS_EMPLOYEE_IMPORT_F1_STORAGE_MODE: FileSystem
+      HRMS_EMPLOYEE_IMPORT_F1_APPROVE_FILESYSTEM_STORAGE: "true"
+      HRMS_EMPLOYEE_IMPORT_F1_APPROVE_CONNECTION: "true"
+      HRMS_EMPLOYEE_IMPORT_F1_APPROVE_CREATE: "true"
+      HRMS_EMPLOYEE_IMPORT_F1_APPROVE_MIGRATION: "true"
+      HRMS_EMPLOYEE_IMPORT_F1_APPROVE_WORKER: "true"
+      HRMS_EMPLOYEE_IMPORT_F1_APPROVE_DELETE: "false"
+      HRMS_EMPLOYEE_IMPORT_F1_CI_REQUIRED: "true"
+
+    steps:
+      - name: Check required CI-only secret
+        shell: bash
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.HRMS_F1_CI_MYSQL_ROOT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$MYSQL_ROOT_PASSWORD" || {
+            echo "Missing required test-only secret HRMS_F1_CI_MYSQL_ROOT_PASSWORD."
+            exit 1
+          }
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x
+
+      - name: Restore and build test harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore HRMS.slnx
+          dotnet build HRMS.slnx --no-restore
+
+      - name: Ensure MySQL CLI is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v mysql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y mysql-client
+          fi
+
+      - name: Derive isolated run identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="run${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          run_slug="${run_id//-/_}"
+          root="$RUNNER_TEMP/hrms-employee-import-f1/$run_id"
+          mkdir -p "$root/workbooks" "$root/reports"
+          {
+            echo "HRMS_EMPLOYEE_IMPORT_F1_RUN_ID=$run_id"
+            echo "HRMS_EMPLOYEE_IMPORT_F1_CATALOG_DATABASE=hrms_ei1_${run_slug}_meta"
+            echo "HRMS_EMPLOYEE_IMPORT_F1_TENANT_DATABASE=hrms_ei1_${run_slug}_shard"
+            echo "HRMS_EMPLOYEE_IMPORT_F1_MIGRATION_DOWN_DATABASE=hrms_ei1_${run_slug}_down"
+            echo "HRMS_EMPLOYEE_IMPORT_F1_DATABASE_ALLOWLIST=hrms_ei1_${run_slug}_meta,hrms_ei1_${run_slug}_shard,hrms_ei1_${run_slug}_down"
+            echo "HRMS_EMPLOYEE_IMPORT_F1_MANIFEST_PATH=$root/reports/ownership-manifest.json"
+            echo "HRMS_EMPLOYEE_IMPORT_F1_RESULT_PATH=$root/reports/result.json"
+            echo "HRMS_EMPLOYEE_IMPORT_F1_STORAGE_CONFIGURATION=$root/storage.json"
+            echo "HRMS_EMPLOYEE_IMPORT_F1_FILESYSTEM_ROOT=$root/workbooks"
+            echo "HRMS_EMPLOYEE_IMPORT_F1_COMPOSE_PROJECT=hrms-f1-${run_id,,}"
+            echo "HRMS_EMPLOYEE_IMPORT_F1_COMPOSE_FILE=$root/docker-compose.f1.yml"
+            echo "F1_RUN_ROOT=$root"
+            echo "F1_METRICS_ROOT=$root/reports"
+          } >> "$GITHUB_ENV"
+
+      - name: Wait for isolated MySQL service
+        shell: bash
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.HRMS_F1_CI_MYSQL_ROOT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cnf="$RUNNER_TEMP/hrms-f1-mysql.cnf"
+          umask 077
+          printf '[client]\nhost=127.0.0.1\nport=3306\nuser=root\npassword=%s\nprotocol=tcp\n' "$MYSQL_ROOT_PASSWORD" > "$cnf"
+          echo "F1_MYSQL_CNF=$cnf" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 30); do
+            if mysql --defaults-extra-file="$cnf" --batch --skip-column-names -e 'SELECT 1' >/dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
+          echo "MySQL service did not become ready."
+          exit 1
+
+      - name: Provision restricted app account and exact run-scoped grants
+        shell: bash
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.HRMS_F1_CI_MYSQL_ROOT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          app_user="hrms_f1_${GITHUB_RUN_ID}"
+          app_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$app_password"
+          app_credentials="$F1_RUN_ROOT/app-credentials.env"
+          umask 077
+          printf 'F1_APP_USER=%s\nF1_APP_PASSWORD=%s\n' "$app_user" "$app_password" > "$app_credentials"
+          echo "F1_APP_CREDENTIALS=$app_credentials" >> "$GITHUB_ENV"
+          mysql --defaults-extra-file="$F1_MYSQL_CNF" --batch --skip-column-names -e "SELECT @@hostname" > "$F1_METRICS_ROOT/mysql-hostname.txt"
+          server_identity="$(tr -d '\r\n' < "$F1_METRICS_ROOT/mysql-hostname.txt")"
+          test -n "$server_identity" || { echo "Could not determine service identity."; exit 1; }
+          echo "HRMS_EMPLOYEE_IMPORT_F1_SERVER_IDENTITY=$server_identity" >> "$GITHUB_ENV"
+          cat <<SQL | mysql --defaults-extra-file="$F1_MYSQL_CNF" --batch --skip-column-names
+          CREATE USER '$app_user'@'%' IDENTIFIED BY '$app_password';
+          GRANT ALL PRIVILEGES ON \`$HRMS_EMPLOYEE_IMPORT_F1_CATALOG_DATABASE\`.* TO '$app_user'@'%';
+          GRANT ALL PRIVILEGES ON \`$HRMS_EMPLOYEE_IMPORT_F1_TENANT_DATABASE\`.* TO '$app_user'@'%';
+          GRANT ALL PRIVILEGES ON \`$HRMS_EMPLOYEE_IMPORT_F1_MIGRATION_DOWN_DATABASE\`.* TO '$app_user'@'%';
+          FLUSH PRIVILEGES;
+          SQL
+
+      - name: Assert run-scoped database isolation before harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          count="$(mysql --defaults-extra-file="$F1_MYSQL_CNF" --batch --skip-column-names -e "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME IN ('$HRMS_EMPLOYEE_IMPORT_F1_CATALOG_DATABASE','$HRMS_EMPLOYEE_IMPORT_F1_TENANT_DATABASE','$HRMS_EMPLOYEE_IMPORT_F1_MIGRATION_DOWN_DATABASE');")"
+          test "$count" = 0
+          protected="$(mysql --defaults-extra-file="$F1_MYSQL_CNF" --batch --skip-column-names -e "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME IN ('hrms_web1','hrms_catalog');")"
+          test "$protected" = 0
+          global_privileges="$(mysql --defaults-extra-file="$F1_MYSQL_CNF" --batch --skip-column-names -e "SELECT COUNT(*) FROM mysql.user WHERE User='$F1_APP_USER' AND Host='%' AND (Select_priv='Y' OR Insert_priv='Y' OR Update_priv='Y' OR Delete_priv='Y' OR Create_priv='Y' OR Grant_priv='Y');")"
+          test "$global_privileges" = 0
+          scoped_grants="$(mysql --defaults-extra-file="$F1_MYSQL_CNF" --batch --skip-column-names -e "SELECT COUNT(*) FROM mysql.db WHERE User='$F1_APP_USER' AND Host='%' AND Db IN ('$HRMS_EMPLOYEE_IMPORT_F1_CATALOG_DATABASE','$HRMS_EMPLOYEE_IMPORT_F1_TENANT_DATABASE','$HRMS_EMPLOYEE_IMPORT_F1_MIGRATION_DOWN_DATABASE');")"
+          test "$scoped_grants" = 3
+          unexpected_grants="$(mysql --defaults-extra-file="$F1_MYSQL_CNF" --batch --skip-column-names -e "SELECT COUNT(*) FROM mysql.db WHERE User='$F1_APP_USER' AND Host='%' AND Db NOT IN ('$HRMS_EMPLOYEE_IMPORT_F1_CATALOG_DATABASE','$HRMS_EMPLOYEE_IMPORT_F1_TENANT_DATABASE','$HRMS_EMPLOYEE_IMPORT_F1_MIGRATION_DOWN_DATABASE');")"
+          test "$unexpected_grants" = 0
+
+      - name: Create isolated encrypted filesystem configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          key_a="$(openssl rand -base64 32)"
+          key_b="$(openssl rand -base64 32)"
+          F1_KEY_A="$key_a" F1_KEY_B="$key_b" python3 - "$HRMS_EMPLOYEE_IMPORT_F1_STORAGE_CONFIGURATION" "$HRMS_EMPLOYEE_IMPORT_F1_FILESYSTEM_ROOT" <<'PY'
+          import json, os, sys
+          config_path, root = sys.argv[1:]
+          document = {
+              "EmployeeImportStorage": {
+                  "Provider": "FileSystem",
+                  "RetentionDays": 1,
+                  "RootPath": root,
+                  "Encryption": {
+                      "ActiveKeyId": "ci-key-a",
+                      "Keys": {"ci-key-a": os.environ["F1_KEY_A"], "ci-key-b": os.environ["F1_KEY_B"]}
+                  }
+              }
+          }
+          with open(config_path, "w", encoding="utf-8") as handle:
+              json.dump(document, handle)
+          PY
+
+      - name: Capture database metrics before acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mysql --defaults-extra-file="$F1_MYSQL_CNF" --batch --skip-column-names -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected','Threads_running','Questions','Queries','Innodb_buffer_pool_read_requests','Innodb_buffer_pool_reads','Created_tmp_tables');" > "$F1_METRICS_ROOT/mysql-before.tsv"
+
+      - name: Run complete employee-import acceptance
+        id: acceptance
+        shell: bash
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.HRMS_F1_CI_MYSQL_ROOT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -s "$F1_APP_CREDENTIALS"
+          set -a
+          . "$F1_APP_CREDENTIALS"
+          set +a
+          export HRMS_EMPLOYEE_IMPORT_F1_MYSQL_CONNECTION="Server=127.0.0.1;Port=3306;Database=mysql;User ID=root;Password=$MYSQL_ROOT_PASSWORD;Pooling=false"
+          export HRMS_EMPLOYEE_IMPORT_F1_APPLICATION_MYSQL_CONNECTION="Server=127.0.0.1;Port=3306;Database=mysql;User ID=$F1_APP_USER;Password=$F1_APP_PASSWORD;Pooling=false"
+          start_ns="$(date +%s%N)"
+          set +e
+          dotnet test Backend/HRMS.Tests/HRMS.Tests.csproj --no-restore --filter 'FullyQualifiedName~EmployeeImportMySql' > "$F1_METRICS_ROOT/test.log" 2>&1
+          test_code=$?
+          set -e
+          end_ns="$(date +%s%N)"
+          elapsed_ms="$(( (end_ns - start_ns) / 1000000 ))"
+          printf '%s\n' "$elapsed_ms" > "$F1_METRICS_ROOT/elapsed-ms.txt"
+          exit "$test_code"
+
+      - name: Capture database metrics and sanitized report
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$F1_MYSQL_CNF" ]; then
+            mysql --defaults-extra-file="$F1_MYSQL_CNF" --batch --skip-column-names -e "SHOW GLOBAL STATUS WHERE Variable_name IN ('Threads_connected','Threads_running','Questions','Queries','Innodb_buffer_pool_read_requests','Innodb_buffer_pool_reads','Created_tmp_tables');" > "$F1_METRICS_ROOT/mysql-after.tsv" || true
+          fi
+          elapsed_ms="$(cat "$F1_METRICS_ROOT/elapsed-ms.txt" 2>/dev/null || echo 0)"
+          python3 - "$F1_METRICS_ROOT" "$HRMS_EMPLOYEE_IMPORT_F1_RESULT_PATH" <<'PY'
+          import json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          result_path = pathlib.Path(sys.argv[2])
+          elapsed_ms = int((root / "elapsed-ms.txt").read_text().strip()) if (root / "elapsed-ms.txt").exists() else 0
+          result = json.loads(result_path.read_text()) if result_path.exists() else {"Status": "NOT_WRITTEN"}
+          if result.get("Status") != "SCHEMA_PROVIDER_CHECKS_PASSED":
+              raise SystemExit("Acceptance result did not pass the complete provider scenario.")
+          seconds = elapsed_ms / 1000 if elapsed_ms else 0
+          report = {
+              "status": result.get("Status", "NOT_WRITTEN"),
+              "run_id": result.get("RunId", "unknown"),
+              "elapsed_seconds": round(seconds, 3),
+              "employees_per_minute": round(10000 / (seconds / 60), 2) if seconds else None,
+              "acceptance_expectations": {
+                  "successful_employees": 9997,
+                  "failed_rows": [2, 5000, 10000],
+                  "skipped_rows": 0,
+                  "pending_rows": 0,
+                  "partial_completion_and_rollback": True,
+                  "duplicate_prevention": True,
+                  "paginated_status_results": True,
+                  "sanitized_failed_row_csv": True
+              },
+              "synthetic_only": True,
+              "protected_databases_touched": False,
+              "checks": result.get("CompletedChecks", [])
+          }
+          (root / "sanitized-report.json").write_text(json.dumps(report, indent=2) + "\n")
+          (root / "sanitized-summary.md").write_text(
+              f"# Employee Import F1 CI\n\n"
+              f"- Status: `{report['status']}`\n"
+              f"- Elapsed seconds: `{report['elapsed_seconds']}`\n"
+              f"- Employees per minute: `{report['employees_per_minute']}`\n"
+              f"- Synthetic data only: `{report['synthetic_only']}`\n"
+              f"- Protected databases touched: `{report['protected_databases_touched']}`\n"
+          )
+          PY
+
+          artifact_root="$RUNNER_TEMP/hrms-f1-artifacts"
+          rm -rf "$artifact_root"
+          mkdir -p "$artifact_root"
+          cp "$F1_METRICS_ROOT/sanitized-report.json" "$artifact_root/" 2>/dev/null || true
+          cp "$F1_METRICS_ROOT/sanitized-summary.md" "$artifact_root/" 2>/dev/null || true
+          cp "$HRMS_EMPLOYEE_IMPORT_F1_RESULT_PATH" "$artifact_root/" 2>/dev/null || true
+          cp "$HRMS_EMPLOYEE_IMPORT_F1_MANIFEST_PATH" "$artifact_root/" 2>/dev/null || true
+          cp "$F1_METRICS_ROOT/mysql-before.tsv" "$artifact_root/" 2>/dev/null || true
+          cp "$F1_METRICS_ROOT/mysql-after.tsv" "$artifact_root/" 2>/dev/null || true
+
+      - name: Upload sanitized acceptance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: employee-import-f1-${{ github.run_id }}
+          path: ${{ runner.temp }}/hrms-f1-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove ephemeral CI credentials and filesystem
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          cnf="${F1_MYSQL_CNF:-}"
+          run_root="${F1_RUN_ROOT:-}"
+          credentials="${F1_APP_CREDENTIALS:-}"
+          unset F1_APP_PASSWORD F1_MYSQL_CNF MYSQL_ROOT_PASSWORD
+          if [ -n "${GITHUB_ENV:-}" ]; then
+            sed -i '/^F1_APP_CREDENTIALS=/d;/^F1_APP_PASSWORD=/d;/^F1_APP_USER=/d;/^F1_MYSQL_CNF=/d' "$GITHUB_ENV"
+          fi
+          if [ -n "$cnf" ]; then shred -u "$cnf" 2>/dev/null || rm -f "$cnf"; fi
+          if [ -n "$credentials" ]; then shred -u "$credentials" 2>/dev/null || rm -f "$credentials"; fi
+          if [ -n "$run_root" ]; then rm -rf "$run_root"; fi

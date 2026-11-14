@@ -28,6 +28,26 @@ public sealed class EmployeeBulkImportExecutionTests
     private static readonly Guid TenantId = SeedData.TenantIds.Demo01;
 
     [Fact]
+    public async Task Status_results_support_bounded_paging_without_changing_operation_counters()
+    {
+        using var f = await Fixture.CreateAsync();
+        await f.ConfigureCodeAsync();
+        var prepared = await f.PrepareAsync(await f.CreateWorkbookAsync(3));
+        Assert.True(prepared.Succeeded, prepared.Message);
+
+        var status = await f.Execution.GetStatusAsync(prepared.Value!.OperationId, resultPage: 2, resultPageSize: 1);
+
+        Assert.True(status.Succeeded, status.Message);
+        Assert.Equal(2, status.Value!.ResultPage);
+        Assert.Equal(1, status.Value.ResultPageSize);
+        Assert.Equal(3, status.Value.ResultTotalRows);
+        Assert.Equal(3, status.Value.ResultTotalPages);
+        Assert.Single(status.Value.Rows);
+        Assert.Equal(3, status.Value.Rows[0].ExcelRowNumber);
+        Assert.Equal((0, 0, 0), (status.Value.SucceededRows, status.Value.FailedRows, status.Value.SkippedRows));
+    }
+
+    [Fact]
     public async Task Preparation_is_read_only_and_confirmation_imports_multiple_rows_with_audit_and_codes()
     {
         using var f = await Fixture.CreateAsync();
@@ -440,6 +460,14 @@ public sealed class EmployeeBulkImportExecutionTests
             Assert.True(f.Db.Employees.IgnoreQueryFilters().Any(x => x.TenantId == TenantId && x.FirstName == name)));
         Assert.Equal(3, result.Value.Rows.Where(x => x.Status == "Succeeded").Select(x => x.EmployeeCode).Distinct().Count());
         Assert.Equal(3, result.Value.Rows.Where(x => x.Status == "Succeeded").Select(x => x.EmployeeCode).Count());
+
+        var failedExport = await f.Execution.ExportFailedRowsAsync(prepared.Value.OperationId);
+        Assert.True(failedExport.Succeeded, failedExport.Message);
+        Assert.Equal(1, failedExport.Value!.RowCount);
+        var failedCsv = System.Text.Encoding.UTF8.GetString(failedExport.Value.Content);
+        Assert.Contains("Excel Row,Status,Employee Code,Error Code,Message", failedCsv);
+        Assert.Contains("2,Failed,,employee.create_failed,", failedCsv);
+        Assert.DoesNotContain("Asha0", failedCsv);
 
         var diagnostic = Assert.Single(f.PreparationLogger.Entries, x => x.Message.Contains("Employee import row onboarding failed."));
         Assert.Contains("Excel row 2", diagnostic.Message);
