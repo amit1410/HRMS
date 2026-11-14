@@ -100,11 +100,12 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            var failure = EmployeeImportMySqlFailureDiagnostics.Create(stage, exception, checkpoints.ActiveCheckpoint);
+            var failingCheckpoint = checkpoints.ActiveCheckpoint ?? CheckpointForStage(stage, checkpoints.LastCompletedCheckpoint);
+            var failure = EmployeeImportMySqlFailureDiagnostics.Create(stage, exception, failingCheckpoint);
             await WriteResultAsync(configuration.ResultPath, new(configuration.RunId, "FAILED_RETAINED_FOR_REVIEW", completed,
                 "Provider acceptance failed; owned databases were retained for inspection.", failure,
                 LastCompletedCheckpoint: checkpoints.LastCompletedCheckpoint,
-                FailingCheckpoint: checkpoints.ActiveCheckpoint), CancellationToken.None);
+                FailingCheckpoint: failingCheckpoint), CancellationToken.None);
             throw new InvalidOperationException("Employee-import MySQL acceptance failed. The run-owned databases were retained; inspect the private manifest and results before any cleanup.");
         }
 
@@ -115,6 +116,15 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         await WriteResultAsync(configuration.ResultPath, result, cancellationToken);
         return result;
     }
+
+    private static string CheckpointForStage(string stage, string? lastCompleted) => stage switch
+    {
+        "employee-import worker execution" => "worker_execution",
+        "encrypted workbook storage verification" => "workbook_storage_verification",
+        "employee-import schema verification" => "schema_verification",
+        "migration-down rollback" => "migration_down_rollback",
+        _ => lastCompleted ?? "acceptance_setup"
+    };
 
     public async Task CleanupAsync(IReadOnlyDictionary<string, string?>? values = null, CancellationToken cancellationToken = default)
     {
@@ -242,6 +252,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
 
     private static async Task<(int ProcessedRows, int SuccessfulRows)> VerifyMySqlOnboardingExecutionAsync(EmployeeImportMySqlAcceptanceConfiguration c, AcceptanceCheckpointTracker checkpoints, CancellationToken ct)
     {
+        await checkpoints.BeginAsync("synthetic_tenant_creation");
         var tenantId = Guid.NewGuid();
         var userId = Guid.NewGuid();
         var shard = new Tenant
@@ -250,28 +261,33 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             Host = $"{tenantId:N}.f1.invalid", ShardKey = c.TenantDatabase,
             DatabaseProvider = DatabaseProviderType.MySql, Status = TenantStatus.Active
         };
-        await using (var catalog = CreateCatalogContext(c, c.CatalogDatabase))
+        await checkpoints.CompleteAsync();
+        await checkpoints.RunAsync("catalog_tenant_insert", async () =>
         {
+            await using var catalog = CreateCatalogContext(c, c.CatalogDatabase);
             catalog.Tenants.Add(shard);
             await catalog.SaveChangesAsync(ct);
-        }
+        });
         var tenant = new TestTenantContext(tenantId, userId);
         await using (var db = CreateTenantContext(c, c.TenantDatabase))
         {
-            await DatabaseSeeder.SeedShardAsync(db, new IdentityPasswordHasher(), shard, ct,
-                configuration: new ConfigurationBuilder().Build(), isDevelopment: false);
+            await checkpoints.RunAsync("shard_seeding", () => DatabaseSeeder.SeedShardAsync(db, new IdentityPasswordHasher(), shard, ct,
+                configuration: new ConfigurationBuilder().Build(), isDevelopment: false));
             var seededUser = await db.Users.IgnoreQueryFilters().Where(x => x.TenantId == tenantId).Select(x => x.Id).FirstAsync(ct);
             tenant.UserId = seededUser;
             var authorization = new AcceptanceAuthorization(Permissions.Employee.Import, Permissions.Employee.Create,
                 Permissions.EmployeeSensitive.Edit, Permissions.EmploymentHistory.Change);
             var clock = TimeProvider.System;
             var codeService = new EmployeeCodeConfigurationService(db, tenant, new EmployeeCodeConfigurationRequestValidator());
-            var codeConfig = await codeService.SaveAsync(new EmployeeCodeConfigurationRequest
+            await checkpoints.RunAsync("employee_code_configuration", async () =>
             {
-                AutoGenerate = true, AssignmentMode = EmployeeCodeAssignmentMode.Auto, GenerationMethod = EmployeeCodeGenerationMethod.Simple,
-                Prefix = "F1", Separator = "-", NextNumber = 1, Padding = 5, EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow)
-            }, ct);
-            if (!codeConfig.Succeeded) throw new InvalidOperationException("Synthetic employee-code configuration could not be established.");
+                var codeConfig = await codeService.SaveAsync(new EmployeeCodeConfigurationRequest
+                {
+                    AutoGenerate = true, AssignmentMode = EmployeeCodeAssignmentMode.Auto, GenerationMethod = EmployeeCodeGenerationMethod.Simple,
+                    Prefix = "F1", Separator = "-", NextNumber = 1, Padding = 5, EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow)
+                }, ct);
+                if (!codeConfig.Succeeded) throw new InvalidOperationException("Synthetic employee-code configuration could not be established.");
+            });
 
             var jobStatus = new JobStatusService(db, tenant, authorization, clock);
             var employment = new EmployeeEmploymentService(db, tenant, authorization, Microsoft.Extensions.Logging.Abstractions.NullLogger<EmployeeEmploymentService>.Instance,
@@ -289,8 +305,12 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
                     new EmployeeImportWorkbookCipher(storeConfig))
                 : CreateS3Store(storeConfig, storageOptions, tenant, clock);
             var execution = new EmployeeBulkImportExecutionService(db, tenant, validation, persistence, workbookStore, employeeService, workerContext);
-            var template = await new EmployeeBulkUploadTemplateService(db, tenant).GenerateAsync(ct);
-            if (!template.Succeeded) throw new InvalidOperationException("Synthetic workbook template generation failed.");
+            Result<byte[]>? template = null;
+            await checkpoints.RunAsync("template_creation", async () =>
+            {
+                template = await new EmployeeBulkUploadTemplateService(db, tenant).GenerateAsync(ct);
+                if (!template.Succeeded) throw new InvalidOperationException("Synthetic workbook template generation failed.");
+            });
             using var workbook = new XLWorkbook(new MemoryStream(template.Value!));
             var sheet = workbook.Worksheet("Employees");
             var columns = sheet.Row(1).CellsUsed().ToDictionary(x => x.GetString(), x => x.Address.ColumnNumber);
@@ -303,52 +323,65 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
                 sheet.Cell(index + 2, columns["Aadhaar Number *"]).GetString(),
                 sheet.Cell(index + 2, columns["PAN *"]).GetString()
             }).ToArray();
-            using var stream = new MemoryStream(); workbook.SaveAs(stream); var bytes = stream.ToArray();
-            var before = await db.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == tenantId, ct);
-            using var input = new MemoryStream(bytes, writable: false);
-            var prepared = await execution.PrepareAsync(input, "synthetic-f1.xlsx", ct);
-            if (!prepared.Succeeded) throw new InvalidOperationException("Synthetic employee import preparation failed validation.");
-            if (await db.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == tenantId, ct) != before)
-                throw new InvalidOperationException("Preparation created an employee before confirmation.");
+            byte[] bytes = [];
+            var before = 0;
+            Result<EmployeeBulkImportPreparationDto>? prepared = null;
+            await checkpoints.RunAsync("workbook_preparation", async () =>
+            {
+                using var stream = new MemoryStream(); workbook.SaveAs(stream); bytes = stream.ToArray();
+                before = await db.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == tenantId, ct);
+                using var input = new MemoryStream(bytes, writable: false);
+                prepared = await execution.PrepareAsync(input, "synthetic-f1.xlsx", ct);
+                if (!prepared.Succeeded) throw new InvalidOperationException("Synthetic employee import preparation failed validation.");
+                if (await db.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == tenantId, ct) != before)
+                    throw new InvalidOperationException("Preparation created an employee before confirmation.");
+            });
             var shardDescriptor = new ShardDescriptor(shard.Id, shard.TenantCode, shard.Host, shard.ShardKey, shard.Status, shard.DatabaseProvider);
-            await ConfirmOverHttpAsync(c, shardDescriptor, tenantId, seededUser, prepared.Value!, ct);
-            var confirmedState = await ReadOperationStateAsync(c, tenantId, prepared.Value.OperationId, ct);
-            if (confirmedState != EmployeeImportOperationState.Queued)
-                throw new InvalidOperationException("HTTP confirmation did not durably queue the import before worker startup.");
-            await using (var afterConfirmation = CreateTenantContext(c, c.TenantDatabase))
+            await checkpoints.RunAsync("http_confirmation", () => ConfirmOverHttpAsync(c, shardDescriptor, tenantId, seededUser, prepared!.Value!, ct));
+            await checkpoints.RunAsync("queued_state_verification", async () =>
+            {
+                var confirmedState = await ReadOperationStateAsync(c, tenantId, prepared!.Value.OperationId, ct);
+                if (confirmedState != EmployeeImportOperationState.Queued)
+                    throw new InvalidOperationException("HTTP confirmation did not durably queue the import before worker startup.");
+                await using var afterConfirmation = CreateTenantContext(c, c.TenantDatabase);
                 if (await afterConfirmation.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == tenantId, ct) != before)
                     throw new InvalidOperationException("HTTP 202 confirmation created employees before the isolated worker started.");
+            });
 
             // First isolated API host simulates a process interruption after row 2 commits and before row 3 starts.
             var interruptAtNextRow = new PauseAtRowStartInterceptor(3);
-            using (var interruptedHost = new EmployeeImportF1ApiFactory(c, workerEnabled: true,
-                       shard.TenantCode, prepared.Value.OperationId, interruptAtNextRow))
+            using var interruptedHost = new EmployeeImportF1ApiFactory(c, workerEnabled: true,
+                shard.TenantCode, prepared!.Value.OperationId, interruptAtNextRow);
+            await checkpoints.RunAsync("worker_startup", () => Task.CompletedTask);
             using (var interruptedClient = interruptedHost.CreateClientFor(shard.Host))
             {
                 interruptedClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TestTokens.Create(seededUser, tenantId, shard.TenantCode,
                     permissions: [Permissions.Employee.Import, Permissions.Employee.Create, Permissions.EmployeeSensitive.Edit]));
-                await checkpoints.RunAsync("interruption_row2_committed", () => WaitForImportAsync(c, tenantId, prepared.Value.OperationId,
+                await checkpoints.RunAsync("row2_commit", () => WaitForImportAsync(c, tenantId, prepared!.Value.OperationId,
                     async (context, operation) => operation.State == EmployeeImportOperationState.Processing &&
                         await context.EmployeeImportRows.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenantId && x.OperationId == operation.Id &&
                             x.ExcelRowNumber == 2 && x.Status == EmployeeImportRowStatus.Succeeded, ct), ct));
                 // Stop the isolated host while the worker is paused before row 3. Throwing from
                 // SaveChanges would be treated as a recoverable row failure by the worker and
                 // would not simulate a process interruption or preserve the processing lease.
-                await checkpoints.RunAsync("interruption_row3_paused", () => interruptAtNextRow.Entered.Task.WaitAsync(TimeSpan.FromSeconds(45), ct));
-                await checkpoints.RunAsync("interruption_host_shutdown_requested", () => interruptedHost.StopHostAsync(ct));
-                await checkpoints.RunAsync("interruption_cancellation_observed", () => interruptAtNextRow.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(10), ct));
+                await checkpoints.RunAsync("row3_pause", () => interruptAtNextRow.Entered.Task.WaitAsync(TimeSpan.FromSeconds(45), ct));
+                await checkpoints.RunAsync("host_shutdown", () => interruptedHost.StopHostAsync(ct));
+                await checkpoints.RunAsync("cancellation", () => interruptAtNextRow.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(10), ct));
             }
 
-            Guid oldLeaseId;
+            var oldLeaseId = Guid.Empty;
+            var operationToExpire = prepared.Value.OperationId;
             await using (var afterInterruption = CreateTenantContext(c, c.TenantDatabase))
             {
-                await checkpoints.BeginAsync("interruption_lease_retained");
-                var interrupted = await afterInterruption.EmployeeImportOperations.IgnoreQueryFilters().SingleAsync(x => x.Id == prepared.Value.OperationId, ct);
-                if (interrupted.State != EmployeeImportOperationState.Processing || interrupted.ClaimLeaseId is null)
-                    throw new InvalidOperationException("Interrupted import did not retain a recoverable processing lease.");
-                oldLeaseId = interrupted.ClaimLeaseId.Value;
-                await checkpoints.CompleteAsync();
-                await checkpoints.RunAsync("interruption_lease_expired", () => ExpireLeaseAsync(c, tenantId, interrupted.Id, ct));
+                await checkpoints.RunAsync("lease_retention", async () =>
+                {
+                    var interrupted = await afterInterruption.EmployeeImportOperations.IgnoreQueryFilters().SingleAsync(x => x.Id == prepared!.Value.OperationId, ct);
+                    if (interrupted.State != EmployeeImportOperationState.Processing || interrupted.ClaimLeaseId is null)
+                        throw new InvalidOperationException("Interrupted import did not retain a recoverable processing lease.");
+                    oldLeaseId = interrupted.ClaimLeaseId.Value;
+                    operationToExpire = interrupted.Id;
+                });
+                await checkpoints.RunAsync("interruption_lease_expired", () => ExpireLeaseAsync(c, tenantId, operationToExpire, ct));
             }
 
             var pauseAtRecovery = new PauseAtRowStartInterceptor(3);
@@ -366,12 +399,13 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
 
             await using var fencingDb = CreateTenantContext(c, c.TenantDatabase);
             var stalePersistence = new EmployeeImportPersistenceService(fencingDb, tenant, clock);
-            await checkpoints.BeginAsync("recovery_worker_claimed_new_lease");
-            var currentLease = await fencingDb.EmployeeImportOperations.IgnoreQueryFilters().Where(x => x.Id == prepared.Value.OperationId)
-                .Select(x => x.ClaimLeaseId).SingleAsync(ct);
-            if (currentLease is null || currentLease == oldLeaseId)
-                throw new InvalidOperationException("Expired lease was not replaced by recovery worker ownership.");
-            await checkpoints.CompleteAsync();
+            await checkpoints.RunAsync("recovery_claim", async () =>
+            {
+                var currentLease = await fencingDb.EmployeeImportOperations.IgnoreQueryFilters().Where(x => x.Id == prepared!.Value.OperationId)
+                    .Select(x => x.ClaimLeaseId).SingleAsync(ct);
+                if (currentLease is null || currentLease == oldLeaseId)
+                    throw new InvalidOperationException("Expired lease was not replaced by recovery worker ownership.");
+            });
             await checkpoints.RunAsync("stale_worker_renewal_rejected", async () =>
             {
                 var staleRenewal = await stalePersistence.RenewClaimAsync(prepared.Value.OperationId, oldLeaseId, ct);
@@ -388,7 +422,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             }
 
             pauseAtRecovery.Release.TrySetResult();
-            await checkpoints.RunAsync("recovery_final_completion", () => WaitForImportAsync(c, tenantId, prepared.Value.OperationId,
+            await checkpoints.RunAsync("final_completion", () => WaitForImportAsync(c, tenantId, prepared!.Value.OperationId,
                 (_, operation) => Task.FromResult(operation.State == EmployeeImportOperationState.Completed), ct));
             var status = await execution.GetStatusAsync(prepared.Value.OperationId, cancellationToken: ct);
             if (!status.Succeeded || status.Value!.State != "Completed" || status.Value.SucceededRows != 3 ||
@@ -814,7 +848,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         }
     }
 
-    private sealed class AcceptanceCheckpointTracker(string resultPath, string runId, List<string> completedChecks)
+    internal sealed class AcceptanceCheckpointTracker(string resultPath, string runId, List<string> completedChecks)
     {
         public string? ActiveCheckpoint { get; private set; }
         public string? LastCompletedCheckpoint { get; private set; }
@@ -838,9 +872,20 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         public async Task CompleteAsync()
         {
             if (ActiveCheckpoint is null) throw new InvalidOperationException("No active acceptance checkpoint exists.");
-            LastCompletedCheckpoint = ActiveCheckpoint;
+            var completed = ActiveCheckpoint;
+            LastCompletedCheckpoint = completed;
             ActiveCheckpoint = null;
-            await PersistAsync();
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                // The checkpoint that completed is still the operation most likely to have failed
+                // if result persistence itself breaks. Never turn that into an empty diagnostic.
+                ActiveCheckpoint = completed;
+                throw;
+            }
         }
 
         private Task PersistAsync() => WriteResultAsync(resultPath,
@@ -1030,3 +1075,4 @@ public sealed record EmployeeImportMySqlRunResult(
     int? SuccessfulRows = null,
     string? LastCompletedCheckpoint = null,
     string? FailingCheckpoint = null);
+
