@@ -72,13 +72,14 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
     {
         const string secret = "Password=synthetic-secret-must-not-appear";
         var diagnostic = EmployeeImportMySqlFailureDiagnostics.Create(
-            "catalog migration", new InvalidOperationException(secret));
+            "catalog migration", new InvalidOperationException(secret), "catalog_migration_sql");
         var json = System.Text.Json.JsonSerializer.Serialize(diagnostic);
 
         Assert.Equal(EmployeeImportMySqlFailureDiagnostics.ProviderAcceptanceTestName, diagnostic.TestName);
         Assert.Equal("catalog migration", diagnostic.Stage);
         Assert.Equal("Migration", diagnostic.Category);
         Assert.Equal("INVALID_OPERATION", diagnostic.ErrorCode);
+        Assert.Equal("catalog_migration_sql", diagnostic.FailingCheckpoint);
         Assert.DoesNotContain(secret, json, StringComparison.Ordinal);
         Assert.DoesNotContain("Password", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("synthetic-secret", json, StringComparison.Ordinal);

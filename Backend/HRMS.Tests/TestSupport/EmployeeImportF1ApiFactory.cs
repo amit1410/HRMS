@@ -47,6 +47,9 @@ public sealed class EmployeeImportF1ApiFactory : HrmsApiFactory
     protected override DatabaseProviderType TestTenantProvider => DatabaseProviderType.MySql;
     protected override bool RequireInitialization => false;
 
+    /// <summary>Stops the real hosted worker and waits for host shutdown to complete.</summary>
+    public Task StopHostAsync(CancellationToken cancellationToken = default) => Server.Host.StopAsync(cancellationToken);
+
     protected override void ConfigureTestConfiguration(IConfigurationBuilder configuration)
     {
         base.ConfigureTestConfiguration(configuration);
