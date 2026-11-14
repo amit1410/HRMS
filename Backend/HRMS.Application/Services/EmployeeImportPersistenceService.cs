@@ -268,17 +268,17 @@ public sealed class EmployeeImportPersistenceService(
         }
     }
 
-    public Task<Result<EmployeeImportRow>> FailRowAsync(Guid operationId, int excelRowNumber, string errorCode, string sanitizedMessage, CancellationToken cancellationToken = default) =>
-        FinishRowAsync(operationId, excelRowNumber, EmployeeImportRowStatus.Failed, errorCode, sanitizedMessage, null, cancellationToken);
+    public Task<Result<EmployeeImportRow>> FailRowAsync(Guid operationId, int excelRowNumber, string errorCode, string sanitizedMessage, string? employeeCode = null, CancellationToken cancellationToken = default) =>
+        FinishRowAsync(operationId, excelRowNumber, EmployeeImportRowStatus.Failed, errorCode, sanitizedMessage, null, employeeCode, cancellationToken);
 
-    public Task<Result<EmployeeImportRow>> FailClaimedRowAsync(Guid operationId, int excelRowNumber, Guid leaseId, string errorCode, string sanitizedMessage, CancellationToken cancellationToken = default) =>
-        FinishRowAsync(operationId, excelRowNumber, EmployeeImportRowStatus.Failed, errorCode, sanitizedMessage, leaseId, cancellationToken);
+    public Task<Result<EmployeeImportRow>> FailClaimedRowAsync(Guid operationId, int excelRowNumber, Guid leaseId, string errorCode, string sanitizedMessage, string? employeeCode = null, CancellationToken cancellationToken = default) =>
+        FinishRowAsync(operationId, excelRowNumber, EmployeeImportRowStatus.Failed, errorCode, sanitizedMessage, leaseId, employeeCode, cancellationToken);
 
     public Task<Result<EmployeeImportRow>> SkipRowAsync(Guid operationId, int excelRowNumber, string errorCode, string sanitizedMessage, CancellationToken cancellationToken = default) =>
-        FinishRowAsync(operationId, excelRowNumber, EmployeeImportRowStatus.Skipped, errorCode, sanitizedMessage, null, cancellationToken);
+        FinishRowAsync(operationId, excelRowNumber, EmployeeImportRowStatus.Skipped, errorCode, sanitizedMessage, null, null, cancellationToken);
 
     public Task<Result<EmployeeImportRow>> SkipClaimedRowAsync(Guid operationId, int excelRowNumber, Guid leaseId, string errorCode, string sanitizedMessage, CancellationToken cancellationToken = default) =>
-        FinishRowAsync(operationId, excelRowNumber, EmployeeImportRowStatus.Skipped, errorCode, sanitizedMessage, leaseId, cancellationToken);
+        FinishRowAsync(operationId, excelRowNumber, EmployeeImportRowStatus.Skipped, errorCode, sanitizedMessage, leaseId, null, cancellationToken);
 
     public async Task<Result<EmployeeImportRow>> CompleteRowWithinTransactionAsync(
         Guid operationId, int excelRowNumber, Guid employeeId, string? employeeCode, Guid leaseId,
@@ -317,7 +317,7 @@ public sealed class EmployeeImportPersistenceService(
     }
 
     private async Task<Result<EmployeeImportRow>> FinishRowAsync(
-        Guid operationId, int excelRowNumber, EmployeeImportRowStatus status, string errorCode, string sanitizedMessage, Guid? leaseId,
+        Guid operationId, int excelRowNumber, EmployeeImportRowStatus status, string errorCode, string sanitizedMessage, Guid? leaseId, string? employeeCode,
         CancellationToken cancellationToken)
     {
         var found = await FindRowAsync(operationId, excelRowNumber, cancellationToken);
@@ -326,7 +326,7 @@ public sealed class EmployeeImportPersistenceService(
         var safeCode = NormalizeErrorCode(errorCode);
         var safeMessage = Sanitize(sanitizedMessage) ?? "The row could not be processed.";
         var changed = status == EmployeeImportRowStatus.Failed
-            ? row.Fail(safeCode, safeMessage, clock.GetUtcNow().UtcDateTime)
+            ? row.Fail(safeCode, safeMessage, clock.GetUtcNow().UtcDateTime, NormalizeEmployeeCode(employeeCode))
             : row.Skip(safeCode, safeMessage, clock.GetUtcNow().UtcDateTime);
         if (operation.State != EmployeeImportOperationState.Processing || !OwnsLiveClaim(operation, leaseId) || !changed)
             return Result<EmployeeImportRow>.Conflict("Import row cannot be finalized from its current state.");

@@ -36,10 +36,11 @@ public sealed class EmployeeImportRow : BaseEntity, ITenantEntity
         return true;
     }
 
-    public bool Fail(string errorCode, string sanitizedMessage, DateTime nowUtc)
+    public bool Fail(string errorCode, string sanitizedMessage, DateTime nowUtc, string? employeeCode = null)
     {
         if (Status != EmployeeImportRowStatus.Processing) return false;
         Status = EmployeeImportRowStatus.Failed;
+        EmployeeCode = string.IsNullOrWhiteSpace(employeeCode) ? null : employeeCode;
         ErrorCode = errorCode;
         SanitizedErrorMessage = sanitizedMessage;
         ProcessingCompletedAtUtc = nowUtc;

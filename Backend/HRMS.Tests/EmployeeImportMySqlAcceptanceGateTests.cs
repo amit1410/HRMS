@@ -58,19 +58,132 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
         Assert.DoesNotContain("Sharding:MySqlConnectionStringTemplate", snapshot.Keys);
     }
 
+    [Fact]
+    public void CI_required_mode_fails_closed_instead_of_allowing_provider_acceptance_to_skip()
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable(EmployeeImportMySqlAcceptanceEnvironment.CiRequired), "true", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _ = EmployeeImportMySqlAcceptanceConfiguration.Read(EmployeeImportMySqlAcceptanceEnvironment.Snapshot());
+    }
+
+    [Fact]
+    public void Login_path_mode_requires_an_exclusive_administrator_source()
+    {
+        var values = ValidValues();
+        values[EmployeeImportMySqlAcceptanceEnvironment.Connection] =
+            "Server=127.0.0.1;Port=13307;Database=mysql;User ID=f1_admin;Pooling=false";
+        values[EmployeeImportMySqlAcceptanceEnvironment.ApplicationConnection] =
+            "Server=127.0.0.1;Port=13307;Database=mysql;User ID=hrms_f1_app;Pooling=false";
+        values[EmployeeImportMySqlAcceptanceEnvironment.LoginPath] = "hrms_f1_admin";
+        values[EmployeeImportMySqlAcceptanceEnvironment.ConfigEditor] = "mysql_config_editor.exe";
+
+        var accepted = EmployeeImportMySqlAcceptanceConfiguration.Read(values);
+
+        Assert.Equal("hrms_f1_admin", accepted.AdminLoginPath);
+        Assert.DoesNotContain("Password", accepted.ConnectionString, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("mysql_config_editor.exe", accepted.MySqlConfigEditorPath);
+    }
+
+    [Fact]
+    public void Login_path_mode_rejects_persistent_password_fallback()
+    {
+        var values = ValidValues();
+        values[EmployeeImportMySqlAcceptanceEnvironment.LoginPath] = "hrms_f1_admin";
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            EmployeeImportMySqlAcceptanceConfiguration.Read(values));
+
+        Assert.Contains("password-free", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Login_path_output_requires_complete_approved_loopback_credentials()
+    {
+        var missing = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["user"] = "root", ["host"] = "127.0.0.1", ["port"] = "3306"
+        };
+        Assert.Throws<InvalidOperationException>(() => EmployeeImportMySqlCredentialAdapter.BuildConnectionString(missing, 3306));
+
+        var wrongHost = new Dictionary<string, string>(missing) { ["password"] = "secret", ["host"] = "localhost" };
+        Assert.Throws<InvalidOperationException>(() => EmployeeImportMySqlCredentialAdapter.BuildConnectionString(wrongHost, 3306));
+    }
+
+    [Fact]
+    public void Masked_login_path_output_is_rejected_before_provider_connection_creation()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => EmployeeImportMySqlCredentialAdapter.ParseOutput(
+            "[hrms_f1_admin]\nuser = \"root\"\npassword = *****\nhost = \"127.0.0.1\"\nport = 3306\n"));
+
+        Assert.Contains("masked", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Administrator_connection_rejects_restricted_application_account()
+    {
+        var values = ValidValues();
+        values[EmployeeImportMySqlAcceptanceEnvironment.Connection] =
+            "Server=127.0.0.1;Port=13307;Database=mysql;User ID=hrms_f1_app;Password=test;Pooling=false";
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            EmployeeImportMySqlAcceptanceConfiguration.Read(values));
+
+        Assert.Contains("administrator", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData(EmployeeImportMySqlAcceptanceEnvironment.ApproveConnection)]
     [InlineData(EmployeeImportMySqlAcceptanceEnvironment.ApproveCreate)]
     [InlineData(EmployeeImportMySqlAcceptanceEnvironment.ApproveMigration)]
     [InlineData(EmployeeImportMySqlAcceptanceEnvironment.ApproveWorker)]
-    [InlineData(EmployeeImportMySqlAcceptanceEnvironment.ApproveDelete)]
-    [InlineData(EmployeeImportMySqlAcceptanceEnvironment.ApproveMinioRestart)]
     public void Every_mutating_or_connecting_action_requires_its_own_approval(string approvalName)
     {
         var values = ValidValues();
         values[approvalName] = "false";
         var error = Assert.Throws<InvalidOperationException>(() => EmployeeImportMySqlAcceptanceConfiguration.Read(values));
         Assert.Contains(approvalName, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_configuration_does_not_require_delete_approval_when_run_does_not_delete_resources()
+    {
+        var values = ValidValues();
+        values[EmployeeImportMySqlAcceptanceEnvironment.ApproveDelete] = "false";
+        var accepted = EmployeeImportMySqlAcceptanceConfiguration.Read(values);
+        Assert.Equal(EmployeeImportDatabaseMode.CreateNew, accepted.DatabaseMode);
+    }
+
+    [Fact]
+    public void S3_storage_requires_its_own_restart_approval()
+    {
+        var values = ValidValues();
+        values[EmployeeImportMySqlAcceptanceEnvironment.ApproveMinioRestart] = "false";
+        var error = Assert.Throws<InvalidOperationException>(() => EmployeeImportMySqlAcceptanceConfiguration.Read(values));
+        Assert.Contains(EmployeeImportMySqlAcceptanceEnvironment.ApproveMinioRestart, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Filesystem_existing_loopback_mode_requires_explicit_opt_ins_and_preserves_run_root()
+    {
+        var values = ValidValues();
+        var root = Path.Combine(Path.GetTempPath(), "hrms-employee-import-f1", "run202610280");
+        values[EmployeeImportMySqlAcceptanceEnvironment.MySqlMode] = "ExistingLoopback";
+        values[EmployeeImportMySqlAcceptanceEnvironment.ServerIdentity] = "local-mysql-host";
+        values[EmployeeImportMySqlAcceptanceEnvironment.HostPort] = "3306";
+        values[EmployeeImportMySqlAcceptanceEnvironment.Connection] = "Server=127.0.0.1;Port=3306;Database=mysql;User ID=f1_admin;Password=test-only;Pooling=false";
+        values[EmployeeImportMySqlAcceptanceEnvironment.ApplicationConnection] = "Server=127.0.0.1;Port=3306;Database=mysql;User ID=hrms_f1_app;Password=test-only;Pooling=false";
+        values[EmployeeImportMySqlAcceptanceEnvironment.StorageMode] = "FileSystem";
+        values[EmployeeImportMySqlAcceptanceEnvironment.FileSystemRoot] = root;
+        values.Remove(EmployeeImportMySqlAcceptanceEnvironment.MinioPort);
+        values[EmployeeImportMySqlAcceptanceEnvironment.ApproveExistingLoopback] = "true";
+        values[EmployeeImportMySqlAcceptanceEnvironment.ApproveFileSystemStorage] = "true";
+
+        var accepted = EmployeeImportMySqlAcceptanceConfiguration.Read(values);
+
+        Assert.Equal(EmployeeImportMySqlMode.ExistingLoopback, accepted.MySqlMode);
+        Assert.Equal(EmployeeImportStorageMode.FileSystem, accepted.StorageMode);
+        Assert.Equal(Path.GetFullPath(root), Path.GetFullPath(accepted.FileSystemRoot));
     }
 
     [Theory]
@@ -179,6 +292,7 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
             [EmployeeImportMySqlAcceptanceEnvironment.ServerPort] = "3306",
             [EmployeeImportMySqlAcceptanceEnvironment.ServerIdentity] = "hrmsf1mysqlrun202610280",
             [EmployeeImportMySqlAcceptanceEnvironment.Connection] = "Server=127.0.0.1;Port=13307;Database=mysql;User ID=f1;Password=test-only;Pooling=false",
+            [EmployeeImportMySqlAcceptanceEnvironment.ApplicationConnection] = "Server=127.0.0.1;Port=13307;Database=mysql;User ID=hrms_f1_app;Password=test-only;Pooling=false",
             [EmployeeImportMySqlAcceptanceEnvironment.CatalogDatabase] = catalog,
             [EmployeeImportMySqlAcceptanceEnvironment.TenantDatabase] = tenant,
             [EmployeeImportMySqlAcceptanceEnvironment.MigrationDownDatabase] = down,

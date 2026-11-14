@@ -235,7 +235,8 @@ public sealed class EmployeeBulkUploadValidationHttpTests(HrmsApiFactory factory
     private async Task<byte[]> BuildValidWorkbookAsync()
     {
         byte[] template = [];
-        await factory.ExecuteInTenantScopeAsync(HrmsApiFactory.Demo01Host, async services =>
+        await factory.ExecuteAsUserInTenantScopeAsync(HrmsApiFactory.Demo01Host,
+            SeedData.Users.First(x => x.TenantId == Demo01).Id, async services =>
         {
             var configs = services.GetRequiredService<IEmployeeCodeConfigurationService>();
             var config = await configs.SaveAsync(new EmployeeCodeConfigurationRequest

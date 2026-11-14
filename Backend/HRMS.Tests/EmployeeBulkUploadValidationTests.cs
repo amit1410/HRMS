@@ -47,6 +47,26 @@ public sealed class EmployeeBulkUploadValidationTests
     }
 
     [Fact]
+    public async Task Automatic_code_collision_is_reported_during_validation_before_onboarding()
+    {
+        using var harness = await OrganizationTestHarness.CreateAsync();
+        await ConfigureCode(harness);
+        using var context = harness.CreateContext();
+        context.Employees.Add(new Employee
+        {
+            Id = Guid.NewGuid(), TenantId = Tenant, EmployeeCode = "EMP-00001", Email = "existing-code@example.test",
+            FirstName = "Existing", LastName = "Code", DateOfJoining = new DateOnly(2026, 3, 4), Status = EmployeeStatus.Active
+        });
+        await context.SaveChangesAsync();
+
+        using var workbook = await ValidWorkbook(context, harness);
+        var preview = await Validate(workbook, context, harness);
+
+        Assert.Contains(preview.Rows[0].Issues, issue =>
+            issue.ErrorCode == "employee_code.generated_duplicate" && issue.ColumnName == "Date of Joining *");
+    }
+
+    [Fact]
     public async Task Bulk_upload_selects_manual_or_automatic_configuration_by_each_employees_joining_date()
     {
         using var harness = await OrganizationTestHarness.CreateAsync();

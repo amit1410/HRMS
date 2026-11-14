@@ -22,9 +22,15 @@ public sealed record EmployeeImportMySqlAcceptanceConfiguration(
     int MinioPort,
     string ComposeProject,
     string ComposeFile,
-    string ConnectionString)
+    string? ConnectionString,
+    string ApplicationConnectionString,
+    string? AdminLoginPath,
+    string? MySqlConfigEditorPath)
 {
     public EmployeeImportDatabaseMode DatabaseMode { get; init; } = EmployeeImportDatabaseMode.CreateNew;
+    public EmployeeImportStorageMode StorageMode { get; init; } = EmployeeImportStorageMode.S3;
+    public EmployeeImportMySqlMode MySqlMode { get; init; } = EmployeeImportMySqlMode.Docker;
+    public string? FileSystemRoot { get; init; }
     public static EmployeeImportMySqlAcceptanceConfiguration Read(
         IReadOnlyDictionary<string, string?> values,
         bool allowExistingManifest = false)
@@ -59,9 +65,7 @@ public sealed record EmployeeImportMySqlAcceptanceConfiguration(
                      "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_CONNECTION",
                      "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_CREATE",
                      "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_MIGRATION",
-                     "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_WORKER",
-                     "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_DELETE",
-                     "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_MINIO_RESTART"
+                     "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_WORKER"
                  })
             RequireApproval(values, approval);
 
@@ -69,9 +73,22 @@ public sealed record EmployeeImportMySqlAcceptanceConfiguration(
         if (runId.Length is < 12 or > 41 || runId.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-'))
             throw new InvalidOperationException("The employee-import run ID must be unique, 12-41 characters, and use only ASCII letters, digits, or hyphens.");
         var serverIdentity = Required(values, "HRMS_EMPLOYEE_IMPORT_F1_SERVER_IDENTITY");
-        var requiredContainerHost = $"hrmsf1mysql{runId.Replace("-", string.Empty, StringComparison.Ordinal)}";
-        if (!string.Equals(serverIdentity, requiredContainerHost, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("The expected MySQL server identity must be the unique run-derived F1 container hostname.");
+        var mysqlModeText = values.TryGetValue("HRMS_EMPLOYEE_IMPORT_F1_MYSQL_MODE", out var configuredMySqlMode) && !string.IsNullOrWhiteSpace(configuredMySqlMode)
+            ? configuredMySqlMode.Trim() : nameof(EmployeeImportMySqlMode.Docker);
+        if (!Enum.TryParse<EmployeeImportMySqlMode>(mysqlModeText, ignoreCase: false, out var mysqlMode) || !Enum.IsDefined(mysqlMode))
+            throw new InvalidOperationException("MySQL mode must be exactly Docker or ExistingLoopback.");
+        if (mysqlMode == EmployeeImportMySqlMode.Docker)
+        {
+            var requiredContainerHost = $"hrmsf1mysql{runId.Replace("-", string.Empty, StringComparison.Ordinal)}";
+            if (!string.Equals(serverIdentity, requiredContainerHost, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The expected MySQL server identity must be the unique run-derived F1 container hostname.");
+        }
+        else
+        {
+            RequireApproval(values, "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_EXISTING_LOOPBACK");
+            if (serverIdentity.Length is < 1 or > 255 || serverIdentity.Any(c => char.IsWhiteSpace(c) || c is ';' or '"'))
+                throw new InvalidOperationException("ExistingLoopback requires the exact previously verified local MySQL hostname.");
+        }
 
         // MySQL tenant shard routing rejects uppercase shard keys. Keep database identities
         // run-scoped while making the shard name directly routable by the production factory.
@@ -90,17 +107,51 @@ public sealed record EmployeeImportMySqlAcceptanceConfiguration(
         if (!int.TryParse(Required(values, "HRMS_EMPLOYEE_IMPORT_F1_SERVER_PORT"), out var serverPort) || serverPort != 3306)
             throw new InvalidOperationException("The disposable MySQL container port must be explicitly verified as 3306.");
 
-        var connectionString = Required(values, "HRMS_EMPLOYEE_IMPORT_F1_MYSQL_CONNECTION");
-        MySqlConnectionStringBuilder connection;
-        try { connection = new MySqlConnectionStringBuilder(connectionString); }
-        catch (ArgumentException) { throw new InvalidOperationException("The isolated MySQL connection configuration is malformed."); }
-
-        if (!string.Equals(connection.Server, "127.0.0.1", StringComparison.Ordinal) || connection.Port != (uint)port)
-            throw new InvalidOperationException("Employee-import acceptance is restricted to the explicitly approved loopback MySQL endpoint.");
-        if (!string.IsNullOrEmpty(connection.Database) && !string.Equals(connection.Database, "mysql", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("The administrator connection must select only the MySQL system database or no default database.");
-        if (connection.Pooling)
-            throw new InvalidOperationException("Connection pooling must be disabled for disposable provider acceptance.");
+        var connectionString = values.TryGetValue("HRMS_EMPLOYEE_IMPORT_F1_MYSQL_CONNECTION", out var configuredConnection)
+            ? configuredConnection?.Trim()
+            : null;
+        var loginPath = values.TryGetValue("HRMS_EMPLOYEE_IMPORT_F1_MYSQL_LOGIN_PATH", out var configuredLoginPath)
+            ? configuredLoginPath?.Trim()
+            : null;
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new InvalidOperationException("Configure a password-free administrator descriptor for the interactive F1 credential prompt.");
+        if (!string.IsNullOrWhiteSpace(loginPath) &&
+            (loginPath.Length > 128 || loginPath.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '_' and not '-')))
+            throw new InvalidOperationException("The MySQL login path must be a simple local profile name.");
+        var configEditorPath = values.TryGetValue("HRMS_EMPLOYEE_IMPORT_F1_MYSQL_CONFIG_EDITOR", out var configuredConfigEditor)
+            ? configuredConfigEditor?.Trim()
+            : null;
+        if (!string.IsNullOrWhiteSpace(loginPath) && !string.IsNullOrWhiteSpace(configEditorPath) &&
+            Path.IsPathRooted(configEditorPath) && !File.Exists(configEditorPath))
+            throw new InvalidOperationException("The configured mysql_config_editor executable does not exist.");
+        var applicationConnectionString = Required(values, "HRMS_EMPLOYEE_IMPORT_F1_APPLICATION_MYSQL_CONNECTION");
+        MySqlConnectionStringBuilder? connection = null;
+        if (!string.IsNullOrWhiteSpace(connectionString))
+        {
+            try { connection = new MySqlConnectionStringBuilder(connectionString); }
+            catch (ArgumentException) { throw new InvalidOperationException("The isolated MySQL connection configuration is malformed."); }
+            ValidateAdministratorConnection(connection, port);
+            if (!string.IsNullOrWhiteSpace(loginPath) && !string.IsNullOrWhiteSpace(connection.Password))
+                throw new InvalidOperationException("Interactive F1 credential mode requires a password-free administrator descriptor.");
+        }
+        MySqlConnectionStringBuilder applicationConnection;
+        try { applicationConnection = new MySqlConnectionStringBuilder(applicationConnectionString); }
+        catch (ArgumentException) { throw new InvalidOperationException("The isolated application MySQL connection configuration is malformed."); }
+        if (!string.Equals(applicationConnection.Server, "127.0.0.1", StringComparison.Ordinal) || applicationConnection.Port != (uint)port || applicationConnection.Pooling)
+            throw new InvalidOperationException("The isolated application MySQL connection must target the approved loopback endpoint with pooling disabled.");
+        if (!string.IsNullOrEmpty(applicationConnection.Database) && !string.Equals(applicationConnection.Database, "mysql", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The isolated application connection must select only the MySQL system database or no default database.");
+        if (string.IsNullOrWhiteSpace(applicationConnection.UserID) || applicationConnection.UserID.Equals("root", StringComparison.OrdinalIgnoreCase) ||
+            !applicationConnection.UserID.StartsWith("hrms_f1_", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The isolated application connection must use a dedicated non-root HRMS F1 account.");
+        if (!string.IsNullOrWhiteSpace(loginPath) && !string.IsNullOrWhiteSpace(applicationConnection.Password))
+            throw new InvalidOperationException("Interactive F1 credential mode requires a password-free application descriptor.");
+        var storageModeText = values.TryGetValue("HRMS_EMPLOYEE_IMPORT_F1_STORAGE_MODE", out var configuredStorage) && !string.IsNullOrWhiteSpace(configuredStorage)
+            ? configuredStorage.Trim() : nameof(EmployeeImportStorageMode.S3);
+        if (!Enum.TryParse<EmployeeImportStorageMode>(storageModeText, ignoreCase: false, out var storageMode) || !Enum.IsDefined(storageMode))
+            throw new InvalidOperationException("Storage mode must be exactly S3 or FileSystem.");
+        if (storageMode == EmployeeImportStorageMode.S3)
+            RequireApproval(values, "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_MINIO_RESTART");
 
         var manifest = Required(values, "HRMS_EMPLOYEE_IMPORT_F1_MANIFEST_PATH");
         var result = Required(values, "HRMS_EMPLOYEE_IMPORT_F1_RESULT_PATH");
@@ -110,8 +161,19 @@ public sealed record EmployeeImportMySqlAcceptanceConfiguration(
         if (!allowExistingManifest && File.Exists(manifest))
             throw new InvalidOperationException("The ownership manifest already exists; use a new run ID and manifest path.");
         if (!allowExistingManifest && File.Exists(result)) throw new InvalidOperationException("The result path already exists; use a new run-specific result path.");
-        if (!int.TryParse(Required(values, "HRMS_EMPLOYEE_IMPORT_F1_MINIO_PORT"), out var minioPort) || minioPort is < 1024 or > 65535)
+        var minioPort = 0;
+        if (storageMode == EmployeeImportStorageMode.S3 &&
+            (!int.TryParse(Required(values, "HRMS_EMPLOYEE_IMPORT_F1_MINIO_PORT"), out minioPort) || minioPort is < 1024 or > 65535))
             throw new InvalidOperationException("The approved loopback MinIO port is invalid.");
+        if (storageMode == EmployeeImportStorageMode.FileSystem)
+        {
+            RequireApproval(values, "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_FILESYSTEM_STORAGE");
+            var root = Required(values, "HRMS_EMPLOYEE_IMPORT_F1_FILESYSTEM_ROOT");
+            if (!Path.IsPathFullyQualified(root) || !root.EndsWith(runId, StringComparison.OrdinalIgnoreCase) ||
+                root.Contains("MySQL Server 8.0\\Data", StringComparison.OrdinalIgnoreCase) ||
+                root.Contains("hrms_web1", StringComparison.OrdinalIgnoreCase) || root.Contains("hrms_catalog", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The filesystem workbook root must be a dedicated run-scoped path outside MySQL data and protected HRMS paths.");
+        }
         var project = Required(values, "HRMS_EMPLOYEE_IMPORT_F1_COMPOSE_PROJECT");
         if (!string.Equals(project, $"hrms-f1-{runId.ToLowerInvariant()}", StringComparison.Ordinal))
             throw new InvalidOperationException("The Docker Compose project must exactly match this unique F1 run ID.");
@@ -121,7 +183,29 @@ public sealed record EmployeeImportMySqlAcceptanceConfiguration(
         // Return the connection only to the caller. Never include it in messages, logs, records, or results.
         return new(runId, serverIdentity, port,
             serverPort, catalog, tenant, migrationDown, manifest, result, storageConfiguration, minioPort,
-            project, composeFile, connection.ConnectionString) { DatabaseMode = mode };
+            project, composeFile, connection?.ConnectionString, applicationConnection.ConnectionString,
+            string.IsNullOrWhiteSpace(loginPath) ? null : loginPath,
+            string.IsNullOrWhiteSpace(loginPath) ? null : (string.IsNullOrWhiteSpace(configEditorPath) ? "mysql_config_editor.exe" : configEditorPath))
+        {
+            DatabaseMode = mode,
+            StorageMode = storageMode,
+            MySqlMode = mysqlMode,
+            FileSystemRoot = storageMode == EmployeeImportStorageMode.FileSystem
+                ? Required(values, "HRMS_EMPLOYEE_IMPORT_F1_FILESYSTEM_ROOT")
+                : null
+        };
+    }
+
+    private static void ValidateAdministratorConnection(MySqlConnectionStringBuilder connection, int port)
+    {
+        if (!string.Equals(connection.Server, "127.0.0.1", StringComparison.Ordinal) || connection.Port != (uint)port)
+            throw new InvalidOperationException("Employee-import acceptance is restricted to the explicitly approved loopback MySQL endpoint.");
+        if (!string.IsNullOrEmpty(connection.Database) && !string.Equals(connection.Database, "mysql", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The administrator connection must select only the MySQL system database or no default database.");
+        if (connection.Pooling)
+            throw new InvalidOperationException("Connection pooling must be disabled for disposable provider acceptance.");
+        if (connection.UserID.Equals("hrms_f1_app", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The administrator connection cannot use the restricted application account.");
     }
 
     private static string ValidateDatabaseName(string name, string prefix)
@@ -158,6 +242,10 @@ public static class EmployeeImportMySqlAcceptanceEnvironment
     public const string ServerPort = "HRMS_EMPLOYEE_IMPORT_F1_SERVER_PORT";
     public const string ServerIdentity = "HRMS_EMPLOYEE_IMPORT_F1_SERVER_IDENTITY";
     public const string Connection = "HRMS_EMPLOYEE_IMPORT_F1_MYSQL_CONNECTION";
+    public const string LoginPath = "HRMS_EMPLOYEE_IMPORT_F1_MYSQL_LOGIN_PATH";
+    public const string ConfigEditor = "HRMS_EMPLOYEE_IMPORT_F1_MYSQL_CONFIG_EDITOR";
+    public const string CiRequired = "HRMS_EMPLOYEE_IMPORT_F1_CI_REQUIRED";
+    public const string ApplicationConnection = "HRMS_EMPLOYEE_IMPORT_F1_APPLICATION_MYSQL_CONNECTION";
     public const string CatalogDatabase = "HRMS_EMPLOYEE_IMPORT_F1_CATALOG_DATABASE";
     public const string TenantDatabase = "HRMS_EMPLOYEE_IMPORT_F1_TENANT_DATABASE";
     public const string MigrationDownDatabase = "HRMS_EMPLOYEE_IMPORT_F1_MIGRATION_DOWN_DATABASE";
@@ -174,9 +262,16 @@ public static class EmployeeImportMySqlAcceptanceEnvironment
     public const string ApproveWorker = "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_WORKER";
     public const string ApproveDelete = "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_DELETE";
     public const string ApproveMinioRestart = "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_MINIO_RESTART";
+    public const string StorageMode = "HRMS_EMPLOYEE_IMPORT_F1_STORAGE_MODE";
+    public const string FileSystemRoot = "HRMS_EMPLOYEE_IMPORT_F1_FILESYSTEM_ROOT";
+    public const string ApproveFileSystemStorage = "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_FILESYSTEM_STORAGE";
+    public const string MySqlMode = "HRMS_EMPLOYEE_IMPORT_F1_MYSQL_MODE";
+    public const string ApproveExistingLoopback = "HRMS_EMPLOYEE_IMPORT_F1_APPROVE_EXISTING_LOOPBACK";
 }
 
 public enum EmployeeImportDatabaseMode { CreateNew, AdoptExistingEmpty }
+public enum EmployeeImportStorageMode { S3, FileSystem }
+public enum EmployeeImportMySqlMode { Docker, ExistingLoopback }
 
 public sealed record EmployeeImportOwnedDatabase(string Name, bool Created, bool MigrationSucceeded, string OwnershipMarker);
 

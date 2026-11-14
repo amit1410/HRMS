@@ -1,5 +1,7 @@
 using System.Data;
+using System.Data.Common;
 using System.Security.Cryptography;
+using System.Security;
 using System.Text;
 using HRMS.Application.Abstractions;
 using HRMS.Application.Common;
@@ -128,16 +130,20 @@ public sealed class EmployeeBulkImportExecutionService(
             $"/api/employees/bulk-upload/{operationId:D}"), "Import accepted for background processing.");
     }
 
-    public async Task<Result<EmployeeBulkImportStatusDto>> GetStatusAsync(Guid operationId, CancellationToken cancellationToken = default)
+    public async Task<Result<EmployeeBulkImportStatusDto>> GetStatusAsync(Guid operationId, int resultPage = 1, int resultPageSize = 10_000, CancellationToken cancellationToken = default)
     {
         if (!HasTenantUser()) return Result<EmployeeBulkImportStatusDto>.Unauthorized("Authenticated tenant context is required.");
+        if (resultPage < 1 || resultPageSize is < 1 or > 10_000)
+            return Result<EmployeeBulkImportStatusDto>.Invalid("pagination", "Result page must be positive and page size must be between 1 and 10,000.");
         var found = await persistence.GetAsync(operationId, cancellationToken);
         if (!found.Succeeded) return Result<EmployeeBulkImportStatusDto>.Failure(found.Status, found.Message, found.Errors);
         var operation = found.Value!;
-        var rowEntities = await db.EmployeeImportRows.AsNoTracking()
+        var rowQuery = db.EmployeeImportRows.AsNoTracking()
             .Where(x => x.TenantId == tenant.TenantId && x.OperationId == operationId)
-            .OrderBy(x => x.ExcelRowNumber)
-            .ToListAsync(cancellationToken);
+            .OrderBy(x => x.ExcelRowNumber);
+        var resultTotalRows = await rowQuery.CountAsync(cancellationToken);
+        var resultTotalPages = (int)Math.Ceiling(resultTotalRows / (double)resultPageSize);
+        var rowEntities = await rowQuery.Skip((resultPage - 1) * resultPageSize).Take(resultPageSize).ToListAsync(cancellationToken);
         var rows = rowEntities.Select(x => new EmployeeBulkImportRowResultDto(x.ExcelRowNumber, x.Status.ToString(), x.EmployeeCode,
             x.ErrorCode, x.SanitizedErrorMessage)).ToList();
         var lastUpdatedAtUtc = new DateTime?[] { operation.PreparedAtUtc, operation.ConfirmedAtUtc, operation.StartedAtUtc, operation.CompletedAtUtc }
@@ -145,7 +151,8 @@ public sealed class EmployeeBulkImportExecutionService(
             .Max()!.Value;
         return Result<EmployeeBulkImportStatusDto>.Success(new(operationId, operation.State.ToString(), operation.TotalRows,
             operation.SucceededRows, operation.FailedRows, operation.SkippedRows, operation.StartedAtUtc,
-            operation.CompletedAtUtc, lastUpdatedAtUtc, operation.SanitizedSummary, rows));
+            operation.CompletedAtUtc, lastUpdatedAtUtc, operation.SanitizedSummary, rows,
+            resultPage, resultPageSize, resultTotalRows, resultTotalPages));
     }
 
     public async Task<Result<EmployeeBulkImportHistoryDto>> GetHistoryAsync(int page, int pageSize, CancellationToken cancellationToken = default)
@@ -163,6 +170,24 @@ public sealed class EmployeeBulkImportExecutionService(
             .ToListAsync(cancellationToken);
         var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
         return Result<EmployeeBulkImportHistoryDto>.Success(new(items, page, pageSize, totalCount, totalPages));
+    }
+
+    public async Task<Result<EmployeeBulkImportFailedRowsExport>> ExportFailedRowsAsync(Guid operationId, CancellationToken cancellationToken = default)
+    {
+        if (!HasTenantUser()) return Result<EmployeeBulkImportFailedRowsExport>.Unauthorized("Authenticated tenant context is required.");
+        var found = await persistence.GetAsync(operationId, cancellationToken);
+        if (!found.Succeeded) return Result<EmployeeBulkImportFailedRowsExport>.Failure(found.Status, found.Message, found.Errors);
+
+        var rows = await db.EmployeeImportRows.AsNoTracking()
+            .Where(x => x.TenantId == tenant.TenantId && x.OperationId == operationId && x.Status == EmployeeImportRowStatus.Failed)
+            .OrderBy(x => x.ExcelRowNumber)
+            .ToListAsync(cancellationToken);
+        var csv = new CsvBuilder("Excel Row", "Status", "Employee Code", "Error Code", "Message");
+        foreach (var row in rows)
+            csv.AppendRow(row.ExcelRowNumber.ToString(System.Globalization.CultureInfo.InvariantCulture), row.Status.ToString(),
+                row.EmployeeCode, row.ErrorCode, row.SanitizedErrorMessage);
+        return Result<EmployeeBulkImportFailedRowsExport>.Success(new(csv.ToUtf8Bytes(),
+            $"employee-import-{operationId:D}-failed-rows.csv", rows.Count));
     }
 
     public async Task<bool> ProcessQueuedOperationAsync(Guid operationId, CancellationToken cancellationToken = default)
@@ -326,9 +351,18 @@ public sealed class EmployeeBulkImportExecutionService(
                         failureFields,
                         onboardingException?.GetType().Name ?? "None",
                         errorCategory);
+                    if (onboardingException is not null && IsCriticalInfrastructureFailure(onboardingException))
+                    {
+                        await FinalizeUnprocessableOperationAsync(claimed.Id, leaseId, "employee.infrastructure_failure",
+                            "Import processing stopped because a required infrastructure service could not complete safely. Resolve the infrastructure issue before authorized recovery.",
+                            CancellationToken.None);
+                        return;
+                    }
                     db.ClearChangeTracker();
+                    var failure = BuildSafeRowFailure(creation, onboardingException);
                     var failed = await persistence.FailClaimedRowAsync(claimed.Id, row.ExcelRowNumber, leaseId,
-                        "employee.create_failed", "Employee onboarding failed and was rolled back. Correct the row or current tenant data before retrying.",
+                        failure.ErrorCode, failure.Message,
+                        rowsByNumber[row.ExcelRowNumber].Request.InitialEmployment.EmployeeCode,
                         CancellationToken.None);
                     if (!failed.Succeeded) return;
                     continue;
@@ -353,6 +387,65 @@ public sealed class EmployeeBulkImportExecutionService(
         InvalidOperationException => "invalid_operation",
         _ => "unhandled_exception"
     };
+
+    private static bool IsCriticalInfrastructureFailure(Exception exception)
+    {
+        // EF wraps row-scoped uniqueness/relationship violations in DbUpdateException. Those remain
+        // recoverable row failures; only an unwrapped provider/storage failure stops the operation.
+        if (exception is DbUpdateConcurrencyException or DbUpdateException) return false;
+        return exception switch
+        {
+            TimeoutException or IOException or UnauthorizedAccessException or SecurityException or DbException => true,
+            _ when exception.InnerException is not null => IsCriticalInfrastructureFailure(exception.InnerException),
+            _ => false
+        };
+    }
+
+    private static (string ErrorCode, string Message) BuildSafeRowFailure(Result<EmployeeDto>? creation, Exception? exception)
+    {
+        if (exception is not null)
+        {
+            var code = exception switch
+            {
+                DbUpdateConcurrencyException => "employee.concurrent_change",
+                DbUpdateException => "employee.constraint_conflict",
+                TimeoutException => "employee.infrastructure_timeout",
+                InvalidDataException => "employee.invalid_data",
+                ArgumentException => "employee.invalid_argument",
+                _ => "employee.create_failed"
+            };
+            var message = code switch
+            {
+                "employee.concurrent_change" => "The row changed while it was being onboarded. Revalidate the workbook and retry this row.",
+                "employee.constraint_conflict" => "A uniqueness or relationship constraint rejected this row. Check employee identifiers, codes and master-data references.",
+                "employee.infrastructure_timeout" => "The row could not be completed before the database timeout. Retry after the database is healthy.",
+                "employee.invalid_data" => "The row contains data that the onboarding rules rejected. Correct the reported fields and revalidate.",
+                "employee.invalid_argument" => "One or more row values are not in an accepted format. Correct the reported fields and revalidate.",
+                _ => "Employee onboarding failed and was rolled back. Correct the row or current tenant data before retrying."
+            };
+            return (code, message);
+        }
+
+        var error = creation?.Errors?.FirstOrDefault(error => !string.IsNullOrWhiteSpace(error.Field) || !string.IsNullOrWhiteSpace(error.Message));
+        if (error is null) return ("employee.create_failed", "Employee onboarding failed and was rolled back. Correct the row or current tenant data before retrying.");
+        var field = NormalizeSafeField(error.Field);
+        var messageText = NormalizeSafeMessage(error.Message);
+        return ($"employee.validation.{field}", $"{field}: {messageText} Correct the field and revalidate the workbook.");
+    }
+
+    private static string NormalizeSafeField(string? field)
+    {
+        var value = new string((field ?? "row").Where(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '.' or ' ').Take(64).ToArray()).Trim();
+        return string.IsNullOrWhiteSpace(value) ? "Row" : value;
+    }
+
+    private static string NormalizeSafeMessage(string? message)
+    {
+        var value = string.IsNullOrWhiteSpace(message) ? "The value does not satisfy the onboarding rules." : message.Trim();
+        value = System.Text.RegularExpressions.Regex.Replace(value, @"(?i)(?<![A-Z0-9])[A-Z]{5}[0-9]{4}[A-Z](?![A-Z0-9])|(?<![0-9])[0-9]{12}(?![0-9])|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|(?<![A-Z0-9])\+?[0-9][0-9\s().-]{6,}[0-9](?![A-Z0-9])", "[masked]");
+        value = System.Text.RegularExpressions.Regex.Replace(value, "[\\r\\n\\t]+", " ").Trim();
+        return value.Length <= 300 ? value : value[..300];
+    }
 
     private static string GetSafeFailureFields(IReadOnlyList<ValidationError>? errors)
     {

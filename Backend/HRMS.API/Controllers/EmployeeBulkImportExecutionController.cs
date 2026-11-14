@@ -47,10 +47,11 @@ public sealed class EmployeeBulkImportExecutionController(IEmployeeBulkImportExe
 
     [HttpGet("{operationId:guid}")]
     [HasPermission(Permissions.Employee.Import)]
-    public async Task<ActionResult<ApiResponse<EmployeeBulkImportStatusDto>>> Status(Guid operationId, CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<EmployeeBulkImportStatusDto>>> Status(Guid operationId,
+        [FromQuery] int resultPage = 1, [FromQuery] int resultPageSize = 10_000, CancellationToken cancellationToken = default)
     {
         Response.Headers.CacheControl = "no-store";
-        return (await imports.GetStatusAsync(operationId, cancellationToken)).ToActionResult();
+        return (await imports.GetStatusAsync(operationId, resultPage, resultPageSize, cancellationToken)).ToActionResult();
     }
 
     [HttpGet("history")]
@@ -59,6 +60,16 @@ public sealed class EmployeeBulkImportExecutionController(IEmployeeBulkImportExe
     {
         Response.Headers.CacheControl = "no-store";
         return (await imports.GetHistoryAsync(page, pageSize, cancellationToken)).ToActionResult();
+    }
+
+    [HttpGet("{operationId:guid}/failed-rows.csv")]
+    [HasPermission(Permissions.Employee.Import)]
+    public async Task<IActionResult> FailedRows(Guid operationId, CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        var result = await imports.ExportFailedRowsAsync(operationId, cancellationToken);
+        if (!result.Succeeded) return result.ToErrorResult();
+        return File(result.Value!.Content, "text/csv; charset=utf-8", result.Value.FileName);
     }
 }
 

@@ -2,6 +2,7 @@ using HRMS.Infrastructure.Persistence;
 using HRMS.Infrastructure.Persistence.Catalog;
 using HRMS.Infrastructure.Storage;
 using HRMS.Application.Abstractions;
+using HRMS.Application.Common;
 using HRMS.Application.DTOs.Employees;
 using HRMS.Application.EmployeeCodes;
 using HRMS.Application.Services;
@@ -49,6 +50,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             throw new NotImplementedException("AdoptExistingEmpty is not ready for execution in Phase A. Phase B must implement and approve the complete read-only preflight and mutation boundary first; no resource was touched.");
         ValidateComposeConfiguration(configuration);
         ValidateStorageConfiguration(configuration);
+        using var credentialScope = EmployeeImportMySqlCredentialAdapter.BeginPromptSession(configuration);
         var started = DateTimeOffset.UtcNow;
         var completed = new List<string>();
         var manifest = NewManifest(configuration);
@@ -102,6 +104,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
     public async Task CleanupAsync(IReadOnlyDictionary<string, string?>? values = null, CancellationToken cancellationToken = default)
     {
         var configuration = EmployeeImportMySqlAcceptanceConfiguration.Read(values ?? EmployeeImportMySqlAcceptanceEnvironment.Snapshot(), allowExistingManifest: true);
+        using var credentialScope = EmployeeImportMySqlCredentialAdapter.BeginPromptSession(configuration);
         beforeFirstConnection?.Invoke();
         var manifestText = await File.ReadAllTextAsync(configuration.ManifestPath, cancellationToken);
         var manifest = System.Text.Json.JsonSerializer.Deserialize<EmployeeImportMySqlOwnershipManifest>(manifestText,
@@ -146,6 +149,15 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             throw new InvalidOperationException("The private test-only S3/encryption configuration file is missing.");
         var config = new ConfigurationBuilder().AddJsonFile(c.StorageConfigurationPath, optional: false, reloadOnChange: false).Build();
         var options = EmployeeImportStorageOptions.LoadAndValidate(config, new AcceptanceHostEnvironment());
+        if (c.StorageMode == EmployeeImportStorageMode.FileSystem)
+        {
+            if (options.Provider != EmployeeImportStorageProvider.FileSystem || string.IsNullOrWhiteSpace(options.RootPath))
+                throw new InvalidOperationException("Filesystem acceptance requires EmployeeImportStorage:Provider=FileSystem.");
+            var expectedRoot = c.FileSystemRoot;
+            if (string.IsNullOrWhiteSpace(expectedRoot) || !string.Equals(Path.GetFullPath(options.RootPath), Path.GetFullPath(expectedRoot), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Filesystem acceptance root must exactly match the approved run-scoped root.");
+            return;
+        }
         if (options.Provider != EmployeeImportStorageProvider.S3 || options.Endpoint is null ||
             !string.Equals(options.Endpoint.Host, "127.0.0.1", StringComparison.Ordinal) || options.Endpoint.Port != c.MinioPort ||
             options.UseTls || !options.AllowInsecureDevelopmentEndpoint ||
@@ -158,6 +170,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
 
     private static void ValidateComposeConfiguration(EmployeeImportMySqlAcceptanceConfiguration c)
     {
+        if (c.MySqlMode == EmployeeImportMySqlMode.ExistingLoopback) return;
         if (!File.Exists(c.ComposeFile) || !string.Equals(Path.GetFileName(c.ComposeFile), "docker-compose.f1.yml", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The configured F1 Compose file is missing or is not the dedicated employee-import stack file.");
     }
@@ -255,12 +268,11 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             var persistence = new EmployeeImportPersistenceService(db, tenant, clock);
             var storeConfig = new ConfigurationBuilder().AddJsonFile(c.StorageConfigurationPath, optional: false, reloadOnChange: false).Build();
             var storageOptions = EmployeeImportStorageOptions.LoadAndValidate(storeConfig, new AcceptanceHostEnvironment());
-            var s3Config = new AmazonS3Config { ServiceURL = storageOptions.Endpoint!.ToString().TrimEnd('/'), AuthenticationRegion = storageOptions.Region, ForcePathStyle = true, Timeout = TimeSpan.FromSeconds(15), MaxErrorRetry = 0 };
-            AWSCredentials credentials = StaticAcceptanceCredentials(storageOptions);
-            using var s3 = new AmazonS3Client(credentials, s3Config);
             var workerContext = new EmployeeImportWorkerExecutionContext();
-            var workbookStore = new S3EmployeeImportWorkbookStore(storeConfig, new AcceptanceHostEnvironment(), tenant, clock,
-                new EmployeeImportWorkbookCipher(storeConfig), new S3EmployeeImportObjectClient(s3));
+            IEmployeeImportWorkbookStore workbookStore = c.StorageMode == EmployeeImportStorageMode.FileSystem
+                ? new EncryptedFileEmployeeImportWorkbookStore(storeConfig, new AcceptanceHostEnvironment(), tenant, clock,
+                    new EmployeeImportWorkbookCipher(storeConfig))
+                : CreateS3Store(storeConfig, storageOptions, tenant, clock);
             var execution = new EmployeeBulkImportExecutionService(db, tenant, validation, persistence, workbookStore, employeeService, workerContext);
             var template = await new EmployeeBulkUploadTemplateService(db, tenant).GenerateAsync(ct);
             if (!template.Succeeded) throw new InvalidOperationException("Synthetic workbook template generation failed.");
@@ -351,7 +363,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             pauseAtRecovery.Release.TrySetResult();
             await WaitForImportAsync(c, tenantId, prepared.Value.OperationId,
                 (_, operation) => Task.FromResult(operation.State == EmployeeImportOperationState.Completed), ct);
-            var status = await execution.GetStatusAsync(prepared.Value.OperationId, ct);
+            var status = await execution.GetStatusAsync(prepared.Value.OperationId, cancellationToken: ct);
             if (!status.Succeeded || status.Value!.State != "Completed" || status.Value.SucceededRows != 3 ||
                 status.Value.Rows.Select(x => x.EmployeeCode).Distinct(StringComparer.Ordinal).Count() != 3)
                 throw new InvalidOperationException("Recovered hosted worker did not complete each employee exactly once with unique generated codes.");
@@ -397,6 +409,9 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             }
             recoveryHost.Dispose();
             concurrentHost.Dispose();
+
+            await VerifyTenThousandRowScenarioAsync(c, db, execution, shardDescriptor, tenantId, seededUser,
+                shard, tenant, template.Value!, department, designation, ct);
 
             // A runtime failure after a prior row committed must retain that success and close later rows as skipped.
             var partialNames = new[] { $"SyntheticPartialOk{RandomNumberGenerator.GetInt32(1000, 9999)}", $"SyntheticPartialFail{RandomNumberGenerator.GetInt32(1000, 9999)}" };
@@ -479,6 +494,11 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         var config = new ConfigurationBuilder().AddJsonFile(c.StorageConfigurationPath, optional: false, reloadOnChange: false).Build();
         var environment = new AcceptanceHostEnvironment();
         var options = EmployeeImportStorageOptions.LoadAndValidate(config, environment);
+        if (c.StorageMode == EmployeeImportStorageMode.FileSystem)
+        {
+            await VerifyFileSystemWorkbookStoreAsync(c, config, environment, ct);
+            return;
+        }
         if (options.Provider != EmployeeImportStorageProvider.S3 || options.Endpoint is null ||
             !string.Equals(options.Endpoint.Host, "127.0.0.1", StringComparison.Ordinal) || options.Endpoint.Port != c.MinioPort ||
             options.UseTls || !options.AllowInsecureDevelopmentEndpoint)
@@ -559,6 +579,45 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             Assert(await restartedStore.IsAvailableAsync(operationId, ct), "Workbook object did not survive client restart.");
         }
         finally { CryptographicOperations.ZeroMemory(workbookBytes); }
+    }
+
+    private static async Task VerifyFileSystemWorkbookStoreAsync(EmployeeImportMySqlAcceptanceConfiguration c,
+        IConfiguration config, IHostEnvironment environment, CancellationToken ct)
+    {
+        var options = EmployeeImportStorageOptions.LoadAndValidate(config, environment);
+        if (options.Provider != EmployeeImportStorageProvider.FileSystem || string.IsNullOrWhiteSpace(options.RootPath))
+            throw new InvalidOperationException("Filesystem acceptance requires the encrypted filesystem workbook store.");
+        var tenantId = Guid.NewGuid();
+        var operationId = Guid.NewGuid();
+        var tenant = new TestTenantContext(tenantId, Guid.NewGuid());
+        var store = new EncryptedFileEmployeeImportWorkbookStore(config, environment, tenant, TimeProvider.System,
+            new EmployeeImportWorkbookCipher(config));
+        var workbookBytes = CreateSyntheticWorkbook();
+        var hash = Convert.ToHexString(SHA256.HashData(workbookBytes));
+        try
+        {
+            await using var input = new MemoryStream(workbookBytes, writable: false);
+            await store.SaveAsync(operationId, input, hash, ct);
+            Assert(await store.IsAvailableAsync(operationId, ct), "Encrypted filesystem workbook was not persisted.");
+            await using var output = await store.OpenReadAsync(operationId, hash, ct) ?? throw new InvalidOperationException("Encrypted filesystem workbook could not be read.");
+            using var restored = new MemoryStream();
+            await output.CopyToAsync(restored, ct);
+            Assert(SHA256.HashData(restored.ToArray()).AsSpan().SequenceEqual(Convert.FromHexString(hash)), "Filesystem workbook hash changed after round-trip.");
+            var otherTenant = new TestTenantContext(Guid.NewGuid(), Guid.NewGuid());
+            var otherStore = new EncryptedFileEmployeeImportWorkbookStore(config, environment, otherTenant, TimeProvider.System,
+                new EmployeeImportWorkbookCipher(config));
+            Assert(await otherStore.OpenReadAsync(operationId, hash, ct) is null, "Filesystem workbook lookup crossed tenant scope.");
+        }
+        finally { CryptographicOperations.ZeroMemory(workbookBytes); }
+    }
+
+    private static IEmployeeImportWorkbookStore CreateS3Store(IConfiguration config, EmployeeImportStorageOptions options,
+        ITenantContext tenant, TimeProvider clock)
+    {
+        var s3Config = new AmazonS3Config { ServiceURL = options.Endpoint!.ToString().TrimEnd('/'), AuthenticationRegion = options.Region, ForcePathStyle = true, Timeout = TimeSpan.FromSeconds(15), MaxErrorRetry = 0 };
+        var client = new AmazonS3Client(StaticAcceptanceCredentials(options), s3Config);
+        return new S3EmployeeImportWorkbookStore(config, new AcceptanceHostEnvironment(), tenant, clock,
+            new EmployeeImportWorkbookCipher(config), new S3EmployeeImportObjectClient(client));
     }
 
     private static byte[] CreateSyntheticWorkbook()
@@ -736,13 +795,95 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         }
     }
 
-    private sealed class FailEmployeeSaveInterceptor(string firstName) : SaveChangesInterceptor
+    private static async Task VerifyTenThousandRowScenarioAsync(
+        EmployeeImportMySqlAcceptanceConfiguration c,
+        HrmsDbContext db,
+        IEmployeeBulkImportExecutionService execution,
+        ShardDescriptor shardDescriptor,
+        Guid tenantId,
+        Guid seededUser,
+        Tenant shard,
+        TestTenantContext tenant,
+        byte[] templateBytes,
+        string department,
+        string designation,
+        CancellationToken ct)
+    {
+        const int totalRows = 10_000;
+        var firstNames = Enumerable.Range(1, totalRows).Select(index => $"Synthetic10K{index:00000}").ToArray();
+        var failedNames = new[] { firstNames[0], firstNames[4_998], firstNames[9_998] };
+        using var workbook = new XLWorkbook(new MemoryStream(templateBytes));
+        var sheet = workbook.Worksheet("Employees");
+        var columns = sheet.Row(1).CellsUsed().ToDictionary(x => x.GetString(), x => x.Address.ColumnNumber);
+        AddSyntheticRows(sheet, columns, department, designation, firstNames, 10_000);
+        using var stream = new MemoryStream();
+        workbook.SaveAs(stream);
+        using var input = new MemoryStream(stream.ToArray(), writable: false);
+        var prepared = await execution.PrepareAsync(input, "synthetic-10000-f1.xlsx", ct);
+        if (!prepared.Succeeded || prepared.Value!.TotalRows != totalRows)
+            throw new InvalidOperationException("The dedicated 10,000-row workbook did not prepare as exactly 10,000 valid rows.");
+
+        await ConfirmOverHttpAsync(c, shardDescriptor, tenantId, seededUser, prepared.Value, ct);
+        var failureInterceptor = new FailEmployeeSaveInterceptor(failedNames);
+        using var workerHost = new EmployeeImportF1ApiFactory(c, workerEnabled: true,
+            shard.TenantCode, prepared.Value.OperationId, failureInterceptor);
+        using var workerClient = workerHost.CreateClientFor(shard.Host);
+        workerClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", TestTokens.Create(seededUser, tenantId, shard.TenantCode,
+                permissions: [Permissions.Employee.Import, Permissions.Employee.Create, Permissions.EmployeeSensitive.Edit]));
+        await WaitForImportAsync(c, tenantId, prepared.Value.OperationId,
+            (_, operation) => Task.FromResult(operation.State == EmployeeImportOperationState.PartiallyCompleted), ct);
+
+        await using var verificationDb = CreateTenantContext(c, c.TenantDatabase);
+        var imported = await verificationDb.Employees.IgnoreQueryFilters()
+            .Where(x => x.TenantId == tenantId && firstNames.Contains(x.FirstName))
+            .ToListAsync(ct);
+        if (imported.Count != totalRows - failedNames.Length || imported.Select(x => x.FirstName).Distinct(StringComparer.Ordinal).Count() != imported.Count ||
+            imported.Select(x => x.EmployeeCode).Where(x => x is not null).Distinct(StringComparer.Ordinal).Count() != imported.Count)
+            throw new InvalidOperationException("The 10,000-row import did not create each valid employee exactly once with unique generated codes.");
+        if (await verificationDb.Employees.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenantId && failedNames.Contains(x.FirstName), ct))
+            throw new InvalidOperationException("A deliberately failed employee survived its row transaction; rollback was not verified.");
+
+        var operation = await verificationDb.EmployeeImportOperations.IgnoreQueryFilters().SingleAsync(x => x.Id == prepared.Value.OperationId, ct);
+        if (operation.TotalRows != totalRows || operation.SucceededRows != totalRows - 3 || operation.FailedRows != 3 || operation.SkippedRows != 0)
+            throw new InvalidOperationException("The 10,000-row operation counters are not exactly 9,997 succeeded, 3 failed, 0 skipped.");
+        if (await verificationDb.EmployeeImportRows.IgnoreQueryFilters().AnyAsync(x => x.OperationId == operation.Id && x.Status == EmployeeImportRowStatus.Pending, ct))
+            throw new InvalidOperationException("The completed 10,000-row import left pending rows.");
+
+        var statusPages = new List<EmployeeBulkImportRowResultDto>();
+        for (var page = 1; page <= 10; page++)
+        {
+            using var response = await workerClient.GetAsync($"/api/employees/bulk-upload/{operation.Id:D}?resultPage={page}&resultPageSize=1000", ct);
+            if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"10,000-row status page {page} was not retrievable.");
+            var envelope = await response.Content.ReadFromJsonAsync<ApiResponse<EmployeeBulkImportStatusDto>>(cancellationToken: ct)
+                ?? throw new InvalidOperationException("10,000-row status response was empty.");
+            if (envelope.Data is null || envelope.Data.ResultTotalRows != totalRows || envelope.Data.ResultTotalPages != 10 || envelope.Data.Rows.Count != 1000)
+                throw new InvalidOperationException("10,000-row status pagination returned inaccurate totals.");
+            statusPages.AddRange(envelope.Data.Rows);
+        }
+        var failedResults = statusPages.Where(x => x.Status == EmployeeImportRowStatus.Failed.ToString()).ToArray();
+        if (statusPages.Count != totalRows || failedResults.Select(x => x.ExcelRowNumber).ToArray() is not [2, 5000, 10000] ||
+            failedResults.Any(x => x.ErrorCode != "employee.create_failed" || string.IsNullOrWhiteSpace(x.Message) || x.Message.Contains("Synthetic", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("The 10,000-row status response did not preserve the three specific sanitized failed-row outcomes.");
+
+        using var csvResponse = await workerClient.GetAsync($"/api/employees/bulk-upload/{operation.Id:D}/failed-rows.csv", ct);
+        if (!csvResponse.IsSuccessStatusCode) throw new InvalidOperationException("Failed-row CSV export was not available for the 10,000-row operation.");
+        var csv = await csvResponse.Content.ReadAsStringAsync(ct);
+        var csvLines = csv.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries);
+        if (csvLines.Length != 4 || !csvLines[0].Contains("Excel Row", StringComparison.Ordinal) ||
+            !csvLines.Any(x => x.StartsWith("2,Failed,", StringComparison.Ordinal)) ||
+            !csvLines.Any(x => x.StartsWith("5000,Failed,", StringComparison.Ordinal)) ||
+            !csvLines.Any(x => x.StartsWith("10000,Failed,", StringComparison.Ordinal)))
+            throw new InvalidOperationException("Failed-row CSV export did not contain exactly the three durable failed rows.");
+    }
+
+    private sealed class FailEmployeeSaveInterceptor(params string[] firstNames) : SaveChangesInterceptor
     {
         public override ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData,
             InterceptionResult<int> result, CancellationToken cancellationToken = default)
         {
             var fail = eventData.Context?.ChangeTracker.Entries<Employee>().Any(entry =>
-                entry.State == EntityState.Added && string.Equals(entry.Entity.FirstName, firstName, StringComparison.Ordinal)) == true;
+                entry.State == EntityState.Added && firstNames.Contains(entry.Entity.FirstName, StringComparer.Ordinal)) == true;
             if (fail) throw new InvalidOperationException("Synthetic F1 employee persistence failure.");
             return ValueTask.FromResult(result);
         }
@@ -773,14 +914,10 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
     private static HrmsCatalogDbContext CreateCatalogContext(EmployeeImportMySqlAcceptanceConfiguration c, string db) =>
         new(new DbContextOptionsBuilder<HrmsCatalogDbContext>().UseMySQL(Connection(c, db), x => x.MigrationsAssembly("HRMS.Infrastructure.MySqlCatalogMigrations")).Options);
     private static string Connection(EmployeeImportMySqlAcceptanceConfiguration c, string db)
-    {
-        var builder = new MySqlConnectionStringBuilder(c.ConnectionString) { Database = db, Pooling = false };
-        return builder.ConnectionString;
-    }
+        => EmployeeImportMySqlCredentialAdapter.Connection(c, db);
     private static async Task<MySqlConnection> OpenAdminAsync(EmployeeImportMySqlAcceptanceConfiguration c, CancellationToken ct)
     {
-        var builder = new MySqlConnectionStringBuilder(c.ConnectionString) { Database = "mysql", Pooling = false };
-        var connection = new MySqlConnection(builder.ConnectionString);
+        var connection = new MySqlConnection(EmployeeImportMySqlCredentialAdapter.Connection(c, "mysql"));
         await connection.OpenAsync(ct);
         return connection;
     }

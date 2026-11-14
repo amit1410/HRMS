@@ -50,12 +50,14 @@ public sealed class EmployeeImportF1ApiFactory : HrmsApiFactory
     protected override void ConfigureTestConfiguration(IConfigurationBuilder configuration)
     {
         base.ConfigureTestConfiguration(configuration);
-        var tenantTemplate = new MySql.Data.MySqlClient.MySqlConnectionStringBuilder(f1.ConnectionString)
+        var tenantTemplate = new MySql.Data.MySqlClient.MySqlConnectionStringBuilder(
+            EmployeeImportMySqlCredentialAdapter.ApplicationConnection(f1, ShardingOptions.ShardKeyPlaceholder))
         {
             Database = ShardingOptions.ShardKeyPlaceholder,
             Pooling = false
         };
-        var catalogConnection = new MySql.Data.MySqlClient.MySqlConnectionStringBuilder(f1.ConnectionString)
+        var catalogConnection = new MySql.Data.MySqlClient.MySqlConnectionStringBuilder(
+            EmployeeImportMySqlCredentialAdapter.ApplicationConnection(f1, f1.CatalogDatabase))
         {
             Database = f1.CatalogDatabase,
             Pooling = false

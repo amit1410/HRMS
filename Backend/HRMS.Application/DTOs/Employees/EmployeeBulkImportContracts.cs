@@ -15,7 +15,11 @@ public sealed record EmployeeBulkImportStatusDto(
     DateTime? CompletedAtUtc,
     DateTime LastUpdatedAtUtc,
     string? Summary,
-    IReadOnlyList<EmployeeBulkImportRowResultDto> Rows);
+    IReadOnlyList<EmployeeBulkImportRowResultDto> Rows,
+    int ResultPage = 1,
+    int ResultPageSize = 10_000,
+    int ResultTotalRows = 0,
+    int ResultTotalPages = 0);
 
 public sealed record EmployeeBulkImportHistoryItemDto(
     Guid OperationId,
@@ -34,3 +38,5 @@ public sealed record EmployeeBulkImportHistoryDto(
     int PageSize,
     int TotalCount,
     int TotalPages);
+
+public sealed record EmployeeBulkImportFailedRowsExport(byte[] Content, string FileName, int RowCount);
