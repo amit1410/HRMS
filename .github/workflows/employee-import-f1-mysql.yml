@@ -69,6 +69,32 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Validate credential variable loading
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$GITHUB_WORKSPACE/.github/workflows/employee-import-f1-mysql.yml" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          workflow = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          steps = re.split(r"(?m)^      - name: ", workflow)[1:]
+          failures = []
+          for step in steps:
+              name, _, body = step.partition("\n")
+              if not re.search(r"\bF1_APP_(?:USER|PASSWORD)\b", body):
+                  continue
+              creates_file = "app_credentials=\"$F1_RUN_ROOT/app-credentials.env\"" in body
+              loads_file = '. "$F1_APP_CREDENTIALS"' in body
+              cleans_up = "unset F1_APP_PASSWORD" in body
+              if not (creates_file or loads_file or cleans_up):
+                  failures.append(name.strip())
+          if failures:
+              raise SystemExit("Credential variables used without protected-file handling: " + ", ".join(failures))
+          print("Credential variable loading: PASS")
+          PY
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.x
@@ -159,6 +185,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test -f "$F1_APP_CREDENTIALS"
+          test "$(stat -c '%a' "$F1_APP_CREDENTIALS")" = 600
+          set -a
+          . "$F1_APP_CREDENTIALS"
+          set +a
+          test -n "${F1_APP_USER:-}"
+          test -n "${F1_APP_PASSWORD:-}"
           count="$(mysql --defaults-extra-file="$F1_MYSQL_CNF" --batch --skip-column-names -e "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME IN ('$HRMS_EMPLOYEE_IMPORT_F1_CATALOG_DATABASE','$HRMS_EMPLOYEE_IMPORT_F1_TENANT_DATABASE','$HRMS_EMPLOYEE_IMPORT_F1_MIGRATION_DOWN_DATABASE');")"
           test "$count" = 0
           protected="$(mysql --defaults-extra-file="$F1_MYSQL_CNF" --batch --skip-column-names -e "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME IN ('hrms_web1','hrms_catalog');")"
