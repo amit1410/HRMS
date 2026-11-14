@@ -53,6 +53,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         using var credentialScope = EmployeeImportMySqlCredentialAdapter.BeginPromptSession(configuration);
         var completed = new List<string>();
         var checkpoints = new AcceptanceCheckpointTracker(configuration.ResultPath, configuration.RunId, completed);
+        var preparationDiagnostics = new EmployeeImportPreparationDiagnosticsState();
         (int ProcessedRows, int SuccessfulRows)? largeImport = null;
         var manifest = NewManifest(configuration);
         await EmployeeImportMySqlOwnershipManifest.WriteNewAsync(manifest, configuration.ManifestPath, cancellationToken);
@@ -92,7 +93,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             await VerifyMinioWorkbookStoreAsync(configuration, cancellationToken);
             completed.Add("S3-compatible encrypted workbook persistence, integrity, privacy, duplicate and key-rotation checks");
             stage = "employee-import worker execution";
-            largeImport = await VerifyMySqlOnboardingExecutionAsync(configuration, checkpoints, cancellationToken);
+            largeImport = await VerifyMySqlOnboardingExecutionAsync(configuration, checkpoints, preparationDiagnostics, cancellationToken);
             completed.Add("Durable prepare, confirm/queue, worker execution, generated code, audit association, and committed row outcomes");
             stage = "migration-down rollback";
             await MigrateDownAsync(configuration, cancellationToken);
@@ -101,7 +102,10 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             var failingCheckpoint = checkpoints.ActiveCheckpoint ?? CheckpointForStage(stage, checkpoints.LastCompletedCheckpoint);
-            var failure = EmployeeImportMySqlFailureDiagnostics.Create(stage, exception, failingCheckpoint);
+            var failure = EmployeeImportMySqlFailureDiagnostics.Create(stage, exception, failingCheckpoint) with
+            {
+                Preparation = preparationDiagnostics.Value
+            };
             await WriteResultAsync(configuration.ResultPath, new(configuration.RunId, "FAILED_RETAINED_FOR_REVIEW", completed,
                 "Provider acceptance failed; owned databases were retained for inspection.", failure,
                 LastCompletedCheckpoint: checkpoints.LastCompletedCheckpoint,
@@ -250,7 +254,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         await context.Database.ExecuteSqlRawAsync("SELECT 1 FROM EmployeeImportRows LIMIT 0", ct);
     }
 
-    private static async Task<(int ProcessedRows, int SuccessfulRows)> VerifyMySqlOnboardingExecutionAsync(EmployeeImportMySqlAcceptanceConfiguration c, AcceptanceCheckpointTracker checkpoints, CancellationToken ct)
+    private static async Task<(int ProcessedRows, int SuccessfulRows)> VerifyMySqlOnboardingExecutionAsync(EmployeeImportMySqlAcceptanceConfiguration c, AcceptanceCheckpointTracker checkpoints, EmployeeImportPreparationDiagnosticsState preparationDiagnostics, CancellationToken ct)
     {
         await checkpoints.BeginAsync("synthetic_tenant_creation");
         var tenantId = Guid.NewGuid();
@@ -408,13 +412,46 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             byte[] bytes = [];
             var before = 0;
             Result<EmployeeBulkImportPreparationDto>? prepared = null;
-            await checkpoints.RunAsync("workbook_preparation", async () =>
+            await checkpoints.RunAsync("workbook_serialization", () =>
             {
                 using var stream = new MemoryStream(); workbook.SaveAs(stream); bytes = stream.ToArray();
+                if (bytes.Length == 0) throw new InvalidOperationException("Synthetic workbook serialization produced no bytes.");
+                return Task.CompletedTask;
+            });
+            await checkpoints.RunAsync("employee_count_before_prepare", async () =>
+            {
                 before = await db.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == tenantId, ct);
+            });
+            await checkpoints.RunAsync("workbook_validation", async () =>
+            {
+                using var input = new MemoryStream(bytes, writable: false);
+                var validationResult = await validation.ValidateForExecutionAsync(input, ct);
+                if (!validationResult.Succeeded)
+                {
+                    preparationDiagnostics.Value = EmployeeImportPreparationDiagnostics.FromValidation(validationResult);
+                    throw new InvalidOperationException("Synthetic employee workbook failed the read-only validation invariant.");
+                }
+                preparationDiagnostics.Value = EmployeeImportPreparationDiagnostics.FromValidation(validationResult);
+            });
+            await checkpoints.RunAsync("import_prepare_persistence", async () =>
+            {
                 using var input = new MemoryStream(bytes, writable: false);
                 prepared = await execution.PrepareAsync(input, "synthetic-f1.xlsx", ct);
-                if (!prepared.Succeeded) throw new InvalidOperationException("Synthetic employee import preparation failed validation.");
+                if (!prepared.Succeeded)
+                {
+                    preparationDiagnostics.Value = EmployeeImportPreparationDiagnostics.FromPreparation(prepared, preparationDiagnostics.Value?.ExpectedRows);
+                    throw new InvalidOperationException("Synthetic employee import preparation returned a non-success result.");
+                }
+                preparationDiagnostics.Value = preparationDiagnostics.Value with
+                {
+                    ResultStatus = prepared.Status.ToString(),
+                    Category = "PreparationSucceeded",
+                    StableCode = "PREPARE_SUCCESS",
+                    ActualRows = prepared.Value.TotalRows
+                };
+            });
+            await checkpoints.RunAsync("prepare_no_employee_side_effects", async () =>
+            {
                 if (await db.Employees.IgnoreQueryFilters().CountAsync(x => x.TenantId == tenantId, ct) != before)
                     throw new InvalidOperationException("Preparation created an employee before confirmation.");
             });
@@ -1231,6 +1268,64 @@ internal static class EmployeeImportAcceptanceMasterData
         return resolved ?? throw new InvalidOperationException("Synthetic acceptance tenant has no active designation after disposable provisioning.");
     }
 }
+
+internal sealed class EmployeeImportPreparationDiagnosticsState
+{
+    public EmployeeImportPreparationDiagnostic? Value { get; set; }
+}
+
+internal static class EmployeeImportPreparationDiagnostics
+{
+    private static readonly HashSet<string> AllowedFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "file", "workbook", "Employees", "First Name *", "Last Name *", "Aadhaar Number *", "PAN *",
+        "Date of Joining *", "Job Status *", "Employment Effective From *", "Department Code *",
+        "Designation Code *", "Employment Change Reason *", "Employment Type *", "employee", "tenant",
+        "authorization", "storage", "database"
+    };
+
+    public static EmployeeImportPreparationDiagnostic FromValidation(Result<EmployeeBulkUploadValidationResult> result) =>
+        new(
+            result.Status.ToString(),
+            result.Succeeded ? "WorkbookValidationSucceeded" : Category(result.Status),
+            result.Succeeded ? "WORKBOOK_VALIDATION_SUCCESS" : $"WORKBOOK_VALIDATION_{result.Status.ToString().ToUpperInvariant()}",
+            Fields(result.Errors),
+            result.Value?.Preview.TotalRows,
+            result.Value?.ValidatedRows.Count);
+
+    public static EmployeeImportPreparationDiagnostic FromPreparation(Result<EmployeeBulkImportPreparationDto> result, int? expectedRows) =>
+        new(
+            result.Status.ToString(),
+            Category(result.Status),
+            $"PREPARE_{result.Status.ToString().ToUpperInvariant()}",
+            Fields(result.Errors),
+            expectedRows,
+            result.Value?.TotalRows);
+
+    private static string Category(ResultStatus status) => status switch
+    {
+        ResultStatus.ValidationFailed => "WorkbookValidation",
+        ResultStatus.Unauthorized or ResultStatus.Forbidden => "Authorization",
+        ResultStatus.Conflict => "PreparationPersistenceConflict",
+        ResultStatus.ServiceUnavailable => "PreparationStorageUnavailable",
+        _ => "PreparationFailure"
+    };
+
+    private static IReadOnlyList<string> Fields(IReadOnlyList<ValidationError>? errors) =>
+        (errors ?? []).Select(x => x.Field)
+            .Where(x => AllowedFields.Contains(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+}
+
+public sealed record EmployeeImportPreparationDiagnostic(
+    string ResultStatus,
+    string Category,
+    string StableCode,
+    IReadOnlyList<string> ValidationFields,
+    int? ExpectedRows,
+    int? ActualRows);
 
 public sealed record EmployeeImportMySqlRunResult(
     string RunId,

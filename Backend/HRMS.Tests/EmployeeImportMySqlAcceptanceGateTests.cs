@@ -1,3 +1,5 @@
+using HRMS.Application.Common;
+using HRMS.Application.DTOs.Employees;
 using HRMS.Tests.TestSupport;
 using HRMS.Domain.Entities;
 using HRMS.Domain.Enums;
@@ -139,7 +141,11 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
     [InlineData("department_resolution")]
     [InlineData("synthetic_rows_generation")]
     [InlineData("template_creation")]
-    [InlineData("workbook_preparation")]
+    [InlineData("workbook_serialization")]
+    [InlineData("employee_count_before_prepare")]
+    [InlineData("workbook_validation")]
+    [InlineData("import_prepare_persistence")]
+    [InlineData("prepare_no_employee_side_effects")]
     [InlineData("http_confirmation")]
     [InlineData("queued_state_verification")]
     [InlineData("worker_startup")]
@@ -166,6 +172,47 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
         {
             if (File.Exists(resultPath)) File.Delete(resultPath);
         }
+    }
+
+    [Fact]
+    public void Preparation_diagnostics_keep_status_code_fields_and_counts_without_values()
+    {
+        var result = Result<EmployeeBulkUploadValidationResult>.Failure(
+            ResultStatus.ValidationFailed,
+            "Workbook rejected.",
+            [new ValidationError("PAN *", "masked"), new ValidationError("raw-secret-field", "masked")]);
+
+        var diagnostic = EmployeeImportPreparationDiagnostics.FromValidation(result);
+
+        Assert.Equal("ValidationFailed", diagnostic.ResultStatus);
+        Assert.Equal("WorkbookValidation", diagnostic.Category);
+        Assert.Equal("WORKBOOK_VALIDATION_VALIDATIONFAILED", diagnostic.StableCode);
+        Assert.Equal(["PAN *"], diagnostic.ValidationFields);
+        Assert.Null(diagnostic.ExpectedRows);
+        Assert.Null(diagnostic.ActualRows);
+        Assert.DoesNotContain("masked", System.Text.Json.JsonSerializer.Serialize(diagnostic), StringComparison.Ordinal);
+        Assert.DoesNotContain("raw-secret-field", System.Text.Json.JsonSerializer.Serialize(diagnostic), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Preparation_diagnostics_are_serialized_in_result_and_remain_sanitized()
+    {
+        var result = new EmployeeImportMySqlRunResult(
+            "run-test", "FAILED_RETAINED_FOR_REVIEW", [], "retained",
+            new EmployeeImportMySqlFailureDiagnostic(
+                "test", "employee-import worker execution", "EmployeeImportExecution", "INVALID_OPERATION",
+                "inspect private log", "import_prepare_persistence",
+                new EmployeeImportPreparationDiagnostic("Conflict", "PreparationPersistenceConflict", "PREPARE_CONFLICT",
+                    ["Department Code *"], 3, 0)));
+
+        var json = System.Text.Json.JsonSerializer.Serialize(result);
+
+        Assert.Contains("import_prepare_persistence", json, StringComparison.Ordinal);
+        Assert.Contains("PreparationPersistenceConflict", json, StringComparison.Ordinal);
+        Assert.Contains("Department Code *", json, StringComparison.Ordinal);
+        Assert.Contains("ExpectedRows", json, StringComparison.Ordinal);
+        Assert.Contains("ActualRows", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("raw employee value", json, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
