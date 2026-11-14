@@ -102,7 +102,10 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             var failingCheckpoint = checkpoints.ActiveCheckpoint ?? CheckpointForStage(stage, checkpoints.LastCompletedCheckpoint);
-            var failure = EmployeeImportMySqlFailureDiagnostics.Create(stage, exception, failingCheckpoint) with\n            {\n                Preparation = preparationDiagnostics.Value\n            };
+            var failure = EmployeeImportMySqlFailureDiagnostics.Create(stage, exception, failingCheckpoint) with
+            {
+                Preparation = preparationDiagnostics.Value
+            };
             await WriteResultAsync(configuration.ResultPath, new(configuration.RunId, "FAILED_RETAINED_FOR_REVIEW", completed,
                 "Provider acceptance failed; owned databases were retained for inspection.", failure,
                 LastCompletedCheckpoint: checkpoints.LastCompletedCheckpoint,
