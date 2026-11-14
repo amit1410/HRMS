@@ -90,6 +90,7 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
     [InlineData("synthetic_tenant_creation")]
     [InlineData("catalog_tenant_insert")]
     [InlineData("shard_seeding")]
+    [InlineData("seeded_user_resolution")]
     [InlineData("employee_code_configuration")]
     [InlineData("template_creation")]
     [InlineData("workbook_preparation")]
