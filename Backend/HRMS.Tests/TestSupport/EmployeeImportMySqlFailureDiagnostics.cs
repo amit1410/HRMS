@@ -7,7 +7,7 @@ internal static class EmployeeImportMySqlFailureDiagnostics
     public const string ProviderAcceptanceTestName =
         "EmployeeImportMySqlProviderAcceptanceEntryPoint.MySql_schema_and_minio_provider_acceptance";
 
-    public static EmployeeImportMySqlFailureDiagnostic Create(string stage, Exception exception)
+    public static EmployeeImportMySqlFailureDiagnostic Create(string stage, Exception exception, string? failingCheckpoint = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(stage);
         ArgumentNullException.ThrowIfNull(exception);
@@ -18,7 +18,8 @@ internal static class EmployeeImportMySqlFailureDiagnostics
             stage,
             category,
             ErrorCode(exception),
-            Remediation(category));
+            Remediation(category),
+            failingCheckpoint);
     }
 
     private static string Category(string stage, Exception exception)
@@ -66,4 +67,5 @@ public sealed record EmployeeImportMySqlFailureDiagnostic(
     string Stage,
     string Category,
     string ErrorCode,
-    string Remediation);
+    string Remediation,
+    string? FailingCheckpoint = null);

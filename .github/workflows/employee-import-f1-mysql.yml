@@ -331,6 +331,8 @@ jobs:
           status = safe(status, r"[A-Za-z0-9_]+", "NOT_WRITTEN")
           processed_rows = value(result, "processedRows")
           successful_rows = value(result, "successfulRows")
+          last_completed_checkpoint = safe(value(result, "lastCompletedCheckpoint", ""), r"[A-Za-z0-9_-]+", "")
+          failing_checkpoint = safe(value(failure, "failingCheckpoint", ""), r"[A-Za-z0-9_-]+", "")
           counts_confirmed = (
               test_exit_code == 0 and
               status == "SCHEMA_PROVIDER_CHECKS_PASSED" and
@@ -346,6 +348,8 @@ jobs:
               "successful_rows": successful_rows if counts_confirmed else None,
               "employees_per_minute": round(successful_rows / (seconds / 60), 2) if counts_confirmed and seconds else None,
               "throughput_confirmed": counts_confirmed and bool(seconds),
+              "last_completed_checkpoint": last_completed_checkpoint,
+              "failing_checkpoint": failing_checkpoint,
               "acceptance_expectations": {
                   "successful_employees": 9997,
                   "failed_rows": [2, 5000, 10000],
@@ -381,8 +385,26 @@ jobs:
           artifact_root="$RUNNER_TEMP/hrms-f1-artifacts"
           rm -rf "$artifact_root"
           mkdir -p "$artifact_root"
+          python3 - "$F1_METRICS_ROOT/test.log" "$F1_METRICS_ROOT/private-test-diagnostics.log" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          source = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          text = source.read_text(errors="replace") if source.exists() else ""
+          lines = [line for line in text.splitlines() if re.search(r"(?i)(failed|error|exception|assert|checkpoint|at )", line)]
+          redacted = "\n".join(lines)
+          redacted = re.sub(r"(?i)(server|database|user id|password|pwd|secret|accesskey|secretkey|token|connectionstring)\s*[=:]\s*[^\s;,\]]+", r"\1=[REDACTED]", redacted)
+          redacted = re.sub(r"(?i)Synthetic[A-Za-z0-9_-]+", "[REDACTED_SYNTHETIC]", redacted)
+          redacted = re.sub(r"(?<![A-Za-z0-9])[A-Z]{5}[0-9]{4}[A-Z](?![A-Za-z0-9])", "[REDACTED_IDENTIFIER]", redacted)
+          redacted = re.sub(r"(?<![0-9])[0-9]{12}(?![0-9])", "[REDACTED_NUMBER]", redacted)
+          redacted = re.sub(r"(?i)Bearer\s+[^\s]+", "Bearer [REDACTED]", redacted)
+          destination.write_text(redacted + ("\n" if redacted else ""), encoding="utf-8")
+          PY
           cp "$F1_METRICS_ROOT/sanitized-report.json" "$artifact_root/" 2>/dev/null || true
           cp "$F1_METRICS_ROOT/sanitized-summary.md" "$artifact_root/" 2>/dev/null || true
+          cp "$F1_METRICS_ROOT/private-test-diagnostics.log" "$artifact_root/" 2>/dev/null || true
           cp "$HRMS_EMPLOYEE_IMPORT_F1_RESULT_PATH" "$artifact_root/" 2>/dev/null || true
           cp "$HRMS_EMPLOYEE_IMPORT_F1_MANIFEST_PATH" "$artifact_root/" 2>/dev/null || true
           cp "$F1_METRICS_ROOT/mysql-before.tsv" "$artifact_root/" 2>/dev/null || true

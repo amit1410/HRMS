@@ -52,6 +52,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         ValidateStorageConfiguration(configuration);
         using var credentialScope = EmployeeImportMySqlCredentialAdapter.BeginPromptSession(configuration);
         var completed = new List<string>();
+        var checkpoints = new AcceptanceCheckpointTracker(configuration.ResultPath, configuration.RunId, completed);
         (int ProcessedRows, int SuccessfulRows)? largeImport = null;
         var manifest = NewManifest(configuration);
         await EmployeeImportMySqlOwnershipManifest.WriteNewAsync(manifest, configuration.ManifestPath, cancellationToken);
@@ -60,7 +61,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         {
             // This is the first provider operation; the gate above has already validated every approval and target.
             beforeFirstConnection?.Invoke();
-            await VerifyTargetAsync(configuration, cancellationToken);
+            await checkpoints.RunAsync("target_verified", () => VerifyTargetAsync(configuration, cancellationToken));
             stage = "run-scoped database absence verification";
             foreach (var database in manifest.Databases)
                 if (await DatabaseExistsAsync(configuration, database.Name, cancellationToken))
@@ -91,7 +92,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             await VerifyMinioWorkbookStoreAsync(configuration, cancellationToken);
             completed.Add("S3-compatible encrypted workbook persistence, integrity, privacy, duplicate and key-rotation checks");
             stage = "employee-import worker execution";
-            largeImport = await VerifyMySqlOnboardingExecutionAsync(configuration, cancellationToken);
+            largeImport = await VerifyMySqlOnboardingExecutionAsync(configuration, checkpoints, cancellationToken);
             completed.Add("Durable prepare, confirm/queue, worker execution, generated code, audit association, and committed row outcomes");
             stage = "migration-down rollback";
             await MigrateDownAsync(configuration, cancellationToken);
@@ -99,15 +100,18 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            var failure = EmployeeImportMySqlFailureDiagnostics.Create(stage, exception);
+            var failure = EmployeeImportMySqlFailureDiagnostics.Create(stage, exception, checkpoints.ActiveCheckpoint);
             await WriteResultAsync(configuration.ResultPath, new(configuration.RunId, "FAILED_RETAINED_FOR_REVIEW", completed,
-                "Provider acceptance failed; owned databases were retained for inspection.", failure), CancellationToken.None);
+                "Provider acceptance failed; owned databases were retained for inspection.", failure,
+                LastCompletedCheckpoint: checkpoints.LastCompletedCheckpoint,
+                FailingCheckpoint: checkpoints.ActiveCheckpoint), CancellationToken.None);
             throw new InvalidOperationException("Employee-import MySQL acceptance failed. The run-owned databases were retained; inspect the private manifest and results before any cleanup.");
         }
 
         var result = new EmployeeImportMySqlRunResult(configuration.RunId, "SCHEMA_PROVIDER_CHECKS_PASSED", completed,
             "Employee import execution and MinIO end-to-end scenarios completed successfully.",
-            Failure: null, ProcessedRows: largeImport!.Value.ProcessedRows, SuccessfulRows: largeImport.Value.SuccessfulRows);
+            Failure: null, ProcessedRows: largeImport!.Value.ProcessedRows, SuccessfulRows: largeImport.Value.SuccessfulRows,
+            LastCompletedCheckpoint: checkpoints.LastCompletedCheckpoint, FailingCheckpoint: null);
         await WriteResultAsync(configuration.ResultPath, result, cancellationToken);
         return result;
     }
@@ -236,7 +240,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
         await context.Database.ExecuteSqlRawAsync("SELECT 1 FROM EmployeeImportRows LIMIT 0", ct);
     }
 
-    private static async Task<(int ProcessedRows, int SuccessfulRows)> VerifyMySqlOnboardingExecutionAsync(EmployeeImportMySqlAcceptanceConfiguration c, CancellationToken ct)
+    private static async Task<(int ProcessedRows, int SuccessfulRows)> VerifyMySqlOnboardingExecutionAsync(EmployeeImportMySqlAcceptanceConfiguration c, AcceptanceCheckpointTracker checkpoints, CancellationToken ct)
     {
         var tenantId = Guid.NewGuid();
         var userId = Guid.NewGuid();
@@ -323,24 +327,28 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             {
                 interruptedClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TestTokens.Create(seededUser, tenantId, shard.TenantCode,
                     permissions: [Permissions.Employee.Import, Permissions.Employee.Create, Permissions.EmployeeSensitive.Edit]));
-                await WaitForImportAsync(c, tenantId, prepared.Value.OperationId,
+                await checkpoints.RunAsync("interruption_row2_committed", () => WaitForImportAsync(c, tenantId, prepared.Value.OperationId,
                     async (context, operation) => operation.State == EmployeeImportOperationState.Processing &&
                         await context.EmployeeImportRows.IgnoreQueryFilters().AnyAsync(x => x.TenantId == tenantId && x.OperationId == operation.Id &&
-                            x.ExcelRowNumber == 2 && x.Status == EmployeeImportRowStatus.Succeeded, ct), ct);
+                            x.ExcelRowNumber == 2 && x.Status == EmployeeImportRowStatus.Succeeded, ct), ct));
                 // Stop the isolated host while the worker is paused before row 3. Throwing from
                 // SaveChanges would be treated as a recoverable row failure by the worker and
                 // would not simulate a process interruption or preserve the processing lease.
-                await interruptAtNextRow.Entered.Task.WaitAsync(TimeSpan.FromSeconds(45), ct);
+                await checkpoints.RunAsync("interruption_row3_paused", () => interruptAtNextRow.Entered.Task.WaitAsync(TimeSpan.FromSeconds(45), ct));
+                await checkpoints.RunAsync("interruption_host_shutdown_requested", () => interruptedHost.StopHostAsync(ct));
+                await checkpoints.RunAsync("interruption_cancellation_observed", () => interruptAtNextRow.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(10), ct));
             }
 
             Guid oldLeaseId;
             await using (var afterInterruption = CreateTenantContext(c, c.TenantDatabase))
             {
+                await checkpoints.BeginAsync("interruption_lease_retained");
                 var interrupted = await afterInterruption.EmployeeImportOperations.IgnoreQueryFilters().SingleAsync(x => x.Id == prepared.Value.OperationId, ct);
                 if (interrupted.State != EmployeeImportOperationState.Processing || interrupted.ClaimLeaseId is null)
                     throw new InvalidOperationException("Interrupted import did not retain a recoverable processing lease.");
                 oldLeaseId = interrupted.ClaimLeaseId.Value;
-                await ExpireLeaseAsync(c, tenantId, interrupted.Id, ct);
+                await checkpoints.CompleteAsync();
+                await checkpoints.RunAsync("interruption_lease_expired", () => ExpireLeaseAsync(c, tenantId, interrupted.Id, ct));
             }
 
             var pauseAtRecovery = new PauseAtRowStartInterceptor(3);
@@ -349,7 +357,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             using var recoveryClient = recoveryHost.CreateClientFor(shard.Host);
             recoveryClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TestTokens.Create(seededUser, tenantId, shard.TenantCode,
                 permissions: [Permissions.Employee.Import, Permissions.Employee.Create, Permissions.EmployeeSensitive.Edit]));
-            await pauseAtRecovery.Entered.Task.WaitAsync(TimeSpan.FromSeconds(45), ct);
+            await checkpoints.RunAsync("recovery_worker_paused", () => pauseAtRecovery.Entered.Task.WaitAsync(TimeSpan.FromSeconds(45), ct));
             using var concurrentHost = new EmployeeImportF1ApiFactory(c, workerEnabled: true,
                 shard.TenantCode, prepared.Value.OperationId);
             using var concurrentClient = concurrentHost.CreateClientFor(shard.Host);
@@ -357,13 +365,18 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
                 permissions: [Permissions.Employee.Import, Permissions.Employee.Create, Permissions.EmployeeSensitive.Edit]));
 
             await using var fencingDb = CreateTenantContext(c, c.TenantDatabase);
+            var stalePersistence = new EmployeeImportPersistenceService(fencingDb, tenant, clock);
+            await checkpoints.BeginAsync("recovery_worker_claimed_new_lease");
             var currentLease = await fencingDb.EmployeeImportOperations.IgnoreQueryFilters().Where(x => x.Id == prepared.Value.OperationId)
                 .Select(x => x.ClaimLeaseId).SingleAsync(ct);
             if (currentLease is null || currentLease == oldLeaseId)
                 throw new InvalidOperationException("Expired lease was not replaced by recovery worker ownership.");
-            var stalePersistence = new EmployeeImportPersistenceService(fencingDb, tenant, clock);
-            var staleRenewal = await stalePersistence.RenewClaimAsync(prepared.Value.OperationId, oldLeaseId, ct);
-            if (staleRenewal.Succeeded) throw new InvalidOperationException("Stale worker was able to renew a reclaimed lease.");
+            await checkpoints.CompleteAsync();
+            await checkpoints.RunAsync("stale_worker_renewal_rejected", async () =>
+            {
+                var staleRenewal = await stalePersistence.RenewClaimAsync(prepared.Value.OperationId, oldLeaseId, ct);
+                if (staleRenewal.Succeeded) throw new InvalidOperationException("Stale worker was able to renew a reclaimed lease.");
+            });
             var existingEmployee = await fencingDb.Employees.IgnoreQueryFilters().Where(x => x.TenantId == tenantId && x.FirstName == initialNames[0])
                 .Select(x => new { x.Id, x.EmployeeCode }).SingleAsync(ct);
             await using (var staleTransaction = await fencingDb.Database.BeginTransactionAsync(ct))
@@ -375,8 +388,8 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             }
 
             pauseAtRecovery.Release.TrySetResult();
-            await WaitForImportAsync(c, tenantId, prepared.Value.OperationId,
-                (_, operation) => Task.FromResult(operation.State == EmployeeImportOperationState.Completed), ct);
+            await checkpoints.RunAsync("recovery_final_completion", () => WaitForImportAsync(c, tenantId, prepared.Value.OperationId,
+                (_, operation) => Task.FromResult(operation.State == EmployeeImportOperationState.Completed), ct));
             var status = await execution.GetStatusAsync(prepared.Value.OperationId, cancellationToken: ct);
             if (!status.Succeeded || status.Value!.State != "Completed" || status.Value.SucceededRows != 3 ||
                 status.Value.Rows.Select(x => x.EmployeeCode).Distinct(StringComparer.Ordinal).Count() != 3)
@@ -777,6 +790,7 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData,
             InterceptionResult<int> result, CancellationToken cancellationToken = default)
@@ -786,10 +800,54 @@ public sealed class EmployeeImportMySqlAcceptanceRunner
             if (isTarget)
             {
                 Entered.TrySetResult();
-                await Release.Task.WaitAsync(cancellationToken);
+                try
+                {
+                    await Release.Task.WaitAsync(cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    CancellationObserved.TrySetResult();
+                    throw;
+                }
             }
             return result;
         }
+    }
+
+    private sealed class AcceptanceCheckpointTracker(string resultPath, string runId, List<string> completedChecks)
+    {
+        public string? ActiveCheckpoint { get; private set; }
+        public string? LastCompletedCheckpoint { get; private set; }
+
+        public async Task RunAsync(string checkpoint, Func<Task> action)
+        {
+            await BeginAsync(checkpoint);
+            await action();
+            await CompleteAsync();
+        }
+
+        public Task BeginAsync(string checkpoint)
+        {
+            if (string.IsNullOrWhiteSpace(checkpoint) || checkpoint.Length > 80 ||
+                checkpoint.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_' && c != '-'))
+                throw new ArgumentException("Checkpoint identifiers must be sanitized ASCII identifiers.", nameof(checkpoint));
+            ActiveCheckpoint = checkpoint;
+            return PersistAsync();
+        }
+
+        public async Task CompleteAsync()
+        {
+            if (ActiveCheckpoint is null) throw new InvalidOperationException("No active acceptance checkpoint exists.");
+            LastCompletedCheckpoint = ActiveCheckpoint;
+            ActiveCheckpoint = null;
+            await PersistAsync();
+        }
+
+        private Task PersistAsync() => WriteResultAsync(resultPath,
+            new EmployeeImportMySqlRunResult(runId, "RUNNING", completedChecks,
+                "Provider acceptance is in progress; owned databases remain run-scoped.", null,
+                LastCompletedCheckpoint: LastCompletedCheckpoint,
+                FailingCheckpoint: ActiveCheckpoint), CancellationToken.None);
     }
 
     private static async Task<(int ProcessedRows, int SuccessfulRows)> VerifyTenThousandRowScenarioAsync(
@@ -969,4 +1027,6 @@ public sealed record EmployeeImportMySqlRunResult(
     string Notes,
     EmployeeImportMySqlFailureDiagnostic? Failure = null,
     int? ProcessedRows = null,
-    int? SuccessfulRows = null);
+    int? SuccessfulRows = null,
+    string? LastCompletedCheckpoint = null,
+    string? FailingCheckpoint = null);
