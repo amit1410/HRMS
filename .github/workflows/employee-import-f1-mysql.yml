@@ -254,6 +254,7 @@ jobs:
           end_ns="$(date +%s%N)"
           elapsed_ms="$(( (end_ns - start_ns) / 1000000 ))"
           printf '%s\n' "$elapsed_ms" > "$F1_METRICS_ROOT/elapsed-ms.txt"
+          printf '%s\n' "$test_code" > "$F1_METRICS_ROOT/test-exit-code.txt"
           exit "$test_code"
 
       - name: Capture database metrics and sanitized report
@@ -266,17 +267,70 @@ jobs:
           fi
           elapsed_ms="$(cat "$F1_METRICS_ROOT/elapsed-ms.txt" 2>/dev/null || echo 0)"
           python3 - "$F1_METRICS_ROOT" "$HRMS_EMPLOYEE_IMPORT_F1_RESULT_PATH" <<'PY'
-          import json, pathlib, sys
+          import json, pathlib, re, sys
           root = pathlib.Path(sys.argv[1])
           result_path = pathlib.Path(sys.argv[2])
           elapsed_ms = int((root / "elapsed-ms.txt").read_text().strip()) if (root / "elapsed-ms.txt").exists() else 0
-          result = json.loads(result_path.read_text()) if result_path.exists() else {"Status": "NOT_WRITTEN"}
-          if result.get("Status") != "SCHEMA_PROVIDER_CHECKS_PASSED":
-              raise SystemExit("Acceptance result did not pass the complete provider scenario.")
+          test_exit_code = int((root / "test-exit-code.txt").read_text().strip()) if (root / "test-exit-code.txt").exists() else 1
+          try:
+              result = json.loads(result_path.read_text()) if result_path.exists() else {"status": "NOT_WRITTEN"}
+          except (OSError, json.JSONDecodeError):
+              result = {"status": "NOT_WRITTEN"}
+
+          def value(document, name, default=None):
+              return document.get(name, document.get(name[:1].upper() + name[1:], default))
+
+          failure = value(result, "failure") or {}
+          log = (root / "test.log").read_text(errors="replace") if (root / "test.log").exists() else ""
+          failed_tests = re.findall(r"Failed\s+([A-Za-z0-9_.]+)", log)
+          skipped_tests = re.findall(r"Skipped\s+([A-Za-z0-9_.]+)", log)
+          if failure:
+              test_name = value(failure, "testName", "EmployeeImportMySqlProviderAcceptanceEntryPoint.MySql_schema_and_minio_provider_acceptance")
+              stage = value(failure, "stage", "provider acceptance")
+              category = value(failure, "category", "ProviderOperation")
+              error_code = value(failure, "errorCode", "UNEXPECTED_FAILURE")
+          elif failed_tests:
+              test_name = failed_tests[0]
+              stage = "provider test execution"
+              category = "TestFailure"
+              error_code = "TEST_FAILED"
+          elif skipped_tests:
+              test_name = skipped_tests[0]
+              stage = "provider test selection"
+              category = "AcceptanceTestSkipped"
+              error_code = "TEST_SKIPPED"
+          elif not result_path.exists():
+              test_name = "EmployeeImportMySqlProviderAcceptanceEntryPoint.MySql_schema_and_minio_provider_acceptance"
+              stage = "provider test result"
+              category = "ResultMissing"
+              error_code = "RESULT_NOT_WRITTEN"
+          else:
+              test_name = "EmployeeImportMySqlProviderAcceptanceEntryPoint.MySql_schema_and_minio_provider_acceptance"
+              stage = "provider acceptance"
+              category = "ProviderOperation"
+              error_code = "UNEXPECTED_FAILURE"
+
+          safe = lambda text, pattern, fallback: text if isinstance(text, str) and re.fullmatch(pattern, text) else fallback
+          test_name = safe(test_name, r"[A-Za-z0-9_.]+", "EmployeeImportMySqlProviderAcceptanceEntryPoint.MySql_schema_and_minio_provider_acceptance")
+          stage = safe(stage, r"[A-Za-z0-9 -]+", "provider acceptance")
+          category = safe(category, r"[A-Za-z0-9]+", "ProviderOperation")
+          error_code = safe(error_code, r"[A-Za-z0-9_]+", "UNEXPECTED_FAILURE")
+          remediation = {
+              "DatabaseAuthorization": "Verify the restricted account grants and retry the isolated run.",
+              "Migration": "Inspect the private test log for the migration operation and verify the provider migration assemblies.",
+              "WorkbookStorage": "Verify the run-scoped encrypted filesystem configuration and key material.",
+              "EmployeeImportExecution": "Inspect the private test log for the employee-import stage; no employee data is included here.",
+              "Timeout": "Inspect the private test log for the timed operation and verify runner capacity.",
+              "AcceptanceTestSkipped": "CI_REQUIRED must remain true; verify the isolated provider configuration is complete.",
+              "ResultMissing": "Inspect the private test log; the provider did not write its result file.",
+          }.get(category, "Inspect the private test log for the named stage; raw exception text is intentionally omitted.")
           seconds = elapsed_ms / 1000 if elapsed_ms else 0
+          status = value(result, "status", "NOT_WRITTEN")
+          status = safe(status, r"[A-Za-z0-9_]+", "NOT_WRITTEN")
           report = {
-              "status": result.get("Status", "NOT_WRITTEN"),
-              "run_id": result.get("RunId", "unknown"),
+              "status": status,
+              "run_id": safe(value(result, "runId", "unknown"), r"[A-Za-z0-9-]+", "unknown"),
+              "test_exit_code": test_exit_code,
               "elapsed_seconds": round(seconds, 3),
               "employees_per_minute": round(10000 / (seconds / 60), 2) if seconds else None,
               "acceptance_expectations": {
@@ -291,7 +345,14 @@ jobs:
               },
               "synthetic_only": True,
               "protected_databases_touched": False,
-              "checks": result.get("CompletedChecks", [])
+              "checks": [x for x in (value(result, "completedChecks", []) or []) if isinstance(x, str) and re.fullmatch(r"[A-Za-z0-9 ,/\-]+", x)],
+              "failure_diagnostics": {
+                  "test_name": test_name,
+                  "failure_stage": stage,
+                  "error_category": category,
+                  "error_code": error_code,
+                  "remediation": remediation,
+              },
           }
           (root / "sanitized-report.json").write_text(json.dumps(report, indent=2) + "\n")
           (root / "sanitized-summary.md").write_text(
@@ -313,6 +374,23 @@ jobs:
           cp "$HRMS_EMPLOYEE_IMPORT_F1_MANIFEST_PATH" "$artifact_root/" 2>/dev/null || true
           cp "$F1_METRICS_ROOT/mysql-before.tsv" "$artifact_root/" 2>/dev/null || true
           cp "$F1_METRICS_ROOT/mysql-after.tsv" "$artifact_root/" 2>/dev/null || true
+
+          result_status="$(python3 - "$HRMS_EMPLOYEE_IMPORT_F1_RESULT_PATH" <<'PY'
+          import json, os, sys
+          path = sys.argv[1]
+          try:
+              with open(path, encoding="utf-8") as handle:
+                  document = json.load(handle) if os.path.exists(path) else {}
+          except (OSError, json.JSONDecodeError):
+              document = {}
+          print(document.get("status", document.get("Status", "NOT_WRITTEN")))
+          PY
+          )"
+          test_exit_code="$(cat "$F1_METRICS_ROOT/test-exit-code.txt" 2>/dev/null || echo 1)"
+          if [ "$test_exit_code" != "0" ] || [ "$result_status" != "SCHEMA_PROVIDER_CHECKS_PASSED" ]; then
+            echo "Sanitized acceptance diagnostics were written and uploaded; provider acceptance failed."
+            exit 1
+          fi
 
       - name: Upload sanitized acceptance artifacts
         if: always()

@@ -68,6 +68,24 @@ public sealed class EmployeeImportMySqlAcceptanceGateTests
     }
 
     [Fact]
+    public void Failure_diagnostics_are_structured_and_do_not_copy_exception_messages()
+    {
+        const string secret = "Password=synthetic-secret-must-not-appear";
+        var diagnostic = EmployeeImportMySqlFailureDiagnostics.Create(
+            "catalog migration", new InvalidOperationException(secret));
+        var json = System.Text.Json.JsonSerializer.Serialize(diagnostic);
+
+        Assert.Equal(EmployeeImportMySqlFailureDiagnostics.ProviderAcceptanceTestName, diagnostic.TestName);
+        Assert.Equal("catalog migration", diagnostic.Stage);
+        Assert.Equal("Migration", diagnostic.Category);
+        Assert.Equal("INVALID_OPERATION", diagnostic.ErrorCode);
+        Assert.DoesNotContain(secret, json, StringComparison.Ordinal);
+        Assert.DoesNotContain("Password", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("synthetic-secret", json, StringComparison.Ordinal);
+        Assert.Contains("private test log", diagnostic.Remediation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Login_path_mode_requires_an_exclusive_administrator_source()
     {
         var values = ValidValues();
